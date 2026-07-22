@@ -80,11 +80,10 @@ _PANEL_NAMES = (
     "task",
 )
 _INITIAL_MANIFEST = (
-    "analysis/tool-time-offline-gated-robust-confirmation-"
-    "swe-rebench-100-20260713/manifest.json"
+    "configs/corpora/swe-100.json"
 )
 _DEVELOPMENT_MANIFEST = (
-    "analysis/results/prequential-task-update-20260721/inputs/fresh277-manifest.json"
+    "configs/corpora/swe-277.json"
 )
 _INITIAL_COLLECTION = "swe-rebench-qwen3.7-max-seed42-offset50-100-complete-v2"
 _DEVELOPMENT_COLLECTION = "swe-rebench-qwen3.7-max-fresh-seed42-skip150-n277"

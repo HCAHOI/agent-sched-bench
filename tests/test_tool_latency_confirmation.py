@@ -273,7 +273,13 @@ def test_corpus_manifest_resolves_inputs_and_validates_types(tmp_path: Path) -> 
 
     assert manifest["costs_ms"] == _TEN_COSTS_MS
     assert manifest["expected_task_count"] == 5
-    assert Path(manifest["task_ids_file"]).is_file()
+    assert manifest["task_ids"] == [
+        "task-a",
+        "task-b",
+        "task-c",
+        "task-d",
+        "task-e",
+    ]
 
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     payload["skip_leading_cd"] = 0
@@ -330,13 +336,11 @@ def _decision_panel(
 def _write_manifest(tmp_path: Path) -> Path:
     trace_root = tmp_path / "traces"
     trace_root.mkdir()
-    task_ids = tmp_path / "task_ids.txt"
-    task_ids.write_text("task-a\ntask-b\ntask-c\ntask-d\ntask-e\n", encoding="utf-8")
     payload = {
         "schema_version": 1,
         "collection_id": "corpus",
         "trace_root": str(trace_root),
-        "task_ids_file": str(task_ids),
+        "task_ids": ["task-a", "task-b", "task-c", "task-d", "task-e"],
         "expected_task_count": 5,
         "fold_count": 5,
         "inner_folds": 4,

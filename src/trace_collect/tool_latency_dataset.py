@@ -517,7 +517,7 @@ def read_tool_latency_corpus_manifest(
     *,
     repo_root: Path,
 ) -> dict[str, Any]:
-    """Load shared corpus metadata and resolve its trace and task-list paths."""
+    """Load shared corpus metadata and resolve its trace path."""
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -573,22 +573,28 @@ def read_tool_latency_corpus_manifest(
         raise ValueError("manifest analysis config differs from the fixed corpus protocol")
 
     resolved = dict(payload)
-    for field in ("trace_root", "task_ids_file"):
-        value = payload.get(field)
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError(f"manifest field {field!r} must be a non-empty path")
-        input_path = Path(value).expanduser()
-        resolved[field] = str(
-            (repo_root / input_path).resolve()
-            if not input_path.is_absolute()
-            else input_path.resolve()
-        )
-    trace_root = Path(resolved["trace_root"])
-    task_ids_file = Path(resolved["task_ids_file"])
+    trace_root_value = payload.get("trace_root")
+    if not isinstance(trace_root_value, str) or not trace_root_value.strip():
+        raise ValueError("manifest field 'trace_root' must be a non-empty path")
+    trace_root_input = Path(trace_root_value).expanduser()
+    trace_root = (
+        (repo_root / trace_root_input).resolve()
+        if not trace_root_input.is_absolute()
+        else trace_root_input.resolve()
+    )
     if not trace_root.is_dir():
         raise ValueError(f"trace_root is not a directory: {trace_root}")
-    if not task_ids_file.is_file():
-        raise ValueError(f"task_ids_file is not a file: {task_ids_file}")
+    resolved["trace_root"] = str(trace_root)
+
+    task_ids = payload.get("task_ids")
+    if not isinstance(task_ids, list) or not task_ids or any(
+        not isinstance(task_id, str) or not task_id.strip() for task_id in task_ids
+    ):
+        raise ValueError("manifest field 'task_ids' must contain non-empty strings")
+    normalized_task_ids = sorted(task_id.strip() for task_id in task_ids)
+    if len(normalized_task_ids) != len(set(normalized_task_ids)):
+        raise ValueError("manifest field 'task_ids' contains duplicates")
+    resolved["task_ids"] = normalized_task_ids
     resolved["costs_ms"] = [float(value) for value in costs]
     return resolved
 

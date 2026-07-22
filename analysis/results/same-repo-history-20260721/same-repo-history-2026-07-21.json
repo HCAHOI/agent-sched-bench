@@ -38,7 +38,6 @@
         "trace_count": 277
       },
       "initialization": {
-        "file": "analysis/tool-time-offline-gated-robust-confirmation-swe-rebench-100-20260713/pre_run_trace_inventory.sha256",
         "sha256": "33273824002bc347bf267686aca6e20b7d72404a92435872f770776454c2ed0e",
         "trace_count": 100
       }

@@ -71,7 +71,7 @@ bootstrap). Emits JSON + MD to ``analysis/`` (``-PARTIAL`` unless ``--final``).
 Usage:
   uv run python scripts/certification/adjudicate_k2_recheck.py \
     --manifest analysis/results/prequential-task-update-20260721/inputs/\
-fresh277-manifest.json --final
+swe-277.json --final
 """
 
 from __future__ import annotations
@@ -97,7 +97,6 @@ from trace_collect.tool_latency_dataset import (  # noqa: E402
     ToolLatencySample,
     discover_trace_files,
     extract_many_tool_latency_samples,
-    read_task_ids,
     read_tool_latency_corpus_manifest,
     require_explicit_trace_task_ids,
 )
@@ -675,7 +674,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path(
             "analysis/results/prequential-task-update-20260721/inputs/"
-            "fresh277-manifest.json"
+            "swe-277.json"
         ),
     )
     parser.add_argument(
@@ -740,15 +739,15 @@ def _load_manifest_corpus(
             )
         samples_by_task[sample.task_id].append(sample)
 
-    task_ids = read_task_ids(Path(manifest["task_ids_file"]))
+    task_ids = list(manifest["task_ids"])
     if len(task_ids) != manifest["expected_task_count"]:
         raise ValueError(
-            "manifest expected_task_count differs from frozen task_ids_file: "
+            "manifest expected_task_count differs from pinned task_ids: "
             f"{manifest['expected_task_count']} != {len(task_ids)}"
         )
     if set(samples_by_task) != set(task_ids):
         raise ValueError(
-            "extracted logical tasks differ from frozen task_ids_file: "
+            "extracted logical tasks differ from pinned task_ids: "
             f"missing={sorted(set(task_ids) - set(samples_by_task))}, "
             f"unexpected={sorted(set(samples_by_task) - set(task_ids))}"
         )

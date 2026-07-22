@@ -4,7 +4,7 @@
     "offline_accounting": true,
     "live_validation": "W10-11 (GPU)",
     "final": true,
-    "manifest": "analysis/results/prequential-task-update-20260721/inputs/fresh277-manifest.json",
+    "manifest": "configs/corpora/swe-277.json",
     "collection_id": "swe-rebench-qwen3.7-max-fresh-seed42-skip150-n277",
     "task_count": 277,
     "limit_tasks": null,

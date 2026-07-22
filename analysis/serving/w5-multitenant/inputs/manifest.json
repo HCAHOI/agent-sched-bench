@@ -7,7 +7,7 @@
       "task_count": 100,
       "source": {
         "commit": "ed5c3d8e107d6a4cba18ed67a79896f7774a47d4",
-        "path": "analysis/tool-time-offline-gated-robust-confirmation-swe-rebench-100-20260713/task_ids.txt"
+        "path": "analysis/serving/w5-multitenant/inputs/swe-rebench-init100-task-ids.txt"
       }
     },
     {

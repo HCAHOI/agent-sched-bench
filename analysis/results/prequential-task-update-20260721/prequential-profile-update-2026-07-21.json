@@ -8,7 +8,7 @@
       "call"
     ],
     "command_field": "command",
-    "development_manifest": "analysis/results/prequential-task-update-20260721/inputs/fresh277-manifest.json",
+    "development_manifest": "configs/corpora/swe-277.json",
     "development_trace_inventory": {
       "file": "analysis/development/prequential-profile-update-fresh277-pre-run-traces.sha256",
       "sha256": "b51c3c59653122c4224a199cf369551d1e50e8dd81daba57959ad7b9949bf190",
@@ -27,9 +27,8 @@
       5000
     ],
     "guard_ms": 0,
-    "initialization_manifest": "analysis/tool-time-offline-gated-robust-confirmation-swe-rebench-100-20260713/manifest.json",
+    "initialization_manifest": "configs/corpora/swe-100.json",
     "initialization_trace_inventory": {
-      "file": "analysis/tool-time-offline-gated-robust-confirmation-swe-rebench-100-20260713/pre_run_trace_inventory.sha256",
       "sha256": "33273824002bc347bf267686aca6e20b7d72404a92435872f770776454c2ed0e",
       "trace_count": 100
     },
@@ -6607,7 +6606,7 @@
     "config_sha256": "25075af1b7f3570839b77a73989cdeec287f5f43d378c196b5e877e2969352e5",
     "development_call_count": 13410,
     "development_collection_id": "swe-rebench-qwen3.7-max-fresh-seed42-skip150-n277",
-    "development_manifest": "analysis/results/prequential-task-update-20260721/inputs/fresh277-manifest.json",
+    "development_manifest": "configs/corpora/swe-277.json",
     "development_manifest_sha256": "4db9f8f7e69a990d6c8552223f20ed176945e4aac1221f399dca2b37097a58fb",
     "development_task_count": 277,
     "development_task_ids_sha256": "e1c1b4b45a202c067baf1cf723c7a59208d374d7a4baab6abdc46774903f7541",
@@ -6616,7 +6615,7 @@
     "git_sha": "e6cca14e00c98353891cc6fe735d9bf3fa12c783",
     "initialization_call_count": 4640,
     "initialization_collection_id": "swe-rebench-qwen3.7-max-seed42-offset50-100-complete-v2",
-    "initialization_manifest": "analysis/tool-time-offline-gated-robust-confirmation-swe-rebench-100-20260713/manifest.json",
+    "initialization_manifest": "configs/corpora/swe-100.json",
     "initialization_manifest_sha256": "ba4a10f1ee40e492a4f967d488f1545f78dd88983ea99c56b32c257382e00969",
     "initialization_task_count": 100,
     "initialization_task_ids_sha256": "fadf54855c91559bcb166db475320c7f34d03a167baa0d5979a81506749736b8",

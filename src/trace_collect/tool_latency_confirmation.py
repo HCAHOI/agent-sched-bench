@@ -57,9 +57,8 @@ def paired_task_cluster_bootstrap(
     ``permutation_draws`` (default 0 = off, output byte-identical to before)
     attaches a COVERAGE-VALID simultaneous certificate alongside the percentile
     one. The percentile-bootstrap ``simultaneous_label`` under-covers on skewed
-    ~100-cluster data (measured ~2.7x anticonservative; see
-    analysis/tool-time-gate-robustness-swe-rebench-20260716), so it must not
-    carry a headline certification. When ``permutation_draws > 0`` each point
+    ~100-cluster data (measured ~2.7x anticonservative), so it must not carry a
+    headline certification. When ``permutation_draws > 0`` each point
     also gets a ``permutation_label`` from a paired sign-flip randomization test
     (flip each task's whole paired-delta vector by +/-1 -- the exact
     exchangeability null for E[delta]=0), Bonferroni-simultaneous over the cost

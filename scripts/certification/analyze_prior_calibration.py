@@ -109,7 +109,7 @@ committed JSON.
 Usage (full corpus):
   uv run python scripts/certification/analyze_prior_calibration.py \
     --manifest analysis/results/prequential-task-update-20260721/inputs/\
-fresh277-manifest.json --final
+swe-277.json --final
 """
 
 from __future__ import annotations
@@ -1275,7 +1275,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path(
             "analysis/results/prequential-task-update-20260721/inputs/"
-            "fresh277-manifest.json"
+            "swe-277.json"
         ),
     )
     parser.add_argument(

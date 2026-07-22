@@ -156,7 +156,7 @@ unless ``--final``).
 Usage (full corpus):
   uv run python scripts/certification/analyze_pressure_headroom.py \
     --manifest analysis/results/prequential-task-update-20260721/inputs/\
-fresh277-manifest.json --final
+swe-277.json --final
 """
 
 from __future__ import annotations
@@ -211,7 +211,7 @@ _HEADLINE_COST_MS = 3500.0
 _CERTIFIED_TASK_COUNT = 277
 _FROZEN_MANIFEST = Path(
     "analysis/results/prequential-task-update-20260721/inputs/"
-    "fresh277-manifest.json"
+    "swe-277.json"
 )
 
 # The already-banked pre-restore effect the direction must beat to be worth
