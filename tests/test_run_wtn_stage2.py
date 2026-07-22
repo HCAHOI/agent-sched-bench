@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from scripts.analyze_wrapper_transparency import ScreenConfig, screen_transparency
-from scripts.run_wtn_stage2 import (
+from scripts.exploration.analyze_wrapper_transparency import ScreenConfig, screen_transparency
+from scripts.exploration.run_wtn_stage2 import (
     _certificate,
     _chains_from_samples,
     _divergence_by_cost,

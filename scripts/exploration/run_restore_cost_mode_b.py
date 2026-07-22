@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Refit offline-gated trigger policies with the restore cost in the objective.
 
-Mode B counterpart to scripts/analyze_restore_cost_sweep.py: every fit stage
+Mode B counterpart to scripts/exploration/analyze_restore_cost_sweep.py: every fit stage
 (inner probe scoring, guard selection, outer triggers) runs at each swept
 ``restore_cost_fraction`` and the paired bootstrap scores at the same
 fraction. Inputs are the frozen fold splits and latency JSONLs written by
-scripts/run_offline_gated_robust_confirmation.py, so data, folds, and config
+scripts/certification/run_offline_gated_robust_confirmation.py, so data, folds, and config
 match the certified run; the fraction-zero refit is asserted to reproduce the
 frozen triggers exactly. See trace_collect.restore_cost_analysis.
 """

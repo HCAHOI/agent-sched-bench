@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.evaluate_tool_latency_buckets import main as evaluate_buckets_main
+from scripts.exploration.evaluate_tool_latency_buckets import main as evaluate_buckets_main
 from trace_collect.kv_profile_sweep import KVSwapProfileEntry
 from trace_collect.tool_latency_bucket import (
     bucket_edges_from_profile,

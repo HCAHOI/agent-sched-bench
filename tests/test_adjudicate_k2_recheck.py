@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from scripts.adjudicate_k2_recheck import (
+from scripts.certification.adjudicate_k2_recheck import (
     AdjudicationConfig,
     _hazard_candidates,
     adjudicate_node_cell,

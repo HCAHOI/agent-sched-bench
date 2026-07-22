@@ -46,7 +46,7 @@ from typing import Any
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from trace_collect.command_features import shell_command_segments  # noqa: E402
 from trace_collect.tool_gap_extractor import discover_trace_files  # noqa: E402
@@ -308,7 +308,7 @@ def render_memo(
         "to inform whether to buy more Terminal-Bench trace collection. No new "
         "collection, no API, no GPU."
     )
-    lines.append(f">")
+    lines.append(">")
     lines.append(f"> git sha: `{git_sha}`")
     lines.append("")
 
@@ -452,7 +452,7 @@ def _git_sha() -> str:
     try:
         return (
             subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[1]
+                ["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[2]
             )
             .decode()
             .strip()

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from scripts.evaluate_tool_latency_qerror import main as evaluate_qerror_main
-from scripts.extract_tool_latencies import main as extract_latencies_main
+from scripts.exploration.evaluate_tool_latency_qerror import main as evaluate_qerror_main
+from scripts.trace.extract_tool_latencies import main as extract_latencies_main
 from trace_collect.tool_latency_dataset import (
     MISSING_TOOL_NAME,
     extract_tool_latency_samples,

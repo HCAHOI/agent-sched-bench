@@ -7,39 +7,39 @@ B=analysis/fresh-corpus-certification-20260717
 FR=traces/swe-rebench/qwen3.7-max/fresh-seed42-skip150-n200
 run(){ n="$1"; shift; echo "[$(date +%H:%M:%S)] STEP $n START: $*"; "$@"; rc=$?; if [ $rc -ne 0 ]; then echo "[$(date +%H:%M:%S)] STEP $n FAILED (exit=$rc)"; exit $rc; fi; echo "[$(date +%H:%M:%S)] STEP $n OK"; }
 
-run 3 python scripts/run_restore_cost_mode_b.py \
+run 3 python scripts/exploration/run_restore_cost_mode_b.py \
   --confirmation-root $B/offline-gated-robust/results --restore-cost-fractions 0.0,0.94 \
   --replicates 50000 --confidence-level 0.95 --seed 0 --output-root $B/restore-cost-mode-b
 
-run 4 python scripts/run_within_task_baseline.py \
+run 4 python scripts/exploration/run_within_task_baseline.py \
   --confirmation-root $B/offline-gated-robust/results --mode-b-root $B/restore-cost-mode-b \
   --restore-cost-fractions 0.0,0.94 --replicates 50000 --confidence-level 0.95 --seed 0 \
   --output-root $B/within-task-gated
 
-run 5 python scripts/run_hazard_model_confirmation.py \
+run 5 python scripts/certification/run_hazard_model_confirmation.py \
   --confirmation-root $B/offline-gated-robust/results --mode-b-root $B/restore-cost-mode-b \
   --gated-b1-root $B/within-task-gated --restore-cost-fractions 0.0,0.94 \
   --num-intervals 40 --model-family gbm --feature-set full --ensemble-members 0 \
   --replicates 50000 --confidence-level 0.95 --seed 0 --output-root $B/hazard-model-gbm-full
 
-run 6 python scripts/analyze_certified_union.py \
+run 6 python scripts/certification/analyze_certified_union.py \
   --hazard-root $B/hazard-model-gbm-full --restore-cost-fractions 0.0,0.94 \
   --inclusion-criterion loo_lcb --replicates 50000 --confidence-level 0.95 --seed 0 \
   --output-root $B/certified-union-loo-lcb
 
-run 7 python scripts/analyze_gate_robustness.py \
+run 7 python scripts/certification/analyze_gate_robustness.py \
   --decisions $B/certified-union-loo-lcb/rho_0.94_decisions.jsonl --restore-cost-fraction 0.94 \
   --replicates 20000 --confidence-level 0.95 --seed 0 \
   --output $B/gate-robustness/gate_robustness_rho094.json
 
-run 8 python scripts/run_benchmark_frontier.py \
+run 8 python scripts/certification/run_benchmark_frontier.py \
   --config-manifest $B/offline-gated-robust/manifest.json --trace-root $FR --tool-name-trie \
   --num-intervals 40 --model-family gbm --feature-set full --ensemble-members 0 \
   --restore-cost-fractions 0.0,0.94 --replicates 50000 --confidence-level 0.95 --seed 0 \
   --exposure-note "Fresh SWE-ReBench seed42 skip150 n=277; disjoint from all dev roots; pre-registration 20260716." \
   --output-root $B/frontier-p1
 
-run 9 python scripts/analyze_frontier_permutation.py \
+run 9 python scripts/certification/analyze_frontier_permutation.py \
   --decisions $B/frontier-p1/rho_0.94_decisions.jsonl \
   --treatment-field offline_gated_robust_trigger_ms --baseline-field offline_gated_tool_name_trigger_ms \
   --restore-cost-fraction 0.94 --replicates 20000 --seed 0 \

@@ -12,7 +12,7 @@ import pytest
 
 _SPEC = importlib.util.spec_from_file_location(
     "measure_kv_swap_cost",
-    Path(__file__).resolve().parents[1] / "scripts" / "measure_kv_swap_cost.py",
+    Path(__file__).resolve().parents[1] / "scripts" / "serving" / "measure_kv_swap_cost.py",
 )
 mks = importlib.util.module_from_spec(_SPEC)
 # Register before exec so @dataclass can resolve the module via sys.modules.

@@ -450,7 +450,7 @@ def test_build_table_rejects_negative_restore_cost_fraction() -> None:
 
 
 def test_export_validation_rejects_zero_restore_cost_fraction(tmp_path) -> None:
-    from scripts.export_trigger_table import validate_restore_cost_fraction_for_export
+    from scripts.serving.export_trigger_table import validate_restore_cost_fraction_for_export
 
     path = tmp_path / "rho_0.0_decisions.jsonl"
     path.write_text("")
@@ -459,7 +459,7 @@ def test_export_validation_rejects_zero_restore_cost_fraction(tmp_path) -> None:
 
 
 def test_export_validation_rejects_filename_mismatch(tmp_path) -> None:
-    from scripts.export_trigger_table import validate_restore_cost_fraction_for_export
+    from scripts.serving.export_trigger_table import validate_restore_cost_fraction_for_export
 
     path = tmp_path / "rho_0.94_decisions.jsonl"
     path.write_text("")
@@ -468,7 +468,7 @@ def test_export_validation_rejects_filename_mismatch(tmp_path) -> None:
 
 
 def test_export_validation_rejects_unrecognized_filename(tmp_path) -> None:
-    from scripts.export_trigger_table import validate_restore_cost_fraction_for_export
+    from scripts.serving.export_trigger_table import validate_restore_cost_fraction_for_export
 
     path = tmp_path / "decisions.jsonl"
     path.write_text("")
@@ -477,7 +477,7 @@ def test_export_validation_rejects_unrecognized_filename(tmp_path) -> None:
 
 
 def test_export_validation_accepts_matching_fraction(tmp_path) -> None:
-    from scripts.export_trigger_table import validate_restore_cost_fraction_for_export
+    from scripts.serving.export_trigger_table import validate_restore_cost_fraction_for_export
 
     path = tmp_path / "rho_0.94_decisions.jsonl"
     path.write_text("")
@@ -485,7 +485,7 @@ def test_export_validation_accepts_matching_fraction(tmp_path) -> None:
 
 
 def test_exporter_cli_requires_restore_cost_fraction() -> None:
-    from scripts.export_trigger_table import build_parser
+    from scripts.serving.export_trigger_table import build_parser
 
     with pytest.raises(SystemExit):
         build_parser().parse_args(

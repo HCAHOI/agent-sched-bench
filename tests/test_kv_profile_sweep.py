@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from trace_collect.kv_profile_sweep import evaluate_profile_sweep, load_profile, load_tool_gaps
-from scripts.sweep_kv_profile import build_parser, run
+from scripts.exploration.sweep_kv_profile import build_parser, run
 
 
 _PROFILE_ROW = {

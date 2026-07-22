@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Footprint-aware pricing headroom screen: is one fixed swap price leaving value?
 
-Pre-registered in ``analysis/pressure-headroom-design-20260720.md``. The screen
+Pre-registered in ``analysis/certification/pressure-headroom-design-20260720.md``. The screen
 bounds the value of EVERY pressure-aware swap policy before any GPU hour is
 committed to the direction.
 
@@ -123,7 +123,8 @@ Two criteria with DIFFERENT provenance -- do not conflate them:
   BEFORE CODE, spec section "Pre-registered kill criterion".
 * The three-way POWER RULE below is an AMENDMENT dated 2026-07-20, made by the
   coordinating session with partial (smoke) numbers already visible. It is NOT
-  pre-registration. Recorded in ``analysis/pressure-headroom-design-20260720.md``.
+  pre-registration. Recorded in
+  ``analysis/certification/pressure-headroom-design-20260720.md``.
 
 Three-way verdict at the headline kv cell against
 the banked pre-restore effect (``--banked-seconds-per-277``, default 156.0
@@ -153,7 +154,7 @@ EXPLORATORY until ``--final``. Emits JSON + MD to ``analysis/`` (``-PARTIAL``
 unless ``--final``).
 
 Usage (full corpus):
-  uv run python scripts/analyze_pressure_headroom.py \
+  uv run python scripts/certification/analyze_pressure_headroom.py \
     --manifest analysis/fresh-corpus-certification-20260717/\
 offline-gated-robust/manifest.json --final
 """
@@ -174,10 +175,10 @@ from typing import Any, Sequence
 
 import numpy as np
 
-# Allow direct `python scripts/analyze_pressure_headroom.py ...` invocation.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Allow direct `python scripts/certification/analyze_pressure_headroom.py ...` invocation.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.adjudicate_k2_recheck import (  # noqa: E402
+from scripts.certification.adjudicate_k2_recheck import (  # noqa: E402
     _CERT_GUARD_MS,
     _CERT_RESTORE_COST_FRACTION,
     _banner,
@@ -866,7 +867,7 @@ def summarize(
     exceeds_banked = headroom_s > cfg.banked_seconds_per_277
     # POWER RULE -- an AMENDMENT dated 2026-07-20, made with partial (smoke)
     # numbers visible, NOT pre-registration. Recorded in
-    # analysis/pressure-headroom-design-20260720.md. The bar it compares against
+    # analysis/certification/pressure-headroom-design-20260720.md. The bar it compares against
     # WAS frozen before code.
     # Non-inferiority framing: a direction may only be CLOSED if the
     # screen could actually have detected the effect it is compared against, so
@@ -1054,7 +1055,7 @@ def render_markdown(results: dict[str, Any], provenance: dict[str, Any]) -> str:
         "three-way POWER RULE (DROP / UNDERPOWERED / PROCEED) was NOT: it is an "
         "AMENDMENT dated 2026-07-20, made by the coordinating session with "
         "partial smoke numbers already visible, recorded in "
-        "`analysis/pressure-headroom-design-20260720.md`. Read the verdict with "
+        "`analysis/certification/pressure-headroom-design-20260720.md`. Read the verdict with "
         "that distinction in mind."
     )
     lines.append("")
@@ -1262,7 +1263,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _default_output_paths(final: bool) -> tuple[Path, Path]:
     today = _dt.date.today().isoformat()
     suffix = "" if final else "-PARTIAL"
-    stem = f"analysis/pressure-headroom-{today}{suffix}"
+    stem = f"analysis/certification/pressure-headroom-{today}{suffix}"
     return Path(f"{stem}.json"), Path(f"{stem}.md")
 
 
@@ -1279,7 +1280,7 @@ def _write_decisions_zst(path: Path, decisions: list[dict[str, Any]]) -> None:
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    frozen_manifest = Path(__file__).resolve().parents[1] / _FROZEN_MANIFEST
+    frozen_manifest = Path(__file__).resolve().parents[2] / _FROZEN_MANIFEST
     if args.final and args.manifest.resolve() != frozen_manifest.resolve():
         raise ValueError(
             f"--final requires the frozen manifest {_FROZEN_MANIFEST}, "

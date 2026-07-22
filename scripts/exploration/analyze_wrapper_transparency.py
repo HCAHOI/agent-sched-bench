@@ -55,7 +55,7 @@ No synthetic data: durations come only from the replay corpus. EXPLORATORY,
 replayed on our own hardware. Prints a PARTIAL banner unless ``--final``.
 
 Usage:
-  uv run python scripts/analyze_wrapper_transparency.py \
+  uv run python scripts/exploration/analyze_wrapper_transparency.py \
     --traces-dir traces/fresh-277-segtimeline --fold-count 5 --final
 """
 
@@ -72,11 +72,11 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 
-# Allow `python scripts/analyze_wrapper_transparency.py ...` to import the
+# Allow `python scripts/exploration/analyze_wrapper_transparency.py ...` to import the
 # sibling study module as a package (pytest adds the repo root itself).
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.analyze_segment_variance import (  # noqa: E402
+from scripts.exploration.analyze_segment_variance import (  # noqa: E402
     Chain,
     Config,
     _git_sha,
@@ -1033,7 +1033,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _default_output_paths(final: bool) -> tuple[Path, Path]:
     today = _dt.date.today().isoformat()
     suffix = "" if final else "-PARTIAL"
-    stem = f"analysis/wrapper-transparency-stage1-{today}{suffix}"
+    stem = f"analysis/offline/wrapper-transparency-stage1-{today}{suffix}"
     return Path(f"{stem}.json"), Path(f"{stem}.md")
 
 

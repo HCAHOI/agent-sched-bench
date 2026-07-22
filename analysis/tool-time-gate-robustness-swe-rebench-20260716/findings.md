@@ -8,7 +8,7 @@ rho=0.94; the low-rho files are the closed sensitivity probe and are not read
 here). Corpus: SWE-ReBench 100 tasks / 94 repos / 4640 calls / 10-cost family.
 Certificate under test: `certified_union_trigger_ms` vs the deadline.
 
-Script: `scripts/analyze_gate_robustness.py`. Library change:
+Script: `scripts/certification/analyze_gate_robustness.py`. Library change:
 `paired_task_cluster_bootstrap` gains an opt-in `permutation_draws` that attaches
 a coverage-valid certificate (default off = frozen numerics byte-identical).
 Review-gated.

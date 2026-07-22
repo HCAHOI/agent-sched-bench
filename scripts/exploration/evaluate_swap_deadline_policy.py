@@ -10,7 +10,7 @@ explicit list or from a profiled KV swap cost file; experiment runs must
 use measurements from the actual serving engine's swap mechanism.
 
 Usage:
-  uv run python scripts/evaluate_swap_deadline_policy.py \
+  uv run python scripts/exploration/evaluate_swap_deadline_policy.py \
     --profile-latencies profile_split.jsonl \
     --eval-latencies eval_split.jsonl \
     --kv-costs-ms 500,1000,2000 --guard-ms 0 \

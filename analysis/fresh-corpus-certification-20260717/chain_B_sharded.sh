@@ -30,14 +30,14 @@ shard_step(){
   echo "[$(date +%H:%M:%S)] STEP $n OK"
 }
 
-shard_step 8 scripts/run_benchmark_frontier.py \
+shard_step 8 scripts/certification/run_benchmark_frontier.py \
   --config-manifest $B/offline-gated-robust/manifest.json --trace-root $FR --tool-name-trie \
   --num-intervals 40 --model-family gbm --feature-set full --ensemble-members 0 \
   --restore-cost-fractions 0.0,0.94 --replicates 50000 --confidence-level 0.95 --seed 0 \
   --exposure-note "Fresh SWE-ReBench seed42 skip150 n=277; disjoint from all dev roots; pre-registration 20260716." \
   --output-root $B/frontier-p1
 
-run 9 python scripts/analyze_frontier_permutation.py \
+run 9 python scripts/certification/analyze_frontier_permutation.py \
   --decisions $B/frontier-p1/rho_0.94_decisions.jsonl \
   --treatment-field offline_gated_robust_trigger_ms --baseline-field offline_gated_tool_name_trigger_ms \
   --restore-cost-fraction 0.94 --replicates 20000 --seed 0 \

@@ -2,7 +2,7 @@
 """Sweep profiled KV-swap thresholds against observed tool-gap windows.
 
 Usage:
-  uv run python scripts/sweep_kv_profile.py \
+  uv run python scripts/exploration/sweep_kv_profile.py \
     --profile path/to/kv_profile.jsonl \
     --gaps path/to/tool_gaps.jsonl \
     --quantile p95 \

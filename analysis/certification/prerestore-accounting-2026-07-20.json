@@ -324,5 +324,5 @@
   "monte_carlo_floor_p_value": 1.999960000799984e-05,
   "min_achievable_p_value": 1.999960000799984e-05
  },
- "decisions_archived_at": "analysis/prerestore-accounting-2026-07-20-decisions.json.zst (local, not committed; 134100 rows)"
+  "decisions_archived_at": "analysis/certification/prerestore-accounting-2026-07-20-decisions.json.zst (local, not committed; 134100 rows)"
 }

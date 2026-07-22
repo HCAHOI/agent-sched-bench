@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.evaluate_swap_deadline_policy import main as deadline_policy_main
+from scripts.exploration.evaluate_swap_deadline_policy import main as deadline_policy_main
 from trace_collect.swap_deadline_policy import evaluate_deadline_policy
 from trace_collect.tool_latency_profiled import hazard_recheck_ms
 

@@ -27,7 +27,7 @@ dependencies = [
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.0"]
-# GPU-only extra for scripts/measure_kv_swap_cost.py (KV-swap cost measurement).
+# GPU-only extra for scripts/serving/measure_kv_swap_cost.py (KV-swap cost measurement).
 # vllm pulls torch + CUDA; install on the H100 box only.
 gpu = ["vllm>=0.6"]
 # GPU-only extra for the W1 connector spike (spike/). Pinned to the vLLM

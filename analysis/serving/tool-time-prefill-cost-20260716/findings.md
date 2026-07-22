@@ -4,7 +4,7 @@ The P2 reload-vs-recompute action restores a swapped-out KV cache by the cheaper
 of reload (ρ·kv over PCIe) or recompute (prefill the context). The recompute
 side was the campaign's one unmeasured number; the sweep used placeholder rates
 {0.05..1.5 ms/tok}. This measures the real prefill curve on the deployment
-model/hardware. Script: `scripts/measure_prefill_cost.py` (review-gated APPROVE).
+model/hardware. Script: `scripts/serving/measure_prefill_cost.py` (review-gated APPROVE).
 Raw: `prefill_result.json`.
 
 ## Setup

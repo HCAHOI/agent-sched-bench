@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.evaluate_profiled_latency_thresholds import main as evaluate_profiled_main
+from scripts.exploration.evaluate_profiled_latency_thresholds import main as evaluate_profiled_main
 from trace_collect.tool_latency_profiled import (
     build_latency_prior,
     evaluate_profiled_latency_thresholds,

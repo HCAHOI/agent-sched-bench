@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.extract_tool_gaps import build_parser, discover_trace_files
+from scripts.trace.extract_tool_gaps import build_parser, discover_trace_files
 from trace_collect.tool_gap_extractor import extract_tool_gap_windows
 
 

@@ -8,15 +8,13 @@ knob-matching are checkable without any replay corpus on disk.
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
-from scripts.analyze_segment_variance import (
+from scripts.exploration.analyze_segment_variance import (
     Chain,
     Segment,
-    fit_chain_prefix,
 )
-from scripts.analyze_wrapper_transparency import (
+from scripts.exploration.analyze_wrapper_transparency import (
     GridConfig,
     ScreenConfig,
     ScreenResult,

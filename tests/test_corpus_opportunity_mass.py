@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from analyze_corpus_opportunity_mass import (  # noqa: E402
+from scripts.exploration.analyze_corpus_opportunity_mass import (
     Call,
     analyze_corpus,
     extrapolate,

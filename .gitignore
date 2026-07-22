@@ -37,7 +37,4 @@ docs/
 .pi/
 .rpiv/
 figures/
-analysis/prerestore-accounting*-decisions.json.zst
-analysis/prior-calibration*-decisions.json.zst
-analysis/pressure-headroom*-decisions.json.zst
-analysis/online-gate-replay*-decisions.json.zst
+analysis/**/*-decisions.json.zst

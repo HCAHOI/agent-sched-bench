@@ -4,7 +4,7 @@ First hardware measurement of the quantity the entire restore-cost campaign
 swept blind: rho = swap_in_cost / swap_out_cost, the KV-cache swap-back
 (host->GPU, on the critical path when a call returns) as a fraction of the
 swap-out (GPU->host, hidden during the long call). Measured with
-`scripts/measure_kv_swap_cost.py` (commit 3f070bf) on a rented H100.
+`scripts/serving/measure_kv_swap_cost.py` (commit 3f070bf) on a rented H100.
 
 ## Hardware / method
 

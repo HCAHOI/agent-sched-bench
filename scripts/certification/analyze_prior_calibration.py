@@ -107,7 +107,7 @@ unless ``--final``); per-call rows go to a local zstd sidecar, never the
 committed JSON.
 
 Usage (full corpus):
-  uv run python scripts/analyze_prior_calibration.py \
+  uv run python scripts/certification/analyze_prior_calibration.py \
     --manifest analysis/fresh-corpus-certification-20260717/\
 offline-gated-robust/manifest.json --final
 """
@@ -127,10 +127,10 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 
-# Allow direct `python scripts/analyze_prior_calibration.py ...` invocation.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Allow direct `python scripts/certification/analyze_prior_calibration.py ...` invocation.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.adjudicate_k2_recheck import (  # noqa: E402
+from scripts.certification.adjudicate_k2_recheck import (  # noqa: E402
     _CERT_GUARD_MS,
     _CERT_RESTORE_COST_FRACTION,
     _banner,
@@ -138,7 +138,7 @@ from scripts.adjudicate_k2_recheck import (  # noqa: E402
     _load_manifest_corpus,
     _row_group_keys,
 )
-from scripts.analyze_prerestore_accounting import _write_decisions_zst  # noqa: E402
+from scripts.certification.analyze_prerestore_accounting import _write_decisions_zst  # noqa: E402
 from trace_collect.tool_latency_confirmation import (  # noqa: E402
     _resample_task_totals,
 )
@@ -1342,7 +1342,7 @@ def _require_certified_discipline(args: argparse.Namespace, parser: argparse.Arg
 def _default_output_paths(final: bool) -> tuple[Path, Path]:
     today = _dt.date.today().isoformat()
     suffix = "" if final else "-PARTIAL"
-    stem = f"analysis/prior-calibration-{today}{suffix}"
+    stem = f"analysis/certification/prior-calibration-{today}{suffix}"
     return Path(f"{stem}.json"), Path(f"{stem}.md")
 
 

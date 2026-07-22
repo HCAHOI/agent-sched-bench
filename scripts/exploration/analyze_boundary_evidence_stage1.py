@@ -72,7 +72,7 @@ Exploratory; durations replayed on our own hardware. Emits JSON + MD to
 ``analysis/`` (``-PARTIAL`` suffix unless ``--final``).
 
 Usage:
-  uv run python scripts/analyze_boundary_evidence_stage1.py \
+  uv run python scripts/exploration/analyze_boundary_evidence_stage1.py \
     --traces-dir traces/fresh-277-segtimeline --fold-count 5 --final
 """
 
@@ -94,12 +94,12 @@ from typing import Any, Iterator, Sequence
 import numpy as np
 from scipy.stats import gaussian_kde
 
-# Allow `python scripts/analyze_boundary_evidence_stage1.py ...` to import the
+# Allow `python scripts/exploration/analyze_boundary_evidence_stage1.py ...` to import the
 # sibling study module as a package (pytest adds the repo root itself).
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.analyze_segment_variance import Config, _task_folds, atom_key  # noqa: E402
-from scripts.run_offline_gated_robust_confirmation import (  # noqa: E402
+from scripts.exploration.analyze_segment_variance import Config, _task_folds, atom_key  # noqa: E402
+from scripts.certification.run_offline_gated_robust_confirmation import (  # noqa: E402
     resolve_worker_count,
 )
 from trace_collect.tool_latency_dataset import (
@@ -111,7 +111,7 @@ from trace_collect.tool_latency_profiled import hazard_recheck_ms
 # Certified operating point (fresh-corpus certification manifest,
 # analysis/fresh-corpus-certification-20260717/offline-gated-robust/
 # manifest.json): kv-cost grid, guard 0 (so threshold == kv), and the measured
-# restore-cost fraction rho=0.94 used by scripts/export_trigger_table.py. These
+# restore-cost fraction rho=0.94 used by scripts/serving/export_trigger_table.py. These
 # are the operating point, not tunable knobs - CLI overrides exist only for the
 # smoke path, and the defaults are the certified values.
 _CERT_KV_COSTS_MS: tuple[float, ...] = (
@@ -755,7 +755,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _default_output_paths(final: bool) -> tuple[Path, Path]:
     today = _dt.date.today().isoformat()
     suffix = "" if final else "-PARTIAL"
-    stem = f"analysis/boundary-evidence-stage1-{today}{suffix}"
+    stem = f"analysis/offline/boundary-evidence-stage1-{today}{suffix}"
     return Path(f"{stem}.json"), Path(f"{stem}.md")
 
 

@@ -36,7 +36,7 @@ task-grouped train/test folds:
   key with enough evidence, backing off to shallower keys, the tool, then
   global, with ``skip_leading_cd=False``, ``max_prefix_depth=4`` and
   ``min_evidence=1`` matching the frozen FRESH-CERT offline-fit config (see
-  ``scripts/export_trigger_table.py`` and the certified manifest at
+  ``scripts/serving/export_trigger_table.py`` and the certified manifest at
   ``analysis/fresh-corpus-certification-20260717/offline-gated-robust/
   manifest.json``, whose ``min_tool_history``/``max_prefix_depth`` gate every
   backoff level - ``trace_collect/tool_latency_profiled.py:255,775,791``).
@@ -62,7 +62,7 @@ final" banner unless ``--final`` is passed (the trigger is the full-corpus
 replay finishing).
 
 Usage:
-  uv run python scripts/analyze_segment_variance.py \
+  uv run python scripts/exploration/analyze_segment_variance.py \
     --traces-dir traces/fresh-277-segtimeline \
     --fold-count 5 --prefix-depth 4 --final
 """
@@ -849,14 +849,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--out-json",
         type=Path,
         default=None,
-        help="Default: analysis/segment-atom-study-<date>[-PARTIAL].json "
+        help="Default: analysis/offline/segment-atom-study-<date>[-PARTIAL].json "
         "(the -PARTIAL suffix is dropped only with --final).",
     )
     parser.add_argument(
         "--out-md",
         type=Path,
         default=None,
-        help="Default: analysis/segment-atom-study-<date>[-PARTIAL].md "
+        help="Default: analysis/offline/segment-atom-study-<date>[-PARTIAL].md "
         "(the -PARTIAL suffix is dropped only with --final).",
     )
     parser.add_argument(
@@ -876,7 +876,7 @@ def _default_output_paths(final: bool) -> tuple[Path, Path]:
 
     today = _dt.date.today().isoformat()
     suffix = "" if final else "-PARTIAL"
-    stem = f"analysis/segment-atom-study-{today}{suffix}"
+    stem = f"analysis/offline/segment-atom-study-{today}{suffix}"
     return Path(f"{stem}.json"), Path(f"{stem}.md")
 
 

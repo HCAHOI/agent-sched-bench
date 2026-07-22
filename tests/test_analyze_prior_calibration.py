@@ -6,7 +6,7 @@ import math
 import numpy as np
 import pytest
 
-from scripts.analyze_prior_calibration import (
+from scripts.certification.analyze_prior_calibration import (
     CalibrationConfig,
     EcdfForecast,
     _coverage_verdict_suppressed,
@@ -22,7 +22,6 @@ from scripts.analyze_prior_calibration import (
     ratio_bootstrap,
     run_prior_calibration,
     score_decisions,
-    summarize,
 )
 from trace_collect.tool_latency_dataset import ToolLatencySample
 from trace_collect.trace_data import CURRENT_TRACE_FORMAT_VERSION

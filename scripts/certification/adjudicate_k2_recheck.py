@@ -69,7 +69,7 @@ EXPLORATORY until ``--final`` (cheap: closed-form over node sample sets, no
 bootstrap). Emits JSON + MD to ``analysis/`` (``-PARTIAL`` unless ``--final``).
 
 Usage:
-  uv run python scripts/adjudicate_k2_recheck.py \
+  uv run python scripts/certification/adjudicate_k2_recheck.py \
     --manifest analysis/fresh-corpus-certification-20260717/\
 offline-gated-robust/manifest.json --final
 """
@@ -89,10 +89,10 @@ from typing import Any, Sequence
 
 import numpy as np
 
-# Allow direct `python scripts/adjudicate_k2_recheck.py ...` invocation.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Allow direct `python scripts/certification/adjudicate_k2_recheck.py ...` invocation.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.run_offline_gated_robust_confirmation import (  # noqa: E402
+from scripts.certification.run_offline_gated_robust_confirmation import (  # noqa: E402
     _read_manifest,
     _read_task_ids,
     _require_explicit_trace_task_ids,
@@ -114,7 +114,7 @@ from trace_collect.tool_latency_utility_clock import (  # noqa: E402
 )
 
 # Certified operating point (fresh-corpus certification manifest +
-# scripts/export_trigger_table.py): guard 0 (threshold == kv) and the measured
+# scripts/serving/export_trigger_table.py): guard 0 (threshold == kv) and the measured
 # restore-cost fraction rho = 0.94. The kv-cost panel is read from the manifest.
 _CERT_GUARD_MS = 0.0
 _CERT_RESTORE_COST_FRACTION = 0.94
@@ -715,7 +715,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _default_output_paths(final: bool) -> tuple[Path, Path]:
     today = _dt.date.today().isoformat()
     suffix = "" if final else "-PARTIAL"
-    stem = f"analysis/adjudication-k2-recheck-{today}{suffix}"
+    stem = f"analysis/certification/adjudication-k2-recheck-{today}{suffix}"
     return Path(f"{stem}.json"), Path(f"{stem}.md")
 
 
@@ -724,7 +724,7 @@ def _load_manifest_corpus(
 ) -> tuple[dict[str, list[ToolLatencySample]], list[str], dict[str, Any]]:
     """Load fresh-277 samples grouped by task, matching the frozen manifest."""
 
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     manifest = _read_manifest(manifest_path.resolve(), repo_root=repo_root)
     trace_root = Path(manifest["trace_root"])
     trace_paths = discover_trace_files([trace_root])

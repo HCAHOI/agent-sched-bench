@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.analyze_utility_band_headroom import main as headroom_main
+from scripts.exploration.analyze_utility_band_headroom import main as headroom_main
 from trace_collect.tool_latency_headroom import analyze_utility_headroom
 from trace_collect.tool_latency_utility_clock import trigger_policy_utility_ms
 

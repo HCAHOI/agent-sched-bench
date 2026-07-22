@@ -73,7 +73,7 @@ No synthetic data. EXPLORATORY, replayed on our own hardware. Prints a PARTIAL
 banner unless ``--final``.
 
 Usage (full corpus -- run by the main session, not the smoke):
-  uv run python scripts/analyze_session_state_cv.py \
+  uv run python scripts/exploration/analyze_session_state_cv.py \
     --traces-dir traces/fresh-277-segtimeline \
     --manifest analysis/fresh-corpus-certification-20260717/\
 offline-gated-robust/manifest.json --final
@@ -82,8 +82,8 @@ offline-gated-robust/manifest.json --final
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
-from dataclasses import dataclass, field
+from collections import defaultdict
+from dataclasses import dataclass
 import datetime as _dt
 import json
 import math
@@ -94,15 +94,14 @@ from typing import Any, Sequence
 
 import numpy as np
 
-# Allow direct `python scripts/analyze_session_state_cv.py ...` invocation.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Allow direct `python scripts/exploration/analyze_session_state_cv.py ...` invocation.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.analyze_segment_variance import (  # noqa: E402
+from scripts.exploration.analyze_segment_variance import (  # noqa: E402
     _git_sha,
-    atom_key,
     build_chains,
 )
-from scripts.run_offline_gated_robust_confirmation import (  # noqa: E402
+from scripts.certification.run_offline_gated_robust_confirmation import (  # noqa: E402
     _read_manifest,
     _read_task_ids,
     _require_explicit_trace_task_ids,
@@ -246,7 +245,7 @@ def load_original_calls(
     primary verb (last-segment head); its history verbs are all segment heads.
     """
 
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     manifest = _read_manifest(manifest_path.resolve(), repo_root=repo_root)
     trace_root = Path(manifest["trace_root"])
     command_field = manifest["command_field"]

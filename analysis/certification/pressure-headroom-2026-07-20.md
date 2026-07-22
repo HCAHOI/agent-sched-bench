@@ -12,7 +12,7 @@
 
 > **A SURVIVE here does NOT license deployment.** This is a screen, not a certificate. A positive headroom triggers a SEPARATE certified decision replay -- paired against the frozen certified policy at rho=0.94, permutation per kv cell, full H1 discipline -- exactly as A2 required its robust-clock re-confirmation. The numbers in this artifact must NEVER be quoted as a certified gain.
 
-> **Criterion provenance (two different things).** The BAR -- DROP/PROCEED against the banked pre-restore effect (156 s/277 at kv3500) -- WAS frozen before code. The three-way POWER RULE (DROP / UNDERPOWERED / PROCEED) was NOT: it is an AMENDMENT dated 2026-07-20, made by the coordinating session with partial smoke numbers already visible, recorded in `analysis/pressure-headroom-design-20260720.md`. Read the verdict with that distinction in mind.
+> **Criterion provenance (two different things).** The BAR -- DROP/PROCEED against the banked pre-restore effect (156 s/277 at kv3500) -- WAS frozen before code. The three-way POWER RULE (DROP / UNDERPOWERED / PROCEED) was NOT: it is an AMENDMENT dated 2026-07-20, made by the coordinating session with partial smoke numbers already visible, recorded in `analysis/certification/pressure-headroom-design-20260720.md`. Read the verdict with that distinction in mind.
 
 > **Ceiling scope.** The bound is over triggers `<= the panel cell's threshold` -- both arms search that one common domain, which is the SHIPPED policy's own domain. It is not a claim about triggers beyond the deadline.
 

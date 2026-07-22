@@ -9,7 +9,7 @@ plumbing tests, but experiment runs must use measurements from the actual
 serving engine's KV swap mechanism.
 
 Usage:
-  uv run python scripts/sweep_swap_cutoffs.py \
+  uv run python scripts/exploration/sweep_swap_cutoffs.py \
     --latencies tool_latencies.jsonl \
     --kv-profile kv_profile.jsonl --quantile p95 --guard-ms 50 \
     --cutoffs 0.1,0.3,0.5,0.7,0.9 \

@@ -12,7 +12,7 @@ import math
 import numpy as np
 import pytest
 
-from scripts.analyze_boundary_evidence_stage1 import (
+from scripts.exploration.analyze_boundary_evidence_stage1 import (
     StageOneConfig,
     TimedBoundary,
     TimedChain,
@@ -28,7 +28,7 @@ from scripts.analyze_boundary_evidence_stage1 import (
     run_stage_one,
     task_clustered_bootstrap_ci,
 )
-from scripts.analyze_segment_variance import Config, _task_folds
+from scripts.exploration.analyze_segment_variance import Config, _task_folds
 from trace_collect.tool_latency_dataset import SegmentLatencySample
 from trace_collect.tool_latency_profiled import hazard_recheck_ms
 
@@ -107,7 +107,7 @@ def test_boundary_state_residuals_matches_only_the_shared_state() -> None:
     # Fit node (index k, atom a) entries: (t_end, next_end, total). The E+B set
     # keeps chains whose boundary is reached, is the most recent one, and are
     # still running, residual = total - t.
-    from scripts.analyze_boundary_evidence_stage1 import _FitBoundary
+    from scripts.exploration.analyze_boundary_evidence_stage1 import _FitBoundary
 
     node = [
         _FitBoundary(t_end_ms=40.0, next_end_ms=200.0, total_ms=300.0),  # in-state at t=100

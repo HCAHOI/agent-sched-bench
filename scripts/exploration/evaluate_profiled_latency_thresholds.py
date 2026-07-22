@@ -7,7 +7,7 @@ and eval latency files must be extracted from disjoint task-level trace
 splits (enforced via source_trace and logical task_id overlap checks).
 
 Usage:
-  uv run python scripts/evaluate_profiled_latency_thresholds.py \
+  uv run python scripts/exploration/evaluate_profiled_latency_thresholds.py \
     --profile-latencies profile_split.jsonl \
     --eval-latencies eval_split.jsonl \
     --thresholds-ms 100,200,500 \

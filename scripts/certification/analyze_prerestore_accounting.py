@@ -80,7 +80,7 @@ EXPLORATORY until ``--final``. Emits JSON + MD to ``analysis/`` (``-PARTIAL``
 unless ``--final``).
 
 Usage (full corpus -- run by the main session, not the smoke):
-  uv run python scripts/analyze_prerestore_accounting.py \
+  uv run python scripts/certification/analyze_prerestore_accounting.py \
     --manifest analysis/fresh-corpus-certification-20260717/\
 offline-gated-robust/manifest.json --final
 """
@@ -100,10 +100,10 @@ from typing import Any, Sequence
 
 import numpy as np
 
-# Allow direct `python scripts/analyze_prerestore_accounting.py ...` invocation.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Allow direct `python scripts/certification/analyze_prerestore_accounting.py ...` invocation.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.adjudicate_k2_recheck import (  # noqa: E402
+from scripts.certification.adjudicate_k2_recheck import (  # noqa: E402
     _CERT_GUARD_MS,
     _CERT_RESTORE_COST_FRACTION,
     _banner,
@@ -111,7 +111,7 @@ from scripts.adjudicate_k2_recheck import (  # noqa: E402
     _load_manifest_corpus,
     _row_group_keys,
 )
-from scripts.run_offline_gated_robust_confirmation import (  # noqa: E402
+from scripts.certification.run_offline_gated_robust_confirmation import (  # noqa: E402
     resolve_worker_count,
 )
 from trace_collect.tool_latency_dataset import ToolLatencySample  # noqa: E402
@@ -714,7 +714,7 @@ def _default_output_paths(final: bool, trigger_source: str) -> tuple[Path, Path]
     suffix = "" if final else "-PARTIAL"
     # Keep the committed hazard filename stable; robust gets its own artifact.
     src = "" if trigger_source == "hazard" else f"-{trigger_source}"
-    stem = f"analysis/prerestore-accounting{src}-{today}{suffix}"
+    stem = f"analysis/certification/prerestore-accounting{src}-{today}{suffix}"
     return Path(f"{stem}.json"), Path(f"{stem}.md")
 
 

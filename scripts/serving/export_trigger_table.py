@@ -23,7 +23,7 @@ must not reproduce. The measured system operating point is rho=0.94 (see the
 rho directive in analysis/); a sub-operating-point fraction is out of scope
 for new work without explicit human approval outside this script.
 
-    python scripts/export_trigger_table.py \
+    python scripts/serving/export_trigger_table.py \
         --decisions .../certified-union-loo-lcb/rho_0.94_decisions.jsonl \
         --kv-cost-ms 5000 --deadline-ms 5000 --restore-cost-fraction 0.94 \
         --output trigger_table_kv5000.json
@@ -38,7 +38,9 @@ import re
 import sys
 from pathlib import Path
 
-from spike.trigger_table import build_trigger_table, read_decisions_jsonl
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from spike.trigger_table import build_trigger_table, read_decisions_jsonl  # noqa: E402
 
 # Established repo-wide naming convention for restore-cost-fraction-swept
 # decisions files, e.g. rho_0.94_decisions.jsonl / rho_0.0_decisions.jsonl

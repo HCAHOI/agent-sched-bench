@@ -4,8 +4,8 @@
 Mode A stress test: triggers stay exactly as fitted at restore cost zero and
 only the evaluation utility charges each fire on a short call
 ``fraction * kv_cost_ms``. See trace_collect.restore_cost_analysis for the
-analysis itself and scripts/run_restore_cost_mode_b.py for the refit (Mode B)
-counterpart.
+analysis itself and scripts/exploration/run_restore_cost_mode_b.py for the
+refit (Mode B) counterpart.
 """
 
 from __future__ import annotations

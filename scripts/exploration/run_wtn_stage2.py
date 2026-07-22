@@ -42,7 +42,7 @@ No synthetic data: original traces from the frozen manifest. EXPLORATORY until
 ``--final``.
 
 Usage (full corpus -- run by the main session, not the smoke):
-  uv run python scripts/run_wtn_stage2.py \
+  uv run python scripts/exploration/run_wtn_stage2.py \
     --manifest analysis/fresh-corpus-certification-20260717/\
 offline-gated-robust/manifest.json --final
 """
@@ -60,16 +60,16 @@ from pathlib import Path
 import sys
 from typing import Any, Sequence
 
-# Allow direct `python scripts/run_wtn_stage2.py ...` invocation.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Allow direct `python scripts/exploration/run_wtn_stage2.py ...` invocation.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.analyze_segment_variance import Chain, _git_sha  # noqa: E402
-from scripts.analyze_wrapper_transparency import (  # noqa: E402
+from scripts.exploration.analyze_segment_variance import Chain, _git_sha  # noqa: E402
+from scripts.exploration.analyze_wrapper_transparency import (  # noqa: E402
     ScreenConfig,
     ScreenResult,
     screen_transparency,
 )
-from scripts.run_offline_gated_robust_confirmation import (  # noqa: E402
+from scripts.certification.run_offline_gated_robust_confirmation import (  # noqa: E402
     _read_manifest,
     _read_task_ids,
     _require_explicit_trace_task_ids,
@@ -453,7 +453,7 @@ def run_stage2(
     """Run the Stage-2 replay and return the full result payload."""
     workers = resolve_worker_count(workers)
 
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     manifest = _read_manifest(manifest_path.resolve(), repo_root=repo_root)
     trace_root = Path(manifest["trace_root"])
     task_ids_path = Path(manifest["task_ids_file"])
@@ -773,7 +773,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _default_output_paths(final: bool) -> tuple[Path, Path]:
     today = _dt.date.today().isoformat()
     suffix = "" if final else "-PARTIAL"
-    stem = f"analysis/wrapper-transparency-stage2-{today}{suffix}"
+    stem = f"analysis/offline/wrapper-transparency-stage2-{today}{suffix}"
     return Path(f"{stem}.json"), Path(f"{stem}.md")
 
 

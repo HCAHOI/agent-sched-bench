@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.sweep_swap_cutoffs import main as sweep_cutoffs_main
+from scripts.exploration.sweep_swap_cutoffs import main as sweep_cutoffs_main
 from trace_collect.swap_cutoff_sweep import evaluate_swap_cutoff_sweep
 
 

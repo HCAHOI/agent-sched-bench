@@ -24,7 +24,7 @@ for f in 1 3 4; do
   while [ "$(jobs -rp | wc -l)" -ge "$MAXC" ] || [ "$(free -g | awk '/^Mem:/{print $7}')" -lt "$MINFREE_GB" ]; do sleep 15; done
   echo "[$(date +%H:%M:%S)] STEP 8 launching fold $f"
   OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
-    python scripts/run_benchmark_frontier.py "${FRONTIER_ARGS[@]}" --only-fold "$f" > "$B/step8_fold${f}.log" 2>&1 &
+    python scripts/certification/run_benchmark_frontier.py "${FRONTIER_ARGS[@]}" --only-fold "$f" > "$B/step8_fold${f}.log" 2>&1 &
   pids+=($!); folds+=($f)
 done
 fail=0
@@ -34,12 +34,12 @@ done
 [ $fail -ne 0 ] && { echo "[$(date +%H:%M:%S)] STEP 8 FAILED (fold proc)"; exit 21; }
 
 OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=4 \
-  python scripts/run_benchmark_frontier.py "${FRONTIER_ARGS[@]}" --aggregate-only
+  python scripts/certification/run_benchmark_frontier.py "${FRONTIER_ARGS[@]}" --aggregate-only
 rc=$?; [ $rc -ne 0 ] && { echo "[$(date +%H:%M:%S)] STEP 8 FAILED aggregate (exit=$rc)"; exit $rc; }
 echo "[$(date +%H:%M:%S)] STEP 8 OK"
 
 echo "[$(date +%H:%M:%S)] STEP 9 START"
-python scripts/analyze_frontier_permutation.py \
+python scripts/certification/analyze_frontier_permutation.py \
   --decisions $B/frontier-p1/rho_0.94_decisions.jsonl \
   --treatment-field offline_gated_robust_trigger_ms --baseline-field offline_gated_tool_name_trigger_ms \
   --restore-cost-fraction 0.94 --replicates 20000 --seed 0 \

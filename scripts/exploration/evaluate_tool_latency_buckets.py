@@ -7,7 +7,7 @@ file may be a tiny fixture for plumbing tests, but experiment runs must use
 measurements from the actual serving engine's KV swap mechanism.
 
 Usage:
-  uv run python scripts/evaluate_tool_latency_buckets.py \
+  uv run python scripts/exploration/evaluate_tool_latency_buckets.py \
     --latencies tool_latencies.jsonl \
     --kv-profile kv_profile.jsonl --quantile p95 --guard-ms 50 \
     --output bucket_summary.json --decisions-output bucket_decisions.jsonl

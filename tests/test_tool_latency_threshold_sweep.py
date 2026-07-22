@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.analyze_utility_threshold_sweep import main as threshold_sweep_main
+from scripts.exploration.analyze_utility_threshold_sweep import main as threshold_sweep_main
 from trace_collect.tool_latency_threshold_sweep import analyze_threshold_sweep
 
 

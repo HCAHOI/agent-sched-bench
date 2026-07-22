@@ -2,7 +2,7 @@
 """Extract observed tool-gap windows from canonical trace JSONL files.
 
 Usage:
-  uv run python scripts/extract_tool_gaps.py traces/run_or_trace.jsonl \
+  uv run python scripts/trace/extract_tool_gaps.py traces/run_or_trace.jsonl \
     --output tool_gaps.jsonl
 
 The output is a label/evaluation dataset. Do not use observed current-iteration

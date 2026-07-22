@@ -2,7 +2,7 @@
 """Generate simulate inputs from a collect run directory.
 
 Usage:
-  uv run python scripts/gen_simulate_manifest.py <collect_run_dir>
+  uv run python scripts/serving/gen_simulate_manifest.py <collect_run_dir>
 
 Outputs:
   <collect_run_dir>/simulate_manifest.yaml   - manifest for simulate
@@ -77,11 +77,11 @@ def main() -> None:
     # Print next steps
     print()
     print("=== Next: run simulate ===")
-    print(f"uv run python -m trace_collect.cli simulate \\")
+    print("uv run python -m trace_collect.cli simulate \\")
     print(f"  --manifest {manifest_path} \\")
     print(f"  --task-source {tasks_path} \\")
-    print(f"  --container docker \\")
-    print(f"  --concurrency 1 \\")
+    print("  --container docker \\")
+    print("  --concurrency 1 \\")
     print(f"  --output-dir {run_dir}/simulate_output")
 
 

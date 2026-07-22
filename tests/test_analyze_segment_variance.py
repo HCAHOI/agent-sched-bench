@@ -16,7 +16,7 @@ from trace_collect.command_features import (
     command_has_concurrent_segments,
     command_prefix_keys,
 )
-from scripts.analyze_segment_variance import (
+from scripts.exploration.analyze_segment_variance import (
     _CERT_MAX_PREFIX_DEPTH,
     _CERT_MIN_EVIDENCE,
     Chain,

@@ -13,10 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from scripts.analyze_session_state_cv import (
+from scripts.exploration.analyze_session_state_cv import (
     BootstrapConfig,
     Call,
-    ClassCV,
     SelectionConfig,
     StateRecord,
     StateVocab,
@@ -32,7 +31,12 @@ from scripts.analyze_session_state_cv import (
     select_heavy_classes,
 )
 
-_MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "analyze_session_state_cv.py"
+_MODULE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "scripts"
+    / "exploration"
+    / "analyze_session_state_cv.py"
+)
 
 
 def _sel_cfg(**overrides) -> SelectionConfig:

@@ -7,7 +7,7 @@ from typing import Sequence
 import numpy as np
 import pytest
 
-from scripts.analyze_pressure_headroom import (
+from scripts.certification.analyze_pressure_headroom import (
     PressureHeadroomConfig,
     believed_trigger_ms,
     fixed_lambda_candidates,

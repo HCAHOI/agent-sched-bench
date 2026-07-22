@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from scripts.run_offline_gated_robust_confirmation import (
+from scripts.certification.run_offline_gated_robust_confirmation import (
     FROZEN_CONFIG,
     REQUIRED_EXCLUDED_TRACE_ROOTS,
     _read_manifest,
@@ -340,7 +340,7 @@ def test_confirmation_source_snapshot_paths_exist() -> None:
 
     assert all(path.is_file() for path in paths)
     assert repo_root / "src/trace_collect/tool_latency_confirmation.py" in paths
-    assert repo_root / "scripts/run_offline_gated_robust_confirmation.py" in paths
+    assert repo_root / "scripts/certification/run_offline_gated_robust_confirmation.py" in paths
 
 
 def test_confirmation_reads_explicit_logical_task_from_trace_metadata() -> None:

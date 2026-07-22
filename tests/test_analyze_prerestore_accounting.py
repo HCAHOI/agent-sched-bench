@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from scripts.analyze_prerestore_accounting import (
+from scripts.certification.analyze_prerestore_accounting import (
     PrerestoreConfig,
     _expected_prerestore_utility,
     _robust_swap_triggers,
@@ -226,8 +226,10 @@ def test_cross_fit_real_positive_start_from_fit_samples() -> None:
 def _fold_rows(samples_by_task, task_ids, fold, fold_count):
     eval_tasks = {t for i, t in enumerate(task_ids) if i % fold_count == fold - 1}
     profile = [t for t in task_ids if t not in eval_tasks]
-    to = lambda tasks: [s.to_json_obj() for t in sorted(tasks) for s in samples_by_task[t]]
-    return to(eval_tasks), to(profile)
+    return (
+        [s.to_json_obj() for t in sorted(eval_tasks) for s in samples_by_task[t]],
+        [s.to_json_obj() for t in sorted(profile) for s in samples_by_task[t]],
+    )
 
 
 def _hetero_corpus() -> tuple[dict[str, list], list[str]]:
