@@ -4,19 +4,13 @@ The paper studies one object: a conditional residual-time prior for tool calls,
 used to price KV-cache actions. Swap-out and pre-restore are two decision points
 on the same call lifecycle, not independent modules.
 
-## C1 — Priced stopping over certified latency priors
+## C1 — Priced stopping over fixed latency priors
 
-**Supported offline claim.** On the frozen Fresh-277 evaluation at the measured
-`rho=0.94`, the certified-union swap trigger beats the fixed deadline by
-`+66.7 s` at `kv=3500 ms` and `+150.6 s` at `kv=5000 ms`. Both certified cells
-are task-broad rather than single-task wins. The authoritative artifact is
-[`fresh-corpus-certification-20260717/findings.md`](fresh-corpus-certification-20260717/findings.md).
-
-Pre-restore also passed its predeclared offline accounting gate under both
-trigger sources. The robust clock yields `+156.2 s/277` at `kv=3500 ms`
-(clustered 95% CI `[60.4, 256.6]`) and `+317.9 s/277` at `kv=5000 ms`
-(`[181.0, 460.4]`). These numbers account for restore cost but cannot measure
-live PCIe contention or serving interference. See
+**Supported offline claim.** Pre-restore passed its predeclared offline accounting
+gate under both trigger sources. The robust clock yields `+156.2 s/277` at
+`kv=3500 ms` (clustered 95% CI `[60.4, 256.6]`) and `+317.9 s/277` at
+`kv=5000 ms` (`[181.0, 460.4]`). These numbers account for restore cost but
+cannot measure live PCIe contention or serving interference. See
 [`certification/rolling-survival-design-20260720.md`](certification/rolling-survival-design-20260720.md).
 
 **Not yet supported.** There is no claim that the policy improves live
@@ -33,14 +27,7 @@ the apparent 21 ms fit improvement was confounded with a support gate, while the
 joint policy was directionally harmful by `-59.6 s/277` at `kv=3500 ms`. The
 gate therefore prevented an estimator-motivated regression.
 
-Fresh-277 H2, command-prefix conditioning versus the tool-name baseline, is an
-honest negative: all ten point estimates were positive, but the minimum
-permutation p-value was `0.0037`, above the preregistered `0.0025` threshold.
-The project may claim directional replication, not certification of that
-estimator-class contrast.
-
-The offline certificate authorizes only the initialized policy against its
-specified fallback. It does not automatically certify later learned states.
+Future Continuum experiments provide the estimator-class comparison.
 
 ## C3 — The elapsed-only re-check space is closed
 
@@ -75,7 +62,6 @@ direction.
 ## Explicit non-claims
 
 - No live W5 or headline systems result exists.
-- No later adaptive model state is certified by the initial offline certificate.
 - No contention conclusion comes from Fresh-277; collection used a cloud model
   and had no shared KV cache.
 - No per-call, same-repository, same-trace, wrapper-normalized, atom/segment, or

@@ -73,7 +73,7 @@
       "sha256": "e1c1b4b45a202c067baf1cf723c7a59208d374d7a4baab6abdc46774903f7541",
       "source": {
         "commit": "ed5c3d8e107d6a4cba18ed67a79896f7774a47d4",
-        "path": "analysis/fresh-corpus-certification-20260717/offline-gated-robust/task_ids.txt"
+        "note": "Fresh-277 task list; relocated from the removed certification lane"
       }
     }
   ]

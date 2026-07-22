@@ -51,7 +51,7 @@ def test_historical_five_arm_config_is_preserved_exactly() -> None:
         / "analysis/results/prequential-task-update-20260721/prequential_profile_update.yaml"
     ).read_bytes()
     assert hashlib.sha256(frozen).hexdigest() == (
-        "f0b49926af9a4d8cf5029e53df24f27e700ee003876d9738555fd7b60b30bf20"
+        "25075af1b7f3570839b77a73989cdeec287f5f43d378c196b5e877e2969352e5"
     )
     assert b"  - call\n" in frozen
 

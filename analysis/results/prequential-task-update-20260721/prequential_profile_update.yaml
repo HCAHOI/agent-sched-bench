@@ -2,7 +2,7 @@ schema_version: 2
 protocol_date: "2026-07-21"
 status: development_only_exploratory
 initialization_manifest: analysis/tool-time-offline-gated-robust-confirmation-swe-rebench-100-20260713/manifest.json
-development_manifest: analysis/fresh-corpus-certification-20260717/offline-gated-robust/manifest.json
+development_manifest: analysis/results/prequential-task-update-20260721/inputs/fresh277-manifest.json
 initialization_trace_inventory:
   file: analysis/tool-time-offline-gated-robust-confirmation-swe-rebench-100-20260713/pre_run_trace_inventory.sha256
   sha256: 33273824002bc347bf267686aca6e20b7d72404a92435872f770776454c2ed0e

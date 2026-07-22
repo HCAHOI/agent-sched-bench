@@ -14,11 +14,8 @@ control their reported numbers and provenance.
 
 ## Evidence locations
 
-- `fresh-corpus-certification-20260717/` — frozen Fresh-277 H1/H2
-  certification evidence.
-- `certification/` — locked protocols, integrity amendments, calibration,
-  pre-restore accounting, policy-space adjudication, and compact certified
-  results.
+- `certification/` — retained calibration, pre-restore accounting, and
+  policy-space adjudication evidence.
 - `results/prequential-task-update-20260721/` — retained development-only
   completed-task adaptation screen and original audit sidecars.
 - `serving/` — hardware measurements plus inputs for the unfinished W5
@@ -28,7 +25,7 @@ control their reported numbers and provenance.
 
 ## Current boundary
 
-Frozen offline evidence is complete for the claims stated in `CLAIMS.md`. The
+Retained offline evidence is limited to the claims stated in `CLAIMS.md`. The
 completed-task update is the only retained adaptive candidate, but its measured
 increment is development-only and order-specific.
 

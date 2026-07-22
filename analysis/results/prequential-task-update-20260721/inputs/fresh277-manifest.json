@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "collection_id": "swe-rebench-qwen3.7-max-fresh-seed42-skip150-n277",
+  "trace_root": "traces/swe-rebench/qwen3.7-max/fresh-seed42-skip150-n200",
+  "task_ids_file": "analysis/results/prequential-task-update-20260721/inputs/fresh277-task-ids.txt",
+  "expected_task_count": 277,
+  "fold_count": 5,
+  "inner_folds": 4,
+  "costs_ms": [
+    500,
+    1000,
+    1500,
+    2000,
+    2500,
+    3000,
+    3500,
+    4000,
+    4500,
+    5000
+  ],
+  "guard_ms": 0,
+  "min_tool_history": 1,
+  "min_profile_tasks": 1,
+  "command_field": "command",
+  "max_prefix_depth": 4,
+  "skip_leading_cd": false
+}

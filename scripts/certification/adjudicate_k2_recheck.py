@@ -70,8 +70,8 @@ bootstrap). Emits JSON + MD to ``analysis/`` (``-PARTIAL`` unless ``--final``).
 
 Usage:
   uv run python scripts/certification/adjudicate_k2_recheck.py \
-    --manifest analysis/fresh-corpus-certification-20260717/\
-offline-gated-robust/manifest.json --final
+    --manifest analysis/results/prequential-task-update-20260721/inputs/\
+fresh277-manifest.json --final
 """
 
 from __future__ import annotations
@@ -92,16 +92,14 @@ import numpy as np
 # Allow direct `python scripts/certification/adjudicate_k2_recheck.py ...` invocation.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.certification.run_offline_gated_robust_confirmation import (  # noqa: E402
-    _read_manifest,
-    _read_task_ids,
-    _require_explicit_trace_task_ids,
-    resolve_worker_count,
-)
+from trace_collect.cli_helpers import resolve_worker_count  # noqa: E402
 from trace_collect.tool_latency_dataset import (  # noqa: E402
     ToolLatencySample,
     discover_trace_files,
     extract_many_tool_latency_samples,
+    read_task_ids,
+    read_tool_latency_corpus_manifest,
+    require_explicit_trace_task_ids,
 )
 from trace_collect.tool_latency_profiled import (  # noqa: E402
     build_latency_prior,
@@ -113,7 +111,7 @@ from trace_collect.tool_latency_utility_clock import (  # noqa: E402
     utility_matrix,
 )
 
-# Certified operating point (fresh-corpus certification manifest +
+# Fixed operating point (retained Fresh-277 manifest +
 # scripts/serving/export_trigger_table.py): guard 0 (threshold == kv) and the measured
 # restore-cost fraction rho = 0.94. The kv-cost panel is read from the manifest.
 _CERT_GUARD_MS = 0.0
@@ -676,8 +674,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--manifest",
         type=Path,
         default=Path(
-            "analysis/fresh-corpus-certification-20260717/"
-            "offline-gated-robust/manifest.json"
+            "analysis/results/prequential-task-update-20260721/inputs/"
+            "fresh277-manifest.json"
         ),
     )
     parser.add_argument(
@@ -725,12 +723,12 @@ def _load_manifest_corpus(
     """Load fresh-277 samples grouped by task, matching the frozen manifest."""
 
     repo_root = Path(__file__).resolve().parents[2]
-    manifest = _read_manifest(manifest_path.resolve(), repo_root=repo_root)
+    manifest = read_tool_latency_corpus_manifest(manifest_path.resolve(), repo_root=repo_root)
     trace_root = Path(manifest["trace_root"])
     trace_paths = discover_trace_files([trace_root])
     if not trace_paths:
         raise ValueError(f"no trace.jsonl files found under {trace_root}")
-    task_by_trace = _require_explicit_trace_task_ids(trace_paths)
+    task_by_trace = require_explicit_trace_task_ids(trace_paths)
     samples = extract_many_tool_latency_samples(trace_paths)
     samples_by_task: dict[str, list[ToolLatencySample]] = defaultdict(list)
     for sample in samples:
@@ -742,7 +740,7 @@ def _load_manifest_corpus(
             )
         samples_by_task[sample.task_id].append(sample)
 
-    task_ids = _read_task_ids(Path(manifest["task_ids_file"]))
+    task_ids = read_task_ids(Path(manifest["task_ids_file"]))
     if len(task_ids) != manifest["expected_task_count"]:
         raise ValueError(
             "manifest expected_task_count differs from frozen task_ids_file: "

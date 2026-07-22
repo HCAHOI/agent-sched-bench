@@ -20,6 +20,29 @@ from trace_collect.trace_data import TraceData
 
 MISSING_TOOL_NAME = "__missing_tool_name__"
 
+_FIXED_CORPUS_CONFIG = {
+    "fold_count": 5,
+    "inner_folds": 4,
+    "costs_ms": [
+        500.0,
+        1000.0,
+        1500.0,
+        2000.0,
+        2500.0,
+        3000.0,
+        3500.0,
+        4000.0,
+        4500.0,
+        5000.0,
+    ],
+    "guard_ms": 0.0,
+    "min_tool_history": 1,
+    "min_profile_tasks": 1,
+    "command_field": "command",
+    "max_prefix_depth": 4,
+    "skip_leading_cd": False,
+}
+
 
 @dataclass(frozen=True)
 class ToolLatencySample:
@@ -478,6 +501,111 @@ def _required_nonnegative_float(
     return number
 
 
+def read_task_ids(path: Path) -> list[str]:
+    """Read a sorted, unique list of non-empty logical task IDs."""
+
+    task_ids = [line.strip() for line in path.read_text(encoding="utf-8").splitlines()]
+    if not task_ids or any(not task_id for task_id in task_ids):
+        raise ValueError("task_ids_file must contain non-empty task IDs")
+    if len(task_ids) != len(set(task_ids)):
+        raise ValueError("task_ids_file contains duplicate task IDs")
+    return sorted(task_ids)
+
+
+def read_tool_latency_corpus_manifest(
+    path: Path,
+    *,
+    repo_root: Path,
+) -> dict[str, Any]:
+    """Load shared corpus metadata and resolve its trace and task-list paths."""
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("tool-latency corpus manifest must be a JSON object")
+    if payload.get("schema_version") != 1:
+        raise ValueError("tool-latency corpus manifest schema_version must be 1")
+
+    collection_id = payload.get("collection_id")
+    if not isinstance(collection_id, str) or not collection_id.strip():
+        raise ValueError("collection_id must be non-empty")
+    integer_fields = (
+        "expected_task_count",
+        "fold_count",
+        "inner_folds",
+        "min_tool_history",
+        "min_profile_tasks",
+        "max_prefix_depth",
+    )
+    for field in integer_fields:
+        value = payload.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise ValueError(f"manifest field {field!r} must be a positive integer")
+    if payload["expected_task_count"] < payload["fold_count"]:
+        raise ValueError("expected_task_count must be >= fold_count")
+
+    costs = payload.get("costs_ms")
+    if not isinstance(costs, list) or not costs or any(
+        not isinstance(value, int | float)
+        or isinstance(value, bool)
+        or not math.isfinite(float(value))
+        or float(value) <= 0.0
+        for value in costs
+    ):
+        raise ValueError("manifest field 'costs_ms' must contain positive numbers")
+    guard = payload.get("guard_ms")
+    if (
+        not isinstance(guard, int | float)
+        or isinstance(guard, bool)
+        or not math.isfinite(float(guard))
+    ):
+        raise ValueError("manifest field 'guard_ms' must be a finite number")
+    if not isinstance(payload.get("command_field"), str):
+        raise ValueError("manifest field 'command_field' must be a string")
+    if not isinstance(payload.get("skip_leading_cd"), bool):
+        raise ValueError("manifest field 'skip_leading_cd' must be a bool")
+
+    normalized_config = {
+        **{field: payload[field] for field in _FIXED_CORPUS_CONFIG},
+        "costs_ms": [float(value) for value in costs],
+        "guard_ms": float(guard),
+    }
+    if normalized_config != _FIXED_CORPUS_CONFIG:
+        raise ValueError("manifest analysis config differs from the fixed corpus protocol")
+
+    resolved = dict(payload)
+    for field in ("trace_root", "task_ids_file"):
+        value = payload.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"manifest field {field!r} must be a non-empty path")
+        input_path = Path(value).expanduser()
+        resolved[field] = str(
+            (repo_root / input_path).resolve()
+            if not input_path.is_absolute()
+            else input_path.resolve()
+        )
+    trace_root = Path(resolved["trace_root"])
+    task_ids_file = Path(resolved["task_ids_file"])
+    if not trace_root.is_dir():
+        raise ValueError(f"trace_root is not a directory: {trace_root}")
+    if not task_ids_file.is_file():
+        raise ValueError(f"task_ids_file is not a file: {task_ids_file}")
+    resolved["costs_ms"] = [float(value) for value in costs]
+    return resolved
+
+
+def require_explicit_trace_task_ids(trace_paths: Iterable[Path]) -> dict[str, str]:
+    """Map traces to explicit logical task IDs from canonical metadata."""
+
+    task_by_trace: dict[str, str] = {}
+    for trace_path in trace_paths:
+        trace = TraceData.load(trace_path)
+        task_id = str(trace.metadata.get("instance_id") or "").strip()
+        if not task_id:
+            raise ValueError(f"trace lacks explicit metadata instance_id: {trace_path}")
+        task_by_trace[str(trace_path.resolve())] = task_id
+    return task_by_trace
+
+
 __all__ = [
     "SegmentLatencySample",
     "ToolLatencySample",
@@ -486,6 +614,9 @@ __all__ = [
     "extract_many_tool_latency_samples",
     "extract_segment_latency_samples",
     "extract_tool_latency_samples",
+    "read_task_ids",
+    "read_tool_latency_corpus_manifest",
     "read_tool_latency_jsonl",
+    "require_explicit_trace_task_ids",
     "write_tool_latency_jsonl",
 ]

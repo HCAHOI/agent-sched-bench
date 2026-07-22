@@ -3,7 +3,7 @@
     "exploratory": true,
     "offline_accounting": true,
     "final": true,
-    "manifest": "analysis/fresh-corpus-certification-20260717/offline-gated-robust/manifest.json",
+    "manifest": "analysis/results/prequential-task-update-20260721/inputs/fresh277-manifest.json",
     "collection_id": "swe-rebench-qwen3.7-max-fresh-seed42-skip150-n277",
     "task_count": 277,
     "limit_tasks": null,

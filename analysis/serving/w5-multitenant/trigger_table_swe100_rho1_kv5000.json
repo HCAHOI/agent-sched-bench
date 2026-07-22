@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "label": "deployment demo table derived from eval artifacts -- not itself a certified object; the certified claim is H1 (certified-union vs deadline) on the eval",
+  "label": "development trigger table derived from prior eval artifacts; not a deployment certificate",
   "kv_cost_ms": 5000.0,
   "deadline_ms": 5000.0,
   "max_prefix_depth": 4,

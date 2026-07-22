@@ -8,7 +8,7 @@
       "call"
     ],
     "command_field": "command",
-    "development_manifest": "analysis/fresh-corpus-certification-20260717/offline-gated-robust/manifest.json",
+    "development_manifest": "analysis/results/prequential-task-update-20260721/inputs/fresh277-manifest.json",
     "development_trace_inventory": {
       "file": "analysis/development/prequential-profile-update-fresh277-pre-run-traces.sha256",
       "sha256": "b51c3c59653122c4224a199cf369551d1e50e8dd81daba57959ad7b9949bf190",
@@ -6604,11 +6604,11 @@
   },
   "provenance": {
     "config": "configs/experiments/prequential_profile_update.yaml",
-    "config_sha256": "f0b49926af9a4d8cf5029e53df24f27e700ee003876d9738555fd7b60b30bf20",
+    "config_sha256": "25075af1b7f3570839b77a73989cdeec287f5f43d378c196b5e877e2969352e5",
     "development_call_count": 13410,
     "development_collection_id": "swe-rebench-qwen3.7-max-fresh-seed42-skip150-n277",
-    "development_manifest": "analysis/fresh-corpus-certification-20260717/offline-gated-robust/manifest.json",
-    "development_manifest_sha256": "0eaa598d12194e9a259b838735cd201449a3e75d161bfcf9d7646dac6456f71a",
+    "development_manifest": "analysis/results/prequential-task-update-20260721/inputs/fresh277-manifest.json",
+    "development_manifest_sha256": "4db9f8f7e69a990d6c8552223f20ed176945e4aac1221f399dca2b37097a58fb",
     "development_task_count": 277,
     "development_task_ids_sha256": "e1c1b4b45a202c067baf1cf723c7a59208d374d7a4baab6abdc46774903f7541",
     "development_trace_inventory_sha256": "8c8d3563f93050bad54c6324c47b8cf74343645d984bf8c852c69758d52b6fba",

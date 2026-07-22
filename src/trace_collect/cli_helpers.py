@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from typing import Callable
 
 from trace_collect.kv_profile_sweep import filter_profiles, load_profile
@@ -52,4 +53,13 @@ def resolve_kv_costs(args: argparse.Namespace) -> list[float]:
     return bucket_edges_from_profile(profiles, quantile=args.quantile, guard_ms=0.0)
 
 
-__all__ = ["comma_separated_floats", "resolve_kv_costs"]
+def resolve_worker_count(workers: int | None = None) -> int:
+    """Return a positive worker count, leaving one CPU for the OS by default."""
+
+    resolved = max(1, (os.cpu_count() or 1) - 1) if workers is None else workers
+    if resolved < 1:
+        raise ValueError(f"workers must be >= 1, got {resolved}")
+    return resolved
+
+
+__all__ = ["comma_separated_floats", "resolve_kv_costs", "resolve_worker_count"]

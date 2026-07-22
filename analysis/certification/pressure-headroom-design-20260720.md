@@ -110,10 +110,10 @@ growth distribution (the mechanism figure). Panel coherence
 (non-monotonicity across the kv panel) is reported as a DESCRIPTIVE
 secondary indicator only and cannot move the verdict.
 
-**A SURVIVE does not license deployment.** It triggers a separate
-certified decision replay (paired vs the frozen certified policy at
-rho=0.94, permutation per kv cell, full H1 discipline) — exactly as
-pre-restore required its robust-clock re-confirmation.
+**A SURVIVE does not license deployment.** It triggers a separate decision
+replay paired against the frozen policy at `rho=0.94`, with permutation tests
+per KV cell over the full cost family — exactly as pre-restore required its
+robust-clock re-confirmation.
 
 ## λ-honesty: why occupancy was refused (structural negative)
 

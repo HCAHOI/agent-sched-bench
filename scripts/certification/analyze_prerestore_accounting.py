@@ -62,7 +62,7 @@ scored against them. Every kv cell is evaluated at the certified operating point
 (guard 0 so threshold == kv, rho = 0.94).
 
 Statistics. Per (task, kv) net-utility contributions feed the SAME certified
-engine as the H1 / WTN Stage-2 certificate -- ``_resample_task_totals`` (paired
+task-cluster inference engine used by WTN Stage 2 -- ``_resample_task_totals`` (paired
 task-cluster percentile bootstrap) and ``_permutation_simultaneous_labels``
 (task-clustered sign-flip randomization, Bonferroni over the full cost family)
 at replicates 50000, confidence 0.95, seed 0. We feed a precomputed
@@ -81,8 +81,8 @@ unless ``--final``).
 
 Usage (full corpus -- run by the main session, not the smoke):
   uv run python scripts/certification/analyze_prerestore_accounting.py \
-    --manifest analysis/fresh-corpus-certification-20260717/\
-offline-gated-robust/manifest.json --final
+    --manifest analysis/results/prequential-task-update-20260721/inputs/\
+fresh277-manifest.json --final
 """
 
 from __future__ import annotations
@@ -111,9 +111,7 @@ from scripts.certification.adjudicate_k2_recheck import (  # noqa: E402
     _load_manifest_corpus,
     _row_group_keys,
 )
-from scripts.certification.run_offline_gated_robust_confirmation import (  # noqa: E402
-    resolve_worker_count,
-)
+from trace_collect.cli_helpers import resolve_worker_count  # noqa: E402
 from trace_collect.tool_latency_dataset import ToolLatencySample  # noqa: E402
 from trace_collect.tool_latency_offline_probe import (  # noqa: E402
     evaluate_offline_probe_clock,
@@ -127,7 +125,7 @@ from trace_collect.tool_latency_profiled import (  # noqa: E402
 from trace_collect.tool_latency_prerestore import prerestore_start_ms  # noqa: E402
 
 # Reuse the certified task-cluster bootstrap + sign-flip permutation core
-# verbatim (same replicate/seed/Bonferroni discipline as H1). We supply a
+# verbatim (same replicate/seed/Bonferroni discipline). We supply a
 # precomputed contributions matrix instead of routing through
 # ``paired_task_cluster_bootstrap`` because that wrapper's per-call utility is
 # hardwired to the swap-trigger functional; the statistical engine is identical.
@@ -137,7 +135,7 @@ from trace_collect.tool_latency_confirmation import (  # noqa: E402
 )
 
 # Headline cells for the pre-registered kill (spec: 3500/5000). The FULL cost
-# family still drives the Bonferroni correction, matching H1.
+# family still drives the Bonferroni correction.
 _HEADLINE_COSTS_MS = (3500.0, 5000.0)
 
 
@@ -406,7 +404,7 @@ def _contributions_matrix(
 def _certificate(
     contributions: np.ndarray, cfg: PrerestoreConfig
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
-    """Reuse the H1 engine: percentile CI + sign-flip permutation labels."""
+    """Reuse the shared percentile CI and sign-flip permutation engine."""
 
     observed = np.sum(contributions, axis=0)
     bootstrap_totals = _resample_task_totals(
@@ -626,8 +624,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--manifest",
         type=Path,
         default=Path(
-            "analysis/fresh-corpus-certification-20260717/"
-            "offline-gated-robust/manifest.json"
+            "analysis/results/prequential-task-update-20260721/inputs/"
+            "fresh277-manifest.json"
         ),
     )
     parser.add_argument(

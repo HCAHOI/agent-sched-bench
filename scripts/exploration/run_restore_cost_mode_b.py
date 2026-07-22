@@ -4,10 +4,9 @@
 Mode B counterpart to scripts/exploration/analyze_restore_cost_sweep.py: every fit stage
 (inner probe scoring, guard selection, outer triggers) runs at each swept
 ``restore_cost_fraction`` and the paired bootstrap scores at the same
-fraction. Inputs are the frozen fold splits and latency JSONLs written by
-scripts/certification/run_offline_gated_robust_confirmation.py, so data, folds, and config
-match the certified run; the fraction-zero refit is asserted to reproduce the
-frozen triggers exactly. See trace_collect.restore_cost_analysis.
+fraction. Inputs are frozen fold splits and latency JSONLs from an offline-probe run, so
+data, folds, and config match that run; the fraction-zero refit is asserted to
+reproduce the frozen triggers exactly. See trace_collect.restore_cost_analysis.
 """
 
 from __future__ import annotations

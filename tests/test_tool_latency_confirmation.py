@@ -2,22 +2,18 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import shutil
 from typing import Any
 
 import pytest
 
-from scripts.certification.run_offline_gated_robust_confirmation import (
-    FROZEN_CONFIG,
-    REQUIRED_EXCLUDED_TRACE_ROOTS,
-    _read_manifest,
-    _reject_trace_content_overlap,
-    _require_explicit_trace_task_ids,
-    _source_snapshot_paths,
-    _verify_hash_inventory,
-    _write_hashes,
-)
 from trace_collect.tool_latency_confirmation import paired_task_cluster_bootstrap
+from trace_collect.tool_latency_dataset import (
+    read_tool_latency_corpus_manifest,
+    require_explicit_trace_task_ids,
+)
+
+
+_TEN_COSTS_MS = [float(cost) for cost in range(500, 5_001, 500)]
 
 
 def test_task_cluster_bootstrap_preserves_repeated_call_contributions() -> None:
@@ -164,13 +160,13 @@ def test_task_cluster_bootstrap_vs_deadline_requires_explicit_optout() -> None:
 def test_task_cluster_bootstrap_uses_ten_cost_bonferroni_family() -> None:
     decisions = _decision_panel(
         task_ids=[f"task-{index}" for index in range(5)],
-        costs=FROZEN_CONFIG["costs_ms"],
+        costs=_TEN_COSTS_MS,
         latency_ms=80.0,
     )
 
     result = paired_task_cluster_bootstrap(
         decisions,
-        costs_ms=FROZEN_CONFIG["costs_ms"],
+        costs_ms=_TEN_COSTS_MS,
         replicates=50_000,
         confidence_level=0.95,
         seed=0,
@@ -270,110 +266,28 @@ def test_permutation_certificate_certifies_a_clean_wide_win() -> None:
     assert result["points"]["100.0"]["permutation_label"] == "positive"
 
 
-def test_confirmation_manifest_accepts_only_frozen_configuration(
-    tmp_path: Path,
-) -> None:
+def test_corpus_manifest_resolves_inputs_and_validates_types(tmp_path: Path) -> None:
     manifest_path = _write_manifest(tmp_path)
 
-    manifest = _read_manifest(manifest_path, repo_root=tmp_path)
+    manifest = read_tool_latency_corpus_manifest(manifest_path, repo_root=tmp_path)
 
-    assert manifest["costs_ms"] == FROZEN_CONFIG["costs_ms"]
+    assert manifest["costs_ms"] == _TEN_COSTS_MS
     assert manifest["expected_task_count"] == 5
+    assert Path(manifest["task_ids_file"]).is_file()
 
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    payload["bootstrap"]["replicates"] = 10_000
+    payload["skip_leading_cd"] = 0
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(ValueError, match="differs from frozen protocol"):
-        _read_manifest(manifest_path, repo_root=tmp_path)
+    with pytest.raises(ValueError, match="must be a bool"):
+        read_tool_latency_corpus_manifest(manifest_path, repo_root=tmp_path)
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("guard_ms", False),
-        ("min_tool_history", True),
-        ("skip_leading_cd", 0),
-    ],
-)
-def test_confirmation_manifest_rejects_bool_numeric_aliases(
-    tmp_path: Path,
-    field: str,
-    value: object,
-) -> None:
-    manifest_path = _write_manifest(tmp_path)
-    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    payload[field] = value
-    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
-
-    with pytest.raises(ValueError, match="manifest field|must be a bool"):
-        _read_manifest(manifest_path, repo_root=tmp_path)
-
-
-def test_confirmation_manifest_rejects_excluded_trace_overlap(
-    tmp_path: Path,
-) -> None:
-    manifest_path = _write_manifest(tmp_path)
-    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    payload["excluded_trace_roots"].append(payload["trace_root"])
-    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
-
-    with pytest.raises(ValueError, match="overlaps excluded source"):
-        _read_manifest(manifest_path, repo_root=tmp_path)
-
-
-def test_confirmation_manifest_requires_all_development_exclusions(
-    tmp_path: Path,
-) -> None:
-    manifest_path = _write_manifest(tmp_path)
-    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    payload["excluded_trace_roots"].pop()
-    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
-
-    with pytest.raises(ValueError, match="omits required development sources"):
-        _read_manifest(manifest_path, repo_root=tmp_path)
-
-
-def test_confirmation_source_snapshot_paths_exist() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-
-    paths = _source_snapshot_paths(repo_root)
-
-    assert all(path.is_file() for path in paths)
-    assert repo_root / "src/trace_collect/tool_latency_confirmation.py" in paths
-    assert repo_root / "scripts/certification/run_offline_gated_robust_confirmation.py" in paths
-
-
-def test_confirmation_reads_explicit_logical_task_from_trace_metadata() -> None:
+def test_corpus_reader_uses_explicit_logical_task_metadata() -> None:
     fixture = Path(__file__).resolve().parent / "fixtures/openclaw_minimal_v5.jsonl"
 
-    task_by_trace = _require_explicit_trace_task_ids([fixture])
+    task_by_trace = require_explicit_trace_task_ids([fixture])
 
     assert task_by_trace[str(fixture.resolve())] == "test-openclaw-1"
-
-
-def test_confirmation_input_hash_verification_detects_changes(tmp_path: Path) -> None:
-    source = tmp_path / "input.txt"
-    source.write_text("before\n", encoding="utf-8")
-    inventory = tmp_path / "input_hashes.sha256"
-    _write_hashes([source], inventory)
-
-    _verify_hash_inventory(inventory)
-    source.write_text("after\n", encoding="utf-8")
-
-    with pytest.raises(ValueError, match="changed during run"):
-        _verify_hash_inventory(inventory)
-
-
-def test_confirmation_rejects_development_trace_copied_to_new_path(
-    tmp_path: Path,
-) -> None:
-    development = tmp_path / "development.jsonl"
-    candidate = tmp_path / "renamed-fresh.jsonl"
-    development.write_text('{"type":"trace_metadata"}\n', encoding="utf-8")
-    shutil.copy2(development, candidate)
-
-    with pytest.raises(ValueError, match="duplicates a development trace by content"):
-        _reject_trace_content_overlap([candidate], [development])
 
 
 def _decision(
@@ -414,26 +328,25 @@ def _decision_panel(
 
 
 def _write_manifest(tmp_path: Path) -> Path:
-    trace_root = tmp_path / "fresh-traces"
+    trace_root = tmp_path / "traces"
     trace_root.mkdir()
     task_ids = tmp_path / "task_ids.txt"
     task_ids.write_text("task-a\ntask-b\ntask-c\ntask-d\ntask-e\n", encoding="utf-8")
     payload = {
         "schema_version": 1,
-        "collection_id": "fresh-collection",
+        "collection_id": "corpus",
         "trace_root": str(trace_root),
         "task_ids_file": str(task_ids),
         "expected_task_count": 5,
-        "freshness_attestation": {
-            "not_used_for_method_development": True,
-            "not_smoke_or_synthetic": True,
-            "complete_fixed_task_set": True,
-        },
-        "excluded_trace_roots": [
-            str(tmp_path / relative_path)
-            for relative_path in REQUIRED_EXCLUDED_TRACE_ROOTS
-        ],
-        **FROZEN_CONFIG,
+        "fold_count": 5,
+        "inner_folds": 4,
+        "costs_ms": _TEN_COSTS_MS,
+        "guard_ms": 0,
+        "min_tool_history": 1,
+        "min_profile_tasks": 1,
+        "command_field": "command",
+        "max_prefix_depth": 4,
+        "skip_leading_cd": False,
     }
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps(payload), encoding="utf-8")

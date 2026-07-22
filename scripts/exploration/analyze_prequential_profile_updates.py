@@ -72,10 +72,6 @@ def _source_snapshot_records(
 _SOURCE_HASHES_AT_IMPORT = _source_tree_hashes()
 sys.path.insert(0, str(_REPO_ROOT))
 
-from scripts.certification.run_offline_gated_robust_confirmation import (  # noqa: E402
-    _read_manifest,
-    _require_explicit_trace_task_ids,
-)
 from trace_collect.tool_gap_extractor import discover_trace_files  # noqa: E402
 from trace_collect.tool_latency_utility_clock import (  # noqa: E402
     trigger_policy_utility_ms,
@@ -83,6 +79,8 @@ from trace_collect.tool_latency_utility_clock import (  # noqa: E402
 from trace_collect.tool_latency_dataset import (  # noqa: E402
     ToolLatencySample,
     extract_many_tool_latency_samples,
+    read_tool_latency_corpus_manifest,
+    require_explicit_trace_task_ids,
 )
 from trace_collect.tool_latency_offline_probe import (  # noqa: E402
     evaluate_offline_probe_clock,
@@ -107,7 +105,7 @@ _INITIAL_MANIFEST = (
     "swe-rebench-100-20260713/manifest.json"
 )
 _DEVELOPMENT_MANIFEST = (
-    "analysis/fresh-corpus-certification-20260717/offline-gated-robust/manifest.json"
+    "analysis/results/prequential-task-update-20260721/inputs/fresh277-manifest.json"
 )
 _INITIAL_COLLECTION = "swe-rebench-qwen3.7-max-seed42-offset50-100-complete-v2"
 _DEVELOPMENT_COLLECTION = "swe-rebench-qwen3.7-max-fresh-seed42-skip150-n277"
@@ -1222,7 +1220,7 @@ def _load_corpus(
     str,
 ]:
     manifest_hash = _sha256(manifest_path)
-    manifest = _read_manifest(manifest_path, repo_root=_REPO_ROOT)
+    manifest = read_tool_latency_corpus_manifest(manifest_path, repo_root=_REPO_ROOT)
     _verify_file_hash(manifest_path, manifest_hash)
     task_ids, task_ids_hash = _read_hashed_task_ids(Path(manifest["task_ids_file"]))
     if len(task_ids) != manifest["expected_task_count"]:
@@ -1253,7 +1251,7 @@ def _load_corpus(
             raise ValueError("frozen trace inventory count differs from its metadata")
         if frozen_inventory != inventory:
             raise ValueError("live traces differ from the frozen trace inventory")
-    task_by_trace = _require_explicit_trace_task_ids(trace_paths)
+    task_by_trace = require_explicit_trace_task_ids(trace_paths)
     samples_by_task = _extract_samples_by_task(trace_paths, task_by_trace)
     if set(samples_by_task) != set(task_ids):
         raise ValueError(

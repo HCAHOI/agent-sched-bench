@@ -1,8 +1,8 @@
-# Calibration of the certified latency priors
+# Calibration of the fixed latency priors
 
 > **FINAL - complete corpus**
 >
-> DESCRIPTIVE lane, NO kill criterion. The estimator is frozen and H1-certified; this lane measures it and cannot change it. Original-trace latencies via the frozen manifest (swe-rebench-qwen3.7-max-fresh-seed42-skip150-n277), cross-fitted as A0/A2. Generated 2026-07-20T10:30:20 (git 06f5a5f0dc9f89ae79850bbc3c8e86ca9181952c).
+> DESCRIPTIVE lane, NO kill criterion. The estimator is frozen; this lane measures it and cannot change it. Original-trace latencies via the retained Fresh-277 manifest, cross-fitted as A0/A2. Generated 2026-07-20T10:30:20 (git 06f5a5f0dc9f89ae79850bbc3c8e86ca9181952c).
 
 277 tasks, 13410 calls (14 right-censored), guard 0ms (threshold==kv), rho=0.94. Task-clustered percentile CIs at 0.95.
 

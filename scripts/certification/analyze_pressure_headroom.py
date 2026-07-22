@@ -113,7 +113,7 @@ above -- and no result here, positive or null, says anything about it.
 
 A SURVIVE HERE DOES NOT LICENSE DEPLOYMENT. This is a screen. A positive
 headroom triggers a SEPARATE certified decision replay -- paired against the
-frozen certified policy at rho=0.94, permutation per kv cell, full H1 discipline
+frozen policy at rho=0.94, with permutation tests per KV cell over the full family
 -- exactly as A2 required its robust-clock re-confirmation. The number this
 script prints must NEVER be quoted as a certified gain.
 
@@ -155,8 +155,8 @@ unless ``--final``).
 
 Usage (full corpus):
   uv run python scripts/certification/analyze_pressure_headroom.py \
-    --manifest analysis/fresh-corpus-certification-20260717/\
-offline-gated-robust/manifest.json --final
+    --manifest analysis/results/prequential-task-update-20260721/inputs/\
+fresh277-manifest.json --final
 """
 
 from __future__ import annotations
@@ -198,7 +198,7 @@ from trace_collect.tool_latency_profiled import (  # noqa: E402
 from trace_collect.tool_latency_utility_clock import utility_matrix  # noqa: E402
 
 # Certified statistics engine, reused verbatim (same replicates/seed/Bonferroni
-# discipline as H1 and A2). We feed a precomputed contributions matrix because
+# discipline as A2). We feed a precomputed contributions matrix because
 # ``paired_task_cluster_bootstrap`` hardwires the swap-trigger utility.
 from trace_collect.tool_latency_confirmation import (  # noqa: E402
     _permutation_simultaneous_labels,
@@ -210,8 +210,8 @@ from trace_collect.tool_latency_confirmation import (  # noqa: E402
 _HEADLINE_COST_MS = 3500.0
 _CERTIFIED_TASK_COUNT = 277
 _FROZEN_MANIFEST = Path(
-    "analysis/fresh-corpus-certification-20260717/"
-    "offline-gated-robust/manifest.json"
+    "analysis/results/prequential-task-update-20260721/inputs/"
+    "fresh277-manifest.json"
 )
 
 # The already-banked pre-restore effect the direction must beat to be worth
@@ -1013,7 +1013,7 @@ _NO_DEPLOYMENT_LICENSE = (
     "> **A SURVIVE here does NOT license deployment.** This is a screen, not a "
     "certificate. A positive headroom triggers a SEPARATE certified decision "
     "replay -- paired against the frozen certified policy at rho=0.94, "
-    "permutation per kv cell, full H1 discipline -- exactly as A2 required its "
+    "permutation per KV cell over the full cost family -- exactly as A2 required its "
     "robust-clock re-confirmation. The numbers in this artifact must NEVER be "
     "quoted as a certified gain."
 )

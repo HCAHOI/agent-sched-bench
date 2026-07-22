@@ -1,7 +1,7 @@
 """Cross-benchmark transfer of frozen offline-gated trigger policies (E2).
 
-The certification in scripts/run_offline_gated_robust_confirmation.py fits the
-offline-probe guard and outer triggers on a frozen SWE-ReBench profile. This
+The offline-probe pipeline fits the guard and outer triggers on a frozen
+SWE-ReBench profile. This
 module asks a different question: do those *frozen* fitting rules transfer to a
 target benchmark whose task distribution the method never saw during that fit?
 

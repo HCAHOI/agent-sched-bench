@@ -2,7 +2,7 @@
 """Calibration + sharpness of the certified latency priors (DESCRIPTIVE lane).
 
 Pre-registered in ``analysis/curve-calibration-design-20260720.md``. This lane
-MEASURES the shipped, H1-certified estimator; it does NOT tune it. There is no
+MEASURES the fixed estimator; it does NOT tune it. There is no
 kill criterion: a coverage miss or a negative skill score is reported as a
 limitation, never fixed by touching the estimator. Nothing under ``src/`` is
 modified or re-implemented here -- the prior, its hierarchy, and the certified
@@ -96,7 +96,7 @@ Brier region, ``n < 1 / (1 - q)`` for coverage at ``q``.
 
 **Statistics.** Task-clustered percentile bootstrap at the certified
 replicate/seed discipline (50000, 0.95, seed 0), resampling whole logical tasks
-with ``_resample_task_totals`` (reused verbatim from the H1 engine) for every
+with ``_resample_task_totals`` (the shared task-cluster engine) for every
 ratio-of-sums statistic -- coverage, CRPS skill, Brier -- so numerator and
 denominator move together under one resample. CvM is not a ratio of sums, so it
 uses ``_task_cluster_multiplicities``, which draws the SAME multinomial task
@@ -108,8 +108,8 @@ committed JSON.
 
 Usage (full corpus):
   uv run python scripts/certification/analyze_prior_calibration.py \
-    --manifest analysis/fresh-corpus-certification-20260717/\
-offline-gated-robust/manifest.json --final
+    --manifest analysis/results/prequential-task-update-20260721/inputs/\
+fresh277-manifest.json --final
 """
 
 from __future__ import annotations
@@ -347,7 +347,7 @@ def _cvm_omega2_weighted(sorted_pit: np.ndarray, multiplicity: np.ndarray) -> fl
 def _task_cluster_multiplicities(
     task_count: int, *, replicates: int, seed: int, batch: int
 ) -> Any:
-    """Yield batches of multinomial task multiplicities (same draw as H1).
+    """Yield batches of multinomial task multiplicities.
 
     Mirrors ``_resample_task_totals``' generator and draw exactly
     (``PCG64(seed)``, ``multinomial(task_count, uniform)``) for the statistics
@@ -1042,7 +1042,7 @@ def render_markdown(results: dict[str, Any], provenance: dict[str, Any]) -> str:
     lines.append(">")
     lines.append(
         "> DESCRIPTIVE lane, NO kill criterion. The estimator is frozen and "
-        "H1-certified; this lane measures it and cannot change it. Original-trace "
+        "frozen; this lane measures it and cannot change it. Original-trace "
         f"latencies via the frozen manifest ({provenance['collection_id']}), "
         f"cross-fitted as A0/A2. Generated {provenance['generated']} "
         f"(git {provenance['git_sha']})."
@@ -1274,8 +1274,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--manifest",
         type=Path,
         default=Path(
-            "analysis/fresh-corpus-certification-20260717/"
-            "offline-gated-robust/manifest.json"
+            "analysis/results/prequential-task-update-20260721/inputs/"
+            "fresh277-manifest.json"
         ),
     )
     parser.add_argument(

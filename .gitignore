@@ -20,6 +20,11 @@ demo/gantt_viewer/frontend/dist/
 data/
 tmp/
 results/
+!analysis/results/
+!analysis/results/prequential-task-update-20260721/
+!analysis/results/prequential-task-update-20260721/inputs/
+!analysis/results/prequential-task-update-20260721/inputs/fresh277-manifest.json
+!analysis/results/prequential-task-update-20260721/inputs/fresh277-task-ids.txt
 traces/
 output/
 /logs/

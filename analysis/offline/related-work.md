@@ -14,9 +14,9 @@ workload-level rather than an instantaneous per-request memory price.
 
 The closest contrast is therefore conditional-residual expected-cost pricing
 versus a frozen tool-name point TTL, not “load awareness versus no load
-awareness.” Continuum's published `cd` tail also illustrates why tool identity
-can be too coarse for compound commands, but Fresh-277 H2 did not certify the
-command-prefix advantage and must remain a negative result.
+awareness.” Continuum's published `cd` tail illustrates why tool identity can be
+too coarse for compound commands; the future Continuum experiment must test
+whether command-prefix conditioning improves decision utility.
 
 ## ThunderAgent
 
