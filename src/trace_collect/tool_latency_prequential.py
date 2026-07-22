@@ -11,8 +11,6 @@ from __future__ import annotations
 from bisect import insort
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-import hashlib
-import json
 import math
 from time import perf_counter_ns
 from typing import Any, Literal
@@ -69,7 +67,6 @@ class EvolvingLatencyProfile:
         )
         self._sample_ids: set[str] = set()
         self._task_by_source: dict[str, str] = {}
-        payloads = []
         for index, row in enumerate(profile_rows):
             payload = self._payload(row, source=f"initial profile row {index}")
             sample_id = payload["sample_id"]
@@ -77,13 +74,7 @@ class EvolvingLatencyProfile:
                 raise ValueError(f"duplicate initial profile sample_id: {sample_id!r}")
             self._sample_ids.add(sample_id)
             self._record_source_task(payload, source=f"initial profile row {index}")
-            payloads.append(payload)
-        digest = hashlib.sha256()
-        for payload in sorted(payloads, key=lambda item: item["sample_id"]):
-            digest.update(_canonical_json(payload))
-            digest.update(b"\n")
         self.version = 0
-        self.state_hash = digest.hexdigest()
 
     @property
     def row_count(self) -> int:
@@ -137,15 +128,10 @@ class EvolvingLatencyProfile:
         runtime_ms = (perf_counter_ns() - start_ns) / 1_000_000.0
 
         self.version += 1
-        digest = hashlib.sha256()
-        digest.update(bytes.fromhex(self.state_hash))
-        digest.update(_canonical_json(payload))
-        self.state_hash = digest.hexdigest()
         return (
             {
                 **payload,
                 "model_version": self.version,
-                "model_state_hash": self.state_hash,
                 "profile_row_count": self.row_count,
                 "profile_task_count": self.task_count,
             },
@@ -281,7 +267,6 @@ def evaluate_prequential_updates(
             ):
                 row_index += 1
             snapshot_version = profile.version
-            snapshot_hash = profile.state_hash
             for row in ordered[bucket_start:row_index]:
                 decisions.extend(
                     _score_row(
@@ -290,7 +275,6 @@ def evaluate_prequential_updates(
                         arm=update_mode,
                         task_position=task_position,
                         model_version=snapshot_version,
-                        model_state_hash=snapshot_hash,
                         kv_costs=costs,
                         guard_ms=guard_ms,
                         selected_guard_normalized=selected_guard_normalized,
@@ -324,7 +308,6 @@ def evaluate_prequential_updates(
         "final_profile_row_count": profile.row_count,
         "final_profile_task_count": profile.task_count,
         "final_model_version": profile.version,
-        "final_model_state_hash": profile.state_hash,
         "decisions": decisions,
         "updates": updates,
     }
@@ -337,7 +320,6 @@ def _score_row(
     arm: UpdateMode,
     task_position: int,
     model_version: int,
-    model_state_hash: str,
     kv_costs: Sequence[float],
     guard_ms: float,
     selected_guard_normalized: float | None,
@@ -415,7 +397,6 @@ def _score_row(
                 "prior_group_key": robust_node.group_key,
                 "prior_task_count": len(robust_node.values_by_task),
                 "model_version": model_version,
-                "model_state_hash": model_state_hash,
                 "profile_row_count": profile.row_count,
                 "profile_task_count": profile.task_count,
             }
@@ -505,15 +486,6 @@ def _finite_nonnegative(value: float, *, label: str) -> float:
     if not math.isfinite(number) or number < 0.0:
         raise ValueError(f"{label} must be finite and non-negative")
     return number
-
-
-def _canonical_json(payload: Mapping[str, Any]) -> bytes:
-    return json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
 
 
 __all__ = [

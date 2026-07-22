@@ -1,16 +1,8 @@
-schema_version: 3
+schema_version: 4
 protocol_date: "2026-07-21"
 status: development_only_exploratory
 initialization_manifest: analysis/tool-time-offline-gated-robust-confirmation-swe-rebench-100-20260713/manifest.json
 development_manifest: analysis/results/prequential-task-update-20260721/inputs/fresh277-manifest.json
-initialization_trace_inventory:
-  file: analysis/tool-time-offline-gated-robust-confirmation-swe-rebench-100-20260713/pre_run_trace_inventory.sha256
-  sha256: 33273824002bc347bf267686aca6e20b7d72404a92435872f770776454c2ed0e
-  trace_count: 100
-development_trace_inventory:
-  file: analysis/results/prequential-task-update-20260721/prequential-profile-update-fresh277-pre-run-traces.sha256
-  sha256: b51c3c59653122c4224a199cf369551d1e50e8dd81daba57959ad7b9949bf190
-  trace_count: 277
 outer_folds: 5
 arms:
   - frozen_100

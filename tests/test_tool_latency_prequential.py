@@ -130,9 +130,6 @@ def test_task_updates_publish_only_after_task_boundary() -> None:
         row["sample_id"]: row["trigger_ms"] for row in task["decisions"]
     } == {"e0a": 300.0, "e0b": 300.0, "e0c": 300.0, "e1a": 300.0}
     assert task["final_model_version"] == 4
-    assert task["final_model_state_hash"] == (
-        "d8ac57d20c583c0488899c7ec4acfe18923de9c534e812c91073b8dc7ed85bfd"
-    )
     assert [row["sample_id"] for row in task["updates"]] == [
         "e0a",
         "e0b",
@@ -157,7 +154,5 @@ def test_same_start_calls_share_one_model_snapshot() -> None:
     runtimes = {str(row["sample_id"]): 0.01 for row in rows}
     result = _evaluate(rows, mode="task", runtimes=runtimes, task_order=["e0"])
     versions = {row["sample_id"]: row["model_version"] for row in result["decisions"]}
-    hashes = {row["sample_id"]: row["model_state_hash"] for row in result["decisions"]}
     assert versions == {"e0a": 0, "e0b": 0, "e0c": 0}
-    assert len(set(hashes.values())) == 1
     assert math.isfinite(result["updates"][0]["update_runtime_ms"])

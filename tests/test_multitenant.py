@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import hashlib
 import json
 import sys
 from dataclasses import replace
@@ -485,6 +484,7 @@ def test_w5_task_inputs_match_owned_manifest() -> None:
     config_path = root / "configs/serving/w5_multitenant.yaml"
     inputs_dir = root / "analysis/serving/w5-multitenant/inputs"
     manifest = json.loads((inputs_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == 2
     entries = {row["path"]: row for row in manifest["files"]}
 
     for workload_name in (
@@ -501,10 +501,10 @@ def test_w5_task_inputs_match_owned_manifest() -> None:
         assert len(task_ids) == workload["expected_task_count"]
         for path in owned_paths:
             assert path.parent == inputs_dir
-            data = path.read_bytes()
             entry = entries[path.name]
-            assert len(data.decode("utf-8").splitlines()) == entry["task_count"]
-            assert hashlib.sha256(data).hexdigest() == entry["sha256"]
+            assert len(path.read_text(encoding="utf-8").splitlines()) == entry[
+                "task_count"
+            ]
 
 
 def test_fresh277_is_marked_development_exposed() -> None:

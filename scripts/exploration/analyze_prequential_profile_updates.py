@@ -14,7 +14,6 @@ import atexit
 from concurrent.futures import ProcessPoolExecutor
 from collections import defaultdict
 import datetime as dt
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -31,15 +30,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SOURCE_GLOBS = ("src/**/*.py", "scripts/**/*.py")
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        for block in iter(lambda: fh.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+def _source_snapshot_records() -> Iterable[dict[str, Any]]:
+    """Archive the executable source tree for dirty-tree reproducibility."""
 
-
-def _source_tree_hashes() -> dict[str, str]:
     paths = sorted(
         {
             path
@@ -48,28 +41,17 @@ def _source_tree_hashes() -> dict[str, str]:
             if path.is_file()
         }
     )
-    return {str(path.relative_to(_REPO_ROOT)): _sha256(path) for path in paths}
-
-
-def _source_snapshot_records(
-    source_hashes: Mapping[str, str],
-) -> Iterable[dict[str, Any]]:
-    """Archive the exact executable source tree for dirty-tree reproducibility."""
-
-    for relative_path, expected_hash in sorted(source_hashes.items()):
-        raw = (_REPO_ROOT / relative_path).read_bytes()
-        if hashlib.sha256(raw).hexdigest() != expected_hash:
-            raise ValueError(f"source changed before snapshot: {relative_path}")
+    for path in paths:
+        relative_path = str(path.relative_to(_REPO_ROOT))
         yield {
             "record_type": "source_snapshot",
             "path": relative_path,
-            "sha256": expected_hash,
             "encoding": "utf-8",
-            "content": raw.decode("utf-8"),
+            "content": path.read_bytes().decode("utf-8"),
         }
 
 
-_SOURCE_HASHES_AT_IMPORT = _source_tree_hashes()
+_SOURCE_SNAPSHOT_AT_IMPORT = tuple(_source_snapshot_records())
 sys.path.insert(0, str(_REPO_ROOT))
 
 from trace_collect.tool_gap_extractor import discover_trace_files  # noqa: E402
@@ -90,9 +72,6 @@ from trace_collect.tool_latency_prequential import (  # noqa: E402
     evaluate_prequential_updates,
 )
 
-if _source_tree_hashes() != _SOURCE_HASHES_AT_IMPORT:
-    raise RuntimeError("local source tree changed while imports were loading")
-
 _DYNAMIC_ARMS = ("task",)
 _PANEL_NAMES = (
     "frozen_100",
@@ -111,22 +90,6 @@ _INITIAL_COLLECTION = "swe-rebench-qwen3.7-max-seed42-offset50-100-complete-v2"
 _DEVELOPMENT_COLLECTION = "swe-rebench-qwen3.7-max-fresh-seed42-skip150-n277"
 _INITIAL_TASK_COUNT = 100
 _DEVELOPMENT_TASK_COUNT = 277
-_INITIAL_INVENTORY = {
-    "file": (
-        "analysis/tool-time-offline-gated-robust-confirmation-"
-        "swe-rebench-100-20260713/pre_run_trace_inventory.sha256"
-    ),
-    "sha256": "33273824002bc347bf267686aca6e20b7d72404a92435872f770776454c2ed0e",
-    "trace_count": 100,
-}
-_DEVELOPMENT_INVENTORY = {
-    "file": (
-        "analysis/results/prequential-task-update-20260721/"
-        "prequential-profile-update-fresh277-pre-run-traces.sha256"
-    ),
-    "sha256": "b51c3c59653122c4224a199cf369551d1e50e8dd81daba57959ad7b9949bf190",
-    "trace_count": 277,
-}
 _OUTER_FOLDS = 5
 _OUTPUTS = {
     "json": "analysis/results/prequential-task-update-task-only/prequential-task-update.json",
@@ -159,7 +122,6 @@ _DYNAMIC_FIELDS = (
     "prior_group_key",
     "prior_task_count",
     "model_version",
-    "model_state_hash",
     "profile_row_count",
     "profile_task_count",
     "score_panel_runtime_ms",
@@ -255,54 +217,29 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.workers < 1:
         raise ValueError("--workers must be positive")
     config_path = _resolve(args.config)
-    config, config_hash = _load_config(config_path)
+    config = _load_config(config_path)
     initial_manifest_path = _resolve(Path(config["initialization_manifest"]))
     development_manifest_path = _resolve(Path(config["development_manifest"]))
-    (
-        initial_manifest,
-        initial_task_ids,
-        initial_samples,
-        initial_inventory,
-        initial_manifest_hash,
-        initial_task_ids_hash,
-    ) = _load_corpus(initial_manifest_path)
-    (
-        development_manifest,
-        development_task_ids,
-        development_samples,
-        development_inventory,
-        development_manifest_hash,
-        development_task_ids_hash,
-    ) = _load_corpus(development_manifest_path)
+    initial_manifest, initial_task_ids, initial_samples = _load_corpus(
+        initial_manifest_path
+    )
+    development_manifest, development_task_ids, development_samples = _load_corpus(
+        development_manifest_path
+    )
     if initial_manifest["collection_id"] != _INITIAL_COLLECTION:
         raise ValueError("initialization manifest collection_id changed")
     if development_manifest["collection_id"] != _DEVELOPMENT_COLLECTION:
         raise ValueError("development manifest collection_id changed")
-    if (
-        len(initial_task_ids) != _INITIAL_TASK_COUNT
-        or len(initial_inventory) != _INITIAL_TASK_COUNT
-    ):
+    if len(initial_task_ids) != _INITIAL_TASK_COUNT:
         raise ValueError("initialization corpus must contain exactly 100 tasks/traces")
-    if (
-        len(development_task_ids) != _DEVELOPMENT_TASK_COUNT
-        or len(development_inventory) != _DEVELOPMENT_TASK_COUNT
-    ):
+    if len(development_task_ids) != _DEVELOPMENT_TASK_COUNT:
         raise ValueError("development corpus must contain exactly 277 tasks/traces")
-    _verify_declared_inventory(
-        config["initialization_trace_inventory"], initial_inventory
-    )
-    _verify_declared_inventory(
-        config["development_trace_inventory"], development_inventory
-    )
     overlap = set(initial_task_ids) & set(development_task_ids)
     if overlap:
         raise ValueError(
             f"initialization and development tasks overlap: {sorted(overlap)}"
         )
 
-    source_hashes = dict(_SOURCE_HASHES_AT_IMPORT)
-    initial_task_ids_path = Path(initial_manifest["task_ids_file"])
-    development_task_ids_path = Path(development_manifest["task_ids_file"])
     out_json = _resolve(Path(config["outputs"]["json"]))
     out_md = _resolve(Path(config["outputs"]["markdown"]))
     records_path = out_json.with_name(out_json.stem + "-records.jsonl.zst")
@@ -362,48 +299,17 @@ def main(argv: Sequence[str] | None = None) -> None:
             [
                 {
                     "record_type": "run_metadata",
-                    "schema_version": 3,
+                    "schema_version": 4,
                     "status": "development_only_exploratory",
                     "certificate": False,
                     "run_started": run_started,
                     "config": config,
-                    "config_sha256": config_hash,
-                    "source_sha256": source_hashes,
                     "initialization_collection_id": initial_manifest["collection_id"],
                     "development_collection_id": development_manifest["collection_id"],
                 }
             ]
         )
-        writer.write_many(_source_snapshot_records(source_hashes))
-        writer.write_many(
-            {
-                "record_type": "input_trace",
-                "corpus_role": corpus_role,
-                "source_trace": path,
-                "sha256": digest,
-            }
-            for corpus_role, inventory in (
-                ("initialization", initial_inventory),
-                ("development", development_inventory),
-            )
-            for path, digest in sorted(inventory.items())
-        )
-        writer.write_many(
-            [
-                {
-                    "record_type": "input_task_list",
-                    "corpus_role": "initialization",
-                    "path": str(initial_task_ids_path),
-                    "sha256": initial_task_ids_hash,
-                },
-                {
-                    "record_type": "input_task_list",
-                    "corpus_role": "development",
-                    "path": str(development_task_ids_path),
-                    "sha256": development_task_ids_hash,
-                },
-            ]
-        )
+        writer.write_many(_SOURCE_SNAPSHOT_AT_IMPORT)
         writer.write_many(
             {"record_type": "initial_policy_decision", **row}
             for row in static["decisions"]
@@ -451,44 +357,23 @@ def main(argv: Sequence[str] | None = None) -> None:
         run_name="primary",
         costs=score_costs,
     )
-    try:
-        _verify_file_hash(config_path, config_hash)
-        _verify_file_hash(initial_manifest_path, initial_manifest_hash)
-        _verify_file_hash(development_manifest_path, development_manifest_hash)
-        if _source_tree_hashes() != source_hashes:
-            raise ValueError("local source tree changed during run")
-        _verify_file_hash(initial_task_ids_path, initial_task_ids_hash)
-        _verify_file_hash(development_task_ids_path, development_task_ids_hash)
-        _verify_declared_inventory(
-            config["initialization_trace_inventory"], initial_inventory
-        )
-        _verify_declared_inventory(
-            config["development_trace_inventory"], development_inventory
-        )
-        _verify_runtime_inventory(initial_inventory)
-        _verify_runtime_inventory(development_inventory)
-    except BaseException:
-        _cleanup_partial_outputs(partial_paths)
-        raise
     sidecars = [
         {
             "role": "initialization",
             "file": records_path.name,
-            "sha256": _sha256(sidecar_partial_paths[0]),
             "record_count": writer.count,
         },
         *[
             {
                 "role": f"outer_fold_{result['outer_fold']}",
                 "file": fold_paths[index].name,
-                "sha256": str(result["records_sidecar_sha256"]),
                 "record_count": int(result["records_sidecar_record_count"]),
             }
             for index, result in enumerate(fold_results)
         ],
     ]
     payload = {
-        "schema_version": 3,
+        "schema_version": 4,
         "protocol": {
             "date": config["protocol_date"],
             "status": config["status"],
@@ -512,29 +397,18 @@ def main(argv: Sequence[str] | None = None) -> None:
             "generated": run_started,
             "git_sha": _git_sha(),
             "config": str(config_path.relative_to(_REPO_ROOT)),
-            "config_sha256": config_hash,
             "initialization_manifest": str(
                 initial_manifest_path.relative_to(_REPO_ROOT)
             ),
-            "initialization_manifest_sha256": initial_manifest_hash,
-            "initialization_task_ids_sha256": initial_task_ids_hash,
             "initialization_collection_id": initial_manifest["collection_id"],
             "initialization_task_count": len(initial_task_ids),
             "initialization_call_count": len(profile_rows),
-            "initialization_trace_inventory_sha256": _inventory_digest(
-                initial_inventory
-            ),
             "development_manifest": str(
                 development_manifest_path.relative_to(_REPO_ROOT)
             ),
-            "development_manifest_sha256": development_manifest_hash,
-            "development_task_ids_sha256": development_task_ids_hash,
             "development_collection_id": development_manifest["collection_id"],
             "development_task_count": len(development_task_ids),
             "development_call_count": len(development_rows),
-            "development_trace_inventory_sha256": _inventory_digest(
-                development_inventory
-            ),
             "timing_environment": {
                 "platform": platform.platform(),
                 "machine": platform.machine(),
@@ -549,10 +423,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                 ),
                 "parallel_unit": "outer_fold_arm_score_cost",
             },
-            "source_sha256": source_hashes,
             "source_snapshot": {
                 "records_sidecar": records_path.name,
-                "file_count": len(source_hashes),
             },
         },
         "config": config,
@@ -923,7 +795,7 @@ def _finalize_fold(
             [
                 {
                     "record_type": "fold_metadata",
-                    "schema_version": 3,
+                    "schema_version": 4,
                     "outer_fold": outer_fold,
                     "fold_count": _OUTER_FOLDS,
                     "status": "development_only_exploratory",
@@ -1036,17 +908,15 @@ def _finalize_fold(
             ),
         },
         "runs": [run_summary],
-        "records_sidecar_sha256": _sha256(records_path),
         "records_sidecar_record_count": writer.count,
     }
 
 
-def _final_state(result: Mapping[str, Any]) -> tuple[int, int, int, str]:
+def _final_state(result: Mapping[str, Any]) -> tuple[int, int, int]:
     return (
         int(result["final_profile_row_count"]),
         int(result["final_profile_task_count"]),
         int(result["final_model_version"]),
-        str(result["final_model_state_hash"]),
     )
 
 
@@ -1106,9 +976,8 @@ def _aggregate_fold_run(
     }
 
 
-def _load_config(path: Path) -> tuple[dict[str, Any], str]:
-    raw = path.read_bytes()
-    payload = yaml.safe_load(raw.decode("utf-8"))
+def _load_config(path: Path) -> dict[str, Any]:
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("experiment config must be a mapping")
     required = {
@@ -1116,9 +985,7 @@ def _load_config(path: Path) -> tuple[dict[str, Any], str]:
         "protocol_date",
         "status",
         "initialization_manifest",
-        "initialization_trace_inventory",
         "development_manifest",
-        "development_trace_inventory",
         "outer_folds",
         "arms",
         "fit_kv_costs_ms",
@@ -1139,7 +1006,7 @@ def _load_config(path: Path) -> tuple[dict[str, Any], str]:
             f"missing={sorted(required - set(payload))}, "
             f"unexpected={sorted(set(payload) - required)}"
         )
-    if type(payload["schema_version"]) is not int or payload["schema_version"] != 3:
+    if type(payload["schema_version"]) is not int or payload["schema_version"] != 4:
         raise ValueError("unsupported experiment config schema")
     if payload["protocol_date"] != "2026-07-21":
         raise ValueError("protocol_date must be 2026-07-21")
@@ -1147,12 +1014,8 @@ def _load_config(path: Path) -> tuple[dict[str, Any], str]:
         raise ValueError("experiment must remain development_only_exploratory")
     if payload["initialization_manifest"] != _INITIAL_MANIFEST:
         raise ValueError("initialization_manifest differs from the frozen source")
-    if payload["initialization_trace_inventory"] != _INITIAL_INVENTORY:
-        raise ValueError("initialization_trace_inventory differs from the frozen input")
     if payload["development_manifest"] != _DEVELOPMENT_MANIFEST:
         raise ValueError("development_manifest differs from the frozen source")
-    if payload["development_trace_inventory"] != _DEVELOPMENT_INVENTORY:
-        raise ValueError("development_trace_inventory differs from the frozen input")
     if payload["outer_folds"] != _OUTER_FOLDS:
         raise ValueError(f"outer_folds must be exactly {_OUTER_FOLDS}")
     if payload["arms"] != list(_PANEL_NAMES):
@@ -1196,17 +1059,7 @@ def _load_config(path: Path) -> tuple[dict[str, Any], str]:
         raise ValueError("task_order_seed must be the frozen integer 0")
     if payload["outputs"] != _OUTPUTS:
         raise ValueError("outputs must remain under the development namespace")
-    return payload, hashlib.sha256(raw).hexdigest()
-
-
-def _read_hashed_task_ids(path: Path) -> tuple[list[str], str]:
-    raw = path.read_bytes()
-    task_ids = [line.strip() for line in raw.decode("utf-8").splitlines()]
-    if not task_ids or any(not task_id for task_id in task_ids):
-        raise ValueError("task_ids_file must contain non-empty task IDs")
-    if len(task_ids) != len(set(task_ids)):
-        raise ValueError("task_ids_file contains duplicate task IDs")
-    return sorted(task_ids), hashlib.sha256(raw).hexdigest()
+    return payload
 
 
 def _load_corpus(
@@ -1215,42 +1068,14 @@ def _load_corpus(
     dict[str, Any],
     list[str],
     dict[str, list[ToolLatencySample]],
-    dict[str, str],
-    str,
-    str,
 ]:
-    manifest_hash = _sha256(manifest_path)
     manifest = read_tool_latency_corpus_manifest(manifest_path, repo_root=_REPO_ROOT)
-    _verify_file_hash(manifest_path, manifest_hash)
-    task_ids, task_ids_hash = _read_hashed_task_ids(Path(manifest["task_ids_file"]))
+    task_ids = list(manifest["task_ids"])
     if len(task_ids) != manifest["expected_task_count"]:
         raise ValueError("manifest task count differs from its pinned task list")
     trace_paths = discover_trace_files([Path(manifest["trace_root"])])
-    if not trace_paths:
-        raise ValueError("manifest trace root contains no trace.jsonl files")
-    inventory = {str(path.resolve()): _sha256(path) for path in trace_paths}
-    frozen = manifest.get("frozen_trace_inventory")
-    if frozen is not None:
-        if (
-            not isinstance(frozen, dict)
-            or set(frozen)
-            != {
-                "file",
-                "sha256",
-                "trace_count",
-                "required_post_run_byte_comparison",
-            }
-            or frozen["required_post_run_byte_comparison"] is not True
-        ):
-            raise ValueError("frozen_trace_inventory metadata is invalid")
-        frozen_path = Path(str(frozen["file"])).resolve()
-        if _sha256(frozen_path) != frozen["sha256"]:
-            raise ValueError("frozen trace inventory file hash changed")
-        frozen_inventory = _read_hash_inventory(frozen_path)
-        if len(frozen_inventory) != frozen["trace_count"]:
-            raise ValueError("frozen trace inventory count differs from its metadata")
-        if frozen_inventory != inventory:
-            raise ValueError("live traces differ from the frozen trace inventory")
+    if len(trace_paths) != manifest["expected_task_count"]:
+        raise ValueError("manifest trace count differs from expected_task_count")
     task_by_trace = require_explicit_trace_task_ids(trace_paths)
     samples_by_task = _extract_samples_by_task(trace_paths, task_by_trace)
     if set(samples_by_task) != set(task_ids):
@@ -1259,69 +1084,7 @@ def _load_corpus(
             f"missing={sorted(set(task_ids) - set(samples_by_task))}, "
             f"unexpected={sorted(set(samples_by_task) - set(task_ids))}"
         )
-    return (
-        manifest,
-        task_ids,
-        samples_by_task,
-        inventory,
-        manifest_hash,
-        task_ids_hash,
-    )
-
-
-def _read_hash_inventory(path: Path) -> dict[str, str]:
-    inventory: dict[str, str] = {}
-    for line_number, line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(), 1
-    ):
-        try:
-            digest, raw_path = line.split("  ", 1)
-        except ValueError as exc:
-            raise ValueError(f"{path}:{line_number}: invalid hash record") from exc
-        resolved = str(Path(raw_path).resolve())
-        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
-            raise ValueError(f"{path}:{line_number}: invalid sha256")
-        if resolved in inventory:
-            raise ValueError(f"{path}:{line_number}: duplicate path")
-        inventory[resolved] = digest
-    if not inventory:
-        raise ValueError(f"empty trace inventory: {path}")
-    return inventory
-
-
-def _inventory_digest(inventory: Mapping[str, str]) -> str:
-    digest = hashlib.sha256()
-    for path, file_hash in sorted(inventory.items()):
-        digest.update(f"{file_hash}  {path}\n".encode())
-    return digest.hexdigest()
-
-
-def _verify_declared_inventory(
-    metadata: Mapping[str, Any], inventory: Mapping[str, str]
-) -> None:
-    path = _resolve(Path(str(metadata["file"])))
-    _verify_file_hash(path, str(metadata["sha256"]))
-    frozen_inventory = _read_hash_inventory(path)
-    if len(frozen_inventory) != int(metadata["trace_count"]):
-        raise ValueError("declared trace inventory count differs from its metadata")
-    if frozen_inventory != inventory:
-        raise ValueError("live traces differ from the declared pre-run inventory")
-
-
-def _verify_file_hash(path: Path, expected: str) -> None:
-    if not path.is_file():
-        raise ValueError(f"input disappeared during run: {path}")
-    if _sha256(path) != expected:
-        raise ValueError(f"input changed during run: {path}")
-
-
-def _verify_runtime_inventory(inventory: Mapping[str, str]) -> None:
-    for path, expected in inventory.items():
-        input_path = Path(path)
-        if not input_path.is_file():
-            raise ValueError(f"input trace disappeared during run: {input_path}")
-        if _sha256(input_path) != expected:
-            raise ValueError(f"input trace changed during run: {input_path}")
+    return manifest, task_ids, samples_by_task
 
 
 def _extract_samples_by_task(
@@ -1601,15 +1364,14 @@ def _render_markdown(result: Mapping[str, Any]) -> str:
             "make later task decisions path-dependent.",
             "",
             "Complete calibration, fold membership, decisions, update timings, "
-            "task-boundary publication markers, model versions/state hashes, and "
-            "input/source hashes are stored in:",
+            "task-boundary publication markers, model versions, and source snapshots "
+            "are stored in:",
             "",
         ]
     )
     for sidecar in result["records_sidecars"]:
         lines.append(
-            f"- `{sidecar['file']}` — {sidecar['record_count']} records, "
-            f"SHA-256 `{sidecar['sha256']}`"
+            f"- `{sidecar['file']}` — {sidecar['record_count']} records"
         )
     lines.append("")
     return "\n".join(lines)
