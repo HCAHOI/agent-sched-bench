@@ -307,7 +307,8 @@ def robust_utility_trigger_ms(
 
     The model family contains the full selected node, every non-empty
     leave-one-task-out selected-node fit, and the same curves for its parent.
-    A strict comparison makes utility ties wait. If there is no unanimous
+    An advantage must exceed its derived floating-point error bound; values
+    inside that bound wait as numerical ties. If there is no unanimous
     positive early trigger, the fixed threshold is returned.
     """
 
@@ -320,6 +321,21 @@ def robust_utility_trigger_ms(
     ).trigger_ms
 
 
+def _update_candidate_advantages(
+    curve: np.ndarray,
+    minimum_advantages: np.ndarray,
+    viable: np.ndarray,
+    *,
+    roundoff_bound: float,
+) -> int | None:
+    future_best = np.maximum.accumulate(curve[::-1])[::-1]
+    advantages = curve[:-1] - np.maximum(future_best[1:], 0.0)
+    np.minimum(minimum_advantages, advantages, out=minimum_advantages)
+    viable &= advantages > roundoff_bound
+    first_viable = int(np.argmax(viable))
+    return first_viable if viable[first_viable] else None
+
+
 def robust_utility_trigger_stats(
     node: LatencyPriorNode,
     *,
@@ -328,7 +344,12 @@ def robust_utility_trigger_stats(
     kv_cost_ms: float,
     restore_cost_ms: float = 0.0,
 ) -> RobustUtilityTriggerStats:
-    """Return the robust trigger and minimum curve advantage over waiting."""
+    """Return the robust trigger and minimum curve advantage over waiting.
+
+    Curves stream through O(N + C) scratch instead of a T × C matrix. The
+    exact worst case still inspects every task curve in O(N + TC log N).
+    Advantages inside the conservative accumulation bound are treated as ties.
+    """
 
     if not math.isfinite(threshold_ms) or threshold_ms <= 0.0:
         raise ValueError(
@@ -337,40 +358,89 @@ def robust_utility_trigger_stats(
     if not math.isfinite(kv_cost_ms) or kv_cost_ms <= 0.0:
         raise ValueError(f"kv_cost_ms must be finite and positive, got {kv_cost_ms}")
     validate_restore_cost(restore_cost_ms)
-    if len(node.values_by_task) < 2:
-        return RobustUtilityTriggerStats(threshold_ms, 0.0)
     model_nodes = [node]
     if parent is not None:
         model_nodes.append(parent)
+    node_counts: list[int] = []
+    for model_node in model_nodes:
+        total_count = len(model_node.values)
+        if total_count == 0:
+            raise ValueError("prior node has no call samples")
+        if sum(map(len, model_node.values_by_task.values())) != total_count:
+            raise ValueError("prior node task partition does not match its call samples")
+        node_counts.append(total_count)
+    if len(node.values_by_task) < 2:
+        return RobustUtilityTriggerStats(threshold_ms, 0.0)
     candidates = _utility_candidates(model_nodes, threshold_ms, kv_cost_ms)
-    curves = [
-        curve
-        for model_node in model_nodes
-        for curve in _node_utility_curves(
-            model_node,
+    max_sample_count = max(len(model_node.values) for model_node in model_nodes)
+    epsilon = np.finfo(float).eps
+    gamma = max_sample_count * epsilon / (1.0 - max_sample_count * epsilon)
+    # Eight rounded stages cover prefix accumulation/range subtraction, the
+    # affine utility sum, task aggregation, LOO averaging, and advantage
+    # subtraction. Partial-range samples are bounded by threshold + KV cost.
+    roundoff_bound = (
+        8.0 * gamma * (threshold_ms + kv_cost_ms + restore_cost_ms)
+    )
+    minimum_advantages = np.full(len(candidates) - 1, np.inf)
+    viable = np.ones(len(candidates) - 1, dtype=bool)
+
+    # Full curves are cheap and can reject before any task-level work. Parent
+    # constraints still run first because they are usually binding.
+    scored_nodes: list[tuple[LatencyPriorNode, int, np.ndarray]] = []
+    for model_node, total_count in zip(
+        reversed(model_nodes), reversed(node_counts), strict=True
+    ):
+        total_sum = _utility_sum(
+            model_node.values,
             candidates,
             threshold_ms=threshold_ms,
             kv_cost_ms=kv_cost_ms,
             restore_cost_ms=restore_cost_ms,
         )
-    ]
-    if not curves:
-        return RobustUtilityTriggerStats(threshold_ms, 0.0)
-    curve_matrix = np.asarray(curves)
-    future_best = np.maximum.accumulate(curve_matrix[:, ::-1], axis=1)[:, ::-1]
-    minimum_advantages = np.min(
-        curve_matrix[:, :-1] - np.maximum(future_best[:, 1:], 0.0),
-        axis=0,
-    )
-    positive = np.flatnonzero(minimum_advantages > 0.0)
-    if positive.size:
-        index = int(positive[0])
-        minimum_advantage = float(minimum_advantages[index])
-        return RobustUtilityTriggerStats(
-            trigger_ms=float(candidates[index]),
-            normalized_advantage=minimum_advantage / kv_cost_ms,
+        scored_nodes.append((model_node, total_count, total_sum))
+        first_viable = _update_candidate_advantages(
+            total_sum / total_count,
+            minimum_advantages,
+            viable,
+            roundoff_bound=roundoff_bound,
         )
-    return RobustUtilityTriggerStats(threshold_ms, 0.0)
+        if first_viable is None:
+            return RobustUtilityTriggerStats(threshold_ms, 0.0)
+        active_start = first_viable
+
+    for model_node, total_count, total_sum in scored_nodes:
+        for task_values in sorted(
+            model_node.values_by_task.values(), key=len, reverse=True
+        ):
+            remaining_count = total_count - len(task_values)
+            if not task_values or not remaining_count:
+                continue
+            active_candidates = candidates[active_start:]
+            task_sum = _utility_sum(
+                task_values,
+                active_candidates,
+                threshold_ms=threshold_ms,
+                kv_cost_ms=kv_cost_ms,
+                restore_cost_ms=restore_cost_ms,
+            )
+            first_viable = _update_candidate_advantages(
+                (total_sum[active_start:] - task_sum) / remaining_count,
+                minimum_advantages[active_start:],
+                viable[active_start:],
+                roundoff_bound=(
+                    roundoff_bound * total_count / remaining_count
+                ),
+            )
+            if first_viable is None:
+                return RobustUtilityTriggerStats(threshold_ms, 0.0)
+            active_start += first_viable
+
+    return RobustUtilityTriggerStats(
+        trigger_ms=float(candidates[active_start]),
+        normalized_advantage=(
+            float(minimum_advantages[active_start]) / kv_cost_ms
+        ),
+    )
 
 
 def robust_prior_nodes(
@@ -402,36 +472,6 @@ def _utility_candidates(
     return np.asarray(sorted(candidates), dtype=float)
 
 
-def _node_utility_curves(
-    node: LatencyPriorNode,
-    candidates: np.ndarray,
-    *,
-    threshold_ms: float,
-    kv_cost_ms: float,
-    restore_cost_ms: float,
-) -> list[np.ndarray]:
-    total_sum = np.zeros(len(candidates), dtype=float)
-    task_sums: list[tuple[int, np.ndarray]] = []
-    total_count = 0
-    for values in node.values_by_task.values():
-        task_sum = _utility_sum(
-            values,
-            candidates,
-            threshold_ms=threshold_ms,
-            kv_cost_ms=kv_cost_ms,
-            restore_cost_ms=restore_cost_ms,
-        )
-        task_sums.append((len(values), task_sum))
-        total_sum += task_sum
-        total_count += len(values)
-    if total_count != len(node.values):
-        raise ValueError("prior node task partition does not match its call samples")
-    curves = [total_sum / total_count]
-    for task_count, task_sum in task_sums:
-        remaining_count = total_count - task_count
-        if remaining_count:
-            curves.append((total_sum - task_sum) / remaining_count)
-    return curves
 
 
 def _utility_sum(
@@ -442,14 +482,51 @@ def _utility_sum(
     kv_cost_ms: float,
     restore_cost_ms: float,
 ) -> np.ndarray:
-    utility = _utility_matrix(
-        np.asarray(values, dtype=float),
-        candidates,
-        threshold_ms=threshold_ms,
-        kv_cost_ms=kv_cost_ms,
-        restore_cost_ms=restore_cost_ms,
+    """Sum each candidate's utility without an unbounded calls × candidates matrix."""
+
+    # Four rows cap scratch at 4C and benchmark below prefix/search setup cost.
+    if len(values) <= 4:
+        return np.sum(
+            _utility_matrix(
+                np.asarray(values, dtype=float),
+                candidates,
+                threshold_ms=threshold_ms,
+                kv_cost_ms=kv_cost_ms,
+                restore_cost_ms=restore_cost_ms,
+            ),
+            axis=0,
+        )
+    samples = np.asarray(values, dtype=float)
+    if samples.size > 1 and np.any(samples[:-1] > samples[1:]):
+        samples = np.sort(samples)
+    prefix = np.empty(len(samples) + 1, dtype=float)
+    prefix[0] = 0.0
+    np.cumsum(samples, out=prefix[1:])
+
+    short_end = int(np.searchsorted(samples, threshold_ms, side="right"))
+    fire_start = np.searchsorted(samples, candidates, side="right")
+    edge_start = np.searchsorted(samples, candidates + kv_cost_ms, side="left")
+
+    short_partial_end = np.minimum(edge_start, short_end)
+    short_partial_count = short_partial_end - fire_start
+    short_partial_sum = prefix[short_partial_end] - prefix[fire_start]
+    short_full_count = short_end - np.minimum(edge_start, short_end)
+    short_utility = (
+        short_partial_sum
+        - short_partial_count * (candidates + kv_cost_ms + restore_cost_ms)
+        - short_full_count * restore_cost_ms
     )
-    return np.sum(utility, axis=0)
+
+    long_full_start = np.maximum(edge_start, short_end)
+    long_partial_count = long_full_start - short_end
+    long_partial_sum = prefix[long_full_start] - prefix[short_end]
+    long_full_count = len(samples) - long_full_start
+    long_utility = (
+        2.0 * long_partial_sum
+        - long_partial_count * (2.0 * candidates + kv_cost_ms)
+        + long_full_count * kv_cost_ms
+    )
+    return short_utility + long_utility
 
 
 def validate_restore_cost(value: float, *, label: str = "restore_cost_ms") -> None:
@@ -475,14 +552,13 @@ def trigger_policy_utility_ms(
     if threshold_ms <= 0.0 or kv_cost_ms <= 0.0:
         raise ValueError("threshold_ms and kv_cost_ms must be positive")
     validate_restore_cost(restore_cost_ms)
-    utility = _utility_matrix(
-        np.asarray([latency_ms], dtype=float),
-        np.asarray([trigger_ms], dtype=float),
-        threshold_ms=threshold_ms,
-        kv_cost_ms=kv_cost_ms,
-        restore_cost_ms=restore_cost_ms,
-    )
-    return float(utility[0, 0])
+    remaining = latency_ms - trigger_ms
+    if remaining <= 0.0:
+        return 0.0
+    exposed_ms = max(0.0, kv_cost_ms - remaining)
+    if latency_ms <= threshold_ms:
+        return -exposed_ms - restore_cost_ms
+    return min(kv_cost_ms, remaining) - exposed_ms
 
 
 def utility_matrix(

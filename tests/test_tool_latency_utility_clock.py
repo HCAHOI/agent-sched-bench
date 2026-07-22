@@ -8,7 +8,7 @@ from types import ModuleType
 
 import pytest
 
-from scripts.evaluate_utility_clock_policy import main as utility_clock_main
+from scripts.exploration.evaluate_utility_clock_policy import main as utility_clock_main
 from trace_collect.tool_latency_profiled import LatencyPriorNode
 from trace_collect.tool_latency_utility_clock import (
     evaluate_utility_clock_policy,
