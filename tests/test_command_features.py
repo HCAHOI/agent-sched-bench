@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+import trace_collect.command_features as command_features
 
 from trace_collect.command_features import (
     command_prefix_keys,
@@ -97,6 +98,21 @@ def test_unparseable_and_empty_commands_yield_no_keys() -> None:
     assert shell_command_prefix_tokens("echo 'unbalanced") == []
     assert command_prefix_keys("exec", "echo 'unbalanced", max_depth=4) == ()
     assert command_prefix_keys("exec", "   ", max_depth=4) == ()
+
+
+def test_normalized_tokens_cache_is_bounded_and_not_publicly_mutable() -> None:
+    command_features._normalized_tokens.cache_clear()
+    tokens = shell_command_prefix_tokens("python -m pytest")
+    tokens.append("mutated")
+    assert shell_command_prefix_tokens("python -m pytest") == [
+        "python",
+        "-m",
+        "pytest",
+    ]
+    info = command_features._normalized_tokens.cache_info()
+    assert (info.hits, info.misses) == (1, 1)
+    assert info.maxsize is not None
+    command_features._normalized_tokens.cache_clear()
 
 
 def test_prefix_keys_reject_invalid_depth() -> None:

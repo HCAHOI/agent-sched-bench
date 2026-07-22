@@ -6,9 +6,10 @@ Branch: `dev/kv-swap-profile-sweep-test`
 Checkpoint base: `d4a1c19`
 
 The development-only prequential mechanism screen and its minimal same-history
-follow-up remain frozen. The exact scorer optimization is now complete,
-independently reviewed, and replayed on the full Fresh-277 protocol without
-changing any trigger, utility, score, or policy decision.
+follow-up remain frozen. The exact scorer optimization and the follow-on bounded
+command-token cache are complete and independently reviewed. The completed
+Fresh-277 replay remains the frozen scientific result; cache validation used
+only the controlled 50+50 development benchmark.
 
 ## Banked development evidence
 
@@ -167,21 +168,53 @@ changed after the replay.
   resolved by documenting the earlier human-approved error-bound tie contract
   and the post-replay doc-only source delta. Final status: CLEAN, safe to commit.
 
+## Bounded command-token cache — complete
+
+`command_features._normalized_tokens` now uses a process-local
+`functools.lru_cache(maxsize=4096)` and returns an immutable tuple. Public key
+builders still allocate fresh containers, so callers cannot mutate cached
+state. The bound covers the controlled workload's 2,227 distinct commands
+without retaining unbounded trace text; it changes no scoring or policy logic
+or configuration at fixed causal inputs.
+
+### Controlled 50+50 benchmark
+
+All runs used one outer fold: 50 initialization tasks, 40 warmup tasks, 10
+held-out tasks, all five arms, and both score costs on the same idle remote
+environment. Three unprofiled live-timing A/B runs gave:
+
+| Implementation | Elapsed seconds | Median | Relative |
+|---|---|---:|---:|
+| Cache disabled | 64.47, 65.29, 65.43 | 65.29 | 1.00× |
+| Bounded cache | 57.29, 56.74, 57.30 | **57.29** | **1.140×** |
+
+Median peak RSS increased from 178,176 KiB to 182,400 KiB (+4,224 KiB).
+The cache recorded 96,480 hits and 2,227 misses in the profiled fold.
+`_normalized_tokens` fell from 98,707 parses / 18.110 s cumulative to 2,227
+parses / 0.494 s. End-to-end profiled elapsed time fell from 102.88 s to
+77.58 s; the unprofiled median above is the deployment-relevant speedup.
+
+Two different equivalence checks answer different questions:
+
+1. **Estimator identity at fixed causal inputs.** A separately hash-pinned
+   availability panel replayed identical update runtimes into cache-off and
+   cache-on runs. Summaries match and 0/14,356 non-timing/hash records differ.
+2. **Live self-timing behavior.** The real A/B feeds measured update runtimes
+   back into causal publication readiness. Faster scoring made one additional
+   prior row ready at five calls, changing ten candidate-margin fields (two
+   costs each). Candidate and selected triggers, utilities, scores, policy
+   decisions, point estimates, and summaries remain unchanged. These live
+   sidecars are deliberately not described as bit-identical.
+
+The focused command-feature and downstream scorer suite passes (92 tests).
+Independent review found the cache implementation and both evidence controls
+clean and safe to commit.
+
 ### Remaining acceleration space
 
-The final controlled profile is no longer dominated by the robust matrix:
-
-- `hazard_recheck_ms`: 41.29 s cumulative;
-- command normalization/tokenization: 18.12 s;
-- `_utility_sum`: 17.18 s;
-- candidate construction: 9.16 s.
-
 Do not revive the prior approximate hazard rewrite: it changed 13/30,000
-tie-breaks and bought only 6% before this scorer work. The next low-risk lane,
-if another run needs acceleration, is a bounded cache for repeated normalized
-command tokens, followed by vectorized candidate construction. Both require a
-separate benchmark and artifact-equivalence check; neither is needed for the
-completed replay.
+tie-breaks for only 6% gain. Candidate construction remains a possible later
+lane, but the bounded cache is sufficient for the current request.
 
 ## Repository hygiene
 

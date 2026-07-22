@@ -34,6 +34,7 @@ commands are expected input in agent traces.
 
 from __future__ import annotations
 
+import functools
 import re
 import shlex
 from typing import Any, Callable
@@ -291,8 +292,8 @@ def segment_prefix_keys(
 
 
 def _skip_leading_cd_segments(
-    tokens: list[tuple[str, bool]],
-) -> list[tuple[str, bool]]:
+    tokens: tuple[tuple[str, bool], ...],
+) -> tuple[tuple[str, bool], ...]:
     remaining = tokens
     while remaining and remaining[0][1] and remaining[0][0] == "cd":
         separator_index = next(
@@ -309,15 +310,17 @@ def _skip_leading_cd_segments(
     return remaining if remaining else tokens
 
 
-def _normalized_tokens(command: str) -> list[tuple[str, bool]]:
-    """Normalized ``(token, is_head)`` stream of a shell command."""
+# Keep a few thousand-command batch hot without retaining unbounded trace text.
+@functools.lru_cache(maxsize=4096)
+def _normalized_tokens(command: str) -> tuple[tuple[str, bool], ...]:
+    """Cached normalized ``(token, is_head)`` stream of a shell command."""
 
     lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     try:
         tokens = list(lexer)
     except ValueError:
-        return []
+        return ()
     result: list[tuple[str, bool]] = []
     expect_head = True
     skip_redirection_target = False
@@ -351,7 +354,7 @@ def _normalized_tokens(command: str) -> list[tuple[str, bool]]:
                 expect_head = False
             continue
         result.append((token, False))
-    return result
+    return tuple(result)
 
 
 def _is_redirection_operator(token: str) -> bool:
