@@ -1,0 +1,162 @@
+{
+  "by_match_tier": {
+    "a": {
+      "blended": {
+        "balanced_accuracy": 0.7756756756756756,
+        "confusion": {
+          "false_negative": 11,
+          "false_positive": 12,
+          "true_negative": 28,
+          "true_positive": 63
+        },
+        "predicted_heavy_count": 75
+      },
+      "blended_minus_static_balanced_accuracy": 0.17972972972972967,
+      "row_count": 114,
+      "row_coverage": 0.06437041219649915,
+      "static": {
+        "balanced_accuracy": 0.595945945945946,
+        "confusion": {
+          "false_negative": 8,
+          "false_positive": 28,
+          "true_negative": 12,
+          "true_positive": 66
+        },
+        "predicted_heavy_count": 94
+      }
+    },
+    "b": {
+      "blended": {
+        "balanced_accuracy": 0.5,
+        "confusion": {
+          "false_negative": 3,
+          "false_positive": 2,
+          "true_negative": 3,
+          "true_positive": 2
+        },
+        "predicted_heavy_count": 4
+      },
+      "blended_minus_static_balanced_accuracy": -0.09999999999999998,
+      "row_count": 10,
+      "row_coverage": 0.00564652738565782,
+      "static": {
+        "balanced_accuracy": 0.6,
+        "confusion": {
+          "false_negative": 4,
+          "false_positive": 0,
+          "true_negative": 5,
+          "true_positive": 1
+        },
+        "predicted_heavy_count": 1
+      }
+    },
+    "c": {
+      "blended": {
+        "balanced_accuracy": 0.7297671302906905,
+        "confusion": {
+          "false_negative": 122,
+          "false_positive": 128,
+          "true_negative": 254,
+          "true_positive": 472
+        },
+        "predicted_heavy_count": 600
+      },
+      "blended_minus_static_balanced_accuracy": 0.045388439367497035,
+      "row_count": 976,
+      "row_coverage": 0.5511010728402033,
+      "static": {
+        "balanced_accuracy": 0.6843786909231935,
+        "confusion": {
+          "false_negative": 263,
+          "false_positive": 72,
+          "true_negative": 310,
+          "true_positive": 331
+        },
+        "predicted_heavy_count": 403
+      }
+    },
+    "cold": {
+      "blended": {
+        "balanced_accuracy": 0.5714106740165372,
+        "confusion": {
+          "false_negative": 280,
+          "false_positive": 27,
+          "true_negative": 280,
+          "true_positive": 84
+        },
+        "predicted_heavy_count": 111
+      },
+      "blended_minus_static_balanced_accuracy": 0.0,
+      "row_count": 671,
+      "row_coverage": 0.37888198757763975,
+      "static": {
+        "balanced_accuracy": 0.5714106740165372,
+        "confusion": {
+          "false_negative": 280,
+          "false_positive": 27,
+          "true_negative": 280,
+          "true_positive": 84
+        },
+        "predicted_heavy_count": 111
+      }
+    }
+  },
+  "inputs": {
+    "manifest": "configs/corpora/swe-277.json",
+    "rows": "/tmp/claude-1000/-home-chiyu-workspace-agent-sched-bench/20898024-ea7d-4f6a-88cd-d4d9fc0f8cc1/scratchpad/results_archive/binary_registered_rows.jsonl.gz",
+    "trace_root": "traces/swe-rebench/qwen3.7-max/fresh-seed42-skip150-n200"
+  },
+  "overall": {
+    "blended": {
+      "balanced_accuracy": 0.6842987921036106,
+      "confusion": {
+        "false_negative": 416,
+        "false_positive": 169,
+        "true_negative": 565,
+        "true_positive": 621
+      },
+      "predicted_heavy_count": 790
+    },
+    "blended_minus_static_balanced_accuracy": 0.03840989649980686,
+    "row_count": 1771,
+    "row_coverage": 1.0,
+    "static": {
+      "balanced_accuracy": 0.6458888956038037,
+      "confusion": {
+        "false_negative": 555,
+        "false_positive": 127,
+        "true_negative": 607,
+        "true_positive": 482
+      },
+      "predicted_heavy_count": 609
+    }
+  },
+  "registered_criterion": {
+    "definition": "blended-minus-static BA repo-clustered CI lower bound > 0",
+    "evaluated": true,
+    "passed": true
+  },
+  "repo_clustered_bootstrap": {
+    "blended": {
+      "ci_high": 0.7159122399664462,
+      "ci_low": 0.6500340377984035,
+      "point": 0.6842987921036106
+    },
+    "blended_minus_static": {
+      "ci_high": 0.062102422574806845,
+      "ci_low": 0.014614380393801212,
+      "point": 0.03840989649980686
+    },
+    "bootstrap_replicates": 50000,
+    "cluster_count": 206,
+    "confidence_level": 0.95,
+    "method": "repo-clustered confusion-count bootstrap",
+    "seed": 0
+  },
+  "threshold_cores": 2.0,
+  "timestamp_join": {
+    "corpus_call_count": 13410,
+    "cpu_dump_row_count": 1771,
+    "joined_row_count": 1771
+  }
+}
