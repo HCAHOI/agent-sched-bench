@@ -38,7 +38,7 @@ from spike.vllm_connector.core import (
     thunderagent_reasoning_pauses,
     thunderagent_resume_admissions,
 )
-from trace_collect.command_features import command_prefix_keys
+from tool_time.command import command_prefix_keys
 
 
 def _turn(*, gap_ms: float = 9000.0) -> TraceTurn:

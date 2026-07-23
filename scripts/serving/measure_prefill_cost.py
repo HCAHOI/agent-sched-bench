@@ -1,44 +1,9 @@
-"""Measure prefill (KV recompute) cost vs context length on GPU hardware.
+"""Measure the context-dependent prefill cost used by the W5 scheduler.
 
-The reload-vs-recompute action (P2) restores a swapped-out KV cache by the
-cheaper of two paths: reload it over PCIe (cost rho*kv, measured by
-``measure_kv_swap_cost.py``) or RECOMPUTE it by prefilling the context
-(cost = prefill time for ``context_length`` tokens). This script measures the
-second number — the deployment prefill curve — which the recompute sweep
-currently only guesses at with placeholder rates.
-
-Method: run vLLM prefill-only requests (``max_tokens=1``, so wall time is
-time-to-first-token ~= prefill) for a grid of exact context lengths, prefix
-caching DISABLED and each prompt made of fresh token ids so no prefill is
-skipped. Report per-length prefill_ms and the derived ms/token. Foreground and
-single-threaded by design (no background engine thread — a background vLLM
-harness once wedged a box); it prints progress and writes one JSON.
-
-Two consumer-facing caveats the output must carry:
-- The reload side (measure_kv_swap_cost.py) is timed with bare CUDA events (pure
-  kernel time). This side times ``generate()`` wall clock, which adds a fixed
-  Python/scheduler/sampling floor the reload number lacks. We therefore include
-  a near-zero-context baseline and report ``overhead_floor_ms`` so P2 can
-  reconcile the two boundaries rather than diff them naively.
-- The consumer ``tool_latency_recompute.recompute_restore_ms`` is linear-
-  through-origin (``rate * context``). Per-length ``ms_per_token`` is an
-  origin-secant that varies with length (inflated at short context by the
-  floor), so we also emit a least-squares ``linear_fit`` (marginal slope +
-  intercept); downstream should adopt the slope, with the intercept ~= floor.
-  Prefill is super-linear (attention c^2), so a linear rate under-charges long
-  context — the same direction the consumer's docstring already acknowledges.
-
-Prefill compute per token is data-independent for dense models; the default
-Qwen3-Coder-30B is MoE (top-k routing), so random token ids may shift expert
-load balance (a second-order kernel-efficiency effect, not activated-FLOP
-count). ``enforce_eager`` disables cudagraph capture for steady timings, which
-can over-estimate prefill vs an optimized deployment — a bias conservative
-toward reload.
-
-Heavy deps (torch, vllm, transformers) are imported lazily so ``--help`` and
-``--model-config-only`` work without a GPU. Run on the SAME hardware/model as
-the rho measurement so the two systems numbers compose (H100 Gen5x16,
-Qwen3-Coder-30B-FP8 for the campaign).
+Runs prefix-cache-free vLLM requests over a context-length grid and writes the
+quadratic fit consumed by ``spike.multitenant.load_prefill_cost_profile``.
+Heavy GPU dependencies are imported lazily so ``--help`` and
+``--model-config-only`` work on non-GPU hosts.
 """
 
 from __future__ import annotations

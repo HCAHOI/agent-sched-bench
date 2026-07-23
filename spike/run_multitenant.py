@@ -742,7 +742,7 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
             "min_tool_history": config["prerestore_min_tool_history"],
             "min_profile_tasks": config["prerestore_min_profile_tasks"],
             "optimizer": (
-                "trace_collect.tool_latency_prerestore.prerestore_start_ms"
+                "tool_time.prerestore.prerestore_start_ms"
             ),
             "mechanism": (
                 "one-token internal request attempts to restore retained prompt KV "

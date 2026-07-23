@@ -11,7 +11,7 @@ fold it was scored under (``outer_fold``).
 small static table mapping each command-prefix group key to a single deploy
 trigger, and :func:`lookup_trigger` reproduces the production trie's
 exact-then-prefix-backoff ORDER using the SAME production helper
-(``trace_collect.command_features.command_prefix_keys``) the offline fit used --
+(``tool_time.command.command_prefix_keys``) the offline fit used --
 but NOT its per-call support gating; see :func:`lookup_trigger` for the
 divergence this implies.
 
@@ -43,8 +43,8 @@ from pathlib import Path
 from statistics import median
 from typing import Any, Iterable
 
-from trace_collect.command_features import command_prefix_keys
-from trace_collect.tool_latency_utility_clock import validate_restore_cost
+from tool_time.command import command_prefix_keys
+from tool_time.policy import validate_restore_cost
 
 _TABLE_LABEL = (
     "deployment demo table derived from eval artifacts -- not itself a certified "

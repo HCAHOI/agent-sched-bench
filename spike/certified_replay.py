@@ -5,7 +5,7 @@ resolves for its command group, decide whether the certified policy fires and
 account the KV-resident-time it saves against two baselines computed in the same
 pass: the deadline-only policy (trigger = deadline) and never-pause (never
 fires). The utility functional is the SAME one the offline certification scores
-with (``trace_collect.tool_latency_utility_clock.trigger_policy_utility_ms``,
+with (``tool_time.policy.trigger_policy_utility_ms``,
 ``hidden_on_long - exposed - rho*restore``).
 
 :func:`account_call` takes ``restore_cost_ms`` as an explicit argument (default
@@ -30,7 +30,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Sequence
 
-from trace_collect.tool_latency_utility_clock import trigger_policy_utility_ms
+from tool_time.policy import trigger_policy_utility_ms
 
 from spike.trigger_table import TriggerLookup
 

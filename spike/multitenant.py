@@ -14,14 +14,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from random import Random
 from typing import Any, Sequence
-from trace_collect.command_features import (
+from tool_time.command import (
     command_prefix_keys,
     make_row_command_prefix_keys,
     shell_command_heads,
 )
 
 from trace_collect.tool_latency_dataset import discover_trace_files
-from trace_collect.tool_latency_profiled import (
+from tool_time.prior import (
     LatencyPrior,
     build_latency_prior,
     latency_prior_hierarchy,
@@ -29,7 +29,7 @@ from trace_collect.tool_latency_profiled import (
 from trace_collect.trace_data import TraceData
 
 from spike.trigger_table import TriggerTable, lookup_trigger
-from trace_collect.tool_latency_prerestore import prerestore_start_ms
+from tool_time.prerestore import prerestore_start_ms
 
 _CONTINUUM_HISTORY_THRESHOLD = 100  # Continuum §4.2, arXiv:2511.02230v6.
 _THUNDERAGENT_BUFFER_TOKENS = 100  # backend/state.py at reference commit below.
@@ -598,7 +598,7 @@ def policy_provenance() -> dict[str, Any]:
     return {
         "prerestore": {
             "optimizer": "exact empirical utility maximizer",
-            "source": "trace_collect.tool_latency_prerestore.prerestore_start_ms",
+            "source": "tool_time.prerestore.prerestore_start_ms",
             "candidate_rule": "{g} union {L-R>g} union {L>g}; latest positive tie",
         },
         "continuum": {

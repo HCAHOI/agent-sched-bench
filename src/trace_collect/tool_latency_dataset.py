@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 import json
 import math
 from pathlib import Path
 from typing import Any, Iterable
 
-from trace_collect.command_features import command_has_concurrent_segments
+from tool_time.command import command_has_concurrent_segments
 from trace_collect.tool_gap_extractor import (
     _float_field,
     _int_field,
@@ -612,6 +613,56 @@ def require_explicit_trace_task_ids(trace_paths: Iterable[Path]) -> dict[str, st
     return task_by_trace
 
 
+def load_tool_latency_corpus(
+    manifest_path: Path,
+    *,
+    limit_tasks: int | None = None,
+    final: bool = False,
+) -> tuple[dict[str, list[ToolLatencySample]], list[str], dict[str, Any]]:
+    """Load one declared trace corpus and verify its task membership."""
+
+    repo_root = Path(__file__).resolve().parents[2]
+    manifest = read_tool_latency_corpus_manifest(
+        manifest_path.resolve(), repo_root=repo_root
+    )
+    trace_paths = discover_trace_files([Path(manifest["trace_root"])])
+    if not trace_paths:
+        raise ValueError(f"no trace.jsonl files found under {manifest['trace_root']}")
+
+    task_by_trace = require_explicit_trace_task_ids(trace_paths)
+    samples_by_task: dict[str, list[ToolLatencySample]] = defaultdict(list)
+    for sample in extract_many_tool_latency_samples(trace_paths):
+        expected = task_by_trace.get(str(Path(sample.source_trace).resolve()))
+        if expected is None or sample.task_id != expected:
+            raise ValueError(
+                "extracted sample task_id differs from explicit trace metadata: "
+                f"{sample.source_trace}: {sample.task_id!r} != {expected!r}"
+            )
+        samples_by_task[sample.task_id].append(sample)
+
+    task_ids = list(manifest["task_ids"])
+    if len(task_ids) != manifest["expected_task_count"]:
+        raise ValueError(
+            "manifest expected_task_count differs from pinned task_ids: "
+            f"{manifest['expected_task_count']} != {len(task_ids)}"
+        )
+    if set(samples_by_task) != set(task_ids):
+        raise ValueError(
+            "extracted logical tasks differ from pinned task_ids: "
+            f"missing={sorted(set(task_ids) - set(samples_by_task))}, "
+            f"unexpected={sorted(set(samples_by_task) - set(task_ids))}"
+        )
+    if limit_tasks is not None:
+        if final:
+            raise ValueError("--limit-tasks is a smoke knob; not allowed with --final")
+        if limit_tasks < manifest["fold_count"]:
+            raise ValueError(
+                f"--limit-tasks must be >= fold_count ({manifest['fold_count']})"
+            )
+        task_ids = task_ids[:limit_tasks]
+    return dict(samples_by_task), task_ids, manifest
+
+
 __all__ = [
     "SegmentLatencySample",
     "ToolLatencySample",
@@ -620,6 +671,7 @@ __all__ = [
     "extract_many_tool_latency_samples",
     "extract_segment_latency_samples",
     "extract_tool_latency_samples",
+    "load_tool_latency_corpus",
     "read_task_ids",
     "read_tool_latency_corpus_manifest",
     "read_tool_latency_jsonl",

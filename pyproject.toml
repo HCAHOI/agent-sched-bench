@@ -21,8 +21,6 @@ dependencies = [
   "json-repair>=0.30,<1.0",
   "tiktoken>=0.7,<1.0",
   "terminal-bench>=0.2.18; python_version >= '3.12'",
-  "scipy>=1.15.3",
-  "scikit-learn>=1.7.2",
 ]
 
 [project.optional-dependencies]
@@ -70,6 +68,7 @@ where = ["src", "."]
 include = [
   "llm_call*",
   "trace_collect*",
+  "tool_time*",
   "agents*",
   "harness*",
   "demo*",
