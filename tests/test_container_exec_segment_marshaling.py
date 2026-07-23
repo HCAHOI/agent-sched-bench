@@ -93,6 +93,12 @@ def _container_response(segment_timeline: dict[str, Any]) -> dict[str, Any]:
         "resource_timeout_policy": "resource_integrated",
         "resource_virtual_time_s": 0.203,
         "segment_timeline": segment_timeline,
+        # Per-binary process-accounting rows ride the same response->tool->
+        # runner->trace side-channel and must marshal alongside segment_timeline.
+        "per_process": [
+            {"comm": "sleep", "pid": 11, "ppid": 10, "utime_s": 0.0,
+             "stime_s": 0.0, "avg_mem_kb": 640, "exitcode": 0},
+        ],
     }
 
 
@@ -172,13 +178,19 @@ def test_execute_tools_end_to_end_marshals_segment_timeline_to_tool_call_id() ->
         fatal_error,
         resource_timelines,
         segment_timelines,
+        per_process_records,
         tool_timings,
     ) = asyncio.run(runner._execute_tools(spec, [tool_call], {}))
 
     assert fatal_error is None
     assert segment_timelines == {"call_1": timeline}
+    assert per_process_records == {"call_1": [
+        {"comm": "sleep", "pid": 11, "ppid": 10, "utime_s": 0.0,
+         "stime_s": 0.0, "avg_mem_kb": 640, "exitcode": 0},
+    ]}
     # The str result the LLM would see never carries the telemetry.
     assert "segment_timeline" not in str(results[0])
+    assert "per_process" not in str(results[0])
     assert "call_1" in tool_timings
 
 
@@ -211,7 +223,7 @@ def test_execute_tools_omits_segment_timeline_for_non_exec_tools() -> None:
     tool_call = ToolCallRequest(id="call_1", name="noop", arguments={})
     runner = AgentRunner(provider=None)
 
-    (_, _, _, _, segment_timelines, _) = asyncio.run(
+    (_, _, _, _, segment_timelines, _, _) = asyncio.run(
         runner._execute_tools(spec, [tool_call], {})
     )
 

@@ -1533,6 +1533,10 @@ async def _prepare_container_session(
                 f"agent-sched-bench.output_dir={task_output_dir}",
             ]
             extra_args.extend(start_extra_args or [])
+            if os.environ.get("OPENCLAW_PACCT") == "1":
+                # Grant CAP_SYS_PACCT so the in-container replay server can call
+                # acct(2) for per-binary process accounting.
+                extra_args.extend(["--cap-add", "SYS_PACCT"])
             container_id = await asyncio.to_thread(
                 start_task_container,
                 fixed_name,
@@ -3091,6 +3095,7 @@ async def simulate(
     llm_tpot_ms: float | None = None,
     structured_output: bool = False,
     segment_timeline: bool = True,
+    pacct: bool = False,
     cleanup_images: bool = False,
 ) -> Path:
     if mode != "cloud_model":
@@ -3105,6 +3110,9 @@ async def simulate(
     # (including worker subprocesses, which inherit os.environ at spawn) via the
     # same env-var channel used for OPENCLAW_CONTAINER_WORKDIR. Replay only.
     os.environ["OPENCLAW_SEGMENT_TIMELINE"] = "1" if segment_timeline else "0"
+    # Per-binary process accounting toggle, same replay-only env channel; the
+    # container also needs --cap-add SYS_PACCT (added in _prepare_container_session).
+    os.environ["OPENCLAW_PACCT"] = "1" if pacct else "0"
     llm_timing = LLMTimingConfig(
         mode=llm_timing_mode,
         ttft_ms=llm_ttft_ms,

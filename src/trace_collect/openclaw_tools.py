@@ -138,7 +138,7 @@ def remap_source_runtime_artifact_tool_args(
 # Persistent Python agent script injected into Docker containers; reads JSON-line
 # requests from stdin and writes JSON-line responses to stdout.
 _REPLAY_AGENT_SCRIPT = textwrap.dedent(r"""
-import json, os, sys, subprocess, difflib, signal, time, re, shutil, tempfile
+import json, os, sys, subprocess, difflib, signal, time, re, shutil, tempfile, struct
 WORKDIR = os.environ.get("OPENCLAW_CONTAINER_WORKDIR", "/testbed") or "/testbed"
 
 def _find_match(content, old_text):
@@ -182,6 +182,90 @@ def _truncate_output(text, limit=_MAX_OUTPUT):
         return text
     half = limit // 2
     return text[:half] + f"\n\n... ({len(text) - limit} chars truncated) ...\n\n" + text[-half:]
+
+# --- Per-binary process accounting (BSD acct v3) -------------------------
+# When OPENCLAW_PACCT=1 the container enables kernel process accounting via
+# acct(2) (needs --cap-add SYS_PACCT on the container). The kernel then appends
+# one 64-byte record per process *exit*, so we attribute a compound command's
+# CPU/memory to the individual binaries it ran (python vs head/wc). This inline
+# decoder is a minimal twin of trace_collect/pacct.py (the canonical, tested
+# copy) — the replay server is a standalone `python -c` with no repo import, so
+# keep the two struct layouts in sync. AHZ is a fixed kernel constant of 100.
+_PACCT_ENABLED = os.environ.get("OPENCLAW_PACCT") == "1"
+_PACCT_FILE = "/tmp/.openclaw-pacct.log"
+_PACCT_FMT = "<bbHIIIIIIfHHHHHHHH16s"
+_PACCT_SIZE = struct.calcsize(_PACCT_FMT)  # 64
+
+def _pacct_enable():
+    global _PACCT_ENABLED
+    if not _PACCT_ENABLED:
+        return
+    try:
+        import ctypes, ctypes.util
+        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+        open(_PACCT_FILE, "wb").close()
+        if libc.acct(_PACCT_FILE.encode()) != 0:
+            raise OSError(ctypes.get_errno(), "acct(2) failed")
+    except Exception as exc:
+        _PACCT_ENABLED = False
+        sys.stderr.write("[pacct] disabled: %s\n" % exc)
+        sys.stderr.flush()
+
+def _pacct_decomp(v):
+    return (v & 0x1FFF) << (3 * ((v >> 13) & 0x7))
+
+def _pacct_parse(data):
+    usable = len(data) - (len(data) % _PACCT_SIZE)
+    rows = []
+    for o in range(0, usable, _PACCT_SIZE):
+        f = struct.unpack(_PACCT_FMT, data[o:o + _PACCT_SIZE])
+        if f[1] != 3:
+            continue
+        rows.append({
+            "comm": f[18].split(b"\0", 1)[0].decode("latin1"),
+            "pid": f[6], "ppid": f[7], "exitcode": f[3],
+            "utime_s": round(_pacct_decomp(f[10]) / 100.0, 3),
+            "stime_s": round(_pacct_decomp(f[11]) / 100.0, 3),
+            "avg_mem_kb": _pacct_decomp(f[12]),
+        })
+    return rows
+
+def _pacct_filter_subtree(rows, root_pid):
+    # Keep root_pid's subtree (itself + descendants) resolved within this exit
+    # batch, so a lingering `&` job from an earlier command (its shell absent
+    # here) is dropped. ponytail: fixpoint over one small per-exec batch.
+    kept = {root_pid}
+    changed = True
+    while changed:
+        changed = False
+        for r in rows:
+            if r["pid"] not in kept and r["ppid"] in kept:
+                kept.add(r["pid"]); changed = True
+    return [r for r in rows if r["pid"] in kept]
+
+def _pacct_begin():
+    # Byte offset of the current end-of-file: records before it belong to prior
+    # (or between-exec) work and are skipped, not misattributed to this command.
+    if not _PACCT_ENABLED:
+        return None
+    try:
+        return os.path.getsize(_PACCT_FILE)
+    except OSError:
+        return None
+
+def _pacct_finish(off0, root_pid=None):
+    if off0 is None:
+        return None
+    try:
+        with open(_PACCT_FILE, "rb") as fh:
+            fh.seek(off0)
+            data = fh.read()
+    except OSError:
+        return None
+    rows = _pacct_parse(data)
+    if root_pid is not None:
+        rows = _pacct_filter_subtree(rows, root_pid)
+    return rows or None
 
 # --- Per-segment (atom) command timing telemetry (v2) --------------------
 # Chained commands ("cd X && make && pytest") arrive as one exec call. When
@@ -475,11 +559,15 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
             resp["segment_timeline"] = _finish_segment_trace(
                 seg, start_wall, time.time()
             )
+        per_process = _pacct_finish(pacct_off0, process.pid)
+        if per_process is not None:
+            resp["per_process"] = per_process
         return resp
 
     try:
         launch_args, launch_kwargs = _shell_launch(cmd, env, seg)
         start_wall = time.time()
+        pacct_off0 = _pacct_begin()
         process = subprocess.Popen(
             launch_args,
             cwd=WORKDIR,
@@ -587,6 +675,7 @@ def handle_exec(args):
     try:
         launch_args, launch_kwargs = _shell_launch(cmd, env, seg)
         start_wall = time.time()
+        pacct_off0 = _pacct_begin()
         try:
             r = subprocess.run(launch_args, cwd=WORKDIR,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -597,6 +686,15 @@ def handle_exec(args):
         except subprocess.TimeoutExpired:
             end_wall = time.time()
             resp = {"ok": False, "result": "[timeout]", "returncode": 124}
+        # subprocess.run hides the child pid, so this fallback path (only taken
+        # when the source trace has no resource_timeline) attributes by exit
+        # window without ppid filtering. ponytail: a lingering `&` job from a
+        # prior command could leak here; the resource-integrated path above does
+        # the full subtree filter.
+        # SIGKILLed descendants may exit after this acct read and be missed.
+        per_process = _pacct_finish(pacct_off0)
+        if per_process is not None:
+            resp["per_process"] = per_process
         if seg is not None:
             resp["segment_timeline"] = _finish_segment_trace(seg, start_wall, end_wall)
             seg = None
@@ -784,6 +882,8 @@ HANDLERS = {
 }
 
 signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
+
+_pacct_enable()
 
 for line in sys.stdin:
     line = line.strip()
@@ -978,6 +1078,11 @@ class ContainerAgent:
         segment_flag = os.environ.get("OPENCLAW_SEGMENT_TIMELINE")
         if segment_flag is not None:
             cmd.extend(["-e", f"OPENCLAW_SEGMENT_TIMELINE={segment_flag}"])
+        # Forward the per-binary process-accounting toggle (needs --cap-add
+        # SYS_PACCT on the container, added by the simulate driver).
+        pacct_flag = os.environ.get("OPENCLAW_PACCT")
+        if pacct_flag is not None:
+            cmd.extend(["-e", f"OPENCLAW_PACCT={pacct_flag}"])
         cmd.extend(
             [
                 self._container_id,
@@ -1250,6 +1355,7 @@ def _trace_tool_response_metadata(resp: dict[str, Any]) -> dict[str, Any]:
         "resource_virtual_time_s",
         "resource_stall_s",
         "segment_timeline",
+        "per_process",
     ):
         if key in resp:
             metadata[key] = resp[key]

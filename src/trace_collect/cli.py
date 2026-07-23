@@ -315,6 +315,17 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--pacct",
+        dest="pacct",
+        action="store_true",
+        help=(
+            "Enable per-binary process accounting (BSD acct v3) during "
+            "container replay: attributes each exec's CPU/memory to the "
+            "individual binaries it ran. Requires host CAP_SYS_PACCT support; "
+            "adds --cap-add SYS_PACCT to replay containers. Off by default."
+        ),
+    )
+    parser.add_argument(
         "--cleanup-images",
         action="store_true",
         help=(
@@ -493,6 +504,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "llm_tpot_ms": args.llm_tpot_ms,
         "structured_output": args.output_dir == "traces/simulate",
         "segment_timeline": args.segment_timeline,
+        "pacct": args.pacct,
         "cleanup_images": args.cleanup_images,
     }
 

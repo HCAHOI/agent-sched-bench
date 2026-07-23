@@ -369,6 +369,10 @@ class TraceCollectorHook(AgentHook):
                 segment_timeline = segment_timelines.get(tc_id)
                 if segment_timeline is not None:
                     tool_action_data["segment_timeline"] = segment_timeline
+                per_process_records = getattr(context, "tool_per_process_records", {})
+                per_process = per_process_records.get(tc_id)
+                if per_process is not None:
+                    tool_action_data["per_process"] = per_process
                 tool_action = TraceAction(
                     action_type="tool_exec",
                     action_id=f"tool_{context.iteration}_{action_id_suffix}",

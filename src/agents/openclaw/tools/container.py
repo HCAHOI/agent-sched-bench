@@ -231,6 +231,10 @@ class ContainerExecTool(_ContainerTool):
         # pick up after the call, mirroring how resource_timeline is sourced
         # via a host-side ResourceTimelineRecorder wrapping this same call.
         self.last_segment_timeline: dict[str, Any] | None = None
+        # Same side-channel pattern for per-binary process accounting: the
+        # container response's `per_process` list is stashed for _run_tool to
+        # pick up (execute() must keep returning a plain str).
+        self.last_per_process: list[dict[str, Any]] | None = None
 
     @property
     def name(self) -> str:
@@ -259,6 +263,7 @@ class ContainerExecTool(_ContainerTool):
         # never inherit the previous call's segment timeline (stale-but-valid
         # telemetry would silently corrupt the segment dataset).
         self.last_segment_timeline = None
+        self.last_per_process = None
         workdir = working_dir or self.workspace
         guard_error = self._guard._guard_command(command, workdir)
         if guard_error:
@@ -275,6 +280,9 @@ class ContainerExecTool(_ContainerTool):
         segment_timeline = response.get("segment_timeline")
         if isinstance(segment_timeline, dict):
             self.last_segment_timeline = segment_timeline
+        per_process = response.get("per_process")
+        if isinstance(per_process, list):
+            self.last_per_process = per_process
         result = self._result_or_error(response)
         returncode = response.get("returncode")
         if isinstance(returncode, int) and not isinstance(returncode, bool):
