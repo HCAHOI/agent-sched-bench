@@ -16,7 +16,7 @@ repository with fit tasks — all confirmatory-style CIs are repo-clustered;
 skill numbers are partially in-distribution, not pure OOD.
 
 Per-binary cost table: BSD process accounting during a 20× replay of SWE-100
-(`traces/.../offline-gated-confirm-100-v2-pacct-perbin/per_binary_cost_table{,.flat}.json`,
+(`analysis/results/tool-resource-20260723/per_binary_cost_table{,.flat}.json`,
 163 binaries, 99.8% coverage, 0 attribution violations). Protocol: pacct-on
 replays produce per-binary labels only; call-level CPU labels always come from
 pacct-off runs (acct shares the cgroup counter; ~3% inflation).

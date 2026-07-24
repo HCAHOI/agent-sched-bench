@@ -1,0 +1,986 @@
+{
+ "binaries": {
+  "ZMQbg/IO/0": {
+   "mean_cpu_s": 0.6766666666666666,
+   "mean_mem_kb": 773418.6666666666,
+   "n": 12,
+   "total_cpu_s": 8.12
+  },
+  "ZMQbg/Reaper": {
+   "mean_cpu_s": 2.9983333333333335,
+   "mean_mem_kb": 1419349.3333333333,
+   "n": 6,
+   "total_cpu_s": 17.99
+  },
+  "apinames": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2464.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "apt-cache": {
+   "mean_cpu_s": 1.1400000000000001,
+   "mean_mem_kb": 39608.0,
+   "n": 2,
+   "total_cpu_s": 2.28
+  },
+  "apt-config": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 12376.0,
+   "n": 870,
+   "total_cpu_s": 0.0
+  },
+  "apt-get": {
+   "mean_cpu_s": 0.4479365079365079,
+   "mean_mem_kb": 32858.8253968254,
+   "n": 252,
+   "total_cpu_s": 112.88
+  },
+  "apt-key": {
+   "mean_cpu_s": 5.108556832694764e-05,
+   "mean_mem_kb": 2576.0,
+   "n": 1566,
+   "total_cpu_s": 0.08
+  },
+  "ar": {
+   "mean_cpu_s": 0.002,
+   "mean_mem_kb": 6771.2,
+   "n": 5,
+   "total_cpu_s": 0.01
+  },
+  "arch": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2484.0,
+   "n": 2,
+   "total_cpu_s": 0.0
+  },
+  "as": {
+   "mean_cpu_s": 0.035988372093023246,
+   "mean_mem_kb": 16139.736434108527,
+   "n": 516,
+   "total_cpu_s": 18.57
+  },
+  "asn_generate": {
+   "mean_cpu_s": 2.335,
+   "mean_mem_kb": 171872.0,
+   "n": 2,
+   "total_cpu_s": 4.67
+  },
+  "awk": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 6896.5,
+   "n": 320,
+   "total_cpu_s": 0.0
+  },
+  "basename": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 5799.264797507788,
+   "n": 321,
+   "total_cpu_s": 0.0
+  },
+  "bash": {
+   "mean_cpu_s": 8.205893323386796e-05,
+   "mean_mem_kb": 6537.481536740022,
+   "n": 2681,
+   "total_cpu_s": 0.22
+  },
+  "cat": {
+   "mean_cpu_s": 2.1186440677966103e-05,
+   "mean_mem_kb": 4677.830508474576,
+   "n": 472,
+   "total_cpu_s": 0.01
+  },
+  "cc": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 3860.0,
+   "n": 2,
+   "total_cpu_s": 0.0
+  },
+  "cc1": {
+   "mean_cpu_s": 0.7036494845360822,
+   "mean_mem_kb": 77757.37731958763,
+   "n": 485,
+   "total_cpu_s": 341.27
+  },
+  "cc1plus": {
+   "mean_cpu_s": 0.3406818181818182,
+   "mean_mem_kb": 101973.81818181818,
+   "n": 44,
+   "total_cpu_s": 14.99
+  },
+  "chmod": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2564.6666666666665,
+   "n": 180,
+   "total_cpu_s": 0.0
+  },
+  "clear": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2664.0,
+   "n": 2,
+   "total_cpu_s": 0.0
+  },
+  "cmp": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2560.0,
+   "n": 2,
+   "total_cpu_s": 0.0
+  },
+  "collect2": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 6166.950819672131,
+   "n": 183,
+   "total_cpu_s": 0.0
+  },
+  "conda": {
+   "mean_cpu_s": 3.305614035087719,
+   "mean_mem_kb": 215513.8245614035,
+   "n": 57,
+   "total_cpu_s": 188.42
+  },
+  "configure": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 25,
+   "total_cpu_s": 0.0
+  },
+  "conftest": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2434.4,
+   "n": 5,
+   "total_cpu_s": 0.0
+  },
+  "coverage": {
+   "mean_cpu_s": 11.114999999999998,
+   "mean_mem_kb": 339800.0,
+   "n": 2,
+   "total_cpu_s": 22.23
+  },
+  "cp": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 6868.0,
+   "n": 2,
+   "total_cpu_s": 0.0
+  },
+  "curl": {
+   "mean_cpu_s": 0.02666666666666667,
+   "mean_mem_kb": 97813.33333333333,
+   "n": 6,
+   "total_cpu_s": 0.16
+  },
+  "cut": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 5892.0,
+   "n": 3,
+   "total_cpu_s": 0.0
+  },
+  "cython": {
+   "mean_cpu_s": 0.8350000000000001,
+   "mean_mem_kb": 214496.0,
+   "n": 2,
+   "total_cpu_s": 1.67
+  },
+  "dd": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2532.0,
+   "n": 2,
+   "total_cpu_s": 0.0
+  },
+  "diff": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2656.0,
+   "n": 3,
+   "total_cpu_s": 0.0
+  },
+  "dir": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 3392.0,
+   "n": 5,
+   "total_cpu_s": 0.0
+  },
+  "dirname": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 5506.222222222223,
+   "n": 63,
+   "total_cpu_s": 0.0
+  },
+  "dpkg": {
+   "mean_cpu_s": 0.021094552929085304,
+   "mean_mem_kb": 8325.484069886948,
+   "n": 1946,
+   "total_cpu_s": 41.05
+  },
+  "dpkg-deb": {
+   "mean_cpu_s": 0.006857717445952736,
+   "mean_mem_kb": 32449.934640522875,
+   "n": 7956,
+   "total_cpu_s": 54.56
+  },
+  "dpkg-maintscrip": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 312,
+   "total_cpu_s": 0.0
+  },
+  "dpkg-preconfigu": {
+   "mean_cpu_s": 0.05424242424242424,
+   "mean_mem_kb": 21751.515151515152,
+   "n": 66,
+   "total_cpu_s": 3.58
+  },
+  "dpkg-query": {
+   "mean_cpu_s": 1.3679890560875512e-05,
+   "mean_mem_kb": 9779.447332421341,
+   "n": 731,
+   "total_cpu_s": 0.01
+  },
+  "dpkg-split": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 6548.0,
+   "n": 1326,
+   "total_cpu_s": 0.0
+  },
+  "echo": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 4204.789808917198,
+   "n": 314,
+   "total_cpu_s": 0.0
+  },
+  "expr": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 3206.769230769231,
+   "n": 26,
+   "total_cpu_s": 0.0
+  },
+  "fc-list": {
+   "mean_cpu_s": 0.0004,
+   "mean_mem_kb": 8764.48,
+   "n": 25,
+   "total_cpu_s": 0.01
+  },
+  "find": {
+   "mean_cpu_s": 0.03047619047619046,
+   "mean_mem_kb": 7866.0317460317465,
+   "n": 315,
+   "total_cpu_s": 9.6
+  },
+  "gcc": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 5800.761904761905,
+   "n": 210,
+   "total_cpu_s": 0.0
+  },
+  "gcc-ranlib": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2480.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "getconf": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2468.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "git": {
+   "mean_cpu_s": 0.0023455621301775092,
+   "mean_mem_kb": 45848.93633136095,
+   "n": 4225,
+   "total_cpu_s": 9.91
+  },
+  "git-upload-pack": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 8821.6,
+   "n": 15,
+   "total_cpu_s": 0.0
+  },
+  "gpg-connect-age": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 4720.0,
+   "n": 504,
+   "total_cpu_s": 0.0
+  },
+  "gpgconf": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 4084.0,
+   "n": 168,
+   "total_cpu_s": 0.0
+  },
+  "gpgv": {
+   "mean_cpu_s": 8.620689655172414e-05,
+   "mean_mem_kb": 11313.620689655172,
+   "n": 464,
+   "total_cpu_s": 0.04
+  },
+  "grep": {
+   "mean_cpu_s": 0.00013015991074748982,
+   "mean_mem_kb": 6831.626626998885,
+   "n": 2689,
+   "total_cpu_s": 0.35
+  },
+  "head": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 5892.0,
+   "n": 498,
+   "total_cpu_s": 0.0
+  },
+  "hg": {
+   "mean_cpu_s": 0.13006097560975619,
+   "mean_mem_kb": 36593.62195121951,
+   "n": 656,
+   "total_cpu_s": 85.32
+  },
+  "hostname": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2464.0,
+   "n": 4,
+   "total_cpu_s": 0.0
+  },
+  "http": {
+   "mean_cpu_s": 0.023439999999999985,
+   "mean_mem_kb": 22074.08,
+   "n": 250,
+   "total_cpu_s": 5.86
+  },
+  "install": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 3488.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "javascript-comm": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 52,
+   "total_cpu_s": 0.0
+  },
+  "jemalloc_bg_thd": {
+   "mean_cpu_s": 15.568333333333335,
+   "mean_mem_kb": 1388138.6666666667,
+   "n": 6,
+   "total_cpu_s": 93.41
+  },
+  "ld": {
+   "mean_cpu_s": 0.009414893617021282,
+   "mean_mem_kb": 15007.08510638298,
+   "n": 188,
+   "total_cpu_s": 1.77
+  },
+  "ldconfig": {
+   "mean_cpu_s": 0.011739130434782613,
+   "mean_mem_kb": 1381.391304347826,
+   "n": 69,
+   "total_cpu_s": 0.81
+  },
+  "ldd": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 7324.0,
+   "n": 2,
+   "total_cpu_s": 0.0
+  },
+  "libblas3:amd64.": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "libc-bin.postin": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 53,
+   "total_cpu_s": 0.0
+  },
+  "libjs-jquery.po": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 52,
+   "total_cpu_s": 0.0
+  },
+  "liblapack3:amd6": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "libpython3.11-m": {
+   "mean_cpu_s": 0.0015769230769230778,
+   "mean_mem_kb": 2576.0,
+   "n": 260,
+   "total_cpu_s": 0.41
+  },
+  "libpython3.11-s": {
+   "mean_cpu_s": 0.0009615384615384615,
+   "mean_mem_kb": 2576.0,
+   "n": 156,
+   "total_cpu_s": 0.15
+  },
+  "libstdc++6:amd6": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 3,
+   "total_cpu_s": 0.0
+  },
+  "libtool": {
+   "mean_cpu_s": 0.0010282258064516134,
+   "mean_mem_kb": 7926.645161290323,
+   "n": 496,
+   "total_cpu_s": 0.51
+  },
+  "ln": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 5613.754385964912,
+   "n": 57,
+   "total_cpu_s": 0.0
+  },
+  "ls": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 6695.489361702128,
+   "n": 235,
+   "total_cpu_s": 0.0
+  },
+  "lscpu": {
+   "mean_cpu_s": 0.000392156862745098,
+   "mean_mem_kb": 6353.098039215686,
+   "n": 51,
+   "total_cpu_s": 0.02
+  },
+  "lto-wrapper": {
+   "mean_cpu_s": 0.0005,
+   "mean_mem_kb": 4806.6,
+   "n": 20,
+   "total_cpu_s": 0.01
+  },
+  "lto1-ltrans": {
+   "mean_cpu_s": 0.46249999999999997,
+   "mean_mem_kb": 67143.66666666667,
+   "n": 24,
+   "total_cpu_s": 11.1
+  },
+  "lto1-wpa": {
+   "mean_cpu_s": 0.017,
+   "mean_mem_kb": 47464.4,
+   "n": 20,
+   "total_cpu_s": 0.34
+  },
+  "make": {
+   "mean_cpu_s": 0.01,
+   "mean_mem_kb": 7036.0,
+   "n": 5,
+   "total_cpu_s": 0.05
+  },
+  "mamba": {
+   "mean_cpu_s": 7.857083333333334,
+   "mean_mem_kb": 182138.13333333333,
+   "n": 120,
+   "total_cpu_s": 942.85
+  },
+  "mawk": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 3568.0,
+   "n": 4,
+   "total_cpu_s": 0.0
+  },
+  "mkdir": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 6036.0,
+   "n": 68,
+   "total_cpu_s": 0.0
+  },
+  "mktemp": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2488.0,
+   "n": 176,
+   "total_cpu_s": 0.0
+  },
+  "mv": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 3646.1428571428573,
+   "n": 56,
+   "total_cpu_s": 0.0
+  },
+  "nm": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 4876.0,
+   "n": 5,
+   "total_cpu_s": 0.0
+  },
+  "objdump": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 6308.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "pip": {
+   "mean_cpu_s": 1.4010638297872342,
+   "mean_mem_kb": 62562.04255319149,
+   "n": 47,
+   "total_cpu_s": 65.85
+  },
+  "pip3": {
+   "mean_cpu_s": 1.4738909090909094,
+   "mean_mem_kb": 71435.17090909091,
+   "n": 275,
+   "total_cpu_s": 405.32
+  },
+  "pkg-config": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2725.1714285714284,
+   "n": 420,
+   "total_cpu_s": 0.0
+  },
+  "pre-commit": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 4,
+   "total_cpu_s": 0.0
+  },
+  "preinst": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 158,
+   "total_cpu_s": 0.0
+  },
+  "py3compile": {
+   "mean_cpu_s": 0.0587637362637361,
+   "mean_mem_kb": 20951.472527472528,
+   "n": 364,
+   "total_cpu_s": 21.39
+  },
+  "pytest": {
+   "mean_cpu_s": 1.3352450980392154,
+   "mean_mem_kb": 243970.54901960783,
+   "n": 204,
+   "total_cpu_s": 272.39
+  },
+  "python": {
+   "mean_cpu_s": 1.2671161825726134,
+   "mean_mem_kb": 406688.0165975104,
+   "n": 482,
+   "total_cpu_s": 610.75
+  },
+  "python3": {
+   "mean_cpu_s": 0.7653400614304495,
+   "mean_mem_kb": 111750.06230802984,
+   "n": 2279,
+   "total_cpu_s": 1744.21
+  },
+  "python3-async-g": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-attr.po": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 15,
+   "total_cpu_s": 0.0
+  },
+  "python3-certifi": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-chardet": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-charset": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-click.p": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-coloram": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 2,
+   "total_cpu_s": 0.0
+  },
+  "python3-distuti": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 104,
+   "total_cpu_s": 0.0
+  },
+  "python3-html5li": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-idna.po": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-iniconf": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 15,
+   "total_cpu_s": 0.0
+  },
+  "python3-isodate": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-lib2to3": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 104,
+   "total_cpu_s": 0.0
+  },
+  "python3-markdow": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-mdurl.p": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-mock.po": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-more-it": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 15,
+   "total_cpu_s": 0.0
+  },
+  "python3-numpy.p": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-packagi": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 15,
+   "total_cpu_s": 0.0
+  },
+  "python3-pbr.pos": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-pip.pos": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 53,
+   "total_cpu_s": 0.0
+  },
+  "python3-pkg-res": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 58,
+   "total_cpu_s": 0.0
+  },
+  "python3-pluggy.": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 15,
+   "total_cpu_s": 0.0
+  },
+  "python3-py.post": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 15,
+   "total_cpu_s": 0.0
+  },
+  "python3-pygment": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 15,
+   "total_cpu_s": 0.0
+  },
+  "python3-pyparsi": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-pypercl": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-pytest-": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-pytest.": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 15,
+   "total_cpu_s": 0.0
+  },
+  "python3-request": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-rich.po": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-setupto": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 53,
+   "total_cpu_s": 0.0
+  },
+  "python3-six.pos": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 3,
+   "total_cpu_s": 0.0
+  },
+  "python3-urllib3": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-wcwidth": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-webenco": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3-wheel.p": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 53,
+   "total_cpu_s": 0.0
+  },
+  "python3-yaml.po": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "python3.11": {
+   "mean_cpu_s": 0.11568060836501949,
+   "mean_mem_kb": 20155.72319391635,
+   "n": 1315,
+   "total_cpu_s": 152.12
+  },
+  "python3.11-mini": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 208,
+   "total_cpu_s": 0.0
+  },
+  "python3.11-venv": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 2,
+   "total_cpu_s": 0.0
+  },
+  "python3.11.post": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 104,
+   "total_cpu_s": 0.0
+  },
+  "python3.11.prer": {
+   "mean_cpu_s": 0.0001923076923076923,
+   "mean_mem_kb": 2576.0,
+   "n": 156,
+   "total_cpu_s": 0.03
+  },
+  "python3.12": {
+   "mean_cpu_s": 0.68,
+   "mean_mem_kb": 29076.0,
+   "n": 2,
+   "total_cpu_s": 1.36
+  },
+  "python3.13": {
+   "mean_cpu_s": 0.57,
+   "mean_mem_kb": 1114848.0,
+   "n": 4,
+   "total_cpu_s": 2.28
+  },
+  "python3.9": {
+   "mean_cpu_s": 0.34461538461538466,
+   "mean_mem_kb": 43897.230769230766,
+   "n": 26,
+   "total_cpu_s": 8.96
+  },
+  "ranlib": {
+   "mean_cpu_s": 0.01,
+   "mean_mem_kb": 7060.0,
+   "n": 1,
+   "total_cpu_s": 0.01
+  },
+  "rm": {
+   "mean_cpu_s": 9.212344541685859e-06,
+   "mean_mem_kb": 5364.9193919852605,
+   "n": 2171,
+   "total_cpu_s": 0.02
+  },
+  "rmdir": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2500.0,
+   "n": 5,
+   "total_cpu_s": 0.0
+  },
+  "sed": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 4195.052307692307,
+   "n": 975,
+   "total_cpu_s": 0.0
+  },
+  "sh": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 427,
+   "total_cpu_s": 0.0
+  },
+  "sort": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 3041.714285714286,
+   "n": 7,
+   "total_cpu_s": 0.0
+  },
+  "store": {
+   "mean_cpu_s": 0.43224137931034506,
+   "mean_mem_kb": 19357.51724137931,
+   "n": 116,
+   "total_cpu_s": 50.14
+  },
+  "strip": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 4988.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "svnversion": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 11304.0,
+   "n": 4,
+   "total_cpu_s": 0.0
+  },
+  "systemd.postins": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 52,
+   "total_cpu_s": 0.0
+  },
+  "tail": {
+   "mean_cpu_s": 0.00040310077519379857,
+   "mean_mem_kb": 5916.0,
+   "n": 645,
+   "total_cpu_s": 0.26
+  },
+  "tar": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 7204.0,
+   "n": 1328,
+   "total_cpu_s": 0.0
+  },
+  "test": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 5904.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "timeout": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 5892.0,
+   "n": 3,
+   "total_cpu_s": 0.0
+  },
+  "touch": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2548.0,
+   "n": 3,
+   "total_cpu_s": 0.0
+  },
+  "tr": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 3924.6666666666665,
+   "n": 12,
+   "total_cpu_s": 0.0
+  },
+  "uname": {
+   "mean_cpu_s": 1.3157894736842106e-05,
+   "mean_mem_kb": 5839.263157894737,
+   "n": 760,
+   "total_cpu_s": 0.01
+  },
+  "uniq": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2492.0,
+   "n": 1,
+   "total_cpu_s": 0.0
+  },
+  "update-alternat": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 5904.0,
+   "n": 2,
+   "total_cpu_s": 0.0
+  },
+  "wget": {
+   "mean_cpu_s": 0.37,
+   "mean_mem_kb": 17176.0,
+   "n": 1,
+   "total_cpu_s": 0.37
+  },
+  "which": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 2576.0,
+   "n": 336,
+   "total_cpu_s": 0.0
+  },
+  "x86_64-linux-gn": {
+   "mean_cpu_s": 1.8416206261510128e-05,
+   "mean_mem_kb": 7202.9244935543275,
+   "n": 543,
+   "total_cpu_s": 0.01
+  },
+  "xargs": {
+   "mean_cpu_s": 0.0,
+   "mean_mem_kb": 5367.692307692308,
+   "n": 507,
+   "total_cpu_s": 0.0
+  }
+ },
+ "n_exec_actions": 3004,
+ "n_tasks": 100,
+ "per_process_coverage": 0.9976697736351531,
+ "source": "pacct replay of offline-gated-confirm-100-v2, 2026-07-23, replay_speed=20 workers=1(serial)"
+}
