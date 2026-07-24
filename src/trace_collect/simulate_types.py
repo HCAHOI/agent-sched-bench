@@ -124,6 +124,9 @@ class WorkerReplayResult:
     trace_file: str
     task_stats: list[ReplayTaskStats]
     task_output_dirs: dict[str, str]
+    pacct_metadata_by_agent: dict[str, dict[str, Any]] = dataclasses.field(
+        default_factory=dict
+    )
 
 
 @dataclass(slots=True)

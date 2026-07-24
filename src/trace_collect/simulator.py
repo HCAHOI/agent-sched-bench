@@ -103,6 +103,7 @@ logger = logging.getLogger(__name__)
 GLOBAL_CONTAINER_RESOURCE_SAMPLE_INTERVAL_S = 1.0
 _SHARED_SEMAPHORE_POLL_S = 0.05
 _REPLAY_START_DELAY_S = 0.1
+_CONTAINER_PACCT_SESSIONS: dict[str, Any] = {}
 __all__ = (
     "LLMTimingConfig",
     "LoadedTraceSession",
@@ -231,23 +232,59 @@ async def _exec_tool(
     Returns:
         (tool_result, tool_duration_ms, tool_success, replay_metadata)
     """
-    from trace_collect.openclaw_tools import execute_trace_tool_detailed
-
-    t0 = time.monotonic()
-    (
-        tool_result,
-        tool_success,
-        inner_duration_ms,
-        tool_metadata,
-    ) = await execute_trace_tool_detailed(
-        agent=agent,
-        tool_name=tool_name,
-        tool_args_json=tool_args_json,
-        command_timeout_s=command_timeout_s,
-        source_exec_timeout_s=source_exec_timeout_s,
-        allow_source_runtime_artifacts=allow_source_runtime_artifacts,
-        source_resource_timeline=source_resource_timeline,
+    from trace_collect.openclaw_tools import (
+        container_pacct_begin,
+        container_pacct_finish,
+        execute_trace_tool_detailed,
     )
+
+    pacct_session = getattr(agent, "_container_pacct_session", None)
+    pacct_token = None
+    pacct_collect = False
+    pacct_offset = None
+    if pacct_session is not None and _tool_uses_exec_semantics(
+        tool_name, tool_args_json
+    ):
+        pacct_token, pacct_collect = pacct_session.enter_exec()
+        if pacct_collect:
+            pacct_offset = await asyncio.to_thread(
+                container_pacct_begin,
+                pacct_session,
+            )
+    t0 = time.monotonic()
+    pacct_interval_valid = True
+    try:
+        (
+            tool_result,
+            tool_success,
+            inner_duration_ms,
+            tool_metadata,
+        ) = await execute_trace_tool_detailed(
+            agent=agent,
+            tool_name=tool_name,
+            tool_args_json=tool_args_json,
+            command_timeout_s=command_timeout_s,
+            source_exec_timeout_s=source_exec_timeout_s,
+            allow_source_runtime_artifacts=allow_source_runtime_artifacts,
+            source_resource_timeline=source_resource_timeline,
+        )
+    finally:
+        per_process = (
+            await asyncio.to_thread(
+                container_pacct_finish,
+                pacct_session,
+                pacct_offset,
+            )
+            if pacct_collect
+            else None
+        )
+        if pacct_token is not None:
+            pacct_interval_valid = pacct_session.leave_exec(pacct_token)
+    if not pacct_interval_valid:
+        per_process = None
+        tool_metadata["per_process_unavailable_reason"] = "overlapping_exec"
+    if per_process is not None:
+        tool_metadata["per_process"] = per_process
     wall_duration_ms = (time.monotonic() - t0) * 1000
     # Prefer agent-side timing to exclude pipe transfer overhead
     duration_ms = inner_duration_ms if inner_duration_ms is not None else wall_duration_ms
@@ -1069,6 +1106,7 @@ def _run_terminal_bench_compose(
     container_executable: str,
     project: str,
     compose_file: Path,
+    compose_override: Path | None = None,
     env: dict[str, str],
     args: list[str],
 ) -> str:
@@ -1079,8 +1117,10 @@ def _run_terminal_bench_compose(
         project,
         "-f",
         str(compose_file),
-        *args,
     ]
+    if compose_override is not None:
+        cmd.extend(["-f", str(compose_override)])
+    cmd.extend(args)
     result = subprocess.run(
         cmd,
         capture_output=True,
@@ -1251,6 +1291,7 @@ async def _prepare_terminal_bench_container_session(
     container_workdir = "/testbed"
     container_python_runtime: str | None = None
     container_pythonpath: str | None = None
+    compose_override: Path | None = None
     try:
         phase = recorder.start_phase("materialize_terminal_bench_task")
         try:
@@ -1259,6 +1300,12 @@ async def _prepare_terminal_bench_container_session(
             task_runtime_dir.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(source_dir, task_runtime_dir)
             compose_file = _terminal_bench_compose_file(task_runtime_dir).resolve()
+            if os.environ.get("OPENCLAW_PACCT") == "1":
+                compose_override = task_runtime_dir / "docker-compose.pacct.yaml"
+                compose_override.write_text(
+                    "services:\n  client:\n    cap_add:\n      - SYS_PACCT\n",
+                    encoding="utf-8",
+                )
             dockerfile = task_runtime_dir / "Dockerfile"
             if not dockerfile.exists():
                 raise SimulateError(
@@ -1270,6 +1317,9 @@ async def _prepare_terminal_bench_container_session(
                     "source_dir": str(source_dir),
                     "runtime_dir": str(task_runtime_dir),
                     "compose_file": str(compose_file),
+                    "compose_override": (
+                        str(compose_override) if compose_override is not None else None
+                    ),
                     "dockerfile": str(dockerfile),
                     "compose_project": project,
                     "compose_env": env_values,
@@ -1284,6 +1334,7 @@ async def _prepare_terminal_bench_container_session(
             container_executable=container_executable,
             project=project,
             compose_file=compose_file,
+            compose_override=compose_override,
             env=compose_env,
             args=["down", "--volumes", "--remove-orphans"],
         )
@@ -1294,6 +1345,7 @@ async def _prepare_terminal_bench_container_session(
                 container_executable=container_executable,
                 project=project,
                 compose_file=compose_file,
+                compose_override=compose_override,
                 env=compose_env,
                 args=["build"],
             )
@@ -1309,6 +1361,7 @@ async def _prepare_terminal_bench_container_session(
                 container_executable=container_executable,
                 project=project,
                 compose_file=compose_file,
+                compose_override=compose_override,
                 env=compose_env,
                 args=["up", "-d"],
             )
@@ -1324,6 +1377,7 @@ async def _prepare_terminal_bench_container_session(
                 container_executable=container_executable,
                 project=project,
                 compose_file=compose_file,
+                compose_override=compose_override,
                 env=compose_env,
                 args=["ps", "-q", "client"],
             )
@@ -1586,6 +1640,7 @@ async def _prepare_container_session(
                 python_runtime=None,
                 pythonpath=None,
                 workdir="/testbed",
+                forward_pacct=False,
             )
             phase = recorder.start_phase("container_agent_start")
             try:
@@ -1709,6 +1764,7 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
             )
             raise resource_write_error
         return
+    _CONTAINER_PACCT_SESSIONS.pop(ctr.container_id, None)
     prepared.container = None
     agent_stop_error: BaseException | None = None
     container_stop_error: BaseException | None = None
@@ -1919,10 +1975,15 @@ async def _prewarm_replay_agents_for_batch(
             python_runtime=ctr.python_runtime,
             pythonpath=ctr.pythonpath,
             workdir=ctr.workdir,
+            forward_pacct=False,
         )
         for _ in runnable_actions[1:]
     ]
     if extra_agents:
+        pacct_session = _CONTAINER_PACCT_SESSIONS.get(ctr.container_id)
+        if pacct_session is not None:
+            for agent in extra_agents:
+                agent._container_pacct_session = pacct_session
         ctr.extra_agents.extend(extra_agents)
         await asyncio.gather(*(agent.start() for agent in extra_agents))
         assignments.update(
@@ -1932,6 +1993,60 @@ async def _prewarm_replay_agents_for_batch(
             }
         )
     return assignments
+
+
+def _pacct_trace_metadata(prepared: PreparedTraceSession) -> dict[str, Any]:
+    ctr = prepared.container
+    if ctr is None:
+        return {}
+    pacct_session = _CONTAINER_PACCT_SESSIONS.get(ctr.container_id)
+    if pacct_session is None:
+        return {}
+    metadata: dict[str, Any] = {
+        "pacct_unavailable": pacct_session.unavailable,
+        "pacct_attribution": "offset_delta",
+    }
+    if pacct_session.unavailable_reason is not None:
+        metadata["pacct_unavailable_reason"] = pacct_session.unavailable_reason
+    if pacct_session.overlap_execs:
+        metadata["pacct_overlap_execs"] = pacct_session.overlap_execs
+    return metadata
+
+
+def _split_trace_by_agent_with_pacct(
+    combined_path: Path,
+    sessions: list[PreparedTraceSession],
+) -> None:
+    metadata_by_agent = {
+        prepared.loaded.run_instance_id: _pacct_trace_metadata(prepared)
+        for prepared in sessions
+    }
+    _split_trace_by_agent(
+        combined_path,
+        sessions,
+        metadata_by_agent=metadata_by_agent,
+    )
+
+
+async def _enable_replay_container_pacct(
+    prepared: PreparedTraceSession,
+) -> None:
+    ctr = prepared.container
+    if (
+        ctr is None
+        or os.environ.get("OPENCLAW_PACCT") != "1"
+    ):
+        return
+    from trace_collect.openclaw_tools import enable_container_pacct
+
+    pacct_session = await asyncio.to_thread(
+        enable_container_pacct,
+        ctr.container_id,
+        ctr.container_executable,
+    )
+    _CONTAINER_PACCT_SESSIONS[ctr.container_id] = pacct_session
+    if ctr.agent is not None:
+        ctr.agent._container_pacct_session = pacct_session
 
 
 def _validate_llm_timing_config(
@@ -2011,6 +2126,7 @@ async def _prepare_replay_session(
                 await _restore_source_runtime_artifacts(prepared)
             prepared.task_output_dir = task_output_dir
         if prepared.container is not None:
+            await _enable_replay_container_pacct(prepared)
             prepared.resource_monitoring_enabled = session_resource_monitoring_enabled
             prepared.memory_bandwidth_enabled = memory_bandwidth_enabled
             prepared.monitoring_policy = monitoring_policy
@@ -2347,6 +2463,10 @@ async def _run_worker_wave_async(
             command_timeout_s=command_timeout_s,
             warmup_skip_iterations=warmup_skip_iterations,
         )
+        pacct_metadata_by_agent = {
+            prepared.loaded.run_instance_id: _pacct_trace_metadata(prepared)
+            for prepared in prepared_sessions
+        }
         trace_logger.close()
         return WorkerReplayResult(
             wave_index=wave_index,
@@ -2358,6 +2478,7 @@ async def _run_worker_wave_async(
                 for prepared in prepared_sessions
                 if prepared.task_output_dir is not None
             },
+            pacct_metadata_by_agent=pacct_metadata_by_agent,
         )
     except BaseException:
         if not replay_started:
@@ -3039,6 +3160,7 @@ async def _replay_cloud_model_session(
         + unexpected_replay_failed_actions
     )
     success = failed_actions == 0
+    pacct_metadata = _pacct_trace_metadata(prepared_session)
     trace_logger.log_summary(
         loaded.agent_id,
         _make_trace_summary(
@@ -3059,6 +3181,7 @@ async def _replay_cloud_model_session(
                 "fatal_replay_errors": fatal_replay_errors,
                 "replay_action_errors": replay_action_errors,
                 "sleep_drift": _summarize_sleep_drifts(sleep_drifts),
+                **pacct_metadata,
             },
         ),
     )
@@ -3335,7 +3458,10 @@ async def simulate(
             try:
                 if trace_logger is not None:
                     trace_logger.close()
-                    _split_trace_by_agent(trace_logger.path, prepared_sessions)
+                    _split_trace_by_agent_with_pacct(
+                        trace_logger.path,
+                        prepared_sessions,
+                    )
                 for prepared in prepared_sessions:
                     await _finalize_prepared_session(prepared)
             except (Exception, asyncio.CancelledError) as exc:

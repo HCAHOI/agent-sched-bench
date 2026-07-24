@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
+import subprocess
 import textwrap
+from dataclasses import dataclass, field
 from typing import Any
 
+from trace_collect.pacct import _ACCT_V3_SIZE, parse_pacct_v3
 from trace_collect.resource_timeline import valid_resource_timeline
 from trace_collect.runtime.task_container import _CONTAINER_PYTHON_CANDIDATES
 
@@ -25,6 +29,7 @@ _AGENT_STOP_GRACE_S = 5.0
 _AGENT_KILL_WAIT_S = 5.0
 _PYTHON_PROBE_TIMEOUT_S = 30.0
 _PYTHON_PROBE_KILL_WAIT_S = 5.0
+_CONTAINER_PACCT_FILE = "/tmp/.openclaw-pacct.log"
 _SOURCE_RUNTIME_ARTIFACT_MARKERS = (
     (
         "/openclaw-runtime/tool-results/tool-results/",
@@ -35,6 +40,170 @@ _SOURCE_RUNTIME_ARTIFACT_MARKERS = (
         "/runtime/tool-results",
     ),
 )
+
+
+@dataclass(slots=True)
+class ContainerPacctSession:
+    """Host-managed process accounting for one replay container."""
+
+    container_id: str
+    container_executable: str
+    path: str = _CONTAINER_PACCT_FILE
+    unavailable: bool = False
+    unavailable_reason: str | None = None
+    overlap_execs: int = 0
+    _next_bracket: int = 0
+    _active_brackets: set[int] = field(default_factory=set, repr=False)
+    _invalid_brackets: set[int] = field(default_factory=set, repr=False)
+
+    def enter_exec(self) -> tuple[int, bool]:
+        """Reserve an attribution interval without serializing replay execution."""
+        token = self._next_bracket
+        self._next_bracket += 1
+        collect = not self._active_brackets
+        if not collect:
+            newly_invalid = self._active_brackets - self._invalid_brackets
+            self.overlap_execs += len(newly_invalid) + 1
+            self._invalid_brackets.update(self._active_brackets)
+            self._invalid_brackets.add(token)
+        self._active_brackets.add(token)
+        return token, collect
+
+    def leave_exec(self, token: int) -> bool:
+        """Return whether ``token`` remained isolated from other execs."""
+        self._active_brackets.remove(token)
+        valid = token not in self._invalid_brackets
+        self._invalid_brackets.discard(token)
+        return valid
+
+
+def _run_container_pacct_python(
+    session: ContainerPacctSession,
+    script: str,
+    *args: str,
+    failure_reason: str,
+) -> subprocess.CompletedProcess[str] | None:
+    try:
+        result = subprocess.run(
+            [
+                session.container_executable,
+                "exec",
+                "--user",
+                "0",
+                session.container_id,
+                "python3",
+                "-c",
+                script,
+                *args,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_PYTHON_PROBE_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        session.unavailable = True
+        session.unavailable_reason = failure_reason
+        return None
+    if result.returncode == 0:
+        return result
+    stderr = result.stderr.lower()
+    session.unavailable = True
+    session.unavailable_reason = (
+        "python3_unavailable"
+        if result.returncode == 127 or ("python3" in stderr and "not found" in stderr)
+        else failure_reason
+    )
+    return None
+
+
+def enable_container_pacct(
+    container_id: str,
+    container_executable: str,
+) -> ContainerPacctSession:
+    """Enable acct(2) inside a replay container, failing soft when unavailable."""
+    session = ContainerPacctSession(container_id, container_executable)
+    script = (
+        "import ctypes,sys;"
+        "p=sys.argv[1];"
+        "open(p,'wb').close();"
+        "libc=ctypes.CDLL(None,use_errno=True);"
+        "libc.acct.argtypes=[ctypes.c_char_p];"
+        "libc.acct.restype=ctypes.c_int;"
+        "rc=libc.acct(p.encode());"
+        "rc==0 or (_ for _ in ()).throw(OSError(ctypes.get_errno(),'acct failed'))"
+    )
+    _run_container_pacct_python(
+        session,
+        script,
+        session.path,
+        failure_reason="acct_enable_failed",
+    )
+    return session
+
+
+def container_pacct_begin(session: ContainerPacctSession) -> int | None:
+    """Return the current acct-file byte offset for one exec bracket."""
+    if session.unavailable:
+        return None
+    # The short-lived python3 stat process is itself appended after it prints,
+    # so advance past that fixed-size record as well as the measured file end.
+    result = _run_container_pacct_python(
+        session,
+        f"import os,sys;print(os.path.getsize(sys.argv[1])+{_ACCT_V3_SIZE})",
+        session.path,
+        failure_reason="acct_offset_read_failed",
+    )
+    if result is None:
+        return None
+    try:
+        return int(result.stdout.strip())
+    except ValueError:
+        session.unavailable = True
+        session.unavailable_reason = "acct_offset_invalid"
+        return None
+
+
+def decode_container_pacct_delta(payload: str) -> list[dict[str, Any]]:
+    """Decode one base64 acct-file delta using the canonical host parser."""
+    data = base64.b64decode(payload.encode("ascii"), validate=True)
+    return [
+        {**record.to_row(), "attribution": "offset_delta"}
+        for record in parse_pacct_v3(data)
+    ]
+
+
+def container_pacct_finish(
+    session: ContainerPacctSession,
+    offset: int | None,
+) -> list[dict[str, Any]] | None:
+    """Read and decode records appended since ``offset`` without PID filtering."""
+    if session.unavailable or offset is None:
+        return None
+    script = (
+        "import base64,sys;"
+        "f=open(sys.argv[1],'rb');"
+        "f.seek(int(sys.argv[2]));"
+        "sys.stdout.write(base64.b64encode(f.read()).decode('ascii'));"
+        "f.close()"
+    )
+    result = _run_container_pacct_python(
+        session,
+        script,
+        session.path,
+        str(offset),
+        failure_reason="acct_delta_read_failed",
+    )
+    if result is None:
+        return None
+    try:
+        rows = decode_container_pacct_delta(result.stdout.strip())
+    except (UnicodeEncodeError, ValueError):
+        session.unavailable = True
+        session.unavailable_reason = "acct_delta_invalid"
+        return None
+    # ponytail: descendants killed at timeout may exit after this read and be missed.
+    return rows or None
 
 
 def _unwrap_tool_args(
@@ -978,6 +1147,7 @@ class ContainerAgent:
         pythonpath: str | None = None,
         python_runtime: str | None = None,
         workdir: str = "/testbed",
+        forward_pacct: bool = True,
     ) -> None:
         self._container_id = container_id
         self._executable = container_executable
@@ -986,6 +1156,7 @@ class ContainerAgent:
         self._python_runtime: str = python_runtime or "python3"
         self._pythonpath: str | None = pythonpath
         self._workdir = workdir or "/testbed"
+        self._forward_pacct = forward_pacct
         self._lock = asyncio.Lock()
 
     async def _probe_python(self) -> str:
@@ -1081,7 +1252,7 @@ class ContainerAgent:
         # Forward the per-binary process-accounting toggle (needs --cap-add
         # SYS_PACCT on the container, added by the simulate driver).
         pacct_flag = os.environ.get("OPENCLAW_PACCT")
-        if pacct_flag is not None:
+        if self._forward_pacct and pacct_flag is not None:
             cmd.extend(["-e", f"OPENCLAW_PACCT={pacct_flag}"])
         cmd.extend(
             [

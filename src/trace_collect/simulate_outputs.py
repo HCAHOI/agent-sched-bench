@@ -379,6 +379,8 @@ def _write_prepared_resources(
 def _split_trace_by_agent(
     combined_path: Path,
     sessions: list[PreparedTraceSession],
+    *,
+    metadata_by_agent: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Write per-task trace.jsonl from the combined JSONL, filtered by replay id."""
     agent_dirs = {
@@ -456,6 +458,7 @@ def _split_trace_by_agent(
                 source_model = _source_model(session)
                 metadata["source_models"] = [source_model]
                 metadata["source_model"] = source_model
+                metadata.update((metadata_by_agent or {}).get(agent_id, {}))
                 fh.write(json.dumps(metadata, ensure_ascii=False) + "\n")
             for ln in lines:
                 fh.write(ln + "\n")
@@ -487,7 +490,15 @@ def _split_combined_worker_trace_by_agent(
         prepared_sessions.append(
             PreparedTraceSession(loaded=session, task_output_dir=task_output_dir)
         )
-    _split_trace_by_agent(combined_path, prepared_sessions)
+    _split_trace_by_agent(
+        combined_path,
+        prepared_sessions,
+        metadata_by_agent={
+            agent_id: metadata
+            for result in worker_results
+            for agent_id, metadata in result.pacct_metadata_by_agent.items()
+        },
+    )
 
 
 def _write_combined_worker_trace(
