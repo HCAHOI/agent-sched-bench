@@ -11,11 +11,16 @@ import random
 import re
 from typing import Any, Iterable, Mapping, Sequence
 
-import bashlex
 import numpy as np
 
 from tool_resource.labels import ResourceCallSample
 from tool_resource.metrics import ecdf_quantile
+from tool_resource.mvdan_client import (
+    PARSER_NAME,
+    PARSER_VERSION,
+    MvdanClientError,
+    get_client as get_mvdan_client,
+)
 from tool_time.command import make_row_command_prefix_keys, shell_command_segments
 from tool_time.prior import LatencyPrior, latency_prior_hierarchy
 
@@ -52,6 +57,7 @@ _PREFIX_KEYS = make_row_command_prefix_keys("command", max_depth=4)
 _EWMA_ALPHA = 0.3
 _N_FOLDS = 5
 _FOLD_SEED = 0
+_PARSER_PROVENANCE = {"name": PARSER_NAME, "version": PARSER_VERSION}
 
 _GROUP_A_FEATURES = (
     "clause_count",
@@ -101,6 +107,7 @@ TARGET_NAMES = ("latency_ms", "peak_cpu_cores", "peak_memory_mb")
 class TabularDataset:
     """Aligned numeric features, targets, masks, identities, and repo folds."""
 
+    metadata: dict[str, Any]
     features: dict[str, np.ndarray]
     targets: dict[str, np.ndarray]
     eligibility_masks: dict[str, np.ndarray]
@@ -146,26 +153,24 @@ def assign_repo_folds(
 
 
 def parse_command_clauses(command: str) -> dict[str, Any]:
-    """Return bash clauses and causal syntax context, with a shlex fallback."""
+    """Return Bash clauses and causal context, falling back on malformed input.
 
-    clauses: list[dict[str, Any]] = []
-    try:
-        roots = bashlex.parse(command)
-    except (bashlex.errors.ParsingError, NotImplementedError):
+    Mvdan byte offsets are converted to Python code-point indices. Leading
+    assignments are excluded from argv, while executable wrappers remain the
+    head. Statements without an executable head emit no clause.
+    """
+
+    response = get_mvdan_client().parse(command)
+    if not response.get("ok"):
         return {"clauses": _fallback_clauses(command), "parse_failed": True}
-
-    seen: set[int] = set()
-    for root in roots:
-        _visit_bash_node(
-            root,
-            command,
-            clauses,
-            seen,
-            in_loop=False,
-            in_pipe=False,
-            in_subst=False,
-            pipeline_position=-1,
-        )
+    raw_clauses = response.get("clauses")
+    if not isinstance(raw_clauses, list):
+        raise MvdanClientError("mvdan adapter response has no clause list")
+    byte_to_character = _byte_to_character_offsets(command)
+    clauses = [
+        _clause_from_adapter(command, raw_clause, byte_to_character)
+        for raw_clause in raw_clauses
+    ]
     return {"clauses": clauses, "parse_failed": False}
 
 
@@ -247,6 +252,7 @@ def build_tabular_dataset(
         seed=_FOLD_SEED,
     )
     return TabularDataset(
+        metadata={"command_clause_parser": dict(_PARSER_PROVENANCE)},
         features=features,
         targets={
             name: np.asarray(values, dtype=float) for name, values in targets.items()
@@ -530,117 +536,56 @@ def _targets(
     return values, masks
 
 
-def _visit_bash_node(
-    node: Any,
+def _byte_to_character_offsets(command: str) -> tuple[int, ...]:
+    encoded = command.encode()
+    offsets = [-1] * (len(encoded) + 1)
+    byte_offset = 0
+    for character_offset, character in enumerate(command):
+        offsets[byte_offset] = character_offset
+        byte_offset += len(character.encode())
+    offsets[byte_offset] = len(command)
+    return tuple(offsets)
+
+
+def _clause_from_adapter(
     command: str,
-    clauses: list[dict[str, Any]],
-    seen: set[int],
-    *,
-    in_loop: bool,
-    in_pipe: bool,
-    in_subst: bool,
-    pipeline_position: int,
-) -> None:
-    if id(node) in seen:
-        return
-    seen.add(id(node))
-    kind = getattr(node, "kind", "")
-
-    if kind == "pipeline":
-        members = [part for part in node.parts if part.kind != "pipe"]
-        for position, member in enumerate(members):
-            _visit_bash_node(
-                member,
-                command,
-                clauses,
-                seen,
-                in_loop=in_loop,
-                in_pipe=True,
-                in_subst=in_subst,
-                pipeline_position=position,
-            )
-        return
-    if kind == "commandsubstitution":
-        _visit_bash_node(
-            node.command,
-            command,
-            clauses,
-            seen,
-            in_loop=in_loop,
-            in_pipe=in_pipe,
-            in_subst=True,
-            pipeline_position=pipeline_position,
-        )
-        return
-    if kind == "for":
-        in_body = False
-        for part in node.parts:
-            if part.kind == "reservedword" and part.word == "do":
-                in_body = True
-                continue
-            if part.kind == "reservedword" and part.word == "done":
-                in_body = False
-                continue
-            _visit_bash_node(
-                part,
-                command,
-                clauses,
-                seen,
-                in_loop=in_loop or in_body,
-                in_pipe=in_pipe,
-                in_subst=in_subst,
-                pipeline_position=pipeline_position,
-            )
-        return
-    if kind in {"while", "until"}:
-        for part in node.parts:
-            _visit_bash_node(
-                part,
-                command,
-                clauses,
-                seen,
-                in_loop=True,
-                in_pipe=in_pipe,
-                in_subst=in_subst,
-                pipeline_position=pipeline_position,
-            )
-        return
-    if kind == "command":
-        clause = _clause_from_words(
-            [part.word for part in node.parts if part.kind == "word"]
-        )
-        if clause is not None:
-            start, end = node.pos
-            clauses.append(
-                {
-                    **clause,
-                    "original": command[start:end],
-                    "span": (start, end),
-                    "in_loop": in_loop,
-                    "in_pipe": in_pipe,
-                    "in_subst": in_subst,
-                    "pipeline_position": pipeline_position if in_pipe else -1,
-                }
-            )
-    for child in _node_children(node):
-        _visit_bash_node(
-            child,
-            command,
-            clauses,
-            seen,
-            in_loop=in_loop,
-            in_pipe=in_pipe,
-            in_subst=in_subst,
-            pipeline_position=pipeline_position,
-        )
-
-
-def _node_children(node: Any) -> Iterable[Any]:
-    for value in vars(node).values():
-        if hasattr(value, "kind"):
-            yield value
-        elif isinstance(value, list):
-            yield from (child for child in value if hasattr(child, "kind"))
+    raw_clause: object,
+    byte_to_character: Sequence[int],
+) -> dict[str, Any]:
+    if not isinstance(raw_clause, dict):
+        raise MvdanClientError("mvdan adapter returned a non-object clause")
+    raw_span = raw_clause.get("span")
+    argv = raw_clause.get("argv")
+    if (
+        not isinstance(raw_span, list)
+        or len(raw_span) != 2
+        or not all(isinstance(offset, int) for offset in raw_span)
+        or not isinstance(argv, list)
+        or not argv
+        or not all(isinstance(argument, str) for argument in argv)
+    ):
+        raise MvdanClientError("mvdan adapter returned an invalid clause")
+    byte_start, byte_end = raw_span
+    if (
+        byte_start < 0
+        or byte_end < byte_start
+        or byte_end >= len(byte_to_character)
+        or byte_to_character[byte_start] < 0
+        or byte_to_character[byte_end] < 0
+    ):
+        raise MvdanClientError(f"mvdan adapter returned invalid byte span {raw_span}")
+    start = byte_to_character[byte_start]
+    end = byte_to_character[byte_end]
+    return {
+        "bin": str(raw_clause["bin"]),
+        "argv": argv,
+        "original": command[start:end],
+        "span": (start, end),
+        "in_loop": bool(raw_clause["in_loop"]),
+        "in_pipe": bool(raw_clause["in_pipe"]),
+        "in_subst": bool(raw_clause["in_subst"]),
+        "pipeline_position": int(raw_clause["pipeline_position"]),
+    }
 
 
 def _fallback_clauses(command: str) -> list[dict[str, Any]]:

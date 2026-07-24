@@ -51,11 +51,12 @@ def test_parse_command_clauses_preserves_context_and_spans() -> None:
     )
 
 
-def test_parse_failure_uses_shell_segment_fallback() -> None:
+def test_quoted_heredoc_uses_mvdan_and_excludes_body_from_span() -> None:
     parsed = parse_command_clauses("cat <<'EOF'\nx\nEOF\n")
 
-    assert parsed["parse_failed"]
+    assert not parsed["parse_failed"]
     assert parsed["clauses"][0]["bin"] == "cat"
+    assert parsed["clauses"][0]["original"] == "cat <<'EOF'"
 
 
 def test_tabular_history_is_strictly_causal() -> None:
@@ -131,6 +132,12 @@ def test_missing_cost_table_zero_fills_cost_features() -> None:
     assert dataset.features["heavy_bin_mean_mem_kb_sum"][0] == 0.0
     assert dataset.features["heavy_bin_mean_mem_kb_max"][0] == 0.0
     assert dataset.features["light_bin_count"][0] == 0.0
+    assert dataset.metadata == {
+        "command_clause_parser": {
+            "name": "mvdan.cc/sh/v3",
+            "version": "v3.13.1",
+        }
+    }
     assert not any(name.startswith("bin_count:") for name in dataset.feature_names)
     assert with_later.feature_names == dataset.feature_names
 

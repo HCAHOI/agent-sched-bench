@@ -1,0 +1,377 @@
+package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+	"runtime/debug"
+	"strings"
+
+	"mvdan.cc/sh/v3/syntax"
+)
+
+const parserName = "mvdan.cc/sh/v3"
+
+type request struct {
+	ID      int64  `json:"id"`
+	Op      string `json:"op"`
+	Command string `json:"command"`
+}
+
+type span [2]int
+
+type clause struct {
+	Bin              string   `json:"bin"`
+	Argv             []string `json:"argv"`
+	Span             span     `json:"span"`
+	InLoop           bool     `json:"in_loop"`
+	InPipe           bool     `json:"in_pipe"`
+	InSubst          bool     `json:"in_subst"`
+	PipelinePosition int      `json:"pipeline_position"`
+}
+
+type parserInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+type response struct {
+	ID      int64      `json:"id"`
+	OK      bool       `json:"ok"`
+	Parser  parserInfo `json:"parser"`
+	Clauses []clause   `json:"clauses"`
+	Error   *string    `json:"error"`
+}
+
+func parserVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	for _, dependency := range info.Deps {
+		if dependency.Path == parserName {
+			return dependency.Version
+		}
+	}
+	return "unknown"
+}
+
+func nodeSpan(node syntax.Node) span {
+	return span{int(node.Pos().Offset()), int(node.End().Offset())}
+}
+
+func sourceSlice(source string, node syntax.Node) string {
+	bounds := nodeSpan(node)
+	if bounds[0] < 0 || bounds[1] < bounds[0] || bounds[1] > len(source) {
+		return ""
+	}
+	return source[bounds[0]:bounds[1]]
+}
+
+func literalValue(value string, doubleQuoted bool) string {
+	var result strings.Builder
+	for index := 0; index < len(value); index++ {
+		if value[index] == '\\' && index+1 < len(value) {
+			next := value[index+1]
+			if next == '\n' {
+				index++
+				continue
+			}
+			if !doubleQuoted || strings.ContainsRune("$`\"\\", rune(next)) {
+				index++
+			}
+		}
+		result.WriteByte(value[index])
+	}
+	return result.String()
+}
+
+func wordValue(word *syntax.Word, source string) string {
+	var result strings.Builder
+	for _, part := range word.Parts {
+		switch item := part.(type) {
+		case *syntax.Lit:
+			result.WriteString(literalValue(item.Value, false))
+		case *syntax.SglQuoted:
+			result.WriteString(item.Value)
+		case *syntax.DblQuoted:
+			result.WriteString(wordPartsValue(item.Parts, source))
+		default:
+			result.WriteString(sourceSlice(source, part))
+		}
+	}
+	return result.String()
+}
+
+func wordPartsValue(parts []syntax.WordPart, source string) string {
+	var result strings.Builder
+	for _, part := range parts {
+		switch item := part.(type) {
+		case *syntax.Lit:
+			result.WriteString(literalValue(item.Value, true))
+		case *syntax.SglQuoted:
+			result.WriteString(item.Value)
+		case *syntax.DblQuoted:
+			result.WriteString(wordPartsValue(item.Parts, source))
+		default:
+			result.WriteString(sourceSlice(source, part))
+		}
+	}
+	return result.String()
+}
+
+func assignmentValue(assign *syntax.Assign, source string) string {
+	if assign.Naked {
+		if assign.Name != nil {
+			return assign.Name.Value
+		}
+		if assign.Value != nil {
+			return wordValue(assign.Value, source)
+		}
+	}
+	if assign.Name != nil && assign.Index == nil && assign.Array == nil {
+		operator := "="
+		if assign.Append {
+			operator = "+="
+		}
+		value := ""
+		if assign.Value != nil {
+			value = wordValue(assign.Value, source)
+		}
+		return assign.Name.Value + operator + value
+	}
+	return sourceSlice(source, assign)
+}
+
+func commandArgv(command syntax.Command, source string) []string {
+	switch item := command.(type) {
+	case *syntax.CallExpr:
+		argv := make([]string, 0, len(item.Args))
+		for _, word := range item.Args {
+			argv = append(argv, wordValue(word, source))
+		}
+		return argv
+	case *syntax.DeclClause:
+		argv := []string{item.Variant.Value}
+		for _, assign := range item.Args {
+			argv = append(argv, assignmentValue(assign, source))
+		}
+		return argv
+	default:
+		return nil
+	}
+}
+
+func commandSpan(stmt *syntax.Stmt) span {
+	bounds := nodeSpan(stmt.Cmd)
+	for _, redirect := range stmt.Redirs {
+		redirectStart := int(redirect.Pos().Offset())
+		if redirectStart < bounds[0] {
+			bounds[0] = redirectStart
+		}
+		if redirect.Word != nil {
+			redirectEnd := int(redirect.Word.End().Offset())
+			if redirectEnd > bounds[1] {
+				bounds[1] = redirectEnd
+			}
+		}
+	}
+	return bounds
+}
+
+func enclosingStmt(stack []syntax.Node) *syntax.Stmt {
+	for index := len(stack) - 2; index >= 0; index-- {
+		if stmt, ok := stack[index].(*syntax.Stmt); ok {
+			return stmt
+		}
+	}
+	return nil
+}
+
+func isPipe(command syntax.Command) bool {
+	binary, ok := command.(*syntax.BinaryCmd)
+	return ok && (binary.Op == syntax.Pipe || binary.Op == syntax.PipeAll)
+}
+
+func pipelineBoundary(node syntax.Node) bool {
+	switch node.(type) {
+	case *syntax.Block, *syntax.CaseClause, *syntax.CaseItem, *syntax.CmdSubst,
+		*syntax.ForClause, *syntax.FuncDecl, *syntax.IfClause, *syntax.ProcSubst,
+		*syntax.Subshell, *syntax.WhileClause:
+		return true
+	default:
+		return false
+	}
+}
+
+func pipelineRoot(stack []syntax.Node) *syntax.BinaryCmd {
+	indexes := []int{}
+	for index, node := range stack {
+		if binary, ok := node.(*syntax.BinaryCmd); ok && isPipe(binary) {
+			indexes = append(indexes, index)
+		}
+	}
+	if len(indexes) == 0 {
+		return nil
+	}
+	rootIndex := indexes[len(indexes)-1]
+	for index := len(indexes) - 2; index >= 0; index-- {
+		blocked := false
+		for _, node := range stack[indexes[index]+1 : rootIndex] {
+			if pipelineBoundary(node) {
+				blocked = true
+				break
+			}
+		}
+		if blocked {
+			break
+		}
+		rootIndex = indexes[index]
+	}
+	return stack[rootIndex].(*syntax.BinaryCmd)
+}
+
+func flattenPipeline(stmt *syntax.Stmt) []*syntax.Stmt {
+	if binary, ok := stmt.Cmd.(*syntax.BinaryCmd); ok && isPipe(binary) {
+		return append(flattenPipeline(binary.X), flattenPipeline(binary.Y)...)
+	}
+	return []*syntax.Stmt{stmt}
+}
+
+func pipelinePosition(stack []syntax.Node, offset int) (bool, int) {
+	root := pipelineRoot(stack)
+	if root == nil {
+		return false, -1
+	}
+	members := append(flattenPipeline(root.X), flattenPipeline(root.Y)...)
+	for index, member := range members {
+		bounds := nodeSpan(member)
+		if bounds[0] <= offset && offset < bounds[1] {
+			return true, index
+		}
+	}
+	return true, -1
+}
+
+func inStatementList(offset int, statements []*syntax.Stmt) bool {
+	for _, stmt := range statements {
+		bounds := nodeSpan(stmt)
+		if bounds[0] <= offset && offset < bounds[1] {
+			return true
+		}
+	}
+	return false
+}
+
+func loopContext(stack []syntax.Node, offset int) bool {
+	for _, node := range stack {
+		switch item := node.(type) {
+		case *syntax.WhileClause:
+			return true
+		case *syntax.ForClause:
+			if inStatementList(offset, item.Do) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func substitutionContext(stack []syntax.Node) bool {
+	for _, node := range stack {
+		if _, ok := node.(*syntax.CmdSubst); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func binaryName(head string) string {
+	if separator := strings.LastIndexByte(head, '/'); separator >= 0 {
+		return head[separator+1:]
+	}
+	return head
+}
+
+func analyze(input request) response {
+	out := response{
+		ID: input.ID,
+		Parser: parserInfo{
+			Name:    parserName,
+			Version: parserVersion(),
+		},
+		Clauses: []clause{},
+	}
+	if input.Op == "handshake" {
+		out.OK = true
+		return out
+	}
+	if input.Op != "parse" {
+		message := fmt.Sprintf("unsupported operation %q", input.Op)
+		out.Error = &message
+		return out
+	}
+
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).
+		Parse(strings.NewReader(input.Command), "")
+	if err != nil {
+		message := err.Error()
+		out.Error = &message
+		return out
+	}
+
+	stack := []syntax.Node{}
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if node == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		stack = append(stack, node)
+		command, ok := node.(syntax.Command)
+		if !ok {
+			return true
+		}
+		argv := commandArgv(command, input.Command)
+		if len(argv) == 0 {
+			return true
+		}
+		stmt := enclosingStmt(stack)
+		if stmt == nil || stmt.Cmd != command {
+			return true
+		}
+		bounds := commandSpan(stmt)
+		inPipe, position := pipelinePosition(stack, bounds[0])
+		out.Clauses = append(out.Clauses, clause{
+			Bin:              binaryName(argv[0]),
+			Argv:             argv,
+			Span:             bounds,
+			InLoop:           loopContext(stack, bounds[0]),
+			InPipe:           inPipe,
+			InSubst:          substitutionContext(stack),
+			PipelinePosition: position,
+		})
+		return true
+	})
+	out.OK = true
+	return out
+}
+
+func main() {
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Buffer(make([]byte, 64*1024), 64*1024*1024)
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+	for scanner.Scan() {
+		var input request
+		if err := json.Unmarshal(scanner.Bytes(), &input); err != nil {
+			panic(err)
+		}
+		if err := encoder.Encode(analyze(input)); err != nil {
+			panic(err)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		panic(err)
+	}
+}

@@ -173,6 +173,9 @@ def _concatenate_datasets(datasets: Sequence[TabularDataset]) -> TabularDataset:
     feature_names = datasets[0].feature_names
     if any(dataset.feature_names != feature_names for dataset in datasets[1:]):
         raise ValueError("out-of-repo fit feature schemas differ")
+    metadata = datasets[0].metadata
+    if any(dataset.metadata != metadata for dataset in datasets[1:]):
+        raise ValueError("out-of-repo fit feature provenance differs")
     repo_folds: dict[str, int] = {}
     for dataset in datasets:
         overlap = set(repo_folds) & set(dataset.repo_folds)
@@ -180,6 +183,7 @@ def _concatenate_datasets(datasets: Sequence[TabularDataset]) -> TabularDataset:
             raise ValueError(f"duplicate repositories in fit partitions: {overlap}")
         repo_folds.update(dataset.repo_folds)
     return TabularDataset(
+        metadata=dict(metadata),
         features={
             name: np.concatenate([dataset.features[name] for dataset in datasets])
             for name in feature_names
@@ -1100,6 +1104,7 @@ def _target_result(
                         "repo": repo_cluster_key(task_ids[row]),
                         "tool_name": sample.tool_name,
                         "command": tool_args.get("command"),
+                        "metadata": dict(eval_dataset.metadata),
                         "observed": float(observations[row]),
                         "model_quantile_predictions": dict(
                             zip(
@@ -1288,6 +1293,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             "eval_row_count": len(eval_dataset.sample_ids),
             "feature_count": len(fit_dataset.feature_names),
             "feature_names": list(fit_dataset.feature_names),
+            "feature_metadata": dict(fit_dataset.metadata),
             "scaler": {
                 "fit_only": True,
                 "mean": mean.tolist(),
