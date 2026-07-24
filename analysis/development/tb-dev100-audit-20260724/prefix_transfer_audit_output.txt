@@ -1,0 +1,32 @@
+frozen SWE-100: prefix nodes=818, bins=39
+TB dev-100 traces missing: 0
+
+== TB dev-100 (frozen SWE trie): exec rows=776 ==
+empty: 0 | bashlex parse_fail: 345 (44.5%) | bin_hit(pop>=20): 48.7%
+deepest public prefix depth (count>=1): {4: '3.9%', 3: '1.2%', 2: '8.2%', 1: '47.2%', 0: '39.6%'}
+deepest (count>=20): {2: '2.8%', 1: '46.0%', 0: '51.2%'}
+top OOV bins: [('printf', 118), ('set', 109), ('command', 34), ('sort', 23), ('wc', 22), ('test', 21), ('exit', 19), ('nproc', 19)]
+structure x deepest-depth (count>=1, % of class):
+  seq      n=  529  d4:4% d3:1% d2:11% d1:47% d0:38%
+  heredoc  n=  347  d4:1% d3:0% d2:2% d1:71% d0:26%
+  loop     n=  298  d4:0% d3:1% d2:1% d1:67% d0:31%
+  pipe     n=  268  d4:1% d3:1% d2:6% d1:40% d0:51%
+  subshell n=   90  d4:0% d3:1% d2:3% d1:19% d0:77%
+  simple   n=   70  d4:16% d3:3% d2:7% d1:29% d0:46%
+  wrapper  n=   63  d4:0% d3:2% d2:2% d1:40% d0:57%
+EXPLORATORY dev: p90 pinball (ms) by deepest depth: {4: 7816.9, 3: 1087.8, 2: 2046.9, 1: 9031.0, 0: 11849.5}
+
+== fresh-277 comparator: exec rows=8962 ==
+empty: 0 | bashlex parse_fail: 129 (1.4%) | bin_hit(pop>=20): 98.3%
+deepest public prefix depth (count>=1): {4: '81.4%', 3: '3.8%', 2: '11.3%', 1: '2.9%', 0: '0.6%'}
+deepest (count>=20): {4: '74.4%', 3: '2.5%', 2: '12.5%', 1: '7.2%', 0: '3.4%'}
+top OOV bins: [('sqlfluff', 35), ('wc', 32), ('printf', 27), ('apt', 7), ('sort', 6), ('flake8', 3), ('poetry', 3), ('ln', 2)]
+structure x deepest-depth (count>=1, % of class):
+  seq      n= 7497  d4:94% d3:2% d2:3% d1:1% d0:0%
+  pipe     n= 4310  d4:80% d3:5% d2:11% d1:3% d0:0%
+  simple   n=  542  d4:6% d3:6% d2:65% d1:19% d0:4%
+  wrapper  n=  306  d4:67% d3:3% d2:21% d1:4% d0:5%
+  loop     n=  234  d4:92% d3:2% d2:3% d1:3% d0:1%
+  heredoc  n=  129  d4:88% d3:2% d2:0% d1:9% d0:2%
+  subshell n=   21  d4:86% d3:5% d2:0% d1:5% d0:5%
+EXPLORATORY dev: p90 pinball (ms) by deepest depth: {4: 1436.4, 3: 879.7, 2: 291.6, 1: 452.0, 0: 2269.0}

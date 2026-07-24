@@ -1,0 +1,35 @@
+TB dev-100 rows=1295 tasks=97 calls/task p50=10 p90=26
+
+== latency_ms (n=1288, tasks=97) ==
+  k=1: mean p90 pinball=3128.781  coverage=0.688
+  k=5: mean p90 pinball=3169.489  coverage=0.800
+  skill(k5 vs k1)=-0.0130  task-clustered 95% CI [-0.0929, +0.0556]  (EXPLORATORY)
+  by call position (pos: n | repo-used% k1->k5 | mean loss k1->k5):
+    pos1: n=   97 |  0.0% ->  0.0% |     51.74 ->     51.74
+    pos2: n=   95 | 21.1% ->  0.0% |   2494.75 ->   2485.01
+    pos3: n=   94 | 44.7% ->  0.0% |   2278.84 ->   2391.86
+    pos4: n=   91 | 54.9% ->  0.0% |   3450.70 ->   3787.59
+    pos5: n=   83 | 55.4% ->  0.0% |   3259.26 ->   3824.76
+    pos6+: n=  828 | 75.8% -> 35.1% |   3610.03 ->   3567.93
+
+== peak_memory_mb (n=266, tasks=63) ==
+  k=1: mean p90 pinball=255.205  coverage=0.511
+  k=5: mean p90 pinball=273.986  coverage=0.602
+  skill(k5 vs k1)=-0.0736  task-clustered 95% CI [-0.2745, +0.0681]  (EXPLORATORY)
+  by call position (pos: n | repo-used% k1->k5 | mean loss k1->k5):
+    pos2: n=   11 |  0.0% ->  0.0% |     82.08 ->     82.08
+    pos3: n=   19 | 15.8% ->  0.0% |    113.88 ->    107.77
+    pos4: n=   17 | 17.6% ->  0.0% |    274.05 ->    242.73
+    pos5: n=   15 | 40.0% ->  0.0% |    197.01 ->    225.15
+    pos6+: n=  204 | 76.0% -> 27.9% |    280.41 ->    306.01
+
+== peak_cpu_cores (n=249, tasks=54) ==
+  k=1: mean p90 pinball=0.634  coverage=0.502
+  k=5: mean p90 pinball=0.758  coverage=0.526
+  skill(k5 vs k1)=-0.1949  task-clustered 95% CI [-0.4186, +0.0008]  (EXPLORATORY)
+  by call position (pos: n | repo-used% k1->k5 | mean loss k1->k5):
+    pos2: n=    7 |  0.0% ->  0.0% |      0.98 ->      0.98
+    pos3: n=   19 | 10.5% ->  0.0% |      0.57 ->      0.56
+    pos4: n=   16 | 31.2% ->  0.0% |      1.53 ->      1.65
+    pos5: n=   14 | 50.0% ->  0.0% |      0.56 ->      0.76
+    pos6+: n=  193 | 75.6% -> 26.4% |      0.56 ->      0.70
