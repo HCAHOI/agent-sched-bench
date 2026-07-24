@@ -4,7 +4,12 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from tool_resource.features import build_tabular_dataset, parse_command_clauses
+from tool_resource.features import (
+    assign_repo_folds,
+    build_tabular_dataset,
+    parse_command_clauses,
+    repo_of,
+)
 from tool_time.command import make_row_command_prefix_keys
 from tool_time.prior import build_latency_prior
 
@@ -138,6 +143,41 @@ def test_missing_cost_table_zero_fills_cost_features() -> None:
     assert "bin_count:future-only" not in costed.feature_names
     assert costed.features["heavy_bin_count"][0] == 1.0
     assert costed.features["light_bin_count"][0] == 1.0
+
+
+def test_repo_of_strips_instance_suffix() -> None:
+    assert repo_of("google__flax-4681") == "google__flax"
+    assert repo_of("ArkEcosystem__python-crypto-116") == (
+        "ArkEcosystem__python-crypto"
+    )
+
+
+def test_repo_folds_keep_repositories_disjoint() -> None:
+    repos = [repo_of(f"owner__proj{project}-{task}") for project in range(6) for task in range(3)]
+    folds = assign_repo_folds(repos, n_folds=3, seed=7)
+
+    for fold in range(3):
+        validation = {repo for repo, assigned in folds.items() if assigned == fold}
+        training = {repo for repo, assigned in folds.items() if assigned != fold}
+        assert validation.isdisjoint(training)
+    assert set(folds.values()) == {0, 1, 2}
+
+
+def test_repo_fold_assignment_deduplicates_across_corpora() -> None:
+    task_ids = [
+        "shared__repo-1",
+        "onlya__repo-9",
+        "shared__repo-2",
+        "onlyb__repo-4",
+    ]
+    folds = assign_repo_folds(
+        (repo_of(task_id) for task_id in task_ids),
+        n_folds=3,
+        seed=1,
+    )
+
+    assert "shared__repo" in folds
+    assert len(folds) == 3
 
 
 def _sample(

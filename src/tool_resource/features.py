@@ -7,13 +7,13 @@ from collections import Counter
 from dataclasses import dataclass
 import heapq
 import math
+import random
 import re
 from typing import Any, Iterable, Mapping, Sequence
 
 import bashlex
 import numpy as np
 
-from tool_resource.bert_dataset import assign_repo_folds, repo_of
 from tool_resource.labels import ResourceCallSample
 from tool_resource.metrics import ecdf_quantile
 from tool_time.command import make_row_command_prefix_keys, shell_command_segments
@@ -21,6 +21,7 @@ from tool_time.prior import LatencyPrior, latency_prior_hierarchy
 
 
 _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_REPO_SUFFIX_RE = re.compile(r"-\d+$")
 _WRAPPER_BINS = frozenset(
     {"bash", "env", "nice", "nohup", "sh", "sudo", "timeout", "xargs"}
 )
@@ -122,6 +123,26 @@ class _History:
             self.peak_memory_mb = sample.peak_memory_mb
         if sample.peak_cpu_cores_eligible and sample.peak_cpu_cores is not None:
             self.peak_cpu_cores = sample.peak_cpu_cores
+
+
+def repo_of(task_id: str) -> str:
+    """Strip the trailing instance number from a task ID."""
+
+    return _REPO_SUFFIX_RE.sub("", task_id)
+
+
+def assign_repo_folds(
+    repos: Iterable[str],
+    n_folds: int,
+    seed: int,
+) -> dict[str, int]:
+    """Assign each unique repository to one deterministic fold."""
+
+    if n_folds < 1:
+        raise ValueError("n_folds must be >= 1")
+    unique = sorted(set(repos))
+    random.Random(seed).shuffle(unique)
+    return {repo: index % n_folds for index, repo in enumerate(unique)}
 
 
 def parse_command_clauses(command: str) -> dict[str, Any]:
@@ -718,6 +739,8 @@ def _tau_feature_name(tau: float) -> str:
 __all__ = [
     "TARGET_NAMES",
     "TabularDataset",
+    "assign_repo_folds",
     "build_tabular_dataset",
     "parse_command_clauses",
+    "repo_of",
 ]

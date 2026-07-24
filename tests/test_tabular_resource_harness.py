@@ -20,6 +20,7 @@ from scripts.evaluation.evaluate_tabular_resource import (
     quantile_exceedance,
     repo_cluster_key,
 )
+from tool_resource.mlp import MLPConfig, QuantileMLP, train_quantile_mlp
 
 
 def test_scaler_uses_fit_split_only() -> None:
@@ -130,6 +131,34 @@ def test_binary_probabilities_are_raw_sigmoid_outputs() -> None:
     np.testing.assert_allclose(probabilities, [0.8, 0.8])
     assert np.all((0.0 <= probabilities) & (probabilities <= 1.0))
     assert np.all(probabilities > 0.5)
+
+
+def test_quantile_mlp_trains_all_configured_heads() -> None:
+    model = QuantileMLP(
+        2,
+        MLPConfig(target_names=("latency_ms", "peak_cpu_cores"), hidden_dim=4),
+    )
+    features = torch.tensor([[0.0, 1.0], [1.0, 0.0]])
+    targets = {
+        "latency_ms": torch.tensor([1.0, 2.0]),
+        "peak_cpu_cores": torch.tensor([0.5, 1.5]),
+    }
+    masks = {name: torch.ones(2, dtype=torch.bool) for name in targets}
+
+    train_quantile_mlp(
+        model,
+        features,
+        targets,
+        masks,
+        epochs=1,
+        learning_rate=1e-3,
+        batch_size=2,
+    )
+
+    assert {name: tuple(values.shape) for name, values in model(features).items()} == {
+        "latency_ms": (2, 3),
+        "peak_cpu_cores": (2, 3),
+    }
 
 
 def test_repo_confusion_bootstrap_is_seed_reproducible() -> None:

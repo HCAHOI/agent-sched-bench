@@ -8,6 +8,7 @@ from collections import Counter
 import json
 import math
 from pathlib import Path
+import random
 import sys
 from typing import Any, Mapping, Sequence
 
@@ -23,14 +24,10 @@ from scripts.evaluation.evaluate_resource_prediction import (  # noqa: E402
     build_ambient_residual_ecdfs,
     repo_cluster_key,
 )
-from scripts.training.train_resource_bert import (  # noqa: E402
-    _run_head_epochs,
-    set_seed,
-)
-from tool_resource.bert_model import BertModelConfig, ToolResourceBert  # noqa: E402
 from tool_resource.features import TabularDataset, build_tabular_dataset  # noqa: E402
 from tool_resource.labels import ResourceCallSample, load_resource_corpus  # noqa: E402
 from tool_resource.metrics import ecdf_quantile, pinball_loss  # noqa: E402
+from tool_resource.mlp import MLPConfig, QuantileMLP, train_quantile_mlp  # noqa: E402
 from tool_resource.prior import build_resource_prior, resource_prior_hierarchy  # noqa: E402
 from tool_time.command import make_row_command_prefix_keys  # noqa: E402
 from tool_time.prior import (  # noqa: E402
@@ -71,6 +68,13 @@ def _feature_matrix(dataset: TabularDataset) -> np.ndarray:
     return np.column_stack(
         [dataset.features[name] for name in dataset.feature_names]
     ).astype(np.float32, copy=False)
+
+
+def _set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 def _standardize_fit_eval(
@@ -238,8 +242,8 @@ def _train_quantile_model(
     *,
     seed: int,
     epochs: int,
-) -> tuple[ToolResourceBert, torch.device]:
-    set_seed(seed)
+) -> tuple[QuantileMLP, torch.device]:
+    _set_seed(seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     features = torch.as_tensor(fit_features, dtype=torch.float32, device=device)
     target_tensors: dict[str, torch.Tensor] = {}
@@ -254,29 +258,27 @@ def _train_quantile_model(
         )
         mask_tensors[target] = torch.as_tensor(mask, dtype=torch.bool, device=device)
 
-    config = BertModelConfig(
-        numeric_dim=features.shape[1],
+    config = MLPConfig(
         target_names=tuple(targets),
         quantiles=_QUANTILES,
         hidden_dim=_HIDDEN_DIM,
-        numeric_only=True,
     )
-    model = ToolResourceBert.heads_only(features.shape[1], config).to(device)
-    _run_head_epochs(
+    model = QuantileMLP(features.shape[1], config).to(device)
+    train_quantile_mlp(
         model,
         features,
         target_tensors,
         mask_tensors,
-        epochs,
-        _LEARNING_RATE,
-        _BATCH_SIZE,
+        epochs=epochs,
+        learning_rate=_LEARNING_RATE,
+        batch_size=_BATCH_SIZE,
     )
     return model, device
 
 
 @torch.no_grad()
 def _predict_log_quantiles(
-    model: ToolResourceBert,
+    model: QuantileMLP,
     features: np.ndarray,
     device: torch.device,
 ) -> dict[str, np.ndarray]:
@@ -284,7 +286,7 @@ def _predict_log_quantiles(
     tensor = torch.as_tensor(features, dtype=torch.float32, device=device)
     return {
         name: values.cpu().numpy()
-        for name, values in model.heads_forward(tensor).items()
+        for name, values in model(tensor).items()
     }
 
 
@@ -314,7 +316,7 @@ def _train_binary_classifier(
 ) -> torch.nn.Linear:
     """Fit one weighted logistic head with the shared optimizer conventions."""
 
-    set_seed(seed)
+    _set_seed(seed)
     model = torch.nn.Linear(features.shape[1], 1).to(device)
     feature_tensor = torch.as_tensor(features, dtype=torch.float32, device=device)
     label_tensor = torch.as_tensor(labels, dtype=torch.float32, device=device)
