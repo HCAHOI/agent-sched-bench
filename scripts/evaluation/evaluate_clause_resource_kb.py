@@ -350,6 +350,36 @@ def _bucket_metrics(
     return {key: _metrics(grouped[key]) for key in sorted(grouped)}
 
 
+def _latency_false_negative_modes(
+    rows: Sequence[ScoredRow],
+    calls: Sequence[ProxyCall],
+    target: str,
+) -> dict[str, int]:
+    threshold = FLAG_TARGETS[target][1]
+    calls_by_id = {call.sample.sample_id: call for call in calls}
+    counts = {
+        "single_segment_exceeds": 0,
+        "short_segments_sum_exceeds": 0,
+        "command_envelope_only": 0,
+        "mapping_unavailable": 0,
+    }
+    for row in rows:
+        if row.target != target or not row.truth or row.prediction is not False:
+            continue
+        call = calls_by_id[row.sample_id]
+        if not call.segment_times_ms:
+            counts["mapping_unavailable"] += 1
+            continue
+        durations = [end - start for start, end in call.segment_times_ms]
+        if max(durations, default=0.0) > threshold:
+            counts["single_segment_exceeds"] += 1
+        elif sum(durations) > threshold:
+            counts["short_segments_sum_exceeds"] += 1
+        else:
+            counts["command_envelope_only"] += 1
+    return counts
+
+
 def evaluate(
     fit_calls: Sequence[ProxyCall],
     eval_calls: Sequence[ProxyCall],
@@ -377,6 +407,16 @@ def evaluate(
                     "mapping_evidence",
                 )
             },
+            "false_negative_mechanism": (
+                _latency_false_negative_modes(rows, eval_calls, target)
+                if target.startswith("latency_long")
+                else {
+                    "status": (
+                        "unavailable: legacy proxy has no per-clause CPU/RSS "
+                        "target values for compound commands"
+                    )
+                }
+            ),
         }
     return (
         {
