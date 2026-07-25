@@ -84,7 +84,9 @@ def test_public_holds_only_bin_and_global_and_is_immutable() -> None:
     kb.observe_completed_clause(
         _obs("r1", "pytest", ("pytest", "-q"), 10.0, 20.0, cpu=8.0)
     )
-    kb.predict_command_from_clauses("r1", _clauses(("pytest", ["pytest", "-q"])))
+    kb.predict_command_from_clauses(
+        "r1", _clauses(("pytest", ["pytest", "-q"])), 10.0
+    )
     assert kb._public == snapshot
 
 
@@ -104,6 +106,20 @@ def test_causal_exact_clause_becomes_available_and_all_thresholds() -> None:
     clause_cpu = pred.targets[CPU_HEAVY_TARGET].clause_flags[0]
     assert clause_cpu.scope == "repo"
     assert clause_cpu.key_kind == "exact_clause"
+
+
+def test_external_clauses_advance_causal_state() -> None:
+    kb = _fit(_obs("pub", "pytest", ("pytest", "-q"), 0.0, 1.0, cpu=0.5))
+    kb.observe_completed_clause(
+        _obs("r1", "pytest", ("pytest", "-q"), 10.0, 12.0, cpu=3.0)
+    )
+
+    cpu = kb.predict_command_from_clauses(
+        "r1", _clauses(("pytest", ["pytest", "-q"])), 13.0
+    ).targets[CPU_HEAVY_TARGET].clause_flags[0]
+
+    assert cpu.scope == "repo"
+    assert cpu.flag is True
 
 
 def test_argv_prefix_and_bin_backoff() -> None:
@@ -165,16 +181,16 @@ def test_command_three_valued_or_via_kb() -> None:
         _obs("pub", "heavy", ("heavy",), 1.0, 2.0, cpu=3.0),
     )
     assert kb.predict_command_from_clauses(
-        "r1", _clauses(("light", ["light"]), ("heavy", ["heavy"]))
+        "r1", _clauses(("light", ["light"]), ("heavy", ["heavy"])), 10.0
     ).targets[CPU_HEAVY_TARGET].flag is True  # any True -> True
     assert kb.predict_command_from_clauses(
-        "r1", _clauses(("light", ["light"]), ("light", ["light", "x"]))
+        "r1", _clauses(("light", ["light"]), ("light", ["light", "x"])), 10.0
     ).targets[CPU_HEAVY_TARGET].flag is False  # all False -> False
 
     # a target whose source has NO global evidence -> every clause unknown
     kb_noc = _fit(_obs("pub", "light", ("light",), 0.0, 1.0, cpu=None))
     assert kb_noc.predict_command_from_clauses(
-        "r1", _clauses(("light", ["light"]), ("heavy", ["heavy"]))
+        "r1", _clauses(("light", ["light"]), ("heavy", ["heavy"])), 10.0
     ).targets[CPU_HEAVY_TARGET].flag is None  # all unknown -> Unknown
 
 

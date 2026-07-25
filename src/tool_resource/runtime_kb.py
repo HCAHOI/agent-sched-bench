@@ -746,11 +746,17 @@ class ClauseResourceKB:
         return out
 
     def predict_command_from_clauses(
-        self, repo: str, clauses: Sequence[Mapping[str, Any]], *, command: str = "",
+        self,
+        repo: str,
+        clauses: Sequence[Mapping[str, Any]],
+        ts_start: float,
+        *,
+        command: str = "",
         parse_failed: bool = False,
     ) -> CommandPrediction:
-        """OR per-clause flags into command-level flags for each target."""
+        """Advance causal state, then OR clause flags into command-level flags."""
 
+        self._advance(ts_start)
         per_clause = [
             self.predict_clause(repo, str(c["bin"]), tuple(c["argv"])) for c in clauses
         ]
@@ -772,9 +778,19 @@ class ClauseResourceKB:
         """Parse ``command`` with mvdan then predict command-level flags.
 
         Enforces the monotonic-query guard and releases causally-prior repo
-        clauses before predicting, exactly like the q90 layer's ``query``.
+        clauses before predicting, exactly like the legacy call-level query.
         """
 
+        parsed = parse_command_clauses(command)
+        return self.predict_command_from_clauses(
+            repo,
+            parsed["clauses"],
+            ts_start,
+            command=command,
+            parse_failed=bool(parsed["parse_failed"]),
+        )
+
+    def _advance(self, ts_start: float) -> None:
         if self._last_query_ts is not None and ts_start < self._last_query_ts:
             raise ValueError(
                 f"backdated query at ts_start {ts_start} after a query at "
@@ -783,13 +799,6 @@ class ClauseResourceKB:
             )
         self._last_query_ts = ts_start
         self._absorb_completed(ts_start)
-        parsed = parse_command_clauses(command)
-        return self.predict_command_from_clauses(
-            repo,
-            parsed["clauses"],
-            command=command,
-            parse_failed=bool(parsed["parse_failed"]),
-        )
 
     def to_json_obj(self) -> dict[str, Any]:
         """JSON-serializable snapshot of public, repo, and pending state."""
