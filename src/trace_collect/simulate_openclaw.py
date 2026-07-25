@@ -144,6 +144,7 @@ async def _run_openclaw_replay_session(
         "prompt": prompt,
         "output_trace": str(trace_file),
         "runtime_dir": str(runtime_dir),
+        "runtime_artifact_root_map": prepared_session.runtime_artifact_root_map,
         "workspace": str(workspace),
         "status_path": str(status_path),
         "clause_telemetry_path": str(clause_telemetry_path),

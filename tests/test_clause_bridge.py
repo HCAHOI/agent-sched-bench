@@ -7,6 +7,7 @@ import pytest
 from tool_resource.clause_bridge import (
     ExecImageRecord,
     FailedExecAttempt,
+    SafetyGuardBlockEvidence,
     ShellCommandLookupFailure,
     bridge_command,
 )
@@ -316,6 +317,64 @@ def test_failed_exec_exactly_resolves_one_static_clause_without_observation() ->
         "memory": "unknown:no_runtime_exec",
         "disk_io": "unknown:no_runtime_exec",
     }
+
+
+def test_exact_safety_guard_rejection_resolves_external_clauses_without_runtime() -> None:
+    command = "cd /testbed && rm -f scratch.py"
+    result_text = (
+        "Error: Command blocked by safety guard (path outside working dir)\n\n"
+        "[Analyze the error above and try a different approach.]"
+    )
+    evidence = SafetyGuardBlockEvidence(
+        command=command,
+        source_command=command,
+        source_tool_call_id="source-guard",
+        replay_tool_call_id="replay-guard",
+        source_result=result_text,
+        replay_result=result_text,
+    )
+    result = bridge_command(
+        "r1",
+        command,
+        [],
+        safety_guard_blocked=evidence,
+        entry_pid=0,
+        fork_parent={},
+    )
+    assert result.coverage_gaps == []
+    assert result.unobserved_builtins == ["cd"]
+    assert len(result.no_runtime_exec) == 1
+    assert result.no_runtime_exec[0].bin == "rm"
+    assert result.no_runtime_exec[0].mapping_evidence == (
+        "safety_guard_blocked_before_runtime"
+    )
+    assert result.no_runtime_exec[0].safety_guard_blocked == evidence
+
+
+def test_safety_guard_rejection_requires_exact_source_replay_agreement() -> None:
+    command = "rm -f scratch.py"
+    evidence = SafetyGuardBlockEvidence(
+        command=command,
+        source_command=command,
+        source_tool_call_id="source-guard",
+        replay_tool_call_id="replay-guard",
+        source_result="different source result",
+        replay_result=(
+            "Error: Command blocked by safety guard (dangerous pattern detected)"
+        ),
+    )
+    result = bridge_command(
+        "r1",
+        command,
+        [],
+        safety_guard_blocked=evidence,
+        entry_pid=0,
+        fork_parent={},
+    )
+    assert result.no_runtime_exec == []
+    assert [gap.kind for gap in result.coverage_gaps] == [
+        "unmatched_static_clause"
+    ]
 
 
 def test_failed_exec_does_not_resolve_ambiguous_repeated_static_clauses() -> None:

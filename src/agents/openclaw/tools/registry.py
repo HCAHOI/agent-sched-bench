@@ -4,6 +4,8 @@ from typing import Any
 
 from agents.openclaw.tools.base import Tool
 
+TOOL_ERROR_HINT = "\n\n[Analyze the error above and try a different approach.]"
+
 
 class ToolRegistry:
     """
@@ -63,19 +65,19 @@ class ToolRegistry:
 
     async def execute(self, name: str, params: dict[str, Any]) -> Any:
         """Execute a tool by name with given parameters."""
-        _HINT = "\n\n[Analyze the error above and try a different approach.]"
         tool, params, error = self.prepare_call(name, params)
         if error:
-            return error + _HINT
+            return error + TOOL_ERROR_HINT
 
         try:
             assert tool is not None  # guarded by prepare_call()
             result = await tool.execute(**params)
             if isinstance(result, str) and result.startswith("Error"):
-                return result + _HINT
+                if not result.endswith(TOOL_ERROR_HINT):
+                    return result + TOOL_ERROR_HINT
             return result
         except Exception as e:
-            return f"Error executing {name}: {str(e)}" + _HINT
+            return f"Error executing {name}: {str(e)}" + TOOL_ERROR_HINT
 
     @property
     def tool_names(self) -> list[str]:

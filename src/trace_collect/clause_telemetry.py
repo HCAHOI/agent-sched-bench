@@ -2222,6 +2222,55 @@ class ClauseTelemetryCollector:
             raise ClauseTelemetryIntegrityError("; ".join(violations))
         return summary
 
+    def record_safety_guard_blocked(
+        self,
+        tool_call_id: str,
+        command: str,
+        replay_result: str,
+    ) -> dict[str, Any]:
+        """Record an exec rejected before the container runtime was entered."""
+
+        from tool_resource.clause_bridge import SafetyGuardBlockEvidence
+
+        token = self.begin_tool_call(tool_call_id, command)
+        ended_ns = time.monotonic_ns()
+        self._active = None
+        loss = _counter(self._bpf, "reserve_failures") - token.reserve_failures
+        perf_samples = (
+            _counter(self._bpf, "perf_sample_count") - token.perf_sample_count
+        )
+        evidence = SafetyGuardBlockEvidence(
+            command=command,
+            source_command=token.source_command,
+            source_tool_call_id=token.source_tool_call_id,
+            replay_tool_call_id=token.tool_call_id,
+            source_result=token.source_tool_result,
+            replay_result=replay_result,
+        )
+        fidelity = {
+            "source_action_available": bool(token.source_tool_call_id),
+            "source_command_matches": token.source_command == command,
+            "source_exit_code": None,
+            "replay_exit_code": None,
+            "exit_code_matches": False,
+            "tool_result_exact": token.source_tool_result == replay_result,
+            "short_circuit_eligible": False,
+        }
+        summary, violations = self._summarize_call(
+            token=token,
+            ended_ns=ended_ns,
+            events=[],
+            loss=loss,
+            perf_samples=perf_samples,
+            control_flow_fidelity=fidelity,
+            safety_guard_blocked=evidence,
+        )
+        self.calls.append(summary)
+        if violations:
+            self._integrity_errors.extend(violations)
+            raise ClauseTelemetryIntegrityError("; ".join(violations))
+        return summary
+
     def _summarize_call(
         self,
         *,
@@ -2232,6 +2281,7 @@ class ClauseTelemetryCollector:
         perf_samples: int,
         command_lookup_failure: ShellCommandLookupFailure | None = None,
         control_flow_fidelity: Mapping[str, Any] | None = None,
+        safety_guard_blocked: Any | None = None,
     ) -> tuple[dict[str, Any], list[str]]:
         from tool_resource.clause_bridge import bridge_command
 
@@ -2258,11 +2308,22 @@ class ClauseTelemetryCollector:
             if len({record["host_pid"] for record in records}) == 1
         }
         clauses, _ = _clauses_and_lineage(events)
-        entry_pid, root_pids, command_tree = _command_tree_provenance(
-            clauses,
-            fork_parent,
-            fork_records=fork_records,
-        )
+        if safety_guard_blocked is not None and not clauses and not events:
+            entry_pid = 0
+            root_pids: set[int] = set()
+            command_tree = {
+                "status": "not_applicable",
+                "reason": "safety_guard_blocked_before_runtime",
+                "entry_pid": None,
+                "root_pids": [],
+                "exec_ancestry": [],
+            }
+        else:
+            entry_pid, root_pids, command_tree = _command_tree_provenance(
+                clauses,
+                fork_parent,
+                fork_records=fork_records,
+            )
         metrics, attribution_gaps = analyze(run, entry_pid=entry_pid)
 
         def command_descendant(pid: int) -> bool:
@@ -2359,6 +2420,7 @@ class ClauseTelemetryCollector:
                 if command_descendant(attempt.host_pid)
             ],
             command_lookup_failure=command_lookup_failure,
+            safety_guard_blocked=safety_guard_blocked,
             allow_control_short_circuit=bool(
                 control_flow_fidelity
                 and control_flow_fidelity.get("short_circuit_eligible") is True
@@ -2410,6 +2472,22 @@ class ClauseTelemetryCollector:
                 "mapping_evidence": resolved.mapping_evidence,
                 "attempt_count": len(resolved.attempts),
             }
+            if resolved.safety_guard_blocked is not None:
+                evidence = resolved.safety_guard_blocked
+                row["provenance"] = {
+                    "evidence_kind": "safety_guard_blocked_before_runtime",
+                    "command": evidence.command,
+                    "source": {
+                        "tool_call_id": evidence.source_tool_call_id,
+                        "command": evidence.source_command,
+                        "result": evidence.source_result,
+                    },
+                    "replay": {
+                        "tool_call_id": evidence.replay_tool_call_id,
+                        "result": evidence.replay_result,
+                    },
+                }
+                return row
             if resolved.control_short_circuit is not None:
                 row["provenance"] = {
                     "evidence_kind": "shell_control_short_circuit",

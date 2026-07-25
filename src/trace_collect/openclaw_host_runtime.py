@@ -551,6 +551,7 @@ def build_container_tools_for_agent(
     exec_path_append: str = "",
     workspace: str = "/testbed",
     clause_telemetry: Any | None = None,
+    runtime_artifact_root_map: dict[str, str] | None = None,
 ) -> list[Any]:
     return build_container_tool_overrides(
         agent,
@@ -558,6 +559,7 @@ def build_container_tools_for_agent(
         exec_path_append=exec_path_append,
         workspace=workspace,
         clause_telemetry=clause_telemetry,
+        runtime_artifact_root_map=runtime_artifact_root_map,
     )
 
 
@@ -811,6 +813,9 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 exec_timeout=int(command_timeout_s),
                 workspace=container_workdir,
                 clause_telemetry=clause_collector,
+                runtime_artifact_root_map=dict(
+                    request.get("runtime_artifact_root_map") or {}
+                ),
             ),
         )
         metadata_extra = {

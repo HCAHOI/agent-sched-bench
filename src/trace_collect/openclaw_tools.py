@@ -698,10 +698,29 @@ def _resource_has_active_demand(samples, virtual_time_s):
     )
 
 
-def _kill_process_group(process):
+_PROCESS_GROUP_DRAIN_TIMEOUT_S = 5.0
+
+
+def _live_process_group_members(pgid):
+    members = []
+    for entry in os.scandir("/proc"):
+        if not entry.name.isdigit():
+            continue
+        try:
+            raw = open(entry.path + "/stat").read()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        fields = raw[raw.rfind(")") + 2 :].split()
+        if len(fields) >= 3 and fields[0] != "Z" and int(fields[2]) == pgid:
+            members.append(int(entry.name))
+    return members
+
+
+def _kill_process_group(process, pgid=None):
+    pgid = process.pid if pgid is None else pgid
     try:
         if hasattr(os, "killpg"):
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            os.killpg(pgid, signal.SIGKILL)
         else:
             process.kill()
     except Exception:
@@ -709,6 +728,26 @@ def _kill_process_group(process):
             process.kill()
         except Exception:
             pass
+
+
+def _kill_and_drain_process_group(process):
+    pgid = process.pid  # every caller starts the process in a new session
+    deadline = time.monotonic() + _PROCESS_GROUP_DRAIN_TIMEOUT_S
+    _kill_process_group(process, pgid)
+    try:
+        output = process.communicate(timeout=_PROCESS_GROUP_DRAIN_TIMEOUT_S)
+    except subprocess.TimeoutExpired as exc:
+        _kill_process_group(process, pgid)
+        raise RuntimeError(f"process group {pgid} did not close its pipes") from exc
+    while True:
+        live = _live_process_group_members(pgid)
+        if not live:
+            return output
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"process group {pgid} still has live members: {live}"
+            )
+        time.sleep(0.01)
 
 
 def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_timeline):
@@ -783,8 +822,7 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
                 if progress_s > _RESOURCE_PROGRESS_EPS_S:
                     last_progress_wall_s = current_counters["time_s"]
                 if virtual_time_s >= timeout_s:
-                    _kill_process_group(process)
-                    stdout, stderr = process.communicate()
+                    stdout, stderr = _kill_and_drain_process_group(process)
                     output = (stdout or "") + (stderr or "")
                     if output:
                         output = _truncate_output(output) + "\n[resource_timeout]"
@@ -807,8 +845,7 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
                     samples,
                     virtual_time_s,
                 ):
-                    _kill_process_group(process)
-                    stdout, stderr = process.communicate()
+                    stdout, stderr = _kill_and_drain_process_group(process)
                     output = (stdout or "") + (stderr or "")
                     marker = "[resource_stall_timeout]"
                     if output:
@@ -851,20 +888,28 @@ def handle_exec(args):
         launch_args, launch_kwargs = _shell_launch(cmd, env, seg)
         start_wall = time.time()
         pacct_off0 = _pacct_begin()
+        process = subprocess.Popen(
+            launch_args,
+            cwd=WORKDIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            start_new_session=hasattr(os, "setsid"),
+            **launch_kwargs,
+        )
         try:
-            r = subprocess.run(launch_args, cwd=WORKDIR,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               universal_newlines=True, timeout=timeout, **launch_kwargs)
+            stdout, stderr = process.communicate(timeout=timeout)
             end_wall = time.time()
-            output = (r.stdout or "") + (r.stderr or "")
+            output = (stdout or "") + (stderr or "")
             resp = {
                 "ok": True,
                 "result": _truncate_output(output),
-                "stdout": _truncate_output(r.stdout or ""),
-                "stderr": _truncate_output(r.stderr or ""),
-                "returncode": r.returncode,
+                "stdout": _truncate_output(stdout or ""),
+                "stderr": _truncate_output(stderr or ""),
+                "returncode": process.returncode,
             }
         except subprocess.TimeoutExpired:
+            _kill_and_drain_process_group(process)
             end_wall = time.time()
             resp = {
                 "ok": False,
@@ -873,13 +918,10 @@ def handle_exec(args):
                 "stderr": "",
                 "returncode": 124,
             }
-        # subprocess.run hides the child pid, so this fallback path (only taken
-        # when the source trace has no resource_timeline) attributes by exit
-        # window without ppid filtering. ponytail: a lingering `&` job from a
-        # prior command could leak here; the resource-integrated path above does
-        # the full subtree filter.
-        # SIGKILLed descendants may exit after this acct read and be missed.
-        per_process = _pacct_finish(pacct_off0)
+        # The process-group kill and communicate() above complete before the
+        # response is returned, so clause telemetry can observe causal exits for
+        # the shell and all ordinary descendants before finalizing the call.
+        per_process = _pacct_finish(pacct_off0, process.pid)
         if per_process is not None:
             resp["per_process"] = per_process
         if seg is not None:

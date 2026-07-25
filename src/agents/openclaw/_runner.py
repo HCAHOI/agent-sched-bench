@@ -14,7 +14,7 @@ from typing import Any
 from loguru import logger
 
 from agents.openclaw._hook import AgentHook, AgentHookContext
-from agents.openclaw.tools.registry import ToolRegistry
+from agents.openclaw.tools.registry import TOOL_ERROR_HINT, ToolRegistry
 from llm_call.provider_base import LLMProvider, ToolCallRequest
 from agents.openclaw.utils.helpers import (
     build_assistant_message,
@@ -659,7 +659,6 @@ class AgentRunner:
                 },
             )
 
-        _HINT = "\n\n[Analyze the error above and try a different approach.]"
         lookup_error = repeated_external_lookup_error(
             tool_call.name,
             tool_call.arguments,
@@ -672,7 +671,7 @@ class AgentRunner:
                 "detail": "repeated external lookup blocked",
             }
             error = RuntimeError(lookup_error) if spec.fail_on_tool_error else None
-            return finish(lookup_error + _HINT, event, error, None)
+            return finish(lookup_error + TOOL_ERROR_HINT, event, error, None)
         tool, params, prep_error = spec.tools.prepare_call(
             tool_call.name, tool_call.arguments
         )
@@ -683,7 +682,7 @@ class AgentRunner:
                 "detail": prep_error.split(": ", 1)[-1][:120],
             }
             error = RuntimeError(prep_error) if spec.fail_on_tool_error else None
-            return finish(prep_error + _HINT, event, error, None)
+            return finish(prep_error + TOOL_ERROR_HINT, event, error, None)
 
         resource_recorder: ResourceTimelineRecorder | None = None
         resource_timeline: dict[str, Any] | None = None
@@ -779,8 +778,10 @@ class AgentRunner:
                 telemetry_failure
                 or (RuntimeError(result) if spec.fail_on_tool_error else None)
             )
+            if not result.endswith(TOOL_ERROR_HINT):
+                result += TOOL_ERROR_HINT
             return finish(
-                result + _HINT, event, error, resource_timeline, segment_timeline, per_process
+                result, event, error, resource_timeline, segment_timeline, per_process
             )
 
         detail = "" if result is None else str(result)

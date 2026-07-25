@@ -970,6 +970,104 @@ def test_unrelated_failed_exec_evidence_does_not_resolve_static_clause() -> None
     ]
 
 
+def test_guard_blocked_exec_is_explicit_no_runtime_and_advances_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command = "cd /testbed && rm -f scratch.py"
+    result_text = (
+        "Error: Command blocked by safety guard (dangerous pattern detected)\n\n"
+        "[Analyze the error above and try a different approach.]"
+    )
+    collector = _collector_without_bpf()
+    collector._closed = False
+    collector._active = None
+    collector._bpf = object()
+    collector.calls = []
+    collector._integrity_errors = []
+    collector._source_exec_actions = [
+        {
+            "action_type": "tool_exec",
+            "data": {
+                "tool_name": "exec",
+                "tool_call_id": "source-guard",
+                "tool_args": json.dumps({"command": command}),
+                "tool_result": result_text,
+            },
+        }
+    ]
+    collector._source_exec_index = 0
+    monkeypatch.setattr("trace_collect.clause_telemetry._counter", lambda *_: 0)
+
+    summary = collector.record_safety_guard_blocked(
+        "replay-guard",
+        command,
+        result_text,
+    )
+
+    assert collector._source_exec_index == 1
+    assert collector._active is None
+    assert collector.calls == [summary]
+    assert summary["integrity"] == {"status": "ok", "errors": []}
+    assert summary["mapping"]["no_runtime_exec_count"] == 1
+    assert summary["mapping"]["unobserved_builtins"] == ["cd"]
+    assert summary["no_runtime_exec"][0]["bin"] == "rm"
+    assert summary["no_runtime_exec"][0]["provenance"]["evidence_kind"] == (
+        "safety_guard_blocked_before_runtime"
+    )
+
+
+def test_container_guard_block_records_exact_final_replay_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Agent:
+        async def execute(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            raise AssertionError("guard-blocked command must not enter container")
+
+    class Collector:
+        def __init__(self) -> None:
+            self.records: list[tuple[str, str, str]] = []
+
+        def record_safety_guard_blocked(
+            self,
+            tool_call_id: str,
+            command: str,
+            result: str,
+        ) -> None:
+            self.records.append((tool_call_id, command, result))
+
+    collector = Collector()
+    tool = ContainerExecTool(
+        Agent(),  # type: ignore[arg-type]
+        timeout=10,
+        workspace="/testbed",
+        clause_telemetry=collector,
+    )
+    registry = ToolRegistry()
+    registry.register(tool)
+    monkeypatch.setenv("OPENCLAW_TOOL_RESOURCE_TELEMETRY", "off")
+    result = asyncio.run(
+        AgentRunner(None)._run_tool(  # type: ignore[arg-type]
+            AgentRunSpec(
+                initial_messages=[],
+                tools=registry,
+                model="unused",
+                max_iterations=1,
+                max_tool_result_chars=1,
+            ),
+            ToolCallRequest(
+                "guard-call",
+                "exec",
+                {"command": "rm -f scratch.py"},
+            ),
+            {},
+        )
+    )[0]
+
+    assert result.startswith("Error: Command blocked by safety guard")
+    assert result.count("[Analyze the error above and try a different approach.]") == 1
+    assert collector.records == [("guard-call", "rm -f scratch.py", result)]
+
+
 def test_exec_delimiter_uses_tool_call_id_and_original_command() -> None:
     class Agent:
         async def execute(

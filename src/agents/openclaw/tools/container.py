@@ -10,7 +10,11 @@ from agents.openclaw.tools.base import (
     _write_file_parameters_schema,
 )
 from agents.openclaw.tools.shell import ExecTool, MAX_EXEC_TOOL_TIMEOUT_SEC
-from trace_collect.openclaw_tools import ContainerAgent
+from agents.openclaw.tools.registry import TOOL_ERROR_HINT
+from trace_collect.openclaw_tools import (
+    ContainerAgent,
+    source_runtime_artifact_root_from_path,
+)
 
 
 class _ContainerTool(Tool):
@@ -42,6 +46,15 @@ class _ContainerTool(Tool):
 class ContainerReadFileTool(_ContainerTool):
     _DEFAULT_LIMIT = 2000
 
+    def __init__(
+        self,
+        agent: ContainerAgent,
+        *,
+        runtime_artifact_root_map: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(agent)
+        self._runtime_artifact_root_map = runtime_artifact_root_map or {}
+
     @property
     def name(self) -> str:
         return "read_file"
@@ -70,6 +83,9 @@ class ContainerReadFileTool(_ContainerTool):
     ) -> str:
         if not path:
             return "Error reading file: Unknown path"
+        source_root = source_runtime_artifact_root_from_path(path)
+        if source_root in self._runtime_artifact_root_map:
+            path = self._runtime_artifact_root_map[source_root] + path[len(source_root) :]
         response = await self._request(
             "read_file",
             {
@@ -296,7 +312,14 @@ class ContainerExecTool(_ContainerTool):
         workdir = working_dir or self.workspace
         guard_error = self._guard._guard_command(command, workdir)
         if guard_error:
-            return guard_error
+            replay_result = guard_error + TOOL_ERROR_HINT
+            if self._clause_telemetry is not None:
+                self._clause_telemetry.record_safety_guard_blocked(
+                    self._tool_call_id or "",
+                    command,
+                    replay_result,
+                )
+            return replay_result
         effective_timeout = min(int(timeout or self.timeout), self._MAX_TIMEOUT)
         effective_command = command
         if workdir != self.workspace:
@@ -373,11 +396,15 @@ def build_container_tool_overrides(
     restrict_to_workspace: bool = False,
     workspace: str = "/testbed",
     clause_telemetry: Any | None = None,
+    runtime_artifact_root_map: dict[str, str] | None = None,
 ) -> list[Tool]:
     """Return OpenClaw tool replacements backed by a task-container agent."""
 
     return [
-        ContainerReadFileTool(agent),
+        ContainerReadFileTool(
+            agent,
+            runtime_artifact_root_map=runtime_artifact_root_map,
+        ),
         ContainerWriteFileTool(agent),
         ContainerEditFileTool(agent),
         ContainerListDirTool(agent),

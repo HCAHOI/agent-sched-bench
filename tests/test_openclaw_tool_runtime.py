@@ -185,6 +185,33 @@ def test_container_and_filesystem_share_file_tool_parameter_schemas() -> None:
                 assert property_schema["minimum"] == expected_schema["minimum"]
 
 
+def test_container_read_file_remaps_restored_runtime_artifact() -> None:
+    from agents.openclaw.tools.container import build_container_tool_overrides
+
+    source_root = "/source/attempt/openclaw-runtime/tool-results"
+    restored_root = "/replay/attempt/openclaw-runtime/tool-results"
+    agent = FakeAgent({"read_file": {"ok": True, "result": "restored"}})
+    read_file = next(
+        tool
+        for tool in build_container_tool_overrides(
+            agent,
+            runtime_artifact_root_map={source_root: restored_root},
+        )
+        if tool.name == "read_file"
+    )
+
+    result = asyncio.run(
+        read_file.execute(
+            path=f"{source_root}/tool-results/session/call.txt",
+        )
+    )
+
+    assert result == "restored"
+    assert agent.requests[0]["args"]["path"] == (
+        f"{restored_root}/tool-results/session/call.txt"
+    )
+
+
 def test_container_tool_overrides_serialize_filesystem_and_exec_requests() -> None:
     agent = FakeAgent(
         {

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import shutil
 from pathlib import Path
 from typing import Any, Callable
@@ -159,11 +161,48 @@ def test_handle_exec_records_real_segment_boundaries(
     assert timeline["version"] == 2
     commands = [s["command_text"] for s in timeline["segments"]]
     assert any(c.startswith("sleep") for c in commands)
-    sleep_seg = next(s for s in timeline["segments"] if s["command_text"].startswith("sleep"))
+    sleep_seg = next(
+        s for s in timeline["segments"] if s["command_text"].startswith("sleep")
+    )
     # The sleep segment really took ~200ms.
     assert 150.0 <= (sleep_seg["t_end_ms"] - sleep_seg["t_start_ms"]) <= 900.0
     # Reconciliation: segments fit within the measured exec wall time.
     assert timeline["segments"][-1]["t_end_ms"] <= timeline["raw_total_ms"] + 1.0
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group semantics require POSIX")
+def test_handle_exec_timeout_kills_and_drains_descendants(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("OPENCLAW_CONTAINER_WORKDIR", str(tmp_path))
+    namespace = _script_namespace(monkeypatch, enabled=False)
+    handle_exec = namespace["handle_exec"]
+    pid_file = tmp_path / "child.pid"
+    command = (
+        "sleep 30 & child=$!; "
+        f"printf '%s\\n' \"$child\" > {shlex.quote(str(pid_file))}; "
+        "wait \"$child\""
+    )
+
+    resp = handle_exec({"command": command, "timeout": 0.2})
+
+    assert resp["ok"] is False
+    assert resp["returncode"] == 124
+    assert resp["result"] == "[timeout]"
+    child_pid = int(pid_file.read_text().strip())
+
+    def live_non_zombie() -> bool:
+        stat = Path(f"/proc/{child_pid}/stat")
+        if not stat.exists():
+            return False
+        try:
+            fields = stat.read_text().split()
+        except (FileNotFoundError, ProcessLookupError):
+            return False
+        return len(fields) > 2 and fields[2] != "Z"
+
+    assert not live_non_zombie()
 
 
 # --- extractor -------------------------------------------------------------

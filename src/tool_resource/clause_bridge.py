@@ -136,6 +136,18 @@ class ShellCommandLookupFailure:
 
 
 @dataclass(frozen=True)
+class SafetyGuardBlockEvidence:
+    """Source/replay-agreed rejection before any shell process was started."""
+
+    command: str
+    source_command: str
+    source_tool_call_id: str
+    replay_tool_call_id: str
+    source_result: str
+    replay_result: str
+
+
+@dataclass(frozen=True)
 class MappingGap:
     kind: str  # unmatched_exec_image | unmatched_static_clause | ambiguous
     detail: str
@@ -164,6 +176,7 @@ class NoRuntimeExec:
     attempts: tuple[FailedExecAttempt, ...] = ()
     command_lookup_failure: ShellCommandLookupFailure | None = None
     control_short_circuit: Mapping[str, Any] | None = None
+    safety_guard_blocked: SafetyGuardBlockEvidence | None = None
     availability: dict[str, str] = field(
         default_factory=lambda: {
             "latency": "unknown:no_runtime_exec",
@@ -664,6 +677,7 @@ def bridge_command(
     *,
     failed_exec_attempts: Sequence[FailedExecAttempt] = (),
     command_lookup_failure: ShellCommandLookupFailure | None = None,
+    safety_guard_blocked: SafetyGuardBlockEvidence | None = None,
     allow_control_short_circuit: bool = False,
     entry_pid: int,
     fork_parent: Mapping[int, int],
@@ -765,6 +779,24 @@ def bridge_command(
         ]
         if len(lookup_candidates) == 1:
             lookup_assigned[lookup_candidates[0]] = command_lookup_failure
+    guard_assigned: dict[int, SafetyGuardBlockEvidence] = {}
+    if (
+        safety_guard_blocked is not None
+        and not exec_images
+        and safety_guard_blocked.command == command
+        and safety_guard_blocked.source_command == command
+        and bool(safety_guard_blocked.source_tool_call_id)
+        and bool(safety_guard_blocked.replay_tool_call_id)
+        and safety_guard_blocked.source_result == safety_guard_blocked.replay_result
+        and safety_guard_blocked.replay_result.startswith(
+            "Error: Command blocked by safety guard ("
+        )
+    ):
+        guard_assigned = {
+            si: safety_guard_blocked
+            for si, clause in enumerate(static)
+            if str(clause["bin"]) not in _NOEXEC_BUILTINS
+        }
     control_assigned, control_gaps = (
         _resolve_control_short_circuits(
             static,
@@ -776,6 +808,7 @@ def bridge_command(
                 *ambiguous,
                 *failed_assigned,
                 *lookup_assigned,
+                *guard_assigned,
             },
         )
         if allow_control_short_circuit
@@ -833,6 +866,15 @@ def bridge_command(
                     argv=tuple(clause["argv"]),
                     mapping_evidence="shell_command_lookup_failure_exact_head",
                     command_lookup_failure=lookup_assigned[si],
+                )
+            )
+        elif si in guard_assigned:
+            no_runtime_exec.append(
+                NoRuntimeExec(
+                    bin=cbin,
+                    argv=tuple(clause["argv"]),
+                    mapping_evidence="safety_guard_blocked_before_runtime",
+                    safety_guard_blocked=guard_assigned[si],
                 )
             )
         elif si in control_assigned:
