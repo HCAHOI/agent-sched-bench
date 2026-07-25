@@ -18,12 +18,14 @@ from agents.openclaw.tools.registry import ToolRegistry
 from llm_call.provider_base import LLMProvider, LLMResponse, ToolCallRequest
 from trace_collect.clause_telemetry import (
     ARG_FLAG_ARGV_CAPPED,
+    ARG_FLAG_CONTINUED,
     ARG_FLAG_TRUNCATED,
     MAX_ARGS,
     ClauseTelemetryCollector,
     ClauseTelemetryIntegrityError,
     LOSS_COUNTER_NAMES,
     ToolCallToken,
+    _captured_argv,
     _is_protocol_timeout,
     shell_command_lookup_failure_evidence,
     validate_clause_telemetry_runtime,
@@ -43,6 +45,7 @@ def _event(
     child: int = 0,
     child_tid: int = 0,
     arg_index: int = 0,
+    arg_chunk_index: int = 0,
     arg: str = "",
     arg_flags: int = 0,
     cpu_ns: int = 0,
@@ -71,6 +74,7 @@ def _event(
         "child_host_pid": child,
         "child_host_tid": child_tid or child,
         "arg_index": arg_index,
+        "arg_chunk_index": arg_chunk_index,
         "arg": arg,
         "arg_flags": arg_flags,
         "exit_code": exit_code,
@@ -553,6 +557,75 @@ def test_capped_runtime_invocation_persists_exact_argc_and_zero_observations() -
         "bprm_interp": "/bin/cmd",
         "bprm_evidence_truncated": False,
     }
+
+
+def test_chunked_argv_requires_one_complete_contiguous_sequence() -> None:
+    payload = ("a" * 510 + "雪").encode()
+    first = _event(
+        "exec_arg",
+        100,
+        10,
+        seq=1,
+        arg_index=2,
+        arg_chunk_index=0,
+        arg=payload[:511].decode("utf-8", "replace"),
+        arg_flags=ARG_FLAG_CONTINUED,
+    )
+    first["arg_raw"] = payload[:511].hex()
+    second = _event(
+        "exec_arg",
+        101,
+        10,
+        seq=1,
+        arg_index=2,
+        arg_chunk_index=1,
+        arg=payload[511:].decode("utf-8", "replace"),
+    )
+    second["arg_raw"] = payload[511:].hex()
+    events = [
+        first,
+        second,
+        _event(
+            "exec_arg",
+            102,
+            20,
+            seq=2,
+            arg_index=1,
+            arg_chunk_index=1,
+            arg="orphan",
+        ),
+        *[
+            _event(
+                "exec_arg",
+                103 + chunk,
+                30,
+                seq=3,
+                arg_index=1,
+                arg_chunk_index=chunk,
+                arg=str(chunk),
+                arg_flags=ARG_FLAG_CONTINUED if chunk < 8 else 0,
+            )
+            for chunk in range(9)
+        ],
+        _event(
+            "exec_arg",
+            112,
+            40,
+            seq=4,
+            arg_index=1,
+            arg="malformed",
+            arg_flags=ARG_FLAG_ARGV_CAPPED,
+        ),
+    ]
+
+    words, flags = _captured_argv(events)
+
+    assert words[(10, 1)][2] == "a" * 510 + "雪"
+    assert flags.get((10, 1), 0) == 0
+    assert words[(20, 2)][1] == "orphan"
+    assert flags[(20, 2)] == 1 << 1
+    assert flags[(30, 3)] == 1 << 1
+    assert flags[(40, 4)] == 1 << 1
 
 
 def test_truncated_requested_path_invalidates_bare_head_mapping() -> None:

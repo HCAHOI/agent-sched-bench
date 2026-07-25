@@ -52,8 +52,11 @@ ALIGN_BIN_NS = 20_000_000  # 20 ms aligned bins for RSS summation
 SENTINEL = 2**64 - 1
 MAX_ARGS = 16
 ARG_BYTES = 512
+MAX_ARG_CHUNKS = 8
+MAX_ARG_WORD_BYTES = (ARG_BYTES - 1) * MAX_ARG_CHUNKS
 ARG_FLAG_TRUNCATED = 1
 ARG_FLAG_ARGV_CAPPED = 2
+ARG_FLAG_CONTINUED = 4
 PAGE = os.sysconf("SC_PAGE_SIZE")
 _NPROC = os.cpu_count() or 1
 LOSS_COUNTER_NAMES = (
@@ -92,8 +95,10 @@ BPF_PROGRAM = r"""
 #define TYPE_INTERP_META 9
 #define MAX_ARGS 16
 #define ARG_BYTES 512
+#define MAX_ARG_CHUNKS 8
 #define ARG_FLAG_TRUNCATED 1
 #define ARG_FLAG_ARGV_CAPPED 2
+#define ARG_FLAG_CONTINUED 4
 
 struct event_t {
     u64 timestamp_ns;
@@ -113,6 +118,7 @@ struct event_t {
     u32 child_host_pid;
     u32 child_host_tid;
     u32 arg_index;
+    u32 arg_chunk_index;
     u32 arg_flags;
     u32 exit_code;
     char arg[ARG_BYTES];
@@ -226,30 +232,54 @@ static void capture_argv(
         }
         if (!a) break;
         captured_args++;
-        struct event_t *e = events.ringbuf_reserve(sizeof(*e));
-        if (!e) { ringbuf_reserve_failed(); continue; }
-        __builtin_memset(e, 0, sizeof(*e));
-        e->timestamp_ns = bpf_ktime_get_ns();
-        e->cgroup_id = bpf_get_current_cgroup_id();
-        e->exec_seq = seq;
-        e->type = TYPE_EXEC_ARG;
-        e->host_pid = pid_tgid >> 32;
-        e->host_tid = tid;
-        e->arg_index = i;
-        int arg_size = bpf_probe_read_user_str(e->arg, sizeof(e->arg), a);
-        if (arg_size < 0) {
-            argv_read_failed();
-        } else if (arg_size == sizeof(e->arg)) {
-            char source_last = 0;
-            int last_read = bpf_probe_read_user(
-                &source_last, sizeof(source_last), a + sizeof(e->arg) - 1
+        #pragma unroll
+        for (int chunk = 0; chunk < MAX_ARG_CHUNKS; chunk++) {
+            int offset = chunk * (ARG_BYTES - 1);
+            struct event_t *e = events.ringbuf_reserve(sizeof(*e));
+            if (!e) {
+                ringbuf_reserve_failed();
+                break;
+            }
+            __builtin_memset(e, 0, sizeof(*e));
+            e->timestamp_ns = bpf_ktime_get_ns();
+            e->cgroup_id = bpf_get_current_cgroup_id();
+            e->exec_seq = seq;
+            e->type = TYPE_EXEC_ARG;
+            e->host_pid = pid_tgid >> 32;
+            e->host_tid = tid;
+            e->arg_index = i;
+            e->arg_chunk_index = chunk;
+            int arg_size = bpf_probe_read_user_str(
+                e->arg, sizeof(e->arg), a + offset
             );
-            if (last_read < 0)
-                argv_boundary_read_failed();
-            else if (source_last != '\0')
-                e->arg_flags = ARG_FLAG_TRUNCATED;
+            int complete = 0;
+            if (arg_size < 0) {
+                argv_read_failed();
+                complete = 1;
+            } else if (arg_size == sizeof(e->arg)) {
+                char source_last = 0;
+                int last_read = bpf_probe_read_user(
+                    &source_last,
+                    sizeof(source_last),
+                    a + offset + sizeof(e->arg) - 1
+                );
+                if (last_read < 0) {
+                    argv_boundary_read_failed();
+                    complete = 1;
+                } else if (source_last == '\0') {
+                    complete = 1;
+                } else if (chunk == MAX_ARG_CHUNKS - 1) {
+                    e->arg_flags = ARG_FLAG_TRUNCATED;
+                    complete = 1;
+                } else {
+                    e->arg_flags = ARG_FLAG_CONTINUED;
+                }
+            } else {
+                complete = 1;
+            }
+            events.ringbuf_submit(e, 0);
+            if (complete) break;
         }
-        events.ringbuf_submit(e, 0);
     }
     const char *extra = 0;
     if (captured_args == MAX_ARGS) {
@@ -966,6 +996,56 @@ class Clause:
     argv_capture_flags: int = 0
 
 
+def _captured_argv(
+    events: Sequence[Mapping[str, Any]],
+) -> tuple[
+    dict[tuple[int, int], dict[int, str]],
+    dict[tuple[int, int], int],
+]:
+    chunks: dict[tuple[int, int], dict[int, dict[int, tuple[bytes, int]]]] = {}
+    capture_flags: dict[tuple[int, int], int] = {}
+    for event in events:
+        if event["type"] != "exec_arg":
+            continue
+        key = (int(event["host_pid"]), int(event["exec_seq"]))
+        index = int(event["arg_index"])
+        event_flags = int(event.get("arg_flags", 0))
+        if index == MAX_ARGS and event_flags & ARG_FLAG_ARGV_CAPPED:
+            capture_flags[key] = capture_flags.get(key, 0) | (1 << MAX_ARGS)
+            continue
+        if index >= MAX_ARGS:
+            continue
+        chunk_index = int(event.get("arg_chunk_index", 0))
+        word_chunks = chunks.setdefault(key, {}).setdefault(index, {})
+        if chunk_index in word_chunks:
+            capture_flags[key] = capture_flags.get(key, 0) | (1 << index)
+        raw = event.get("arg_raw")
+        payload = (
+            bytes.fromhex(raw)
+            if isinstance(raw, str)
+            else str(event.get("arg", "")).encode()
+        )
+        word_chunks[chunk_index] = (payload, event_flags)
+
+    words: dict[tuple[int, int], dict[int, str]] = {}
+    for key, by_index in chunks.items():
+        for index, word_chunks in by_index.items():
+            ordered = sorted(word_chunks)
+            flags = [word_chunks[chunk][1] for chunk in ordered]
+            complete = (
+                len(ordered) <= MAX_ARG_CHUNKS
+                and ordered == list(range(len(ordered)))
+                and all(flag == ARG_FLAG_CONTINUED for flag in flags[:-1])
+                and flags[-1] == 0
+            )
+            if not complete:
+                capture_flags[key] = capture_flags.get(key, 0) | (1 << index)
+            words.setdefault(key, {})[index] = b"".join(
+                word_chunks[chunk][0] for chunk in ordered
+            ).decode("utf-8", "replace")
+    return words, capture_flags
+
+
 def _clauses_and_lineage(
     events: list[dict[str, Any]],
 ) -> tuple[list[Clause], dict[int, int]]:
@@ -976,8 +1056,7 @@ def _clauses_and_lineage(
         if e["type"] == "fork" and e["child_host_pid"]:
             fork_parent.setdefault(e["child_host_pid"], e["host_pid"])
 
-    argv_words: dict[tuple[int, int], dict[int, str]] = {}
-    argv_capture_flags: dict[tuple[int, int], int] = {}
+    argv_words, argv_capture_flags = _captured_argv(events)
     exact_argc: dict[tuple[int, int], int | None] = {}
     requested_paths: dict[tuple[int, int], str] = {}
     requested_path_truncated: set[tuple[int, int]] = set()
@@ -1003,21 +1082,6 @@ def _clauses_and_lineage(
             bprm_interpreters[key] = e.get("arg", "")
             if int(e.get("arg_flags", 0)) & ARG_FLAG_TRUNCATED:
                 bprm_truncated.add(key)
-        if e["type"] == "exec_arg":
-            key = (e["host_pid"], e["exec_seq"])
-            index = e["arg_index"]
-            event_flags = int(e.get("arg_flags", 0))
-            if index < MAX_ARGS:
-                argv_words.setdefault(key, {})[index] = e["arg"]
-                if event_flags & ARG_FLAG_TRUNCATED:
-                    argv_capture_flags[key] = argv_capture_flags.get(key, 0) | (
-                        1 << index
-                    )
-            if index == MAX_ARGS and event_flags & ARG_FLAG_ARGV_CAPPED:
-                argv_capture_flags[key] = argv_capture_flags.get(key, 0) | (
-                    1 << MAX_ARGS
-                )
-
     def argv_of(pid: int, seq: int) -> tuple[tuple[str, ...], int]:
         words = argv_words.get((pid, seq), {})
         return (
@@ -2133,6 +2197,7 @@ def _event_row(table: Any, data: int) -> dict[str, Any]:
         "child_host_pid": int(event.child_host_pid),
         "child_host_tid": int(event.child_host_tid),
         "arg_index": int(event.arg_index),
+        "arg_chunk_index": int(event.arg_chunk_index),
         "arg_flags": int(event.arg_flags),
         "exit_code": int(event.exit_code),
         "errno": (
@@ -2142,7 +2207,10 @@ def _event_row(table: Any, data: int) -> dict[str, Any]:
         ),
     }
     if event.type in {1, 7, 8, 9}:
-        row["arg"] = bytes(event.arg).split(b"\0", 1)[0].decode("utf-8", "replace")
+        payload = bytes(event.arg).split(b"\0", 1)[0]
+        row["arg"] = payload.decode("utf-8", "replace")
+        if event.type == 1:
+            row["arg_raw"] = payload.hex()
     return row
 
 
@@ -2210,23 +2278,7 @@ def _exec_image_record(metric: ClauseMetrics) -> Any:
 def _failed_exec_attempt_records(events: list[dict[str, Any]]) -> list[Any]:
     from tool_resource.clause_bridge import FailedExecAttempt
 
-    argv_words: dict[tuple[int, int], dict[int, str]] = {}
-    argv_capture_flags: dict[tuple[int, int], int] = {}
-    for event in events:
-        if event["type"] == "exec_arg":
-            key = (event["host_pid"], event["exec_seq"])
-            index = event["arg_index"]
-            event_flags = int(event.get("arg_flags", 0))
-            if index < MAX_ARGS:
-                argv_words.setdefault(key, {})[index] = event["arg"]
-                if event_flags & ARG_FLAG_TRUNCATED:
-                    argv_capture_flags[key] = argv_capture_flags.get(key, 0) | (
-                        1 << index
-                    )
-            if index == MAX_ARGS and event_flags & ARG_FLAG_ARGV_CAPPED:
-                argv_capture_flags[key] = argv_capture_flags.get(key, 0) | (
-                    1 << MAX_ARGS
-                )
+    argv_words, argv_capture_flags = _captured_argv(events)
     attempts: list[FailedExecAttempt] = []
     for event in events:
         if event["type"] != "failed_exec_attempt":

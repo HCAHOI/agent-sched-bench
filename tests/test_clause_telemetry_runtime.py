@@ -105,7 +105,9 @@ def test_argv_capture_flags_cover_truncation_cap_and_short_argv() -> None:
     payload = (
         "import subprocess;"
         "subprocess.run(['/bin/true','e'*511],check=True);"
-        "subprocess.run(['/bin/true','x'*600],check=True);"
+        "subprocess.run(['/bin/true','l'*1110],check=True);"
+        f"subprocess.run(['/bin/true','m'*{C.MAX_ARG_WORD_BYTES}],check=True);"
+        f"subprocess.run(['/bin/true','x'*{C.MAX_ARG_WORD_BYTES + 1}],check=True);"
         "subprocess.run(['/bin/true',*map(str,range(16))],check=True);"
         "subprocess.run(['/bin/true','ok'],check=True)"
     )
@@ -123,6 +125,16 @@ def test_argv_capture_flags_cover_truncation_cap_and_short_argv() -> None:
         for metric in true_metrics
         if len(metric.argv) == 2 and metric.argv[1].startswith("e")
     )
+    exact_chunked = next(
+        metric
+        for metric in true_metrics
+        if len(metric.argv) == 2 and metric.argv[1].startswith("l")
+    )
+    exact_max = next(
+        metric
+        for metric in true_metrics
+        if len(metric.argv) == 2 and metric.argv[1].startswith("m")
+    )
     truncated = next(
         metric
         for metric in true_metrics
@@ -137,7 +149,11 @@ def test_argv_capture_flags_cover_truncation_cap_and_short_argv() -> None:
 
     assert len(exact_buffer_edge.argv[1]) == C.ARG_BYTES - 1
     assert exact_buffer_edge.argv_capture_flags == 0
-    assert len(truncated.argv[1]) == C.ARG_BYTES - 1
+    assert len(exact_chunked.argv[1]) == 1110
+    assert exact_chunked.argv_capture_flags == 0
+    assert len(exact_max.argv[1]) == C.MAX_ARG_WORD_BYTES
+    assert exact_max.argv_capture_flags == 0
+    assert len(truncated.argv[1]) == C.MAX_ARG_WORD_BYTES
     assert truncated.argv_capture_flags == 1 << 1
     assert len(capped.argv) == C.MAX_ARGS
     assert capped.argv_capture_flags == 1 << C.MAX_ARGS
