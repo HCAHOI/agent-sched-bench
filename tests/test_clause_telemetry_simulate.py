@@ -232,28 +232,18 @@ def test_clause_runtime_rejects_configuration_before_bcc(
             container_executable="podman",
             concurrency=1,
             workers=1,
-            pacct=False,
         )
     monkeypatch.setitem(sys.modules, "bcc", object())
     validate_clause_telemetry_runtime(
         container_executable="docker",
         concurrency=2,
         workers=1,
-        pacct=False,
     )
     with pytest.raises(ValueError, match="workers 1"):
         validate_clause_telemetry_runtime(
             container_executable="docker",
             concurrency=2,
             workers=2,
-            pacct=False,
-        )
-    with pytest.raises(ValueError, match="incompatible with --pacct"):
-        validate_clause_telemetry_runtime(
-            container_executable="docker",
-            concurrency=1,
-            workers=1,
-            pacct=True,
         )
 
 

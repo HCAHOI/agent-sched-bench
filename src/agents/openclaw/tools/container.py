@@ -85,7 +85,9 @@ class ContainerReadFileTool(_ContainerTool):
             return "Error reading file: Unknown path"
         source_root = source_runtime_artifact_root_from_path(path)
         if source_root in self._runtime_artifact_root_map:
-            path = self._runtime_artifact_root_map[source_root] + path[len(source_root) :]
+            path = (
+                self._runtime_artifact_root_map[source_root] + path[len(source_root) :]
+            )
         response = await self._request(
             "read_file",
             {
@@ -245,17 +247,6 @@ class ContainerExecTool(_ContainerTool):
             restrict_to_workspace=restrict_to_workspace,
             path_append=path_append,
         )
-        # Side-channel for tool_collect.openclaw_tools' segment_timeline (v2)
-        # telemetry. execute() must keep returning a plain str (it feeds the
-        # LLM's tool-result message during real collection), so the container
-        # response's extra fields are stashed here for _runner.py._run_tool to
-        # pick up after the call, mirroring how resource_timeline is sourced
-        # via a host-side ResourceTimelineRecorder wrapping this same call.
-        self.last_segment_timeline: dict[str, Any] | None = None
-        # Same side-channel pattern for per-binary process accounting: the
-        # container response's `per_process` list is stashed for _run_tool to
-        # pick up (execute() must keep returning a plain str).
-        self.last_per_process: list[dict[str, Any]] | None = None
 
     def set_tool_call_context(
         self,
@@ -286,7 +277,9 @@ class ContainerExecTool(_ContainerTool):
 
     @property
     def description(self) -> str:
-        return "Execute a shell command inside the task container and return its output."
+        return (
+            "Execute a shell command inside the task container and return its output."
+        )
 
     @property
     def exclusive(self) -> bool:
@@ -303,11 +296,6 @@ class ContainerExecTool(_ContainerTool):
         timeout: int | None = None,
         **_: Any,
     ) -> str:
-        # Reset FIRST, before any early return: a guard-blocked exec must
-        # never inherit the previous call's segment timeline (stale-but-valid
-        # telemetry would silently corrupt the segment dataset).
-        self.last_segment_timeline = None
-        self.last_per_process = None
         self._pending_clause_response = None
         workdir = working_dir or self.workspace
         guard_error = self._guard._guard_command(command, workdir)
@@ -335,17 +323,12 @@ class ContainerExecTool(_ContainerTool):
             timeout_s=float(effective_timeout),
         )
         self._pending_clause_response = response
-        segment_timeline = response.get("segment_timeline")
-        if isinstance(segment_timeline, dict):
-            self.last_segment_timeline = segment_timeline
-        per_process = response.get("per_process")
-        if isinstance(per_process, list):
-            self.last_per_process = per_process
         result = self._result_or_error(response)
         returncode = response.get("returncode")
         if isinstance(returncode, int) and not isinstance(returncode, bool):
             return f"{result}\n\nExit code: {returncode}".strip()
         return result
+
 
 class UnsupportedReplayTool(Tool):
     """Fail-closed placeholder for OpenClaw tools without container-backed replay."""
@@ -385,7 +368,6 @@ _UNSUPPORTED_REPLAY_TOOL_NAMES = (
     "spawn",
     "sessions_yield",
 )
-
 
 
 def build_container_tool_overrides(

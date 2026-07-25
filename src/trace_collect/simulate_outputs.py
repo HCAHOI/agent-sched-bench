@@ -52,8 +52,13 @@ def _structured_output_subdir(
                 "Heterogeneous trace metadata in manifest — primary "
                 "benchmark/model/scaffold=%s/%s/%s but %s has %s/%s/%s; "
                 "using primary for output path.",
-                benchmark, model, scaffold, session.agent_id,
-                other.get("benchmark"), other.get("model"), other.get("scaffold"),
+                benchmark,
+                model,
+                scaffold,
+                session.agent_id,
+                other.get("benchmark"),
+                other.get("model"),
+                other.get("scaffold"),
             )
             break
     scheduler_dir = "bounded_queue" if workers == 1 else "multi_process_workers"
@@ -238,8 +243,12 @@ def _make_task_stats(
     elapsed_s: float,
     failed_action_count: int = 0,
 ) -> ReplayTaskStats:
-    llm_call_count = sum(1 for action in loaded.actions if action.get("action_type") == "llm_call")
-    tool_exec_count = sum(1 for action in loaded.actions if action.get("action_type") == "tool_exec")
+    llm_call_count = sum(
+        1 for action in loaded.actions if action.get("action_type") == "llm_call"
+    )
+    tool_exec_count = sum(
+        1 for action in loaded.actions if action.get("action_type") == "tool_exec"
+    )
     return ReplayTaskStats(
         agent_id=loaded.run_instance_id,
         run_instance_id=loaded.run_instance_id,
@@ -379,8 +388,6 @@ def _write_prepared_resources(
 def _split_trace_by_agent(
     combined_path: Path,
     sessions: list[PreparedTraceSession],
-    *,
-    metadata_by_agent: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Write per-task trace.jsonl from the combined JSONL, filtered by replay id."""
     agent_dirs = {
@@ -458,7 +465,6 @@ def _split_trace_by_agent(
                 source_model = _source_model(session)
                 metadata["source_models"] = [source_model]
                 metadata["source_model"] = source_model
-                metadata.update((metadata_by_agent or {}).get(agent_id, {}))
                 fh.write(json.dumps(metadata, ensure_ascii=False) + "\n")
             for ln in lines:
                 fh.write(ln + "\n")
@@ -493,11 +499,6 @@ def _split_combined_worker_trace_by_agent(
     _split_trace_by_agent(
         combined_path,
         prepared_sessions,
-        metadata_by_agent={
-            agent_id: metadata
-            for result in worker_results
-            for agent_id, metadata in result.pacct_metadata_by_agent.items()
-        },
     )
 
 
@@ -571,10 +572,16 @@ def _write_combined_worker_trace(
             out_fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def _combined_trace_sort_key(record: dict[str, Any], sequence: int) -> tuple[float, int, int]:
+def _combined_trace_sort_key(
+    record: dict[str, Any], sequence: int
+) -> tuple[float, int, int]:
     rtype = record.get("type")
     if rtype == "action":
-        return (_float_sort_value(record.get("ts_start"), default=float("inf")), 0, sequence)
+        return (
+            _float_sort_value(record.get("ts_start"), default=float("inf")),
+            0,
+            sequence,
+        )
     if rtype == "event":
         return (_float_sort_value(record.get("ts")), 1, sequence)
     if rtype == "summary":

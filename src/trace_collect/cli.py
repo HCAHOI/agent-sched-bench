@@ -312,27 +312,7 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
             "Per-tool resource telemetry: off disables new command envelopes, "
             "command preserves resource_timeline, and clause adds Stage-2 eBPF "
             "clause observations. Clause mode requires root/BCC, Docker, "
-            "workers=1, and cannot be combined with --pacct."
-        ),
-    )
-    parser.add_argument(
-        "--no-segment-timeline",
-        dest="segment_timeline",
-        action="store_false",
-        help=(
-            "Disable per-segment (atom) command-timing telemetry during "
-            "container replay. On by default; invisible to replayed commands."
-        ),
-    )
-    parser.add_argument(
-        "--pacct",
-        dest="pacct",
-        action="store_true",
-        help=(
-            "Enable per-binary process accounting (BSD acct v3) during "
-            "container replay: attributes each exec's CPU/memory to the "
-            "individual binaries it ran. Requires host CAP_SYS_PACCT support; "
-            "adds --cap-add SYS_PACCT to replay containers. Off by default."
+            "and workers=1."
         ),
     )
     parser.add_argument(
@@ -353,6 +333,7 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         help="Enable verbose logging.",
     )
     return parser.parse_args(argv)
+
 
 def main() -> None:
     sub = sys.argv[1] if len(sys.argv) > 1 else None
@@ -375,6 +356,7 @@ def main() -> None:
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 def _run_collect(args: argparse.Namespace) -> None:
     logging.basicConfig(
@@ -459,7 +441,9 @@ def _run_collect(args: argparse.Namespace) -> None:
 def _parse_concurrency_values(value: str) -> list[int]:
     parts = [part.strip() for part in value.split(",")]
     if not parts or any(not part for part in parts):
-        raise ValueError("--concurrency must be a positive integer or comma-separated list")
+        raise ValueError(
+            "--concurrency must be a positive integer or comma-separated list"
+        )
     values: list[int] = []
     for part in parts:
         try:
@@ -512,9 +496,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "llm_ttft_ms": args.llm_ttft_ms,
         "llm_tpot_ms": args.llm_tpot_ms,
         "structured_output": args.output_dir == "traces/simulate",
-        "segment_timeline": args.segment_timeline,
         "tool_resource_telemetry": args.tool_resource_telemetry,
-        "pacct": args.pacct,
         "cleanup_images": args.cleanup_images,
     }
 
@@ -523,7 +505,9 @@ def _run_simulate(args: argparse.Namespace) -> None:
         sweep_path.unlink()
     for concurrency in concurrency_values:
         try:
-            trace_file = asyncio.run(simulate(**simulate_kwargs, concurrency=concurrency))
+            trace_file = asyncio.run(
+                simulate(**simulate_kwargs, concurrency=concurrency)
+            )
         except (SimulateError, ValueError) as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
@@ -532,6 +516,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
             _append_throughput_sweep_record(sweep_path, trace_file)
     if len(concurrency_values) > 1:
         print(f"Throughput sweep written to: {sweep_path}")
+
 
 if __name__ == "__main__":
     main()

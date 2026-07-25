@@ -195,30 +195,6 @@ fixed v1 model:
 Host/no-op replay and multi-command exec preserve `resource_timeline` as source
 metadata only.
 
-### Segment-timeline telemetry (per-atom command timing)
-
-Chained exec commands (`cd X && make && pytest`) arrive as one tool call. During
-container replay we re-run the *unmodified* command under `bash -x -c` with
-xtrace redirected to a dedicated fd (`BASH_XTRACEFD`, `PS4='+$EPOCHREALTIME '`),
-capturing per-top-level-segment start timestamps without touching the command's
-stdout/stderr or semantics. Output lands in `tool_exec.data.segment_timeline`
-(v2): `segments[{segment_index, command_text, t_start_ms, t_end_ms}]` plus
-`raw_total_ms` (measured exec wall time, for cross-checking — not forced to equal
-the segment sum).
-
-- On by default in simulate replay (invisible to replayed commands, cheap).
-- `--no-segment-timeline` opts out (keeps the historical `/bin/sh -c` path).
-- When bash is unavailable the field is `{version: 2, telemetry_absent: true,
-  reason}` and replay is unaffected. Malformed telemetry fails fast only at
-  extraction, never during replay.
-- Known ceiling: telemetry-on execs run under bash; `--no-segment-timeline`
-  execs keep `/bin/sh`.
-
-Extract per-atom samples with
-`trace_collect.tool_latency_dataset.extract_segment_latency_samples` (fields:
-`task_id, tool_name, segment_index, segment_command, segment_ms,
-parent_chain_command, parent_total_ms, parent_raw_total_ms`).
-
 #### Full-corpus fresh-277 replay at --replay-speed 20 (8-core / 15 GB host)
 
 ```
@@ -230,11 +206,9 @@ PYTHONPATH=src:. uv run python -m trace_collect.cli simulate \
     --prep-concurrency 8 \
     --replay-speed 20 \
     --cleanup-images \
-    --output-dir traces/fresh-277-segtimeline
+    --output-dir traces/fresh-277-replay
 ```
 
-- Segment telemetry is on by default; add `--no-segment-timeline` only to
-  reproduce the pre-telemetry baseline.
 - Concurrency: on an 8-core / 15 GB host keep `--workers 8 --concurrency 8` so
   at most 8 task containers run at once (~1 core, ~1.5 GB each). Drop to
   `--workers 4 --concurrency 4` if replayed builds (`make`, `pytest`) are
@@ -246,7 +220,6 @@ PYTHONPATH=src:. uv run python -m trace_collect.cli simulate \
   pulls each task's image on demand, then removes it once no pending session
   still references it. Resident image footprint is then ~`concurrency` x 3 GB
   (~24 GB at `--concurrency 8`) plus a few MB per trace, not the full corpus.
-  Segment telemetry adds only small JSON per exec.
   - WARNING: an earlier version of this runbook claimed "each fixed image is
     built once and shared; budget ~2-3 GB for images." That estimate was WRONG
     for fresh-277 — it holds only for shared-image corpora (e.g. a single

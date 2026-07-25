@@ -51,11 +51,6 @@ _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 # over-approximates total time, documented.
 _SEQUENTIAL_SEPARATOR_TOKENS = frozenset({"&&", ";", ";;", "||"})
 _GROUPING_TOKENS = frozenset({"(", ")"})
-# Separators/heads whose members run concurrently or re-emit per iteration, so
-# per-segment xtrace timestamps are not trustworthy sequential bounds (see the
-# segment_timeline duration-validity ceiling in trace_collect/CLAUDE.md).
-_CONCURRENT_SEPARATOR_TOKENS = frozenset({"|", "|&", "&"})
-_LOOP_KEYWORD_HEADS = frozenset({"for", "while", "until"})
 
 
 def shell_command_heads(command: str) -> list[str]:
@@ -152,25 +147,6 @@ def make_row_command_prefix_keys(
     return row_keys
 
 
-def command_has_concurrent_segments(command: str) -> bool:
-    """True if the command's segments do not run in trustworthy sequence.
-
-    Flags pipelines (``a | b``, ``a |& b``), background jobs (``a & b``) and
-    loop constructs (``for``/``while``/``until``): their members run
-    concurrently or re-emit per iteration, so segment_timeline assigns
-    fictitious sequential bounds (duration-validity ceiling). Sequential
-    separators (``&&``, ``;``, ``||``) and untokenizable commands are not
-    flagged. Used to exclude such parents from per-segment duration analysis.
-    """
-
-    for token, is_head in _normalized_tokens(command):
-        if is_head and token in _LOOP_KEYWORD_HEADS:
-            return True
-        if not is_head and token in _CONCURRENT_SEPARATOR_TOKENS:
-            return True
-    return False
-
-
 def shell_command_segments(command: str) -> list[list[str]]:
     """Sequential execution units of a shell command, as token lists.
 
@@ -197,25 +173,6 @@ def shell_command_segments(command: str) -> list[list[str]]:
     if current:
         segments.append(current)
     return segments
-
-
-def segment_prefix_keys(
-    tool_name: str,
-    segment_tokens: list[str],
-    *,
-    max_depth: int,
-) -> tuple[str, ...]:
-    """Nested prefix keys of one segment, ordered general -> specific."""
-
-    if max_depth < 1:
-        raise ValueError(f"max_depth must be >= 1, got {max_depth}")
-    if not segment_tokens:
-        return ()
-    depth = min(len(segment_tokens), max_depth)
-    return tuple(
-        f"{tool_name}:{' '.join(segment_tokens[:length])}"
-        for length in range(1, depth + 1)
-    )
 
 
 def _skip_leading_cd_segments(
@@ -285,16 +242,16 @@ def _normalized_tokens(command: str) -> tuple[tuple[str, bool], ...]:
 
 
 def _is_redirection_operator(token: str) -> bool:
-    return bool(token) and all(char in _REDIRECTION_CHARS for char in token) and any(
-        char in "<>" for char in token
+    return (
+        bool(token)
+        and all(char in _REDIRECTION_CHARS for char in token)
+        and any(char in "<>" for char in token)
     )
 
 
 __all__ = [
-    "command_has_concurrent_segments",
     "command_prefix_keys",
     "make_row_command_prefix_keys",
-    "segment_prefix_keys",
     "shell_command_heads",
     "shell_command_prefix_tokens",
     "shell_command_segments",

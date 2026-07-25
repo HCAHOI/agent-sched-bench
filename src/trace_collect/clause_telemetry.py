@@ -1883,7 +1883,6 @@ def validate_clause_telemetry_runtime(
     container_executable: str | None,
     concurrency: int,
     workers: int,
-    pacct: bool,
 ) -> None:
     """Fail before container preparation when clause telemetry is unsupported."""
 
@@ -1895,8 +1894,6 @@ def validate_clause_telemetry_runtime(
         raise ValueError("clause telemetry requires --container docker")
     if workers != 1:
         raise ValueError("clause telemetry requires --workers 1")
-    if pacct:
-        raise ValueError("clause telemetry is incompatible with --pacct")
     if not Path("/sys/fs/cgroup/cgroup.controllers").is_file():
         raise ValueError("clause telemetry requires cgroup v2")
     try:

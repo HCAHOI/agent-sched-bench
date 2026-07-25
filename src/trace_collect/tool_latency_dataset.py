@@ -9,7 +9,6 @@ import math
 from pathlib import Path
 from typing import Any, Iterable
 
-from tool_time.command import command_has_concurrent_segments
 from trace_collect.tool_gap_extractor import (
     _float_field,
     _int_field,
@@ -153,197 +152,6 @@ def extract_tool_latency_samples(
                 tool_name_missing=tool_name_missing,
             )
         )
-    return samples
-
-
-@dataclass(frozen=True)
-class SegmentLatencySample:
-    """One per-atom (top-level command segment) latency sample from a replay.
-
-    Segments come from ``tool_exec.data.segment_timeline`` (v2) emitted by the
-    container replay path. ``segment_ms`` is the observed label and, like the
-    parent-chain latency, must not be fed back as an online prediction feature.
-    """
-
-    sample_id: str
-    source_trace: str
-    task_id: str
-    agent_id: str
-    action_id: str
-    tool_name: str
-    segment_index: int
-    segment_command: str
-    segment_ms: float
-    t_start_ms: float
-    t_end_ms: float
-    parent_chain_command: str | None
-    parent_total_ms: float
-    parent_raw_total_ms: float | None
-
-    def to_json_obj(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "sample_id": self.sample_id,
-            "source_trace": self.source_trace,
-            "task_id": self.task_id,
-            "agent_id": self.agent_id,
-            "action_id": self.action_id,
-            "tool_name": self.tool_name,
-            "segment_index": self.segment_index,
-            "segment_command": self.segment_command,
-            "segment_ms": self.segment_ms,
-            "t_start_ms": self.t_start_ms,
-            "t_end_ms": self.t_end_ms,
-            "parent_total_ms": self.parent_total_ms,
-        }
-        if self.parent_chain_command is not None:
-            payload["parent_chain_command"] = self.parent_chain_command
-        if self.parent_raw_total_ms is not None:
-            payload["parent_raw_total_ms"] = self.parent_raw_total_ms
-        return payload
-
-
-def _segment_exec_command(tool_args: Any) -> str | None:
-    params = _parse_tool_args(tool_args)
-    if params is None:
-        return None
-    inner = params.get("exec")
-    if isinstance(inner, dict):
-        params = inner
-    command = params.get("command")
-    return command if isinstance(command, str) else None
-
-
-def _require_number(entry: dict[str, Any], field: str, *, source: str) -> float:
-    value = entry.get(field)
-    if not isinstance(value, int | float) or isinstance(value, bool):
-        raise ValueError(f"{source}: segment field {field!r} must be numeric")
-    number = float(value)
-    if not math.isfinite(number):
-        raise ValueError(f"{source}: segment field {field!r} must be finite")
-    return number
-
-
-def extract_segment_latency_samples(
-    trace_path: Path,
-    *,
-    agent_filter: str | None = None,
-    skip_concurrent: bool = False,
-) -> list[SegmentLatencySample]:
-    """Extract per-atom segment latency samples from one replayed trace.
-
-    Malformed telemetry fails fast here (never during replay). Entries recorded
-    as ``telemetry_absent`` are skipped, not errors: some execs run under a
-    non-bash shell where per-segment timing is unavailable by design.
-
-    ``skip_concurrent`` drops actions whose parent command runs its segments
-    concurrently (pipelines, background jobs, loops): their segment_timeline
-    bounds are fictitious by the duration-validity ceiling and can even be
-    reversed (``t_end_ms < t_start_ms``), which otherwise fails fast here.
-    Off by default so the strict per-segment validation is preserved for the
-    canonical dataset; duration analyses that must exclude these parents
-    anyway (and count them) pass ``skip_concurrent=True``.
-    """
-
-    trace = TraceData.load(trace_path, agent_filter=agent_filter)
-    metadata_task_id = str(trace.metadata.get("instance_id") or "").strip()
-    task_id = metadata_task_id or str(trace_path)
-    samples: list[SegmentLatencySample] = []
-    for action in trace.actions:
-        if action.get("action_type") != "tool_exec":
-            continue
-        data = action.get("data") or {}
-        timeline = data.get("segment_timeline")
-        if timeline is None:
-            continue
-        action_id = str(action.get("action_id") or "")
-        source = f"{trace_path}: action {action_id!r}"
-        if not isinstance(timeline, dict):
-            raise ValueError(f"{source}: segment_timeline must be an object")
-        if timeline.get("telemetry_absent"):
-            continue
-        if timeline.get("version") != 2:
-            raise ValueError(
-                f"{source}: unsupported segment_timeline version "
-                f"{timeline.get('version')!r}"
-            )
-        segments = timeline.get("segments")
-        if not isinstance(segments, list) or not segments:
-            raise ValueError(f"{source}: segment_timeline has no segments")
-        agent_id = str(action.get("agent_id") or "")
-        tool_name = _tool_name(action) or MISSING_TOOL_NAME
-        parent_total_ms = _optional_float(data.get("duration_ms"))
-        if parent_total_ms is None:
-            parent_total_ms = (
-                _float_field(action, "ts_end") - _float_field(action, "ts_start")
-            ) * 1000.0
-        parent_chain_command = _segment_exec_command(data.get("tool_args"))
-        if (
-            skip_concurrent
-            and parent_chain_command is not None
-            and command_has_concurrent_segments(parent_chain_command)
-        ):
-            continue
-        raw_total = _optional_float(timeline.get("raw_total_ms"))
-        for entry in segments:
-            if not isinstance(entry, dict):
-                raise ValueError(f"{source}: segment entry must be an object")
-            segment_index = entry.get("segment_index")
-            if not isinstance(segment_index, int) or isinstance(segment_index, bool):
-                raise ValueError(f"{source}: segment_index must be an int")
-            command_text = entry.get("command_text")
-            if not isinstance(command_text, str):
-                raise ValueError(f"{source}: command_text must be a string")
-            t_start_ms = _require_number(entry, "t_start_ms", source=source)
-            t_end_ms = _require_number(entry, "t_end_ms", source=source)
-            if t_end_ms < t_start_ms:
-                raise ValueError(
-                    f"{source}: segment {segment_index} has t_end_ms < t_start_ms"
-                )
-            samples.append(
-                SegmentLatencySample(
-                    sample_id=f"{trace_path}:{agent_id}:{action_id}:{segment_index}",
-                    source_trace=str(trace_path),
-                    task_id=task_id,
-                    agent_id=agent_id,
-                    action_id=action_id,
-                    tool_name=tool_name,
-                    segment_index=segment_index,
-                    segment_command=command_text,
-                    segment_ms=t_end_ms - t_start_ms,
-                    t_start_ms=t_start_ms,
-                    t_end_ms=t_end_ms,
-                    parent_chain_command=parent_chain_command,
-                    parent_total_ms=parent_total_ms,
-                    parent_raw_total_ms=raw_total,
-                )
-            )
-    return samples
-
-
-def extract_many_segment_latency_samples(
-    trace_paths: Iterable[Path],
-    *,
-    agent_filter: str | None = None,
-    skip_concurrent: bool = False,
-) -> list[SegmentLatencySample]:
-    samples: list[SegmentLatencySample] = []
-    for trace_path in trace_paths:
-        samples.extend(
-            extract_segment_latency_samples(
-                trace_path,
-                agent_filter=agent_filter,
-                skip_concurrent=skip_concurrent,
-            )
-        )
-    samples.sort(
-        key=lambda sample: (
-            sample.source_trace,
-            sample.action_id,
-            sample.segment_index,
-        )
-    )
-    if not samples:
-        raise ValueError("no segment latency samples found")
     return samples
 
 
@@ -545,12 +353,16 @@ def read_tool_latency_corpus_manifest(
         raise ValueError("expected_task_count must be >= fold_count")
 
     costs = payload.get("costs_ms")
-    if not isinstance(costs, list) or not costs or any(
+    if (
+        not isinstance(costs, list)
+        or not costs
+        or any(
         not isinstance(value, int | float)
         or isinstance(value, bool)
         or not math.isfinite(float(value))
         or float(value) <= 0.0
         for value in costs
+        )
     ):
         raise ValueError("manifest field 'costs_ms' must contain positive numbers")
     guard = payload.get("guard_ms")
@@ -571,7 +383,9 @@ def read_tool_latency_corpus_manifest(
         "guard_ms": float(guard),
     }
     if normalized_config != _FIXED_CORPUS_CONFIG:
-        raise ValueError("manifest analysis config differs from the fixed corpus protocol")
+        raise ValueError(
+            "manifest analysis config differs from the fixed corpus protocol"
+        )
 
     resolved = dict(payload)
     trace_root_value = payload.get("trace_root")
@@ -588,8 +402,12 @@ def read_tool_latency_corpus_manifest(
     resolved["trace_root"] = str(trace_root)
 
     task_ids = payload.get("task_ids")
-    if not isinstance(task_ids, list) or not task_ids or any(
+    if (
+        not isinstance(task_ids, list)
+        or not task_ids
+        or any(
         not isinstance(task_id, str) or not task_id.strip() for task_id in task_ids
+        )
     ):
         raise ValueError("manifest field 'task_ids' must contain non-empty strings")
     normalized_task_ids = sorted(task_id.strip() for task_id in task_ids)
@@ -664,12 +482,9 @@ def load_tool_latency_corpus(
 
 
 __all__ = [
-    "SegmentLatencySample",
     "ToolLatencySample",
     "discover_trace_files",
-    "extract_many_segment_latency_samples",
     "extract_many_tool_latency_samples",
-    "extract_segment_latency_samples",
     "extract_tool_latency_samples",
     "load_tool_latency_corpus",
     "read_task_ids",

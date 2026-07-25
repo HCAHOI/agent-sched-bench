@@ -347,9 +347,7 @@ class TraceCollectorHook(AgentHook):
                     float(timing_ts_start)
                     if isinstance(timing_ts_start, int | float)
                     else (
-                        tool_ts_end - duration_ms / 1000
-                        if duration_ms
-                        else tool_ts_end
+                        tool_ts_end - duration_ms / 1000 if duration_ms else tool_ts_end
                     )
                 )
                 action_id_suffix = tc_id if tc_id else tool_name
@@ -365,14 +363,6 @@ class TraceCollectorHook(AgentHook):
                 resource_timeline = resource_timelines.get(tc_id)
                 if resource_timeline is not None:
                     tool_action_data["resource_timeline"] = resource_timeline
-                segment_timelines = getattr(context, "tool_segment_timelines", {})
-                segment_timeline = segment_timelines.get(tc_id)
-                if segment_timeline is not None:
-                    tool_action_data["segment_timeline"] = segment_timeline
-                per_process_records = getattr(context, "tool_per_process_records", {})
-                per_process = per_process_records.get(tc_id)
-                if per_process is not None:
-                    tool_action_data["per_process"] = per_process
                 tool_action = TraceAction(
                     action_type="tool_exec",
                     action_id=f"tool_{context.iteration}_{action_id_suffix}",
@@ -400,8 +390,7 @@ class TraceCollectorHook(AgentHook):
                         {
                             key: value
                             for key, value in context.response.extra.items()
-                            if key != "llm_wall_ts_end"
-                            and not key.startswith("_")
+                            if key != "llm_wall_ts_end" and not key.startswith("_")
                         }
                     )
                     error_data.update(self._extract_trace_llm_fields(context.response))

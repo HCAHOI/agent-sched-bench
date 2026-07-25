@@ -222,8 +222,6 @@ class AgentRunner:
                     new_events,
                     fatal_error,
                     tool_resource_timelines,
-                    tool_segment_timelines,
-                    tool_per_process_records,
                     tool_timings,
                 ) = await self._execute_tools(
                     spec,
@@ -233,12 +231,9 @@ class AgentRunner:
                 tool_events.extend(new_events)
                 context.tool_events = list(new_events)
                 context.tool_resource_timelines = tool_resource_timelines
-                context.tool_segment_timelines = tool_segment_timelines
-                context.tool_per_process_records = tool_per_process_records
                 context.tool_timings = tool_timings
-                preserve_tool_result = (
-                    fatal_error is not None
-                    and getattr(fatal_error, "preserve_tool_result", False)
+                preserve_tool_result = fatal_error is not None and getattr(
+                    fatal_error, "preserve_tool_result", False
                 )
                 if fatal_error is not None and not preserve_tool_result:
                     error = f"Error: {type(fatal_error).__name__}: {fatal_error}"
@@ -533,8 +528,6 @@ class AgentRunner:
         list[dict[str, str]],
         BaseException | None,
         dict[str, dict[str, Any]],
-        dict[str, dict[str, Any]],
-        dict[str, list[dict[str, Any]]],
         dict[str, dict[str, float]],
     ]:
         batches = self._partition_tool_batches(spec, tool_calls)
@@ -545,8 +538,6 @@ class AgentRunner:
                 BaseException | None,
                 str,
                 dict[str, Any] | None,
-                dict[str, Any] | None,
-                list[dict[str, Any]] | None,
                 dict[str, float],
             ]
         ] = []
@@ -569,8 +560,6 @@ class AgentRunner:
         results: list[Any] = []
         events: list[dict[str, str]] = []
         resource_timelines: dict[str, dict[str, Any]] = {}
-        segment_timelines: dict[str, dict[str, Any]] = {}
-        per_process_records: dict[str, list[dict[str, Any]]] = {}
         tool_timings: dict[str, dict[str, float]] = {}
         fatal_error: BaseException | None = None
         for (
@@ -579,8 +568,6 @@ class AgentRunner:
             error,
             tool_call_id,
             resource_timeline,
-            segment_timeline,
-            per_process,
             timing,
         ) in tool_results:
             results.append(result)
@@ -588,10 +575,6 @@ class AgentRunner:
             tool_timings[tool_call_id] = timing
             if resource_timeline is not None:
                 resource_timelines[tool_call_id] = resource_timeline
-            if segment_timeline is not None:
-                segment_timelines[tool_call_id] = segment_timeline
-            if per_process is not None:
-                per_process_records[tool_call_id] = per_process
             if error is not None and fatal_error is None:
                 fatal_error = error
         return (
@@ -599,8 +582,6 @@ class AgentRunner:
             events,
             fatal_error,
             resource_timelines,
-            segment_timelines,
-            per_process_records,
             tool_timings,
         )
 
@@ -615,8 +596,6 @@ class AgentRunner:
         BaseException | None,
         str,
         dict[str, Any] | None,
-        dict[str, Any] | None,
-        list[dict[str, Any]] | None,
         dict[str, float],
     ]:
         started_wall = time.time()
@@ -627,31 +606,21 @@ class AgentRunner:
             event: dict[str, str],
             error: BaseException | None,
             resource_timeline: dict[str, Any] | None,
-            segment_timeline: dict[str, Any] | None = None,
-            per_process: list[dict[str, Any]] | None = None,
         ) -> tuple[
             Any,
             dict[str, str],
             BaseException | None,
             str,
             dict[str, Any] | None,
-            dict[str, Any] | None,
-            list[dict[str, Any]] | None,
             dict[str, float],
         ]:
-            ended_wall = (
-                tool_ended_wall
-                if tool_ended_wall is not None
-                else time.time()
-            )
+            ended_wall = tool_ended_wall if tool_ended_wall is not None else time.time()
             return (
                 result,
                 event,
                 error,
                 tool_call.id,
                 resource_timeline,
-                segment_timeline,
-                per_process,
                 {
                     "ts_start": started_wall,
                     "ts_end": ended_wall,
@@ -686,8 +655,6 @@ class AgentRunner:
 
         resource_recorder: ResourceTimelineRecorder | None = None
         resource_timeline: dict[str, Any] | None = None
-        segment_timeline: dict[str, Any] | None = None
-        per_process: list[dict[str, Any]] | None = None
         telemetry_failure: BaseException | None = None
         try:
             set_call_context = getattr(tool, "set_tool_call_context", None)
@@ -709,9 +676,8 @@ class AgentRunner:
                 else:
                     result = await spec.tools.execute(tool_call.name, params)
             finish_clause_telemetry = getattr(tool, "finish_clause_telemetry", None)
-            if (
-                getattr(tool, "clause_telemetry_enabled", False)
-                and callable(finish_clause_telemetry)
+            if getattr(tool, "clause_telemetry_enabled", False) and callable(
+                finish_clause_telemetry
             ):
                 tool_ended_wall = time.time()
                 try:
@@ -722,12 +688,6 @@ class AgentRunner:
                     else:
                         raise
             resource_timeline = resource_recorder.to_trace_dict()
-            # Side-channel populated only by ContainerExecTool during replay
-            # (see agents/openclaw/tools/container.py); None for every other
-            # tool and for real collection, where segment tracing is disabled.
-            segment_timeline = getattr(tool, "last_segment_timeline", None)
-            # Same side-channel: per-binary process-accounting rows for this exec.
-            per_process = getattr(tool, "last_per_process", None)
         except asyncio.CancelledError:
             raise
         except BaseException as caught:
@@ -736,9 +696,8 @@ class AgentRunner:
                 caught if getattr(caught, "fatal_replay_error", False) else None
             )
             finish_clause_telemetry = getattr(tool, "finish_clause_telemetry", None)
-            if (
-                getattr(tool, "clause_telemetry_enabled", False)
-                and callable(finish_clause_telemetry)
+            if getattr(tool, "clause_telemetry_enabled", False) and callable(
+                finish_clause_telemetry
             ):
                 if tool_ended_wall is None:
                     tool_ended_wall = time.time()
@@ -774,15 +733,12 @@ class AgentRunner:
                 "status": "error",
                 "detail": result.replace("\n", " ").strip()[:120],
             }
-            error = (
-                telemetry_failure
-                or (RuntimeError(result) if spec.fail_on_tool_error else None)
+            error = telemetry_failure or (
+                RuntimeError(result) if spec.fail_on_tool_error else None
             )
             if not result.endswith(TOOL_ERROR_HINT):
                 result += TOOL_ERROR_HINT
-            return finish(
-                result, event, error, resource_timeline, segment_timeline, per_process
-            )
+            return finish(result, event, error, resource_timeline)
 
         detail = "" if result is None else str(result)
         detail = detail.replace("\n", " ").strip()
@@ -795,8 +751,6 @@ class AgentRunner:
             {"name": tool_call.name, "status": "ok", "detail": detail},
             telemetry_failure,
             resource_timeline,
-            segment_timeline,
-            per_process,
         )
 
     @staticmethod
@@ -910,7 +864,9 @@ class AgentRunner:
             return messages
 
         provider_max_tokens = self.provider.generation.max_tokens
-        max_output = provider_max_tokens if isinstance(provider_max_tokens, int) else 4096
+        max_output = (
+            provider_max_tokens if isinstance(provider_max_tokens, int) else 4096
+        )
         budget = spec.context_block_limit or (
             spec.context_window_tokens - max_output - _SNIP_SAFETY_BUFFER
         )

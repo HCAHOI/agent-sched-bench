@@ -127,15 +127,11 @@ async def _run_openclaw_replay_session(
     stdout_path = task_output_dir / "openclaw_host_replay_stdout.txt"
     stderr_path = task_output_dir / "openclaw_host_replay_stderr.txt"
     clause_telemetry_path = task_output_dir / "clause_telemetry.json"
-    prompt = str(loaded.task.get("problem_statement") or "Replay source OpenClaw trace.")
+    prompt = str(
+        loaded.task.get("problem_statement") or "Replay source OpenClaw trace."
+    )
     tool_resource_telemetry = os.environ.get(
         "OPENCLAW_TOOL_RESOURCE_TELEMETRY", "command"
-    )
-    segment_timeline_enabled = (
-        os.environ.get("OPENCLAW_SEGMENT_TIMELINE", "1") == "1"
-    )
-    segment_timeline_requested = (
-        os.environ.get("OPENCLAW_SEGMENT_TIMELINE_REQUESTED", "1") == "1"
     )
     request = {
         "source_trace": str(loaded.source_trace),
@@ -161,13 +157,6 @@ async def _run_openclaw_replay_session(
         },
         "command_timeout_s": command_timeout_s,
         "tool_resource_telemetry": tool_resource_telemetry,
-        "segment_timeline_requested": segment_timeline_requested,
-        "segment_timeline_enabled": segment_timeline_enabled,
-        "segment_timeline_decision": (
-            "disabled_in_clause_mode"
-            if tool_resource_telemetry == "clause"
-            else "as_requested"
-        ),
         "task_instance_id": loaded.task_instance_id,
         "repo": loaded.task.get("repo"),
         "source_action_agent_id": loaded.source_action_agent_id,
@@ -209,13 +198,10 @@ async def _run_openclaw_replay_session(
             "tool_container_id": ctr.container_id,
             "tool_container_user": "unknown",
             "openclaw_host_pid": None,
-            "telemetry_integrity_failed": (
-                tool_resource_telemetry == "clause"
-            ),
+            "telemetry_integrity_failed": (tool_resource_telemetry == "clause"),
         }
-    if (
-        tool_resource_telemetry == "clause"
-        and (worker_returncode != 0 or status.get("success") is not True)
+    if tool_resource_telemetry == "clause" and (
+        worker_returncode != 0 or status.get("success") is not True
     ):
         status["telemetry_integrity_failed"] = True
 
@@ -282,8 +268,12 @@ async def _run_openclaw_replay_session(
         "worker_stdout_path": str(stdout_path),
         "worker_stderr_path": str(stderr_path),
         "worker_trace_path": str(trace_file),
-        "agent_execution_environment": status.get("agent_execution_environment", "host"),
-        "tool_execution_environment": status.get("tool_execution_environment", "task_container"),
+        "agent_execution_environment": status.get(
+            "agent_execution_environment", "host"
+        ),
+        "tool_execution_environment": status.get(
+            "tool_execution_environment", "task_container"
+        ),
         "tool_runtime": status.get("tool_runtime"),
         "tool_container_id": status.get("tool_container_id", ctr.container_id),
         "tool_container_user": status.get("tool_container_user", "unknown"),
@@ -295,18 +285,11 @@ async def _run_openclaw_replay_session(
             {
                 "mode": tool_resource_telemetry,
                 "command_envelope_enabled": tool_resource_telemetry != "off",
-                "clause_observations_enabled": (
-                    tool_resource_telemetry == "clause"
-                ),
-                "segment_timeline_requested": segment_timeline_requested,
-                "segment_timeline_enabled": segment_timeline_enabled,
-                "segment_timeline_decision": request["segment_timeline_decision"],
+                "clause_observations_enabled": (tool_resource_telemetry == "clause"),
             },
         ),
         "clause_telemetry_path": (
-            str(clause_telemetry_path)
-            if tool_resource_telemetry == "clause"
-            else None
+            str(clause_telemetry_path) if tool_resource_telemetry == "clause" else None
         ),
         "telemetry_integrity_failed": bool(
             status.get("telemetry_integrity_failed", False)

@@ -3,16 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
-import os
-import subprocess
 import textwrap
-from dataclasses import dataclass, field
 from typing import Any
 
-from trace_collect.pacct import _ACCT_V3_SIZE, parse_pacct_v3
 from trace_collect.resource_timeline import valid_resource_timeline
 from trace_collect.runtime.task_container import _CONTAINER_PYTHON_CANDIDATES
 
@@ -29,7 +24,6 @@ _AGENT_STOP_GRACE_S = 5.0
 _AGENT_KILL_WAIT_S = 5.0
 _PYTHON_PROBE_TIMEOUT_S = 30.0
 _PYTHON_PROBE_KILL_WAIT_S = 5.0
-_CONTAINER_PACCT_FILE = "/tmp/.openclaw-pacct.log"
 _SOURCE_RUNTIME_ARTIFACT_MARKERS = (
     (
         "/openclaw-runtime/tool-results/tool-results/",
@@ -40,170 +34,6 @@ _SOURCE_RUNTIME_ARTIFACT_MARKERS = (
         "/runtime/tool-results",
     ),
 )
-
-
-@dataclass(slots=True)
-class ContainerPacctSession:
-    """Host-managed process accounting for one replay container."""
-
-    container_id: str
-    container_executable: str
-    path: str = _CONTAINER_PACCT_FILE
-    unavailable: bool = False
-    unavailable_reason: str | None = None
-    overlap_execs: int = 0
-    _next_bracket: int = 0
-    _active_brackets: set[int] = field(default_factory=set, repr=False)
-    _invalid_brackets: set[int] = field(default_factory=set, repr=False)
-
-    def enter_exec(self) -> tuple[int, bool]:
-        """Reserve an attribution interval without serializing replay execution."""
-        token = self._next_bracket
-        self._next_bracket += 1
-        collect = not self._active_brackets
-        if not collect:
-            newly_invalid = self._active_brackets - self._invalid_brackets
-            self.overlap_execs += len(newly_invalid) + 1
-            self._invalid_brackets.update(self._active_brackets)
-            self._invalid_brackets.add(token)
-        self._active_brackets.add(token)
-        return token, collect
-
-    def leave_exec(self, token: int) -> bool:
-        """Return whether ``token`` remained isolated from other execs."""
-        self._active_brackets.remove(token)
-        valid = token not in self._invalid_brackets
-        self._invalid_brackets.discard(token)
-        return valid
-
-
-def _run_container_pacct_python(
-    session: ContainerPacctSession,
-    script: str,
-    *args: str,
-    failure_reason: str,
-) -> subprocess.CompletedProcess[str] | None:
-    try:
-        result = subprocess.run(
-            [
-                session.container_executable,
-                "exec",
-                "--user",
-                "0",
-                session.container_id,
-                "python3",
-                "-c",
-                script,
-                *args,
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_PYTHON_PROBE_TIMEOUT_S,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        session.unavailable = True
-        session.unavailable_reason = failure_reason
-        return None
-    if result.returncode == 0:
-        return result
-    stderr = result.stderr.lower()
-    session.unavailable = True
-    session.unavailable_reason = (
-        "python3_unavailable"
-        if result.returncode == 127 or ("python3" in stderr and "not found" in stderr)
-        else failure_reason
-    )
-    return None
-
-
-def enable_container_pacct(
-    container_id: str,
-    container_executable: str,
-) -> ContainerPacctSession:
-    """Enable acct(2) inside a replay container, failing soft when unavailable."""
-    session = ContainerPacctSession(container_id, container_executable)
-    script = (
-        "import ctypes,sys;"
-        "p=sys.argv[1];"
-        "open(p,'wb').close();"
-        "libc=ctypes.CDLL(None,use_errno=True);"
-        "libc.acct.argtypes=[ctypes.c_char_p];"
-        "libc.acct.restype=ctypes.c_int;"
-        "rc=libc.acct(p.encode());"
-        "rc==0 or (_ for _ in ()).throw(OSError(ctypes.get_errno(),'acct failed'))"
-    )
-    _run_container_pacct_python(
-        session,
-        script,
-        session.path,
-        failure_reason="acct_enable_failed",
-    )
-    return session
-
-
-def container_pacct_begin(session: ContainerPacctSession) -> int | None:
-    """Return the current acct-file byte offset for one exec bracket."""
-    if session.unavailable:
-        return None
-    # The short-lived python3 stat process is itself appended after it prints,
-    # so advance past that fixed-size record as well as the measured file end.
-    result = _run_container_pacct_python(
-        session,
-        f"import os,sys;print(os.path.getsize(sys.argv[1])+{_ACCT_V3_SIZE})",
-        session.path,
-        failure_reason="acct_offset_read_failed",
-    )
-    if result is None:
-        return None
-    try:
-        return int(result.stdout.strip())
-    except ValueError:
-        session.unavailable = True
-        session.unavailable_reason = "acct_offset_invalid"
-        return None
-
-
-def decode_container_pacct_delta(payload: str) -> list[dict[str, Any]]:
-    """Decode one base64 acct-file delta using the canonical host parser."""
-    data = base64.b64decode(payload.encode("ascii"), validate=True)
-    return [
-        {**record.to_row(), "attribution": "offset_delta"}
-        for record in parse_pacct_v3(data)
-    ]
-
-
-def container_pacct_finish(
-    session: ContainerPacctSession,
-    offset: int | None,
-) -> list[dict[str, Any]] | None:
-    """Read and decode records appended since ``offset`` without PID filtering."""
-    if session.unavailable or offset is None:
-        return None
-    script = (
-        "import base64,sys;"
-        "f=open(sys.argv[1],'rb');"
-        "f.seek(int(sys.argv[2]));"
-        "sys.stdout.write(base64.b64encode(f.read()).decode('ascii'));"
-        "f.close()"
-    )
-    result = _run_container_pacct_python(
-        session,
-        script,
-        session.path,
-        str(offset),
-        failure_reason="acct_delta_read_failed",
-    )
-    if result is None:
-        return None
-    try:
-        rows = decode_container_pacct_delta(result.stdout.strip())
-    except (UnicodeEncodeError, ValueError):
-        session.unavailable = True
-        session.unavailable_reason = "acct_delta_invalid"
-        return None
-    # ponytail: descendants killed at timeout may exit after this read and be missed.
-    return rows or None
 
 
 def _unwrap_tool_args(
@@ -307,7 +137,7 @@ def remap_source_runtime_artifact_tool_args(
 # Persistent Python agent script injected into Docker containers; reads JSON-line
 # requests from stdin and writes JSON-line responses to stdout.
 _REPLAY_AGENT_SCRIPT = textwrap.dedent(r"""
-import json, os, sys, subprocess, difflib, signal, time, re, shutil, tempfile, struct
+import json, os, sys, subprocess, difflib, signal, time
 WORKDIR = os.environ.get("OPENCLAW_CONTAINER_WORKDIR", "/testbed") or "/testbed"
 
 def _find_match(content, old_text):
@@ -351,198 +181,6 @@ def _truncate_output(text, limit=_MAX_OUTPUT):
         return text
     half = limit // 2
     return text[:half] + f"\n\n... ({len(text) - limit} chars truncated) ...\n\n" + text[-half:]
-
-# --- Per-binary process accounting (BSD acct v3) -------------------------
-# When OPENCLAW_PACCT=1 the container enables kernel process accounting via
-# acct(2) (needs --cap-add SYS_PACCT on the container). The kernel then appends
-# one 64-byte record per process *exit*, so we attribute a compound command's
-# CPU/memory to the individual binaries it ran (python vs head/wc). This inline
-# decoder is a minimal twin of trace_collect/pacct.py (the canonical, tested
-# copy) — the replay server is a standalone `python -c` with no repo import, so
-# keep the two struct layouts in sync. AHZ is a fixed kernel constant of 100.
-_PACCT_ENABLED = os.environ.get("OPENCLAW_PACCT") == "1"
-_PACCT_FILE = "/tmp/.openclaw-pacct.log"
-_PACCT_FMT = "<bbHIIIIIIfHHHHHHHH16s"
-_PACCT_SIZE = struct.calcsize(_PACCT_FMT)  # 64
-
-def _pacct_enable():
-    global _PACCT_ENABLED
-    if not _PACCT_ENABLED:
-        return
-    try:
-        import ctypes, ctypes.util
-        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
-        open(_PACCT_FILE, "wb").close()
-        if libc.acct(_PACCT_FILE.encode()) != 0:
-            raise OSError(ctypes.get_errno(), "acct(2) failed")
-    except Exception as exc:
-        _PACCT_ENABLED = False
-        sys.stderr.write("[pacct] disabled: %s\n" % exc)
-        sys.stderr.flush()
-
-def _pacct_decomp(v):
-    return (v & 0x1FFF) << (3 * ((v >> 13) & 0x7))
-
-def _pacct_parse(data):
-    usable = len(data) - (len(data) % _PACCT_SIZE)
-    rows = []
-    for o in range(0, usable, _PACCT_SIZE):
-        f = struct.unpack(_PACCT_FMT, data[o:o + _PACCT_SIZE])
-        if f[1] != 3:
-            continue
-        rows.append({
-            "comm": f[18].split(b"\0", 1)[0].decode("latin1"),
-            "pid": f[6], "ppid": f[7], "exitcode": f[3],
-            "utime_s": round(_pacct_decomp(f[10]) / 100.0, 3),
-            "stime_s": round(_pacct_decomp(f[11]) / 100.0, 3),
-            "avg_mem_kb": _pacct_decomp(f[12]),
-        })
-    return rows
-
-def _pacct_filter_subtree(rows, root_pid):
-    # Keep root_pid's subtree (itself + descendants) resolved within this exit
-    # batch, so a lingering `&` job from an earlier command (its shell absent
-    # here) is dropped. ponytail: fixpoint over one small per-exec batch.
-    kept = {root_pid}
-    changed = True
-    while changed:
-        changed = False
-        for r in rows:
-            if r["pid"] not in kept and r["ppid"] in kept:
-                kept.add(r["pid"]); changed = True
-    return [r for r in rows if r["pid"] in kept]
-
-def _pacct_begin():
-    # Byte offset of the current end-of-file: records before it belong to prior
-    # (or between-exec) work and are skipped, not misattributed to this command.
-    if not _PACCT_ENABLED:
-        return None
-    try:
-        return os.path.getsize(_PACCT_FILE)
-    except OSError:
-        return None
-
-def _pacct_finish(off0, root_pid=None):
-    if off0 is None:
-        return None
-    try:
-        with open(_PACCT_FILE, "rb") as fh:
-            fh.seek(off0)
-            data = fh.read()
-    except OSError:
-        return None
-    rows = _pacct_parse(data)
-    if root_pid is not None:
-        rows = _pacct_filter_subtree(rows, root_pid)
-    return rows or None
-
-# --- Per-segment (atom) command timing telemetry (v2) --------------------
-# Chained commands ("cd X && make && pytest") arrive as one exec call. When
-# enabled we re-run the *unmodified* command under `bash -x -c` with xtrace
-# redirected to a dedicated fd (BASH_XTRACEFD), so per-top-level-segment start
-# timestamps land in a file the command itself never sees. PS4 embeds
-# $EPOCHREALTIME; bash replicates PS4's first char per nesting level, so lines
-# with exactly one leading '+' are the top-level segments. Best-effort: absent
-# bash or the flag, the untouched /bin/sh path runs and telemetry is recorded
-# as absent -- replay never fails because timing hiccupped.
-# ponytail: nested `bash -x` inside a replayed command inherits PS4/BASH_XTRACEFD
-# and could add spurious depth-1 lines; rare, caught at extraction via
-# raw_total_ms reconciliation. Upgrade path: per-invocation trace-fd tagging.
-_SEGMENT_TIMELINE_VERSION = 2
-_SEGMENT_TIMELINE_ENABLED = os.environ.get("OPENCLAW_SEGMENT_TIMELINE") == "1"
-_SEGMENT_BASH_PATH = shutil.which("bash") if _SEGMENT_TIMELINE_ENABLED else None
-_SEGMENT_TRACE_DIR = os.environ.get("TMPDIR") or "/tmp"
-_SEGMENT_LINE_RE = re.compile(r"^(\++)(\d+[.,]\d+)\s(.*)$")
-
-
-def _segment_absent(reason):
-    return {
-        "version": _SEGMENT_TIMELINE_VERSION,
-        "telemetry_absent": True,
-        "reason": reason,
-    }
-
-
-def _segments_from_xtrace(text, start_wall, end_wall):
-    # ponytail: sequential-operator ceiling -- pipeline members (a | b) both
-    # emit depth-1 lines but run CONCURRENTLY, so their derived durations are
-    # fictitious (first ~0ms, last gets the span); loop headers re-emit per
-    # iteration. Durations are trustworthy only for && / ; / newline chains;
-    # downstream analyses must filter on the parent command (see CLAUDE.md).
-    events = []
-    for line in text.splitlines():
-        match = _SEGMENT_LINE_RE.match(line)
-        if match is None or len(match.group(1)) != 1:
-            continue
-        events.append((float(match.group(2).replace(",", ".")), match.group(3)))
-    if not events:
-        return _segment_absent("no_segments_traced")
-    segments = []
-    for index, (epoch, command_text) in enumerate(events):
-        t_start_ms = (epoch - start_wall) * 1000.0
-        next_epoch = events[index + 1][0] if index + 1 < len(events) else end_wall
-        t_end_ms = (next_epoch - start_wall) * 1000.0
-        segments.append({
-            "segment_index": index,
-            "command_text": command_text,
-            "t_start_ms": round(t_start_ms, 3),
-            "t_end_ms": round(t_end_ms, 3),
-        })
-    return {
-        "version": _SEGMENT_TIMELINE_VERSION,
-        "source": "bash_xtrace_epochrealtime",
-        "segments": segments,
-        "segment_count": len(segments),
-        "raw_total_ms": round((end_wall - start_wall) * 1000.0, 3),
-    }
-
-
-def _open_segment_trace():
-    if not _SEGMENT_TIMELINE_ENABLED or not _SEGMENT_BASH_PATH:
-        return None
-    fd, path = tempfile.mkstemp(prefix=".openclaw-segtrace.", dir=_SEGMENT_TRACE_DIR)
-    return (fd, path)
-
-
-def _shell_launch(cmd, env, seg):
-    # seg is None -> identical to the historical /bin/sh -c path (shell=True).
-    if seg is None:
-        return cmd, {"shell": True, "env": env}
-    fd, _path = seg
-    traced_env = dict(env)
-    traced_env["BASH_XTRACEFD"] = str(fd)
-    # PS4 must be a bash-internal assignment, not an inherited env var: on the
-    # bash builds observed in real task containers, an env-inherited PS4 is
-    # captured once at shell startup (before EPOCHREALTIME is live) and never
-    # re-expanded per xtrace line, silently freezing every timestamp empty.
-    # A PS4 assignment in the script body, before `set -x`, gets bash's normal
-    # per-line re-expansion. Verified live in a real task container (bash
-    # 5.2.15): env-set PS4 -> "+ cmd" (no timestamp); script-body PS4 ->
-    # "+<epoch> cmd" (real timestamps).
-    preamble = "PS4='+$EPOCHREALTIME '\nset -x\n"
-    return [_SEGMENT_BASH_PATH, "-c", preamble + cmd], {
-        "env": traced_env,
-        "pass_fds": (fd,),
-    }
-
-
-def _finish_segment_trace(seg, start_wall, end_wall):
-    fd, path = seg
-    try:
-        os.close(fd)
-    except OSError:
-        pass
-    try:
-        with open(path, encoding="utf-8", errors="replace") as handle:
-            result = _segments_from_xtrace(handle.read(), start_wall, end_wall)
-    except OSError as exc:
-        result = _segment_absent("trace_read_error: %s" % exc)
-    try:
-        os.unlink(path)
-    except OSError:
-        pass
-    return result
-
 
 _RESOURCE_CPU_RATE_EPS_CORE = 0.05
 _RESOURCE_NET_RATE_EPS_BPS = 1024.0
@@ -760,115 +398,88 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
         min(_RESOURCE_STALL_MAX_S, timeout_s),
     )
     start_new_session = hasattr(os, "setsid")
-    seg = _open_segment_trace()
-
-    def _finalize(resp, start_wall):
-        if seg is not None:
-            resp["segment_timeline"] = _finish_segment_trace(
-                seg, start_wall, time.time()
+    process = subprocess.Popen(
+        cmd,
+        shell=True,
+        env=env,
+        cwd=WORKDIR,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True,
+        start_new_session=start_new_session,
+    )
+    virtual_time_s = 0.0
+    last_counters = _read_resource_counters()
+    last_progress_wall_s = last_counters["time_s"]
+    while True:
+        try:
+            stdout, stderr = process.communicate(timeout=_RESOURCE_SAMPLE_INTERVAL_S)
+            output = (stdout or "") + (stderr or "")
+            return {
+                "ok": True,
+                "result": _truncate_output(output),
+                "stdout": _truncate_output(stdout or ""),
+                "stderr": _truncate_output(stderr or ""),
+                "returncode": process.returncode,
+                "resource_timeout_policy": "resource_integrated",
+                "resource_virtual_time_s": round(virtual_time_s, 6),
+            }
+        except subprocess.TimeoutExpired:
+            current_counters = _read_resource_counters()
+            wall_dt_s = max(0.0, current_counters["time_s"] - last_counters["time_s"])
+            deltas = {
+                "cpu_core_s": _counter_delta(last_counters, current_counters, "cpu_usage_s"),
+                "rx_bytes": _counter_delta(last_counters, current_counters, "rx_bytes"),
+                "tx_bytes": _counter_delta(last_counters, current_counters, "tx_bytes"),
+            }
+            progress_s = _resource_progress_increment(
+                samples,
+                virtual_time_s,
+                wall_dt_s,
+                deltas,
             )
-        per_process = _pacct_finish(pacct_off0, process.pid)
-        if per_process is not None:
-            resp["per_process"] = per_process
-        return resp
-
-    try:
-        launch_args, launch_kwargs = _shell_launch(cmd, env, seg)
-        start_wall = time.time()
-        pacct_off0 = _pacct_begin()
-        process = subprocess.Popen(
-            launch_args,
-            cwd=WORKDIR,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            universal_newlines=True,
-            start_new_session=start_new_session,
-            **launch_kwargs,
-        )
-        virtual_time_s = 0.0
-        last_counters = _read_resource_counters()
-        last_progress_wall_s = last_counters["time_s"]
-        while True:
-            try:
-                stdout, stderr = process.communicate(timeout=_RESOURCE_SAMPLE_INTERVAL_S)
+            virtual_time_s += progress_s
+            if progress_s > _RESOURCE_PROGRESS_EPS_S:
+                last_progress_wall_s = current_counters["time_s"]
+            if virtual_time_s >= timeout_s:
+                stdout, stderr = _kill_and_drain_process_group(process)
                 output = (stdout or "") + (stderr or "")
-                resp = {
-                    "ok": True,
-                    "result": _truncate_output(output),
+                if output:
+                    output = _truncate_output(output) + "\n[resource_timeout]"
+                else:
+                    output = "[resource_timeout]"
+                return {
+                    "ok": False,
+                    "result": output,
                     "stdout": _truncate_output(stdout or ""),
                     "stderr": _truncate_output(stderr or ""),
-                    "returncode": process.returncode,
+                    "returncode": 124,
                     "resource_timeout_policy": "resource_integrated",
                     "resource_virtual_time_s": round(virtual_time_s, 6),
                 }
-                _finalize(resp, start_wall)
-                seg = None
-                return resp
-            except subprocess.TimeoutExpired:
-                current_counters = _read_resource_counters()
-                wall_dt_s = max(0.0, current_counters["time_s"] - last_counters["time_s"])
-                deltas = {
-                    "cpu_core_s": _counter_delta(last_counters, current_counters, "cpu_usage_s"),
-                    "rx_bytes": _counter_delta(last_counters, current_counters, "rx_bytes"),
-                    "tx_bytes": _counter_delta(last_counters, current_counters, "tx_bytes"),
+            stalled_s = current_counters["time_s"] - last_progress_wall_s
+            if stalled_s >= stall_timeout_s and _resource_has_active_demand(
+                samples,
+                virtual_time_s,
+            ):
+                stdout, stderr = _kill_and_drain_process_group(process)
+                output = (stdout or "") + (stderr or "")
+                marker = "[resource_stall_timeout]"
+                if output:
+                    output = _truncate_output(output) + "\n" + marker
+                else:
+                    output = marker
+                return {
+                    "ok": False,
+                    "result": output,
+                    "stdout": _truncate_output(stdout or ""),
+                    "stderr": _truncate_output(stderr or ""),
+                    "returncode": 124,
+                    "resource_timeout_policy": "resource_integrated",
+                    "resource_virtual_time_s": round(virtual_time_s, 6),
+                    "resource_stall_s": round(stalled_s, 6),
                 }
-                progress_s = _resource_progress_increment(
-                    samples,
-                    virtual_time_s,
-                    wall_dt_s,
-                    deltas,
-                )
-                virtual_time_s += progress_s
-                if progress_s > _RESOURCE_PROGRESS_EPS_S:
-                    last_progress_wall_s = current_counters["time_s"]
-                if virtual_time_s >= timeout_s:
-                    stdout, stderr = _kill_and_drain_process_group(process)
-                    output = (stdout or "") + (stderr or "")
-                    if output:
-                        output = _truncate_output(output) + "\n[resource_timeout]"
-                    else:
-                        output = "[resource_timeout]"
-                    resp = {
-                        "ok": False,
-                        "result": output,
-                        "stdout": _truncate_output(stdout or ""),
-                        "stderr": _truncate_output(stderr or ""),
-                        "returncode": 124,
-                        "resource_timeout_policy": "resource_integrated",
-                        "resource_virtual_time_s": round(virtual_time_s, 6),
-                    }
-                    _finalize(resp, start_wall)
-                    seg = None
-                    return resp
-                stalled_s = current_counters["time_s"] - last_progress_wall_s
-                if stalled_s >= stall_timeout_s and _resource_has_active_demand(
-                    samples,
-                    virtual_time_s,
-                ):
-                    stdout, stderr = _kill_and_drain_process_group(process)
-                    output = (stdout or "") + (stderr or "")
-                    marker = "[resource_stall_timeout]"
-                    if output:
-                        output = _truncate_output(output) + "\n" + marker
-                    else:
-                        output = marker
-                    resp = {
-                        "ok": False,
-                        "result": output,
-                        "stdout": _truncate_output(stdout or ""),
-                        "stderr": _truncate_output(stderr or ""),
-                        "returncode": 124,
-                        "resource_timeout_policy": "resource_integrated",
-                        "resource_virtual_time_s": round(virtual_time_s, 6),
-                        "resource_stall_s": round(stalled_s, 6),
-                    }
-                    _finalize(resp, start_wall)
-                    seg = None
-                    return resp
-                last_counters = current_counters
-    finally:
-        if seg is not None:
-            _finish_segment_trace(seg, 0.0, 0.0)
+            last_counters = current_counters
 
 
 def handle_exec(args):
@@ -883,54 +494,38 @@ def handle_exec(args):
     )
     if resource_response is not None:
         return resource_response
-    seg = _open_segment_trace()
+    process = subprocess.Popen(
+        cmd,
+        shell=True,
+        env=env,
+        cwd=WORKDIR,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True,
+        start_new_session=hasattr(os, "setsid"),
+    )
     try:
-        launch_args, launch_kwargs = _shell_launch(cmd, env, seg)
-        start_wall = time.time()
-        pacct_off0 = _pacct_begin()
-        process = subprocess.Popen(
-            launch_args,
-            cwd=WORKDIR,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            universal_newlines=True,
-            start_new_session=hasattr(os, "setsid"),
-            **launch_kwargs,
-        )
-        try:
-            stdout, stderr = process.communicate(timeout=timeout)
-            end_wall = time.time()
-            output = (stdout or "") + (stderr or "")
-            resp = {
-                "ok": True,
-                "result": _truncate_output(output),
-                "stdout": _truncate_output(stdout or ""),
-                "stderr": _truncate_output(stderr or ""),
-                "returncode": process.returncode,
-            }
-        except subprocess.TimeoutExpired:
-            _kill_and_drain_process_group(process)
-            end_wall = time.time()
-            resp = {
-                "ok": False,
-                "result": "[timeout]",
-                "stdout": "",
-                "stderr": "",
-                "returncode": 124,
-            }
+        stdout, stderr = process.communicate(timeout=timeout)
+        output = (stdout or "") + (stderr or "")
+        return {
+            "ok": True,
+            "result": _truncate_output(output),
+            "stdout": _truncate_output(stdout or ""),
+            "stderr": _truncate_output(stderr or ""),
+            "returncode": process.returncode,
+        }
+    except subprocess.TimeoutExpired:
         # The process-group kill and communicate() above complete before the
         # response is returned, so clause telemetry can observe causal exits for
         # the shell and all ordinary descendants before finalizing the call.
-        per_process = _pacct_finish(pacct_off0, process.pid)
-        if per_process is not None:
-            resp["per_process"] = per_process
-        if seg is not None:
-            resp["segment_timeline"] = _finish_segment_trace(seg, start_wall, end_wall)
-            seg = None
-        return resp
-    finally:
-        if seg is not None:
-            _finish_segment_trace(seg, 0.0, 0.0)
+        _kill_and_drain_process_group(process)
+        return {
+            "ok": False,
+            "result": "[timeout]",
+            "stdout": "",
+            "stderr": "",
+            "returncode": 124,
+        }
 
 def handle_commands(args):
     cmds = args.get("commands", [])
@@ -1112,8 +707,6 @@ HANDLERS = {
 
 signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
 
-_pacct_enable()
-
 for line in sys.stdin:
     line = line.strip()
     if not line:
@@ -1207,7 +800,6 @@ class ContainerAgent:
         pythonpath: str | None = None,
         python_runtime: str | None = None,
         workdir: str = "/testbed",
-        forward_pacct: bool = True,
     ) -> None:
         self._container_id = container_id
         self._executable = container_executable
@@ -1216,7 +808,6 @@ class ContainerAgent:
         self._python_runtime: str = python_runtime or "python3"
         self._pythonpath: str | None = pythonpath
         self._workdir = workdir or "/testbed"
-        self._forward_pacct = forward_pacct
         self._lock = asyncio.Lock()
 
     async def _probe_python(self) -> str:
@@ -1304,16 +895,6 @@ class ContainerAgent:
         if self._pythonpath:
             cmd.extend(["-e", f"PYTHONPATH={self._pythonpath}"])
         cmd.extend(["-e", f"OPENCLAW_CONTAINER_WORKDIR={self._workdir}"])
-        # Forward the simulate-only segment-timeline toggle into the container.
-        # The collect CLI never sets it, so the collect exec path is unchanged.
-        segment_flag = os.environ.get("OPENCLAW_SEGMENT_TIMELINE")
-        if segment_flag is not None:
-            cmd.extend(["-e", f"OPENCLAW_SEGMENT_TIMELINE={segment_flag}"])
-        # Forward the per-binary process-accounting toggle (needs --cap-add
-        # SYS_PACCT on the container, added by the simulate driver).
-        pacct_flag = os.environ.get("OPENCLAW_PACCT")
-        if self._forward_pacct and pacct_flag is not None:
-            cmd.extend(["-e", f"OPENCLAW_PACCT={pacct_flag}"])
         cmd.extend(
             [
                 self._container_id,
@@ -1572,7 +1153,9 @@ def _resolve_tool_request(
             "args": {
                 "path": params.get("path", "."),
                 "recursive": bool(params.get("recursive", False)),
-                "max_entries": int(params.get("max_entries") or _CONTAINER_LIST_DEFAULT_MAX),
+                "max_entries": int(
+                    params.get("max_entries") or _CONTAINER_LIST_DEFAULT_MAX
+                ),
             },
         }, command_timeout_s
 
@@ -1585,8 +1168,6 @@ def _trace_tool_response_metadata(resp: dict[str, Any]) -> dict[str, Any]:
         "resource_timeout_policy",
         "resource_virtual_time_s",
         "resource_stall_s",
-        "segment_timeline",
-        "per_process",
     ):
         if key in resp:
             metadata[key] = resp[key]

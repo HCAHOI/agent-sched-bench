@@ -103,7 +103,6 @@ logger = logging.getLogger(__name__)
 GLOBAL_CONTAINER_RESOURCE_SAMPLE_INTERVAL_S = 1.0
 _SHARED_SEMAPHORE_POLL_S = 0.05
 _REPLAY_START_DELAY_S = 0.1
-_CONTAINER_PACCT_SESSIONS: dict[str, Any] = {}
 __all__ = (
     "LLMTimingConfig",
     "LoadedTraceSession",
@@ -247,62 +246,28 @@ async def _exec_tool(
     Returns:
         (tool_result, tool_duration_ms, tool_success, replay_metadata)
     """
-    from trace_collect.openclaw_tools import (
-        container_pacct_begin,
-        container_pacct_finish,
-        execute_trace_tool_detailed,
-    )
+    from trace_collect.openclaw_tools import execute_trace_tool_detailed
 
-    pacct_session = getattr(agent, "_container_pacct_session", None)
-    pacct_token = None
-    pacct_collect = False
-    pacct_offset = None
-    if pacct_session is not None and _tool_uses_exec_semantics(
-        tool_name, tool_args_json
-    ):
-        pacct_token, pacct_collect = pacct_session.enter_exec()
-        if pacct_collect:
-            pacct_offset = await asyncio.to_thread(
-                container_pacct_begin,
-                pacct_session,
-            )
     t0 = time.monotonic()
-    pacct_interval_valid = True
-    try:
-        (
-            tool_result,
-            tool_success,
-            inner_duration_ms,
-            tool_metadata,
-        ) = await execute_trace_tool_detailed(
-            agent=agent,
-            tool_name=tool_name,
-            tool_args_json=tool_args_json,
-            command_timeout_s=command_timeout_s,
-            source_exec_timeout_s=source_exec_timeout_s,
-            allow_source_runtime_artifacts=allow_source_runtime_artifacts,
-            source_resource_timeline=source_resource_timeline,
-        )
-    finally:
-        per_process = (
-            await asyncio.to_thread(
-                container_pacct_finish,
-                pacct_session,
-                pacct_offset,
-            )
-            if pacct_collect
-            else None
-        )
-        if pacct_token is not None:
-            pacct_interval_valid = pacct_session.leave_exec(pacct_token)
-    if not pacct_interval_valid:
-        per_process = None
-        tool_metadata["per_process_unavailable_reason"] = "overlapping_exec"
-    if per_process is not None:
-        tool_metadata["per_process"] = per_process
+    (
+        tool_result,
+        tool_success,
+        inner_duration_ms,
+        tool_metadata,
+    ) = await execute_trace_tool_detailed(
+        agent=agent,
+        tool_name=tool_name,
+        tool_args_json=tool_args_json,
+        command_timeout_s=command_timeout_s,
+        source_exec_timeout_s=source_exec_timeout_s,
+        allow_source_runtime_artifacts=allow_source_runtime_artifacts,
+        source_resource_timeline=source_resource_timeline,
+    )
     wall_duration_ms = (time.monotonic() - t0) * 1000
     # Prefer agent-side timing to exclude pipe transfer overhead
-    duration_ms = inner_duration_ms if inner_duration_ms is not None else wall_duration_ms
+    duration_ms = (
+        inner_duration_ms if inner_duration_ms is not None else wall_duration_ms
+    )
     return tool_result, duration_ms, tool_success, tool_metadata
 
 
@@ -406,9 +371,7 @@ def _tool_uses_exec_semantics(tool_name: str | None, tool_args_json: Any) -> boo
         payload = _exec_semantics_payload(tool_name, tool_args_json)
         return payload is None or "command" in payload or "commands" in payload
     payload = _exec_semantics_payload(tool_name, tool_args_json)
-    return isinstance(payload, dict) and (
-        "command" in payload or "commands" in payload
-    )
+    return isinstance(payload, dict) and ("command" in payload or "commands" in payload)
 
 
 def _tool_uses_single_exec_command_semantics(
@@ -447,8 +410,6 @@ def _is_replay_wrapper_timeout_result(tool_result: str) -> bool:
         "[resource_stall_timeout]",
     }
     return any(line.strip() in timeout_markers for line in tool_result.splitlines())
-
-
 
 
 def _source_exec_timeout_s(
@@ -636,7 +597,9 @@ def _replay_fixed_image_name(
     task_output_dir: Path,
 ) -> str:
     label = _sanitize_run_label(agent_id).lower()[:64]
-    digest = hashlib.sha1(str(task_output_dir.resolve()).encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha1(str(task_output_dir.resolve()).encode("utf-8")).hexdigest()[
+        :12
+    ]
     return f"{fixed_image_name_for(source_image)}:simulate-{label}-{digest}"
 
 
@@ -780,9 +743,7 @@ def _validate_session_dependencies(sessions: list[LoadedTraceSession]) -> None:
                 + ", ".join(repr(dep) for dep in missing)
             )
         if session.task_instance_id in session.depends_on:
-            raise SimulateError(
-                f"Task {session.task_instance_id!r} depends on itself"
-            )
+            raise SimulateError(f"Task {session.task_instance_id!r} depends on itself")
         graph[session.task_instance_id] = session.depends_on
 
     visiting: set[str] = set()
@@ -881,7 +842,9 @@ def _validate_loaded_sessions(
 
         for action in session.actions:
             action_id = str(action.get("action_id", ""))
-            ts_start, ts_end = _coerce_action_bounds(action, source_trace=session.source_trace)
+            ts_start, ts_end = _coerce_action_bounds(
+                action, source_trace=session.source_trace
+            )
             if ts_end < ts_start:
                 raise SimulateError(
                     f"{session.source_trace} action {action_id!r} has ts_end < ts_start"
@@ -1113,7 +1076,9 @@ def _terminal_bench_compose_file(task_dir: Path) -> Path:
         candidate = task_dir / name
         if candidate.exists():
             return candidate
-    raise SimulateError(f"Terminal-Bench task has no docker-compose.yaml/yml: {task_dir}")
+    raise SimulateError(
+        f"Terminal-Bench task has no docker-compose.yaml/yml: {task_dir}"
+    )
 
 
 def _run_terminal_bench_compose(
@@ -1121,7 +1086,6 @@ def _run_terminal_bench_compose(
     container_executable: str,
     project: str,
     compose_file: Path,
-    compose_override: Path | None = None,
     env: dict[str, str],
     args: list[str],
 ) -> str:
@@ -1133,8 +1097,6 @@ def _run_terminal_bench_compose(
         "-f",
         str(compose_file),
     ]
-    if compose_override is not None:
-        cmd.extend(["-f", str(compose_override)])
     cmd.extend(args)
     result = subprocess.run(
         cmd,
@@ -1213,7 +1175,9 @@ def _validate_container_workdir(
         )
     resolved = result.stdout.strip()
     if not resolved:
-        raise RuntimeError(f"container workdir probe returned no pwd for {container_id[:12]}")
+        raise RuntimeError(
+            f"container workdir probe returned no pwd for {container_id[:12]}"
+        )
     return resolved
 
 
@@ -1306,7 +1270,6 @@ async def _prepare_terminal_bench_container_session(
     container_workdir = "/testbed"
     container_python_runtime: str | None = None
     container_pythonpath: str | None = None
-    compose_override: Path | None = None
     try:
         phase = recorder.start_phase("materialize_terminal_bench_task")
         try:
@@ -1315,12 +1278,6 @@ async def _prepare_terminal_bench_container_session(
             task_runtime_dir.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(source_dir, task_runtime_dir)
             compose_file = _terminal_bench_compose_file(task_runtime_dir).resolve()
-            if os.environ.get("OPENCLAW_PACCT") == "1":
-                compose_override = task_runtime_dir / "docker-compose.pacct.yaml"
-                compose_override.write_text(
-                    "services:\n  client:\n    cap_add:\n      - SYS_PACCT\n",
-                    encoding="utf-8",
-                )
             dockerfile = task_runtime_dir / "Dockerfile"
             if not dockerfile.exists():
                 raise SimulateError(
@@ -1332,9 +1289,6 @@ async def _prepare_terminal_bench_container_session(
                     "source_dir": str(source_dir),
                     "runtime_dir": str(task_runtime_dir),
                     "compose_file": str(compose_file),
-                    "compose_override": (
-                        str(compose_override) if compose_override is not None else None
-                    ),
                     "dockerfile": str(dockerfile),
                     "compose_project": project,
                     "compose_env": env_values,
@@ -1349,7 +1303,6 @@ async def _prepare_terminal_bench_container_session(
             container_executable=container_executable,
             project=project,
             compose_file=compose_file,
-            compose_override=compose_override,
             env=compose_env,
             args=["down", "--volumes", "--remove-orphans"],
         )
@@ -1360,7 +1313,6 @@ async def _prepare_terminal_bench_container_session(
                 container_executable=container_executable,
                 project=project,
                 compose_file=compose_file,
-                compose_override=compose_override,
                 env=compose_env,
                 args=["build"],
             )
@@ -1376,7 +1328,6 @@ async def _prepare_terminal_bench_container_session(
                 container_executable=container_executable,
                 project=project,
                 compose_file=compose_file,
-                compose_override=compose_override,
                 env=compose_env,
                 args=["up", "-d"],
             )
@@ -1392,12 +1343,13 @@ async def _prepare_terminal_bench_container_session(
                 container_executable=container_executable,
                 project=project,
                 compose_file=compose_file,
-                compose_override=compose_override,
                 env=compose_env,
                 args=["ps", "-q", "client"],
             )
             if not container_id:
-                raise RuntimeError("docker compose ps -q client returned no container id")
+                raise RuntimeError(
+                    "docker compose ps -q client returned no container id"
+                )
             recorder.container_id = container_id
             recorder.finish_phase(
                 phase,
@@ -1547,9 +1499,7 @@ async def _prepare_container_session(
     try:
         phase = recorder.start_phase("ensure_fixed_image")
         try:
-            fixed_name = (
-                fixed_images_by_source or {}
-            ).get(normalized)
+            fixed_name = (fixed_images_by_source or {}).get(normalized)
             if fixed_name is not None:
                 cleanup_fixed_image = False
                 fixed_elapsed_s = 0.0
@@ -1602,10 +1552,6 @@ async def _prepare_container_session(
                 f"agent-sched-bench.output_dir={task_output_dir}",
             ]
             extra_args.extend(start_extra_args or [])
-            if os.environ.get("OPENCLAW_PACCT") == "1":
-                # Grant CAP_SYS_PACCT so the in-container replay server can call
-                # acct(2) for per-binary process accounting.
-                extra_args.extend(["--cap-add", "SYS_PACCT"])
             container_id = await asyncio.to_thread(
                 start_task_container,
                 fixed_name,
@@ -1655,7 +1601,6 @@ async def _prepare_container_session(
                 python_runtime=None,
                 pythonpath=None,
                 workdir="/testbed",
-                forward_pacct=False,
             )
             phase = recorder.start_phase("container_agent_start")
             try:
@@ -1678,12 +1623,17 @@ async def _prepare_container_session(
         try:
             recorder.write(status="failed", error=exc)
         except (Exception, asyncio.CancelledError):
-            logger.exception("Failed to write container startup failure artifact for %s", loaded.agent_id)
+            logger.exception(
+                "Failed to write container startup failure artifact for %s",
+                loaded.agent_id,
+            )
         if agent is not None:
             try:
                 await agent.stop()
             except (Exception, asyncio.CancelledError):
-                logger.exception("Failed to stop container agent for %s", loaded.agent_id)
+                logger.exception(
+                    "Failed to stop container agent for %s", loaded.agent_id
+                )
         container_stopped = False
         if container_id is not None:
             try:
@@ -1695,7 +1645,9 @@ async def _prepare_container_session(
                 container_stopped = True
             except (Exception, asyncio.CancelledError) as cleanup_exc:
                 cleanup_errors.append(cleanup_exc)
-                logger.exception("Failed to stop startup container for %s", loaded.agent_id)
+                logger.exception(
+                    "Failed to stop startup container for %s", loaded.agent_id
+                )
         if (
             cleanup_fixed_image
             and recorder.fixed_image is not None
@@ -1779,7 +1731,6 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
             )
             raise resource_write_error
         return
-    _CONTAINER_PACCT_SESSIONS.pop(ctr.container_id, None)
     prepared.container = None
     agent_stop_error: BaseException | None = None
     container_stop_error: BaseException | None = None
@@ -1990,15 +1941,10 @@ async def _prewarm_replay_agents_for_batch(
             python_runtime=ctr.python_runtime,
             pythonpath=ctr.pythonpath,
             workdir=ctr.workdir,
-            forward_pacct=False,
         )
         for _ in runnable_actions[1:]
     ]
     if extra_agents:
-        pacct_session = _CONTAINER_PACCT_SESSIONS.get(ctr.container_id)
-        if pacct_session is not None:
-            for agent in extra_agents:
-                agent._container_pacct_session = pacct_session
         ctr.extra_agents.extend(extra_agents)
         await asyncio.gather(*(agent.start() for agent in extra_agents))
         assignments.update(
@@ -2008,60 +1954,6 @@ async def _prewarm_replay_agents_for_batch(
             }
         )
     return assignments
-
-
-def _pacct_trace_metadata(prepared: PreparedTraceSession) -> dict[str, Any]:
-    ctr = prepared.container
-    if ctr is None:
-        return {}
-    pacct_session = _CONTAINER_PACCT_SESSIONS.get(ctr.container_id)
-    if pacct_session is None:
-        return {}
-    metadata: dict[str, Any] = {
-        "pacct_unavailable": pacct_session.unavailable,
-        "pacct_attribution": "offset_delta",
-    }
-    if pacct_session.unavailable_reason is not None:
-        metadata["pacct_unavailable_reason"] = pacct_session.unavailable_reason
-    if pacct_session.overlap_execs:
-        metadata["pacct_overlap_execs"] = pacct_session.overlap_execs
-    return metadata
-
-
-def _split_trace_by_agent_with_pacct(
-    combined_path: Path,
-    sessions: list[PreparedTraceSession],
-) -> None:
-    metadata_by_agent = {
-        prepared.loaded.run_instance_id: _pacct_trace_metadata(prepared)
-        for prepared in sessions
-    }
-    _split_trace_by_agent(
-        combined_path,
-        sessions,
-        metadata_by_agent=metadata_by_agent,
-    )
-
-
-async def _enable_replay_container_pacct(
-    prepared: PreparedTraceSession,
-) -> None:
-    ctr = prepared.container
-    if (
-        ctr is None
-        or os.environ.get("OPENCLAW_PACCT") != "1"
-    ):
-        return
-    from trace_collect.openclaw_tools import enable_container_pacct
-
-    pacct_session = await asyncio.to_thread(
-        enable_container_pacct,
-        ctr.container_id,
-        ctr.container_executable,
-    )
-    _CONTAINER_PACCT_SESSIONS[ctr.container_id] = pacct_session
-    if ctr.agent is not None:
-        ctr.agent._container_pacct_session = pacct_session
 
 
 def _validate_llm_timing_config(
@@ -2117,7 +2009,9 @@ async def _prepare_replay_session(
             )
         else:
             if container_executable is None:
-                raise ValueError("container_executable is required for replay task containers")
+                raise ValueError(
+                    "container_executable is required for replay task containers"
+                )
             if _is_terminal_bench_registry_task(loaded):
                 prepared = await _prepare_terminal_bench_container_session(
                     loaded,
@@ -2141,7 +2035,6 @@ async def _prepare_replay_session(
                 await _restore_source_runtime_artifacts(prepared)
             prepared.task_output_dir = task_output_dir
         if prepared.container is not None:
-            await _enable_replay_container_pacct(prepared)
             prepared.resource_monitoring_enabled = session_resource_monitoring_enabled
             prepared.memory_bandwidth_enabled = memory_bandwidth_enabled
             prepared.monitoring_policy = monitoring_policy
@@ -2399,9 +2292,7 @@ async def _run_cloud_model_queue(
                 # so per-task unique images are removed as soon as no pending
                 # session references them.
                 if cleanup_state is not None and loaded is not None:
-                    await _release_source_image(
-                        cleanup_state, loaded.run_instance_id
-                    )
+                    await _release_source_image(cleanup_state, loaded.run_instance_id)
                 queue.task_done()
 
     worker_results = await asyncio.gather(
@@ -2628,10 +2519,6 @@ async def _run_worker_wave_async(
                 warmup_skip_iterations=warmup_skip_iterations,
             )
         )
-        pacct_metadata_by_agent = {
-            prepared.loaded.run_instance_id: _pacct_trace_metadata(prepared)
-            for prepared in prepared_sessions
-        }
         trace_logger.close()
         return WorkerReplayResult(
             wave_index=wave_index,
@@ -2643,7 +2530,6 @@ async def _run_worker_wave_async(
                 for prepared in prepared_sessions
                 if prepared.task_output_dir is not None
             },
-            pacct_metadata_by_agent=pacct_metadata_by_agent,
         )
     except BaseException:
         if not replay_started:
@@ -2800,7 +2686,9 @@ async def _run_cloud_model_worker_waves(
                     for worker_index, chunk in enumerate(chunks)
                 ]
                 wave_results = await asyncio.gather(*futures)
-            replay_results.extend(sorted(wave_results, key=lambda item: item.worker_index))
+            replay_results.extend(
+                sorted(wave_results, key=lambda item: item.worker_index)
+            )
             for result in sorted(wave_results, key=lambda item: item.worker_index):
                 task_stats.extend(result.task_stats)
             # The wave's containers are finalized in their subprocesses before
@@ -2809,9 +2697,7 @@ async def _run_cloud_model_worker_waves(
             # their last wave completes.
             if cleanup_state is not None:
                 for entry in wave:
-                    await _release_source_image(
-                        cleanup_state, entry.run_instance_id
-                    )
+                    await _release_source_image(cleanup_state, entry.run_instance_id)
     task_stats.sort(key=lambda stat: stat.manifest_index)
     replay_results.sort(key=lambda item: (item.wave_index, item.worker_index))
     return replay_results, task_stats
@@ -2974,9 +2860,7 @@ async def _replay_cloud_model_action(
                 tool_result = _CONTROL_PLANE_NOOP_RESULTS[tool_name]
             tool_success = source_success
             duration_ms = (time.time() - record_ts_start) * 1000
-            replay_source = (
-                "message_noop" if tool_name == "message" else "control_noop"
-            )
+            replay_source = "message_noop" if tool_name == "message" else "control_noop"
         elif tool_name.startswith("mcp_"):
             action_sleep = await _sleep_and_measure(
                 source_duration_ms / 1000 / replay_speed,
@@ -2989,13 +2873,16 @@ async def _replay_cloud_model_action(
             duration_ms = (time.time() - record_ts_start) * 1000
             replay_source = "replayed_from_trace"
         else:
-            mapped_tool_args, original_artifact_path, mapped_artifact_path, mapped_exists = (
-                _remap_runtime_artifact_tool_args(
+            (
+                mapped_tool_args,
+                original_artifact_path,
+                mapped_artifact_path,
+                mapped_exists,
+            ) = _remap_runtime_artifact_tool_args(
                     tool_name=tool_name,
                     tool_args_json=tool_args,
                     runtime_root_map=prepared_session.runtime_artifact_root_map,
                 )
-            )
             if original_artifact_path is None and isinstance(tool_args, str):
                 from trace_collect.openclaw_tools import (
                     source_runtime_artifact_path_from_tool_call,
@@ -3209,7 +3096,9 @@ async def _replay_cloud_model_session(
             raise SimulateError(
                 f"OpenClaw replay for {loaded.task_instance_id!r} requires a task container"
             )
-        if not any(action.get("action_type") == "llm_call" for action in loaded.actions):
+        if not any(
+            action.get("action_type") == "llm_call" for action in loaded.actions
+        ):
             raise SimulateError(
                 f"OpenClaw replay for {loaded.task_instance_id!r} has no source llm_call actions"
             )
@@ -3312,9 +3201,7 @@ async def _replay_cloud_model_session(
             source_failed_actions += outcome.source_failed_actions
             replay_failed_actions += outcome.replay_failed_actions
             replay_execution_errors += outcome.replay_execution_errors
-            unexpected_replay_failed_actions += (
-                outcome.unexpected_replay_failed_actions
-            )
+            unexpected_replay_failed_actions += outcome.unexpected_replay_failed_actions
             sleep_drifts.extend(outcome.sleep_drifts)
 
     wall_end = time.time()
@@ -3325,7 +3212,6 @@ async def _replay_cloud_model_session(
         + unexpected_replay_failed_actions
     )
     success = failed_actions == 0
-    pacct_metadata = _pacct_trace_metadata(prepared_session)
     trace_logger.log_summary(
         loaded.agent_id,
         _make_trace_summary(
@@ -3346,7 +3232,6 @@ async def _replay_cloud_model_session(
                 "fatal_replay_errors": fatal_replay_errors,
                 "replay_action_errors": replay_action_errors,
                 "sleep_drift": _summarize_sleep_drifts(sleep_drifts),
-                **pacct_metadata,
             },
         ),
     )
@@ -3382,9 +3267,7 @@ async def simulate(
     llm_ttft_ms: float | None = None,
     llm_tpot_ms: float | None = None,
     structured_output: bool = False,
-    segment_timeline: bool = True,
     tool_resource_telemetry: str = "command",
-    pacct: bool = False,
     cleanup_images: bool = False,
 ) -> Path:
     if mode != "cloud_model":
@@ -3396,10 +3279,7 @@ async def simulate(
     if prep_concurrency < 0:
         raise ValueError("prep_concurrency must be >= 0")
     if tool_resource_telemetry not in {"off", "command", "clause"}:
-        raise ValueError(
-            "tool_resource_telemetry must be one of: off, command, clause"
-        )
-    requested_segment_timeline = segment_timeline
+        raise ValueError("tool_resource_telemetry must be one of: off, command, clause")
     if tool_resource_telemetry == "clause":
         from trace_collect.clause_telemetry import (
             validate_clause_telemetry_runtime,
@@ -3409,20 +3289,8 @@ async def simulate(
             container_executable=container_executable,
             concurrency=concurrency,
             workers=workers,
-            pacct=pacct,
-        )
-        segment_timeline = False
-    # Transport the segment-timeline toggle to every replay ContainerAgent
-    # (including worker subprocesses, which inherit os.environ at spawn) via the
-    # same env-var channel used for OPENCLAW_CONTAINER_WORKDIR. Replay only.
-    os.environ["OPENCLAW_SEGMENT_TIMELINE"] = "1" if segment_timeline else "0"
-    os.environ["OPENCLAW_SEGMENT_TIMELINE_REQUESTED"] = (
-        "1" if requested_segment_timeline else "0"
     )
     os.environ["OPENCLAW_TOOL_RESOURCE_TELEMETRY"] = tool_resource_telemetry
-    # Per-binary process accounting toggle, same replay-only env channel; the
-    # container also needs --cap-add SYS_PACCT (added in _prepare_container_session).
-    os.environ["OPENCLAW_PACCT"] = "1" if pacct else "0"
     llm_timing = LLMTimingConfig(
         mode=llm_timing_mode,
         ttft_ms=llm_ttft_ms,
@@ -3514,8 +3382,10 @@ async def simulate(
             "multi-process worker waves cannot release children immediately "
             "after each parent finishes"
         )
-    scheduler_mode = "dependency_queue" if has_dependencies else (
-        "bounded_queue" if workers == 1 else "multi_process_workers"
+    scheduler_mode = (
+        "dependency_queue"
+        if has_dependencies
+        else ("bounded_queue" if workers == 1 else "multi_process_workers")
     )
 
     try:
@@ -3556,18 +3426,9 @@ async def simulate(
                     "monitoring": monitoring_policy_dict,
                     "tool_resource_telemetry": {
                         "mode": tool_resource_telemetry,
-                        "command_envelope_enabled": (
-                            tool_resource_telemetry != "off"
-                        ),
+                        "command_envelope_enabled": (tool_resource_telemetry != "off"),
                         "clause_observations_enabled": (
                             tool_resource_telemetry == "clause"
-                        ),
-                        "segment_timeline_requested": requested_segment_timeline,
-                        "segment_timeline_enabled": segment_timeline,
-                        "segment_timeline_decision": (
-                            "disabled_in_clause_mode"
-                            if tool_resource_telemetry == "clause"
-                            else "as_requested"
                         ),
                     },
                 },
@@ -3661,10 +3522,7 @@ async def simulate(
             try:
                 if trace_logger is not None:
                     trace_logger.close()
-                    _split_trace_by_agent_with_pacct(
-                        trace_logger.path,
-                        prepared_sessions,
-                    )
+                    _split_trace_by_agent(trace_logger.path, prepared_sessions)
                 for prepared in prepared_sessions:
                     await _finalize_prepared_session(prepared)
             except (Exception, asyncio.CancelledError) as exc:

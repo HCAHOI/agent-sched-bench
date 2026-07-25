@@ -10,7 +10,12 @@ from typing import Any
 
 from agents.openclaw.eval.types import EvalResult
 from agents.openclaw.tools.container import build_container_tool_overrides
-from llm_call.provider_base import GenerationSettings, LLMProvider, LLMResponse, ToolCallRequest
+from llm_call.provider_base import (
+    GenerationSettings,
+    LLMProvider,
+    LLMResponse,
+    ToolCallRequest,
+)
 from trace_collect.openclaw_tools import ContainerAgent
 
 
@@ -234,7 +239,15 @@ class OpenClawReplayProvider(LLMProvider):
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> LLMResponse:
-        del messages, tools, model, max_tokens, temperature, reasoning_effort, tool_choice
+        del (
+            messages,
+            tools,
+            model,
+            max_tokens,
+            temperature,
+            reasoning_effort,
+            tool_choice,
+        )
         if self._index >= len(self._llm_actions):
             return LLMResponse(
                 content="Replay trace exhausted before OpenClaw produced a final response.",
@@ -254,7 +267,9 @@ class OpenClawReplayProvider(LLMProvider):
         wall_end = time.time()
 
         raw_response = (
-            data.get("raw_response") if isinstance(data.get("raw_response"), dict) else {}
+            data.get("raw_response")
+            if isinstance(data.get("raw_response"), dict)
+            else {}
         )
         message = self._raw_message(raw_response)
         tool_calls = self._tool_calls(message)
@@ -303,7 +318,9 @@ class OpenClawReplayProvider(LLMProvider):
             llm_tpot_ms=self._llm_tpot_ms,
         )
 
-    async def _sleep(self, expected_s: float, *, phase: str) -> ReplaySleepRecord | None:
+    async def _sleep(
+        self, expected_s: float, *, phase: str
+    ) -> ReplaySleepRecord | None:
         if expected_s <= 0:
             return None
         import asyncio
@@ -335,7 +352,9 @@ class OpenClawReplayProvider(LLMProvider):
         choices = raw_response.get("choices")
         if isinstance(choices, list) and choices:
             choice = choices[0]
-            if isinstance(choice, dict) and isinstance(choice.get("finish_reason"), str):
+            if isinstance(choice, dict) and isinstance(
+                choice.get("finish_reason"), str
+            ):
                 return choice["finish_reason"]
         return default
 
@@ -432,6 +451,7 @@ async def extract_container_patch(
         return None
     return result
 
+
 _RUNTIME_LABEL_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.+-]{1,40}$")
 _RUNTIME_LABEL_PATH_RE = re.compile(r"^/[A-Za-z0-9_./:@+-]{0,159}$")
 _RUNTIME_LABEL_UID_RE = re.compile(r"^[0-9]{1,10}$")
@@ -515,7 +535,9 @@ async def container_runtime_proof(
         )
     lines = str(response.get("result", "")).strip().splitlines()
     if len(lines) < 5:
-        raise RuntimeError(f"container root proof returned malformed output: {response!r}")
+        raise RuntimeError(
+            f"container root proof returned malformed output: {response!r}"
+        )
     uid_text = lines[0].strip()
     observed_workdir = lines[1].strip()
     observed_os = lines[2].strip()
@@ -669,15 +691,11 @@ def _attach_clause_telemetry(
                     "source": source_exit,
                     "replay": replay_exit,
                     "available": available,
-                    "matches": (
-                        source_exit == replay_exit if available else None
-                    ),
+                    "matches": (source_exit == replay_exit if available else None),
                 }
         updated.append(json.dumps(record, ensure_ascii=False))
     for tool_call_id in sorted(set(by_id) - seen):
-        errors.append(
-            f"clause telemetry {tool_call_id} has no matching exec action"
-        )
+        errors.append(f"clause telemetry {tool_call_id} has no matching exec action")
     trace_path.write_text("\n".join(updated) + "\n", encoding="utf-8")
     return errors
 
@@ -708,7 +726,9 @@ def _update_trace_metadata(trace_path: Path, extra: dict[str, Any]) -> None:
             replaced = True
         updated.append(json.dumps(record, ensure_ascii=False))
     if not replaced:
-        updated.insert(0, json.dumps({"type": "trace_metadata", **extra}, ensure_ascii=False))
+        updated.insert(
+            0, json.dumps({"type": "trace_metadata", **extra}, ensure_ascii=False)
+        )
     trace_path.write_text("\n".join(updated) + "\n", encoding="utf-8")
 
 
@@ -743,13 +763,9 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
     status_path = Path(request["status_path"])
     replay_speed = float(request["replay_speed"])
     llm_timing = dict(request["llm_timing"])
-    tool_resource_telemetry = str(
-        request.get("tool_resource_telemetry") or "command"
-    )
+    tool_resource_telemetry = str(request.get("tool_resource_telemetry") or "command")
     if tool_resource_telemetry not in {"off", "command", "clause"}:
-        raise ValueError(
-            "tool_resource_telemetry must be one of: off, command, clause"
-        )
+        raise ValueError("tool_resource_telemetry must be one of: off, command, clause")
     os.environ["OPENCLAW_TOOL_RESOURCE_TELEMETRY"] = tool_resource_telemetry
     repo = str(request.get("repo") or "")
     if tool_resource_telemetry == "clause" and not repo:
@@ -828,18 +844,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             "tool_resource_telemetry": {
                 "mode": tool_resource_telemetry,
                 "command_envelope_enabled": tool_resource_telemetry != "off",
-                "clause_observations_enabled": (
-                    tool_resource_telemetry == "clause"
-                ),
-                "segment_timeline_requested": bool(
-                    request.get("segment_timeline_requested", True)
-                ),
-                "segment_timeline_enabled": bool(
-                    request.get("segment_timeline_enabled", True)
-                ),
-                "segment_timeline_decision": request.get(
-                    "segment_timeline_decision", "as_requested"
-                ),
+                "clause_observations_enabled": (tool_resource_telemetry == "clause"),
             },
         }
         result = await runner.run(
@@ -926,18 +931,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             "tool_resource_telemetry": {
                 "mode": tool_resource_telemetry,
                 "command_envelope_enabled": tool_resource_telemetry != "off",
-                "clause_observations_enabled": (
-                    tool_resource_telemetry == "clause"
-                ),
-                "segment_timeline_requested": bool(
-                    request.get("segment_timeline_requested", True)
-                ),
-                "segment_timeline_enabled": bool(
-                    request.get("segment_timeline_enabled", True)
-                ),
-                "segment_timeline_decision": request.get(
-                    "segment_timeline_decision", "as_requested"
-                ),
+                "clause_observations_enabled": (tool_resource_telemetry == "clause"),
             },
         }
     finally:
@@ -961,9 +955,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                     status["success"] = False
                     status["stop_reason"] = "error"
                     status["telemetry_integrity_failed"] = True
-                    telemetry_error = (
-                        f"{type(telemetry_exc).__name__}: {telemetry_exc}"
-                    )
+                    telemetry_error = f"{type(telemetry_exc).__name__}: {telemetry_exc}"
                     prior_error = status.get("error")
                     status["error"] = (
                         f"{prior_error}; {telemetry_error}"

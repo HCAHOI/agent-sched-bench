@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from harness.container_stats_sampler import ContainerResourceRecorder, ContainerStatsSampler
+from harness.container_stats_sampler import (
+    ContainerResourceRecorder,
+    ContainerStatsSampler,
+)
 
 
 class SimulateError(Exception):
@@ -124,9 +127,6 @@ class WorkerReplayResult:
     trace_file: str
     task_stats: list[ReplayTaskStats]
     task_output_dirs: dict[str, str]
-    pacct_metadata_by_agent: dict[str, dict[str, Any]] = dataclasses.field(
-        default_factory=dict
-    )
 
 
 @dataclass(slots=True)
