@@ -11,7 +11,11 @@ from tool_resource.clause_bridge import (
     ShellCommandLookupFailure,
     bridge_command,
 )
-from tool_resource.runtime_kb import CPU_HEAVY_TARGET, ClauseObservation, ClauseResourceKB
+from tool_resource.runtime_kb import (
+    CPU_HEAVY_TARGET,
+    ClauseObservation,
+    ClauseResourceKB,
+)
 
 _MS = 1_000_000
 _S = 1_000_000_000
@@ -61,6 +65,7 @@ def _img(
     disk_write: int | None = 0,
     disk_cancelled: int | None = 0,
     disk_io_reason: str = "ok",
+    argv_capture_flags: int = 0,
 ) -> ExecImageRecord:
     cpu_windows = (
         _cpu_windows(t_exec, t_end, cores) if cpu_profile == "auto" else cpu_profile
@@ -90,6 +95,7 @@ def _img(
         exit_signal=signal,
         normal_exit_status=None if signal else status,
         has_causal_end=has_causal_end,
+        argv_capture_flags=argv_capture_flags,
         provenance={
             "quota_cores": quota,
             "disk_io": {
@@ -102,8 +108,14 @@ def _img(
 
 def _fit(bin_: str, *, cpu: float | None = 0.5, rss: float | None = 10.0):
     return ClauseObservation(
-        repo="pub", bin=bin_, argv=(bin_,), ts_start=0.0, ts_end=0.001,
-        latency_ms=10.0, peak_cpu_cores=cpu, sampled_peak_rss_mb=rss,
+        repo="pub",
+        bin=bin_,
+        argv=(bin_,),
+        ts_start=0.0,
+        ts_end=0.001,
+        latency_ms=10.0,
+        peak_cpu_cores=cpu,
+        sampled_peak_rss_mb=rss,
         cpu_ns_cumulative=0,
     )
 
@@ -133,6 +145,34 @@ def _lookup_failure(
     )
 
 
+_CALL_37_COMMAND = (
+    'export PATH="/opt/miniconda3/bin:$PATH" && '
+    "source /opt/miniconda3/etc/profile.d/conda.sh && "
+    "conda activate e2c_test && cd /testbed && "
+    "pip install -e . 2>&1 | tail -10"
+)
+
+
+def _source_lookup_failure(
+    command: str = _CALL_37_COMMAND,
+) -> ShellCommandLookupFailure:
+    diagnostic = "/bin/sh: 1: source: not found"
+    return ShellCommandLookupFailure(
+        executable_head="source",
+        command=command,
+        source_tool_call_id="source-1",
+        replay_tool_call_id="replay-1",
+        source_exit_code=127,
+        replay_exit_code=127,
+        source_diagnostic=diagnostic,
+        replay_diagnostic=diagnostic,
+        source_channel="source_tool_result",
+        replay_channel="raw_stderr",
+        parser="anchored_shell_command_not_found_v1",
+        exit_code_semantics="direct_command_not_found_127",
+    )
+
+
 # --------------------------------------------------------------------------
 # Identity boundary (W/P/M/K/B) with profile-based aggregation
 # --------------------------------------------------------------------------
@@ -140,17 +180,48 @@ def _lookup_failure(
 
 def test_W_exec_chain_becomes_one_clause_headed_by_env() -> None:
     images = [
-        _img(101, 0, "env", 0, 1000, terminal=False, disk_read=10,
-             argv=("env", "nice", "-n", "0", "workload")),
-        _img(101, 1, "nice", 1000, 2000, terminal=False, disk_write=20,
-             argv=("nice", "-n", "0", "workload")),
-        _img(101, 2, "workload", 2000, 1300 * _MS, terminal=True, cores=1.0,
-             rss_mb=40.0, cpu_ns=1300 * _MS, disk_read=30, disk_write=40,
-             disk_cancelled=5, argv=("workload", "cpu-threads", "1")),
+        _img(
+            101,
+            0,
+            "env",
+            0,
+            1000,
+            terminal=False,
+            disk_read=10,
+            argv=("env", "nice", "-n", "0", "workload"),
+        ),
+        _img(
+            101,
+            1,
+            "nice",
+            1000,
+            2000,
+            terminal=False,
+            disk_write=20,
+            argv=("nice", "-n", "0", "workload"),
+        ),
+        _img(
+            101,
+            2,
+            "workload",
+            2000,
+            1300 * _MS,
+            terminal=True,
+            cores=1.0,
+            rss_mb=40.0,
+            cpu_ns=1300 * _MS,
+            disk_read=30,
+            disk_write=40,
+            disk_cancelled=5,
+            argv=("workload", "cpu-threads", "1"),
+        ),
     ]
     result = bridge_command(
-        "r1", "env nice -n 0 workload cpu-threads 1 1.3", images,
-        entry_pid=100, fork_parent={101: 100},
+        "r1",
+        "env nice -n 0 workload cpu-threads 1 1.3",
+        images,
+        entry_pid=100,
+        fork_parent={101: 100},
     )
     assert len(result.bridged) == 1
     assert not result.coverage_gaps
@@ -174,12 +245,388 @@ def test_W_exec_chain_becomes_one_clause_headed_by_env() -> None:
     assert not hasattr(obs, "disk_read_bytes_total")
 
 
+def test_explicit_shell_clause_owns_installer_descendants() -> None:
+    command = "bash installer.sh -b -p /opt/miniconda3 2>&1 | tail -5"
+    images = [
+        _img(
+            100,
+            0,
+            "bash",
+            0,
+            1000 * _MS,
+            terminal=True,
+            argv=("bash", "-c", command),
+        ),
+        _img(
+            101,
+            0,
+            "bash",
+            10,
+            900 * _MS,
+            terminal=True,
+            argv=("bash", "installer.sh", "-b", "-p", "/opt/miniconda3"),
+        ),
+        _img(
+            102,
+            0,
+            "grep",
+            20,
+            100 * _MS,
+            terminal=True,
+            argv=("grep", "GLIBC"),
+        ),
+        _img(
+            103,
+            0,
+            "tail",
+            15,
+            950 * _MS,
+            terminal=True,
+            argv=("tail", "-5"),
+        ),
+    ]
+
+    result = bridge_command(
+        "r1",
+        command,
+        images,
+        entry_pid=99,
+        fork_parent={100: 99, 101: 100, 102: 101, 103: 100},
+    )
+
+    assert result.coverage_gaps == []
+    assert [clause.observation.bin for clause in result.bridged] == ["bash", "tail"]
+    bash_clause = result.bridged[0]
+    assert bash_clause.owned_pids == (101, 102)
+    assert bash_clause.owned_exec_images == ((101, 0), (102, 0))
+    assert bash_clause.provenance["mapping_evidence"] == "tier1"
+
+
+def test_truncated_explicit_shell_owns_call_44_descendants() -> None:
+    payload = "x" * 600
+    command = f"bash -c '{payload}' 2>&1 | tail -20"
+    images = [
+        _img(
+            100,
+            0,
+            "sh",
+            0,
+            2 * _S,
+            terminal=True,
+            argv=("sh", "-c", command),
+        ),
+        _img(
+            101,
+            0,
+            "bash",
+            10,
+            2 * _S,
+            terminal=True,
+            argv=("bash", "-c", payload[:511]),
+            argv_capture_flags=1 << 2,
+        ),
+        _img(102, 0, "dirname", 20, 100, terminal=True),
+        _img(103, 0, "conda", 30, 100, terminal=False),
+        _img(103, 1, "conda", 100, 2 * _S, terminal=True),
+        _img(
+            104,
+            0,
+            "tail",
+            15,
+            2 * _S,
+            terminal=True,
+            argv=("tail", "-20"),
+        ),
+    ]
+
+    result = bridge_command(
+        "r1",
+        command,
+        images,
+        entry_pid=99,
+        fork_parent={100: 99, 101: 100, 102: 101, 103: 101, 104: 100},
+    )
+
+    assert result.coverage_gaps == []
+    assert [item.mapping_evidence for item in result.bridged] == [
+        "tier1_truncated_prefix",
+        "tier1",
+    ]
+    bash_clause = result.bridged[0]
+    assert bash_clause.owned_pids == (101, 102, 103)
+    assert bash_clause.owned_exec_images == (
+        (101, 0),
+        (102, 0),
+        (103, 0),
+        (103, 1),
+    )
+
+
+def test_shared_truncated_prefix_is_ambiguous() -> None:
+    prefix = "x" * 511
+    command = f"bash -c '{prefix}a' | bash -c '{prefix}b'"
+    result = bridge_command(
+        "r1",
+        command,
+        [
+            _img(
+                101,
+                0,
+                "bash",
+                0,
+                _S,
+                terminal=True,
+                argv=("bash", "-c", prefix),
+                argv_capture_flags=1 << 2,
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert result.observations == []
+    assert [gap.kind for gap in result.coverage_gaps] == ["ambiguous", "ambiguous"]
+
+
+def test_unflagged_shell_prefix_stays_unmatched() -> None:
+    prefix = "x" * 511
+    result = bridge_command(
+        "r1",
+        f"bash -c '{prefix}a'",
+        [
+            _img(
+                101,
+                0,
+                "bash",
+                0,
+                _S,
+                terminal=True,
+                argv=("bash", "-c", prefix),
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert result.observations == []
+    assert [gap.kind for gap in result.coverage_gaps] == ["unmatched_static_clause"]
+
+
+def test_capped_argv_cannot_map_even_with_one_static_candidate() -> None:
+    result = bridge_command(
+        "r1",
+        "bash a b c d e f g h",
+        [
+            _img(
+                101,
+                0,
+                "bash",
+                0,
+                _S,
+                terminal=True,
+                argv=("bash", "a", "b", "c", "d", "e", "f", "g"),
+                argv_capture_flags=1 << 8,
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert result.observations == []
+    assert [gap.kind for gap in result.coverage_gaps] == ["unmatched_static_clause"]
+
+
+def test_capped_argv_cannot_disambiguate_unseen_argument() -> None:
+    result = bridge_command(
+        "r1",
+        "bash a b c d e f g left | bash a b c d e f g right",
+        [
+            _img(
+                101,
+                0,
+                "bash",
+                0,
+                _S,
+                terminal=True,
+                argv=("bash", "a", "b", "c", "d", "e", "f", "g"),
+                argv_capture_flags=1 << 8,
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert result.observations == []
+    assert [gap.kind for gap in result.coverage_gaps] == [
+        "unmatched_static_clause",
+        "unmatched_static_clause",
+    ]
+
+
+def test_protocol_timeout_killed_owned_child_excludes_root_clause_from_kb() -> None:
+    result = bridge_command(
+        "r1",
+        "bash task.sh",
+        [
+            _img(
+                101,
+                0,
+                "bash",
+                0,
+                2 * _S,
+                terminal=True,
+                argv=("bash", "task.sh"),
+            ),
+            _img(
+                102,
+                0,
+                "workload",
+                _S,
+                2 * _S,
+                terminal=True,
+                signal=9,
+                argv=("workload",),
+            ),
+        ],
+        entry_pid=100,
+        fork_parent={101: 100, 102: 101},
+        protocol_timeout=True,
+    )
+
+    assert result.coverage_gaps == []
+    assert len(result.bridged) == 1
+    timed_out = result.bridged[0]
+    assert timed_out.owned_pids == (101, 102)
+    assert timed_out.observation.latency_ms is None
+    assert set(timed_out.availability.values()) == {"unknown:protocol_timeout"}
+    assert result.observations == []
+
+
+def test_protocol_timeout_retains_diagnostics_but_excludes_kb_row() -> None:
+    result = bridge_command(
+        "r1",
+        "slow | finish",
+        [
+            _img(
+                101,
+                0,
+                "slow",
+                0,
+                2 * _S,
+                terminal=True,
+                cores=2.0,
+                rss_mb=300.0,
+                cpu_ns=2 * _S,
+                signal=9,
+                argv=("slow",),
+                disk_read=12,
+                disk_write=34,
+                disk_cancelled=5,
+            ),
+            _img(
+                102,
+                0,
+                "finish",
+                0,
+                _S,
+                terminal=True,
+                cores=1.0,
+                rss_mb=20.0,
+                argv=("finish",),
+            ),
+        ],
+        entry_pid=100,
+        fork_parent={101: 100, 102: 100},
+        protocol_timeout=True,
+    )
+
+    timed_out, completed = result.bridged
+    assert timed_out.observation.latency_ms is None
+    assert timed_out.observation.peak_cpu_cores == pytest.approx(2.0)
+    assert timed_out.observation.sampled_peak_rss_mb == pytest.approx(300.0)
+    assert (
+        timed_out.disk_read_bytes_total,
+        timed_out.disk_write_bytes_total,
+        timed_out.disk_cancelled_write_bytes_total,
+    ) == (12, 34, 5)
+    assert set(timed_out.availability.values()) == {"unknown:protocol_timeout"}
+    assert result.observations == [completed.observation]
+    assert completed.availability["latency"] == "ok"
+
+
+def test_signal_without_protocol_timeout_keeps_existing_observation() -> None:
+    result = bridge_command(
+        "r1",
+        "slow",
+        [
+            _img(
+                101,
+                0,
+                "slow",
+                0,
+                2 * _S,
+                terminal=True,
+                signal=9,
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert result.observations == [result.bridged[0].observation]
+    assert result.observations[0].latency_ms == 2000.0
+    assert result.bridged[0].availability["latency"] == "ok"
+
+
+def test_protocol_timeout_does_not_hide_missing_causal_end() -> None:
+    result = bridge_command(
+        "r1",
+        "slow",
+        [
+            _img(
+                101,
+                0,
+                "slow",
+                0,
+                2 * _S,
+                terminal=True,
+                signal=9,
+                has_causal_end=False,
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+        protocol_timeout=True,
+    )
+
+    assert result.bridged == []
+    assert [gap.kind for gap in result.coverage_gaps] == ["no_causal_end"]
+
+
 def test_P_pipeline_two_separate_clauses_no_cross_leak() -> None:
     images = [
-        _img(101, 0, "workload", 0, 1500 * _MS, terminal=True, cores=2.0, rss_mb=50.0,
-             argv=("workload", "cpu-threads", "2", "1.5")),
-        _img(102, 0, "workload", 10, 1500 * _MS, terminal=True, cores=2.0, rss_mb=50.0,
-             argv=("workload", "cpu-threads", "2", "1.5")),
+        _img(
+            101,
+            0,
+            "workload",
+            0,
+            1500 * _MS,
+            terminal=True,
+            cores=2.0,
+            rss_mb=50.0,
+            argv=("workload", "cpu-threads", "2", "1.5"),
+        ),
+        _img(
+            102,
+            0,
+            "workload",
+            10,
+            1500 * _MS,
+            terminal=True,
+            cores=2.0,
+            rss_mb=50.0,
+            argv=("workload", "cpu-threads", "2", "1.5"),
+        ),
     ]
     cmd = "workload cpu-threads 2 1.5 | workload cpu-threads 2 1.5"
     result = bridge_command(
@@ -199,8 +646,17 @@ def test_P_pipeline_two_separate_clauses_no_cross_leak() -> None:
 
 def test_M_memory_flag_from_sampled_peak_rss_not_hiwater() -> None:
     images = [
-        _img(101, 0, "python3", 0, 1200 * _MS, terminal=True,
-             cores=None, rss_mb=600.0, argv=("python3", "-c", "x")),
+        _img(
+            101,
+            0,
+            "python3",
+            0,
+            1200 * _MS,
+            terminal=True,
+            cores=None,
+            rss_mb=600.0,
+            argv=("python3", "-c", "x"),
+        ),
     ]
     result = bridge_command(
         "r1", "python3 -c 'x=1'", images, entry_pid=100, fork_parent={101: 100}
@@ -247,14 +703,35 @@ def test_disk_io_unavailable_does_not_change_kb_observation() -> None:
 
 def test_K_killed_descendant_preserves_peak_and_signal() -> None:
     images = [
-        _img(101, 0, "timeout", 0, 1400 * _MS, terminal=True, cores=None,
-             argv=("timeout", "-s", "KILL", "1.3", "workload")),
-        _img(102, 0, "workload", 5 * _MS, 1300 * _MS, terminal=True, cores=1.0,
-             rss_mb=40.0, signal=9, argv=("workload", "cpu-threads", "1", "5")),
+        _img(
+            101,
+            0,
+            "timeout",
+            0,
+            1400 * _MS,
+            terminal=True,
+            cores=None,
+            argv=("timeout", "-s", "KILL", "1.3", "workload"),
+        ),
+        _img(
+            102,
+            0,
+            "workload",
+            5 * _MS,
+            1300 * _MS,
+            terminal=True,
+            cores=1.0,
+            rss_mb=40.0,
+            signal=9,
+            argv=("workload", "cpu-threads", "1", "5"),
+        ),
     ]
     result = bridge_command(
-        "r1", "timeout -s KILL 1.3 workload cpu-threads 1 5", images,
-        entry_pid=100, fork_parent={101: 100, 102: 101},
+        "r1",
+        "timeout -s KILL 1.3 workload cpu-threads 1 5",
+        images,
+        entry_pid=100,
+        fork_parent={101: 100, 102: 101},
     )
     assert len(result.bridged) == 1
     obs = result.observations[0]
@@ -266,16 +743,46 @@ def test_K_killed_descendant_preserves_peak_and_signal() -> None:
 
 def test_B_background_descendant_maps_without_leakage() -> None:
     images = [
-        _img(201, 0, "workload", 100, 1300 * _MS, terminal=True, cores=1.0, rss_mb=40.0,
-             argv=("workload", "cpu-threads", "1", "1.3")),
-        _img(202, 0, "sleep", 200, 100 * _MS, terminal=True, cores=0.0, rss_mb=1.0,
-             argv=("sleep", "0.1")),
-        _img(203, 0, "sleep", 300, 1300 * _MS, terminal=True, cores=0.0, rss_mb=1.0,
-             argv=("sleep", "1.3")),
+        _img(
+            201,
+            0,
+            "workload",
+            100,
+            1300 * _MS,
+            terminal=True,
+            cores=1.0,
+            rss_mb=40.0,
+            argv=("workload", "cpu-threads", "1", "1.3"),
+        ),
+        _img(
+            202,
+            0,
+            "sleep",
+            200,
+            100 * _MS,
+            terminal=True,
+            cores=0.0,
+            rss_mb=1.0,
+            argv=("sleep", "0.1"),
+        ),
+        _img(
+            203,
+            0,
+            "sleep",
+            300,
+            1300 * _MS,
+            terminal=True,
+            cores=0.0,
+            rss_mb=1.0,
+            argv=("sleep", "1.3"),
+        ),
     ]
     cmd = "( workload cpu-threads 1 1.3 & sleep 0.1 ); sleep 1.3"
     result = bridge_command(
-        "r1", cmd, images, entry_pid=100,
+        "r1",
+        cmd,
+        images,
+        entry_pid=100,
         fork_parent={200: 100, 201: 200, 202: 200, 203: 100},
     )
     assert len(result.bridged) == 3
@@ -319,7 +826,9 @@ def test_failed_exec_exactly_resolves_one_static_clause_without_observation() ->
     }
 
 
-def test_exact_safety_guard_rejection_resolves_external_clauses_without_runtime() -> None:
+def test_exact_safety_guard_rejection_resolves_external_clauses_without_runtime() -> (
+    None
+):
     command = "cd /testbed && rm -f scratch.py"
     result_text = (
         "Error: Command blocked by safety guard (path outside working dir)\n\n"
@@ -372,9 +881,29 @@ def test_safety_guard_rejection_requires_exact_source_replay_agreement() -> None
         fork_parent={},
     )
     assert result.no_runtime_exec == []
-    assert [gap.kind for gap in result.coverage_gaps] == [
-        "unmatched_static_clause"
-    ]
+    assert [gap.kind for gap in result.coverage_gaps] == ["unmatched_static_clause"]
+
+
+def test_failed_exec_with_truncated_argv_does_not_resolve_static_clause() -> None:
+    result = bridge_command(
+        "r1",
+        "python -m pytest",
+        [],
+        failed_exec_attempts=[
+            FailedExecAttempt(
+                101,
+                1,
+                10,
+                ("python", "-m", "pytest"),
+                2,
+                argv_capture_flags=1 << 2,
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+    assert result.no_runtime_exec == []
+    assert [gap.kind for gap in result.coverage_gaps] == ["unmatched_static_clause"]
 
 
 def test_failed_exec_does_not_resolve_ambiguous_repeated_static_clauses() -> None:
@@ -382,9 +911,7 @@ def test_failed_exec_does_not_resolve_ambiguous_repeated_static_clauses() -> Non
         "r1",
         "missing; missing",
         [],
-        failed_exec_attempts=[
-            FailedExecAttempt(101, 1, 10, ("missing",), 2)
-        ],
+        failed_exec_attempts=[FailedExecAttempt(101, 1, 10, ("missing",), 2)],
         entry_pid=100,
         fork_parent={101: 100},
     )
@@ -395,7 +922,9 @@ def test_failed_exec_does_not_resolve_ambiguous_repeated_static_clauses() -> Non
     ]
 
 
-def test_shell_lookup_failure_resolves_one_exact_static_head_without_observation() -> None:
+def test_shell_lookup_failure_resolves_one_exact_static_head_without_observation() -> (
+    None
+):
     evidence = _lookup_failure()
     result = bridge_command(
         "r1",
@@ -468,9 +997,7 @@ def test_exit_zero_lookup_failure_requires_nonfinal_pipeline_clause() -> None:
         fork_parent={},
     )
     assert result.no_runtime_exec == []
-    assert [gap.kind for gap in result.coverage_gaps] == [
-        "unmatched_static_clause"
-    ]
+    assert [gap.kind for gap in result.coverage_gaps] == ["unmatched_static_clause"]
 
 
 def test_bridge_rejects_internally_inconsistent_lookup_evidence() -> None:
@@ -491,9 +1018,252 @@ def test_bridge_rejects_internally_inconsistent_lookup_evidence() -> None:
         fork_parent={},
     )
     assert result.no_runtime_exec == []
-    assert [gap.kind for gap in result.coverage_gaps] == [
-        "unmatched_static_clause"
+    assert [gap.kind for gap in result.coverage_gaps] == ["unmatched_static_clause"]
+
+
+def test_source_lookup_failure_controls_call_37_short_circuit() -> None:
+    result = bridge_command(
+        "r1",
+        _CALL_37_COMMAND,
+        [
+            _img(
+                101,
+                0,
+                "sh",
+                0,
+                10,
+                terminal=True,
+                status=127,
+                argv=("sh", "-c", _CALL_37_COMMAND),
+            )
+        ],
+        command_lookup_failure=_source_lookup_failure(),
+        allow_control_short_circuit=True,
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert result.coverage_gaps == []
+    assert result.bridged == []
+    assert result.unobserved_builtins == ["export", "cd"]
+    assert [item.bin for item in result.no_runtime_exec] == [
+        "source",
+        "conda",
+        "pip",
+        "tail",
     ]
+    source, conda, pip, tail = result.no_runtime_exec
+    assert source.mapping_evidence == "shell_command_lookup_failure_exact_head"
+    assert source.command_lookup_failure == _source_lookup_failure()
+    for item in (conda, pip, tail):
+        control = item.control_short_circuit
+        assert control is not None
+        assert control["controller_clause_index"] == 1
+        assert control["controller_bin"] == "source"
+        assert control["controller_normal_exit_status"] == 127
+        assert control["controller_pid"] is None
+        assert control["controller_exec_seq"] is None
+        assert (
+            control["controller_mapping_evidence"]
+            == "shell_command_lookup_failure_exact_head"
+        )
+    assert conda.control_short_circuit["control_edge_path"] == [0, 1]
+    assert pip.control_short_circuit["control_edge_path"] == [0, 1, 2, 3]
+    assert tail.control_short_circuit["control_edge_path"] == [0, 1, 2, 3]
+
+
+def test_source_without_lookup_evidence_keeps_bash_dialect_runtime_mapping() -> None:
+    result = bridge_command(
+        "r1",
+        _CALL_37_COMMAND,
+        [
+            _img(
+                101,
+                0,
+                "sh",
+                0,
+                10,
+                terminal=True,
+                argv=("sh", "-c", _CALL_37_COMMAND),
+            ),
+            _img(
+                102,
+                0,
+                "conda",
+                1,
+                9,
+                terminal=True,
+                argv=("conda", "activate", "e2c_test"),
+            ),
+            _img(
+                103,
+                0,
+                "pip",
+                2,
+                8,
+                terminal=True,
+                argv=("pip", "install", "-e", "."),
+            ),
+            _img(
+                104,
+                0,
+                "tail",
+                2,
+                9,
+                terminal=True,
+                argv=("tail", "-10"),
+            ),
+        ],
+        entry_pid=100,
+        fork_parent={101: 100, 102: 101, 103: 101, 104: 101},
+    )
+
+    assert result.coverage_gaps == []
+    assert result.no_runtime_exec == []
+    assert [item.observation.bin for item in result.bridged] == [
+        "conda",
+        "pip",
+        "tail",
+    ]
+    assert result.unobserved_builtins == ["export", "source", "cd"]
+
+
+def test_source_lookup_without_control_gate_leaves_downstream_gaps() -> None:
+    result = bridge_command(
+        "r1",
+        _CALL_37_COMMAND,
+        [
+            _img(
+                101,
+                0,
+                "sh",
+                0,
+                10,
+                terminal=True,
+                status=127,
+                argv=("sh", "-c", _CALL_37_COMMAND),
+            )
+        ],
+        command_lookup_failure=_source_lookup_failure(),
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert [item.bin for item in result.no_runtime_exec] == ["source"]
+    assert [
+        gap.detail.split("bin=", 1)[1].split()[0] for gap in result.coverage_gaps
+    ] == ["'conda'", "'pip'", "'tail'"]
+
+
+def test_masked_zero_lookup_does_not_seed_control_leaf() -> None:
+    command = "python -m pytest 2>&1 | tail -40 && conda x"
+    result = bridge_command(
+        "r1",
+        command,
+        [
+            _img(
+                102,
+                0,
+                "tail",
+                0,
+                10,
+                terminal=True,
+                argv=("tail", "-40"),
+            )
+        ],
+        command_lookup_failure=_lookup_failure(0, command),
+        allow_control_short_circuit=True,
+        entry_pid=100,
+        fork_parent={102: 100},
+    )
+
+    assert [item.bin for item in result.no_runtime_exec] == ["python"]
+    assert not any(
+        item.mapping_evidence == "shell_control_short_circuit"
+        for item in result.no_runtime_exec
+    )
+    assert any(
+        gap.kind == "unmatched_static_clause" and "bin='conda'" in gap.detail
+        for gap in result.coverage_gaps
+    )
+
+
+def test_source_lookup_rejects_contradictory_downstream_runtime() -> None:
+    result = bridge_command(
+        "r1",
+        _CALL_37_COMMAND,
+        [
+            _img(
+                101,
+                0,
+                "sh",
+                0,
+                10,
+                terminal=True,
+                status=127,
+                argv=("sh", "-c", _CALL_37_COMMAND),
+            ),
+            _img(
+                102,
+                0,
+                "conda",
+                1,
+                9,
+                terminal=True,
+                argv=("conda", "activate", "e2c_test"),
+            ),
+        ],
+        command_lookup_failure=_source_lookup_failure(),
+        allow_control_short_circuit=True,
+        entry_pid=100,
+        fork_parent={101: 100, 102: 101},
+    )
+
+    assert any(gap.kind == "control_flow_contradiction" for gap in result.coverage_gaps)
+
+
+def test_source_lookup_does_not_choose_between_repeated_heads() -> None:
+    command = "source a.sh && source b.sh && conda x"
+    result = bridge_command(
+        "r1",
+        command,
+        [],
+        command_lookup_failure=_source_lookup_failure(command),
+        allow_control_short_circuit=True,
+        entry_pid=100,
+        fork_parent={},
+    )
+
+    assert result.no_runtime_exec == []
+    assert result.unobserved_builtins == ["source", "source"]
+    assert any(
+        gap.kind == "unmatched_static_clause" and "bin='conda'" in gap.detail
+        for gap in result.coverage_gaps
+    )
+
+
+def test_source_lookup_exit_disagreement_stays_unresolved() -> None:
+    evidence = ShellCommandLookupFailure(
+        **{
+            **_source_lookup_failure().__dict__,
+            "replay_exit_code": 0,
+        }
+    )
+    result = bridge_command(
+        "r1",
+        _CALL_37_COMMAND,
+        [],
+        command_lookup_failure=evidence,
+        allow_control_short_circuit=True,
+        entry_pid=100,
+        fork_parent={},
+    )
+
+    assert result.no_runtime_exec == []
+    assert result.unobserved_builtins == ["export", "source", "cd"]
+    assert {
+        gap.detail.split("bin=", 1)[1].split()[0] for gap in result.coverage_gaps
+    } == {"'conda'", "'pip'", "'tail'"}
 
 
 @pytest.mark.parametrize(
@@ -593,9 +1363,7 @@ def test_outer_control_skips_every_rhs_pipeline_member(
     )
 
     assert not result.coverage_gaps
-    assert [item.observation.bin for item in result.bridged] == [
-        command.split()[0]
-    ]
+    assert [item.observation.bin for item in result.bridged] == [command.split()[0]]
     assert [item.bin for item in result.no_runtime_exec] == ["b", "c"]
     for index, item in enumerate(result.no_runtime_exec, start=1):
         assert item.control_short_circuit == {
@@ -607,6 +1375,7 @@ def test_outer_control_skips_every_rhs_pipeline_member(
             "controller_bin": command.split()[0],
             "controller_pid": 101,
             "controller_exec_seq": 0,
+            "controller_mapping_evidence": "mapped_exec_image",
             "controller_normal_exit_status": status,
             "controlled_clause_index": index,
             "controlled_rhs_clause_indices": [1, 2],
@@ -731,10 +1500,7 @@ def test_outer_control_rejects_partial_rhs_runtime_evidence() -> None:
     )
 
     assert result.no_runtime_exec == []
-    assert any(
-        gap.kind == "control_flow_contradiction"
-        for gap in result.coverage_gaps
-    )
+    assert any(gap.kind == "control_flow_contradiction" for gap in result.coverage_gaps)
 
 
 def test_outer_control_resolves_the_fixed_image_smoke_pipeline() -> None:
@@ -837,13 +1603,24 @@ def test_concurrent_descendants_cpu_sums_to_three_cores() -> None:
     # one static clause (a wrapper) owns two concurrent 1.5-core descendants
     span_end = 2000 * _MS
     images = [
-        _img(101, 0, "runner", 0, span_end, terminal=True, cores=None,
-             argv=("runner", "two")),  # wrapper itself no CPU
+        _img(
+            101,
+            0,
+            "runner",
+            0,
+            span_end,
+            terminal=True,
+            cores=None,
+            argv=("runner", "two"),
+        ),  # wrapper itself no CPU
         _img(102, 0, "worker", 0, span_end, terminal=True, cores=1.5, rss_mb=10.0),
         _img(103, 0, "worker", 0, span_end, terminal=True, cores=1.5, rss_mb=10.0),
     ]
     result = bridge_command(
-        "r1", "runner two", images, entry_pid=100,
+        "r1",
+        "runner two",
+        images,
+        entry_pid=100,
         fork_parent={101: 100, 102: 101, 103: 101},
     )
     assert len(result.bridged) == 1
@@ -852,21 +1629,33 @@ def test_concurrent_descendants_cpu_sums_to_three_cores() -> None:
     kb = ClauseResourceKB.fit_public([_fit("runner", cpu=0.5)])
     kb.observe_completed_clause(obs)
     # predict_command absorbs the causally-prior observation before predicting
-    assert kb.predict_command("r1", "runner two", 100.0).targets[
-        CPU_HEAVY_TARGET
-    ].clause_flags[0].flag is True
+    assert (
+        kb.predict_command("r1", "runner two", 100.0)
+        .targets[CPU_HEAVY_TARGET]
+        .clause_flags[0]
+        .flag
+        is True
+    )
 
 
 def test_concurrent_descendants_rss_sums_distinct_mm() -> None:
     span_end = 1200 * _MS
     images = [
-        _img(101, 0, "runner", 0, span_end, terminal=True, cores=0.1,
-             rss_profile=()),  # wrapper trivial rss
-        _img(102, 0, "worker", 0, span_end, terminal=True, cores=0.1, rss_mb=300.0, mm=1),
-        _img(103, 0, "worker", 0, span_end, terminal=True, cores=0.1, rss_mb=300.0, mm=2),
+        _img(
+            101, 0, "runner", 0, span_end, terminal=True, cores=0.1, rss_profile=()
+        ),  # wrapper trivial rss
+        _img(
+            102, 0, "worker", 0, span_end, terminal=True, cores=0.1, rss_mb=300.0, mm=1
+        ),
+        _img(
+            103, 0, "worker", 0, span_end, terminal=True, cores=0.1, rss_mb=300.0, mm=2
+        ),
     ]
     result = bridge_command(
-        "r1", "runner two", images, entry_pid=100,
+        "r1",
+        "runner two",
+        images,
+        entry_pid=100,
         fork_parent={101: 100, 102: 101, 103: 101},
     )
     obs = result.observations[0]
@@ -876,14 +1665,27 @@ def test_concurrent_descendants_rss_sums_distinct_mm() -> None:
 def test_sequential_images_rss_is_not_summed_across_time() -> None:
     # two owned images each peak 300 MB at DIFFERENT times -> clause peak ~300
     images = [
-        _img(101, 0, "seq", 0, 1200 * _MS, terminal=False,
-             rss_profile=((0, 1, 300.0), (1, 1, 300.0))),  # bins 0-1, mm=1
-        _img(101, 1, "seq", 1200 * _MS, 2400 * _MS, terminal=True, cores=0.1,
-             rss_profile=((100, 2, 300.0), (101, 2, 300.0))),  # bins 100-101, mm=2
+        _img(
+            101,
+            0,
+            "seq",
+            0,
+            1200 * _MS,
+            terminal=False,
+            rss_profile=((0, 1, 300.0), (1, 1, 300.0)),
+        ),  # bins 0-1, mm=1
+        _img(
+            101,
+            1,
+            "seq",
+            1200 * _MS,
+            2400 * _MS,
+            terminal=True,
+            cores=0.1,
+            rss_profile=((100, 2, 300.0), (101, 2, 300.0)),
+        ),  # bins 100-101, mm=2
     ]
-    result = bridge_command(
-        "r1", "seq", images, entry_pid=100, fork_parent={101: 100}
-    )
+    result = bridge_command("r1", "seq", images, entry_pid=100, fork_parent={101: 100})
     obs = result.observations[0]
     assert obs.sampled_peak_rss_mb == pytest.approx(300.0, abs=1.0)  # not 600
 
@@ -891,8 +1693,17 @@ def test_sequential_images_rss_is_not_summed_across_time() -> None:
 def test_missing_or_inconsistent_quota_makes_cpu_unavailable() -> None:
     # missing quota (<=0) -> CPU unavailable, no inf fallback
     missing = [
-        _img(101, 0, "prog", 0, 2000 * _MS, terminal=True, cores=3.0, quota=0.0,
-             argv=("prog",)),
+        _img(
+            101,
+            0,
+            "prog",
+            0,
+            2000 * _MS,
+            terminal=True,
+            cores=3.0,
+            quota=0.0,
+            argv=("prog",),
+        ),
     ]
     r1 = bridge_command("r1", "prog", missing, entry_pid=100, fork_parent={101: 100})
     assert r1.observations[0].peak_cpu_cores is None
@@ -900,8 +1711,17 @@ def test_missing_or_inconsistent_quota_makes_cpu_unavailable() -> None:
 
     # conflicting quotas across owned images -> unavailable
     conflict = [
-        _img(101, 0, "runner", 0, 2000 * _MS, terminal=True, cores=None, quota=8.0,
-             argv=("runner",)),
+        _img(
+            101,
+            0,
+            "runner",
+            0,
+            2000 * _MS,
+            terminal=True,
+            cores=None,
+            quota=8.0,
+            argv=("runner",),
+        ),
         _img(102, 0, "worker", 0, 2000 * _MS, terminal=True, cores=1.5, quota=4.0),
     ]
     r2 = bridge_command(
@@ -913,13 +1733,35 @@ def test_missing_or_inconsistent_quota_makes_cpu_unavailable() -> None:
 
 def test_missing_profile_yields_unavailable_not_scalar_max() -> None:
     images = [
-        _img(101, 0, "runner", 0, 2000 * _MS, terminal=True, cores=None,
-             cpu_profile=None, rss_profile=None),
-        _img(102, 0, "worker", 0, 2000 * _MS, terminal=True, cores=1.5, rss_mb=300.0,
-             cpu_profile=None, rss_profile=None),
+        _img(
+            101,
+            0,
+            "runner",
+            0,
+            2000 * _MS,
+            terminal=True,
+            cores=None,
+            cpu_profile=None,
+            rss_profile=None,
+        ),
+        _img(
+            102,
+            0,
+            "worker",
+            0,
+            2000 * _MS,
+            terminal=True,
+            cores=1.5,
+            rss_mb=300.0,
+            cpu_profile=None,
+            rss_profile=None,
+        ),
     ]
     result = bridge_command(
-        "r1", "runner", images, entry_pid=100,
+        "r1",
+        "runner",
+        images,
+        entry_pid=100,
         fork_parent={101: 100, 102: 101},
     )
     obs = result.observations[0]
@@ -937,13 +1779,32 @@ def test_missing_profile_yields_unavailable_not_scalar_max() -> None:
 def test_pipeline_maps_by_argv_not_timestamp() -> None:
     # b.py chain has the EARLIER t_exec; exact-argv must still map each correctly
     images = [
-        _img(201, 0, "python", 500 * _MS, 1500 * _MS, terminal=True, cores=1.0,
-             argv=("python", "a.py")),
-        _img(202, 0, "python", 0, 1500 * _MS, terminal=True, cores=3.0,
-             argv=("python", "b.py")),  # earlier, heavier
+        _img(
+            201,
+            0,
+            "python",
+            500 * _MS,
+            1500 * _MS,
+            terminal=True,
+            cores=1.0,
+            argv=("python", "a.py"),
+        ),
+        _img(
+            202,
+            0,
+            "python",
+            0,
+            1500 * _MS,
+            terminal=True,
+            cores=3.0,
+            argv=("python", "b.py"),
+        ),  # earlier, heavier
     ]
     result = bridge_command(
-        "r1", "python a.py | python b.py", images, entry_pid=100,
+        "r1",
+        "python a.py | python b.py",
+        images,
+        entry_pid=100,
         fork_parent={201: 100, 202: 100},
     )
     by_argv = {o.argv: o for o in result.observations}
@@ -953,13 +1814,32 @@ def test_pipeline_maps_by_argv_not_timestamp() -> None:
 
 def test_repeated_same_bin_distinct_args_reversed_order() -> None:
     images = [
-        _img(201, 0, "grep", 0, 1200 * _MS, terminal=True, cores=1.0,
-             argv=("grep", "-r", "z")),  # earlier in runtime
-        _img(202, 0, "grep", 400 * _MS, 1600 * _MS, terminal=True, cores=2.5,
-             argv=("grep", "-r", "a")),
+        _img(
+            201,
+            0,
+            "grep",
+            0,
+            1200 * _MS,
+            terminal=True,
+            cores=1.0,
+            argv=("grep", "-r", "z"),
+        ),  # earlier in runtime
+        _img(
+            202,
+            0,
+            "grep",
+            400 * _MS,
+            1600 * _MS,
+            terminal=True,
+            cores=2.5,
+            argv=("grep", "-r", "a"),
+        ),
     ]
     result = bridge_command(
-        "r1", "grep -r a && grep -r z", images, entry_pid=100,
+        "r1",
+        "grep -r a && grep -r z",
+        images,
+        entry_pid=100,
         fork_parent={201: 100, 202: 100},
     )
     by_argv = {o.argv: o for o in result.observations}
@@ -975,7 +1855,10 @@ def test_genuinely_ambiguous_pair_yields_gaps_and_no_observations() -> None:
         _img(202, 0, "foo", 10, 1200 * _MS, terminal=True, cores=3.0, argv=("foo",)),
     ]
     result = bridge_command(
-        "r1", "foo --x | foo --y", images, entry_pid=100,
+        "r1",
+        "foo --x | foo --y",
+        images,
+        entry_pid=100,
         fork_parent={201: 100, 202: 100},
     )
     assert result.observations == []
@@ -990,7 +1873,10 @@ def test_identical_repeated_clauses_map_interchangeably() -> None:
         _img(202, 0, "make", 10, 1200 * _MS, terminal=True, cores=2.5, argv=("make",)),
     ]
     result = bridge_command(
-        "r1", "make | make", images, entry_pid=100,
+        "r1",
+        "make | make",
+        images,
+        entry_pid=100,
         fork_parent={201: 100, 202: 100},
     )
     assert len(result.bridged) == 2
@@ -1011,8 +1897,11 @@ def test_coverage_gaps_builtins_and_unmatched() -> None:
         _img(101, 0, "cd_is_never_execed", 0, 1, terminal=True, cores=0.1),
     ]
     result = bridge_command(
-        "r1", "cd /x && realbin --flag", images,
-        entry_pid=100, fork_parent={101: 100},
+        "r1",
+        "cd /x && realbin --flag",
+        images,
+        entry_pid=100,
+        fork_parent={101: 100},
     )
     assert "cd" in result.unobserved_builtins
     kinds = {g.kind for g in result.coverage_gaps}
@@ -1023,12 +1912,19 @@ def test_coverage_gaps_builtins_and_unmatched() -> None:
 
 def test_insufficient_coverage_isolated_per_target() -> None:
     images = [
-        _img(101, 0, "prog", 0, 1200 * _MS, terminal=True,
-             cores=None, rss_mb=None, argv=("prog",)),
+        _img(
+            101,
+            0,
+            "prog",
+            0,
+            1200 * _MS,
+            terminal=True,
+            cores=None,
+            rss_mb=None,
+            argv=("prog",),
+        ),
     ]
-    result = bridge_command(
-        "r1", "prog", images, entry_pid=100, fork_parent={101: 100}
-    )
+    result = bridge_command("r1", "prog", images, entry_pid=100, fork_parent={101: 100})
     avail = result.bridged[0].availability
     assert avail["latency"] == "ok"
     assert avail["cpu"].startswith("unknown")
@@ -1046,8 +1942,18 @@ def test_insufficient_coverage_isolated_per_target() -> None:
 
 def test_B1_no_causal_end_withholds_observation() -> None:
     images = [
-        _img(101, 0, "prog", 0, 2000 * _MS, terminal=True, cores=3.0, rss_mb=600.0,
-             argv=("prog",), has_causal_end=False),  # never really exited
+        _img(
+            101,
+            0,
+            "prog",
+            0,
+            2000 * _MS,
+            terminal=True,
+            cores=3.0,
+            rss_mb=600.0,
+            argv=("prog",),
+            has_causal_end=False,
+        ),  # never really exited
     ]
     r = bridge_command("r1", "prog", images, entry_pid=100, fork_parent={101: 100})
     assert r.observations == []
@@ -1059,41 +1965,83 @@ def test_B1b_any_owned_image_without_causal_end_withholds() -> None:
     # but a forked descendant it owns never exited (has_causal_end False, earlier
     # t_end). Withhold on ANY owned image lacking a causal end, not just latest.
     images = [
-        _img(101, 0, "prog", 0, 2000 * _MS, terminal=True, cores=3.0, rss_mb=600.0,
-             argv=("prog",)),  # real exit, latest-ending
-        _img(102, 0, "child", 100, 1000 * _MS, terminal=True, cores=1.0,
-             rss_mb=50.0, argv=("child",), has_causal_end=False),  # never exited
+        _img(
+            101,
+            0,
+            "prog",
+            0,
+            2000 * _MS,
+            terminal=True,
+            cores=3.0,
+            rss_mb=600.0,
+            argv=("prog",),
+        ),  # real exit, latest-ending
+        _img(
+            102,
+            0,
+            "child",
+            100,
+            1000 * _MS,
+            terminal=True,
+            cores=1.0,
+            rss_mb=50.0,
+            argv=("child",),
+            has_causal_end=False,
+        ),  # never exited
     ]
-    r = bridge_command("r1", "prog", images, entry_pid=100,
-                       fork_parent={101: 100, 102: 101})
+    r = bridge_command(
+        "r1", "prog", images, entry_pid=100, fork_parent={101: 100, 102: 101}
+    )
     assert r.observations == []
     assert {g.kind for g in r.coverage_gaps} == {"no_causal_end"}
 
 
 def test_B2_parse_failed_withholds_all_observations() -> None:
-    images = [_img(101, 0, "echo", 0, 1200 * _MS, terminal=True, cores=1.0,
-                   argv=("echo", "ok"))]
+    images = [
+        _img(
+            101, 0, "echo", 0, 1200 * _MS, terminal=True, cores=1.0, argv=("echo", "ok")
+        )
+    ]
     # unbalanced paren -> mvdan parse_failed
-    r = bridge_command("r1", "echo ok )", images, entry_pid=100,
-                       fork_parent={101: 100})
+    r = bridge_command("r1", "echo ok )", images, entry_pid=100, fork_parent={101: 100})
     assert r.observations == []
     assert any(g.kind == "parse_failed" for g in r.coverage_gaps)
 
 
 def test_B3_nonzero_loss_withholds_all_observations() -> None:
-    images = [_img(101, 0, "prog", 0, 2000 * _MS, terminal=True, cores=3.0,
-                   rss_mb=600.0, argv=("prog",))]
-    r = bridge_command("r1", "prog", images, entry_pid=100,
-                       fork_parent={101: 100}, loss_count=1)
+    images = [
+        _img(
+            101,
+            0,
+            "prog",
+            0,
+            2000 * _MS,
+            terminal=True,
+            cores=3.0,
+            rss_mb=600.0,
+            argv=("prog",),
+        )
+    ]
+    r = bridge_command(
+        "r1", "prog", images, entry_pid=100, fork_parent={101: 100}, loss_count=1
+    )
     assert r.observations == []
     assert any(g.kind == "nonzero_loss" for g in r.coverage_gaps)
 
 
 def test_B4_B6_invalid_or_nonfinite_profile_is_unavailable() -> None:
     images = [
-        _img(101, 0, "prog", 0, 2000 * _MS, terminal=True, argv=("prog",),
-             cpu_profile=((0, -5),),  # negative cpu_ns -> invalid
-             rss_profile=((0, 1, float("inf")), (1, 1, 300.0))),  # non-finite rss
+        _img(
+            101,
+            0,
+            "prog",
+            0,
+            2000 * _MS,
+            terminal=True,
+            argv=("prog",),
+            cpu_profile=((0, -5),),  # negative cpu_ns -> invalid
+            rss_profile=((0, 1, float("inf")), (1, 1, 300.0)),
+        ),  # non-finite rss
     ]
     r = bridge_command("r1", "prog", images, entry_pid=100, fork_parent={101: 100})
     obs = r.observations[0]
@@ -1105,8 +2053,17 @@ def test_B4_B6_invalid_or_nonfinite_profile_is_unavailable() -> None:
 
 def test_B5_insufficient_rss_samples_is_unavailable() -> None:
     images = [
-        _img(101, 0, "prog", 0, 1200 * _MS, terminal=True, argv=("prog",),
-             cores=None, rss_profile=((5, 1, 600.0),)),  # a single rss sample
+        _img(
+            101,
+            0,
+            "prog",
+            0,
+            1200 * _MS,
+            terminal=True,
+            argv=("prog",),
+            cores=None,
+            rss_profile=((5, 1, 600.0),),
+        ),  # a single rss sample
     ]
     r = bridge_command("r1", "prog", images, entry_pid=100, fork_parent={101: 100})
     assert r.observations[0].sampled_peak_rss_mb is None
@@ -1117,19 +2074,36 @@ def test_C1_path_valued_arguments_are_not_basenamed() -> None:
     # two distinct commands differing only by an argument PATH must not merge:
     # basenaming args would make both "cat log" and collide their identities.
     a = ExecImageRecord(
-        host_pid=201, exec_seq=0, t_exec_ns=0, t_end_ns=1200 * _MS,
-        bin="cat", argv=("/bin/cat", "a/log"), terminal=True,
+        host_pid=201,
+        exec_seq=0,
+        t_exec_ns=0,
+        t_end_ns=1200 * _MS,
+        bin="cat",
+        argv=("/bin/cat", "a/log"),
+        terminal=True,
         cpu_windows=_cpu_windows(0, 1200 * _MS, 1.0),
-        rss_bins=_rss_bins(0, 1200 * _MS, 10.0, 201), provenance={"quota_cores": 8.0},
+        rss_bins=_rss_bins(0, 1200 * _MS, 10.0, 201),
+        provenance={"quota_cores": 8.0},
     )
     b = ExecImageRecord(
-        host_pid=202, exec_seq=0, t_exec_ns=0, t_end_ns=1200 * _MS,
-        bin="cat", argv=("/bin/cat", "b/log"), terminal=True,
+        host_pid=202,
+        exec_seq=0,
+        t_exec_ns=0,
+        t_end_ns=1200 * _MS,
+        bin="cat",
+        argv=("/bin/cat", "b/log"),
+        terminal=True,
         cpu_windows=_cpu_windows(0, 1200 * _MS, 3.0),
-        rss_bins=_rss_bins(0, 1200 * _MS, 10.0, 202), provenance={"quota_cores": 8.0},
+        rss_bins=_rss_bins(0, 1200 * _MS, 10.0, 202),
+        provenance={"quota_cores": 8.0},
     )
-    r = bridge_command("r1", "cat a/log | cat b/log", [a, b], entry_pid=100,
-                       fork_parent={201: 100, 202: 100})
+    r = bridge_command(
+        "r1",
+        "cat a/log | cat b/log",
+        [a, b],
+        entry_pid=100,
+        fork_parent={201: 100, 202: 100},
+    )
     by_argv = {o.argv: o for o in r.observations}
     # head basenamed to "cat"; path arguments preserved and used to disambiguate
     assert ("cat", "a/log") in by_argv and ("cat", "b/log") in by_argv
@@ -1141,11 +2115,22 @@ def test_C3_nonoverlapping_mm_lifetimes_not_summed() -> None:
     # two distinct mm whose observed lifetimes do not overlap (adjacent bin
     # ranges) must NOT be summed into one figure, even both ~300 MB.
     images = [
-        _img(101, 0, "seq", 0, 2400 * _MS, terminal=True, cores=0.1, argv=("seq",),
-             rss_profile=(
-                 (0, 1, 300.0), (1, 1, 300.0),      # mm 1 alive bins 0-1
-                 (100, 2, 300.0), (101, 2, 300.0),  # mm 2 alive bins 100-101
-             )),
+        _img(
+            101,
+            0,
+            "seq",
+            0,
+            2400 * _MS,
+            terminal=True,
+            cores=0.1,
+            argv=("seq",),
+            rss_profile=(
+                (0, 1, 300.0),
+                (1, 1, 300.0),  # mm 1 alive bins 0-1
+                (100, 2, 300.0),
+                (101, 2, 300.0),  # mm 2 alive bins 100-101
+            ),
+        ),
     ]
     r = bridge_command("r1", "seq", images, entry_pid=100, fork_parent={101: 100})
     assert r.observations[0].sampled_peak_rss_mb == pytest.approx(300.0, abs=1.0)

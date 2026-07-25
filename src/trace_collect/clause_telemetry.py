@@ -50,6 +50,10 @@ SAMPLE_PERIOD_NS = 10_000_000  # ~10 ms CPU-time per perf callback
 WINDOW_NS = 500_000_000  # 500 ms wall label window (resource_timeline semantics)
 ALIGN_BIN_NS = 20_000_000  # 20 ms aligned bins for RSS summation
 SENTINEL = 2**64 - 1
+MAX_ARGS = 8
+ARG_BYTES = 512
+ARG_FLAG_TRUNCATED = 1
+ARG_FLAG_ARGV_CAPPED = 2
 PAGE = os.sysconf("SC_PAGE_SIZE")
 _NPROC = os.cpu_count() or 1
 
@@ -75,7 +79,9 @@ BPF_PROGRAM = r"""
 #define TYPE_PERF 5
 #define TYPE_FAILED_EXEC_ATTEMPT 6
 #define MAX_ARGS 8
-#define ARG_BYTES 128
+#define ARG_BYTES 512
+#define ARG_FLAG_TRUNCATED 1
+#define ARG_FLAG_ARGV_CAPPED 2
 
 struct event_t {
     u64 timestamp_ns;
@@ -95,6 +101,7 @@ struct event_t {
     u32 child_host_pid;
     u32 child_host_tid;
     u32 arg_index;
+    u32 arg_flags;
     u32 exit_code;
     char arg[ARG_BYTES];
 };
@@ -190,11 +197,13 @@ static int capture_enter(const char *const *argv) {
         .task_ptr = (u64)bpf_get_current_task(),
     };
     pending_seq.update(&task_key, &seq);
+    u32 captured_args = 0;
     #pragma unroll
     for (int i = 0; i < MAX_ARGS; i++) {
         const char *a = 0;
         bpf_probe_read_user(&a, sizeof(a), &argv[i]);
         if (!a) break;
+        captured_args++;
         struct event_t *e = events.ringbuf_reserve(sizeof(*e));
         if (!e) { lost(); continue; }
         __builtin_memset(e, 0, sizeof(*e));
@@ -205,8 +214,40 @@ static int capture_enter(const char *const *argv) {
         e->host_pid = pid_tgid >> 32;
         e->host_tid = tid;
         e->arg_index = i;
-        bpf_probe_read_user_str(e->arg, sizeof(e->arg), a);
+        int arg_size = bpf_probe_read_user_str(e->arg, sizeof(e->arg), a);
+        if (arg_size < 0) {
+            lost();
+        } else if (arg_size == sizeof(e->arg)) {
+            char source_last = 0;
+            int last_read = bpf_probe_read_user(
+                &source_last, sizeof(source_last), a + sizeof(e->arg) - 1
+            );
+            if (last_read < 0)
+                lost();
+            else if (source_last != '\0')
+                e->arg_flags = ARG_FLAG_TRUNCATED;
+        }
         events.ringbuf_submit(e, 0);
+    }
+    const char *extra = 0;
+    if (captured_args == MAX_ARGS)
+        bpf_probe_read_user(&extra, sizeof(extra), &argv[MAX_ARGS]);
+    if (extra) {
+        struct event_t *e = events.ringbuf_reserve(sizeof(*e));
+        if (!e) {
+            lost();
+        } else {
+            __builtin_memset(e, 0, sizeof(*e));
+            e->timestamp_ns = bpf_ktime_get_ns();
+            e->cgroup_id = bpf_get_current_cgroup_id();
+            e->exec_seq = seq;
+            e->type = TYPE_EXEC_ARG;
+            e->host_pid = pid_tgid >> 32;
+            e->host_tid = tid;
+            e->arg_index = MAX_ARGS;
+            e->arg_flags = ARG_FLAG_ARGV_CAPPED;
+            events.ringbuf_submit(e, 0);
+        }
     }
     return 0;
 }
@@ -492,6 +533,9 @@ class ToolCallToken:
 
 
 _EXIT_CODE_DIAGNOSTIC = re.compile(r"^Exit code: (?P<code>-?\d+)$")
+_PROTOCOL_TIMEOUT_MARKERS = frozenset(
+    {"[timeout]", "[resource_timeout]", "[resource_stall_timeout]"}
+)
 
 
 def _anchored_command_not_found(text: str) -> tuple[str, str] | None:
@@ -512,6 +556,12 @@ def _strict_exit_code(tool_result: str) -> int | None:
     if not lines or (match := _EXIT_CODE_DIAGNOSTIC.fullmatch(lines[-1])) is None:
         return None
     return int(match.group("code"))
+
+
+def _is_protocol_timeout(replay_exit_code: int | None, replay_result: str) -> bool:
+    return replay_exit_code == 124 and any(
+        line.strip() in _PROTOCOL_TIMEOUT_MARKERS for line in replay_result.splitlines()
+    )
 
 
 def _replay_tool_result(
@@ -683,6 +733,7 @@ def collect_case(command: str, tag: str, *, marker: str = "") -> RawRun:
             "child_host_pid": int(e.child_host_pid),
             "child_host_tid": int(e.child_host_tid),
             "arg_index": int(e.arg_index),
+            "arg_flags": int(e.arg_flags),
             "exit_code": int(e.exit_code),
             "errno": (
                 int(e.exit_code)
@@ -784,6 +835,7 @@ class Clause:
     lineage_parent_pid: int | None
     terminal: bool
     has_causal_end: bool  # real exit (terminal) or next same-pid exec (non-terminal)
+    argv_capture_flags: int = 0
 
 
 def _clauses_and_lineage(
@@ -797,15 +849,29 @@ def _clauses_and_lineage(
             fork_parent.setdefault(e["child_host_pid"], e["host_pid"])
 
     argv_words: dict[tuple[int, int], dict[int, str]] = {}
+    argv_capture_flags: dict[tuple[int, int], int] = {}
     for e in events:
         if e["type"] == "exec_arg":
-            argv_words.setdefault((e["host_pid"], e["exec_seq"]), {})[
-                e["arg_index"]
-            ] = e["arg"]
+            key = (e["host_pid"], e["exec_seq"])
+            index = e["arg_index"]
+            event_flags = int(e.get("arg_flags", 0))
+            if index < MAX_ARGS:
+                argv_words.setdefault(key, {})[index] = e["arg"]
+                if event_flags & ARG_FLAG_TRUNCATED:
+                    argv_capture_flags[key] = argv_capture_flags.get(key, 0) | (
+                        1 << index
+                    )
+            if index == MAX_ARGS and event_flags & ARG_FLAG_ARGV_CAPPED:
+                argv_capture_flags[key] = argv_capture_flags.get(key, 0) | (
+                    1 << MAX_ARGS
+                )
 
-    def argv_of(pid: int, seq: int) -> tuple[str, ...]:
+    def argv_of(pid: int, seq: int) -> tuple[tuple[str, ...], int]:
         words = argv_words.get((pid, seq), {})
-        return tuple(words[i] for i in sorted(words))
+        return (
+            tuple(words[i] for i in sorted(words)),
+            argv_capture_flags.get((pid, seq), 0),
+        )
 
     exits: dict[int, int] = {}
     for e in events:
@@ -833,7 +899,7 @@ def _clauses_and_lineage(
             else:
                 t_end = last_ts  # synthetic bound; NOT a real causal end
                 has_causal_end = False
-            argv = argv_of(pid, e["exec_seq"])
+            argv, capture_flags = argv_of(pid, e["exec_seq"])
             clauses.append(
                 Clause(
                     host_pid=pid,
@@ -845,6 +911,7 @@ def _clauses_and_lineage(
                     lineage_parent_pid=fork_parent.get(pid),
                     terminal=terminal,
                     has_causal_end=has_causal_end,
+                    argv_capture_flags=capture_flags,
                 )
             )
     return clauses, fork_parent
@@ -864,7 +931,10 @@ def _clause_at(clauses_on_pid: "list[Clause] | tuple", ts: int) -> "Clause | Non
 
 
 def _ancestor_clause_pid(
-    pid: int, ts: int, clause_by_pid: dict[int, list[Clause]], fork_parent: dict[int, int]
+    pid: int,
+    ts: int,
+    clause_by_pid: dict[int, list[Clause]],
+    fork_parent: dict[int, int],
 ) -> Clause | None:
     """Nearest ancestor pid whose half-open clause window contains ts."""
 
@@ -906,6 +976,7 @@ class ClauseMetrics:
     cpu_windows: tuple[tuple[int, int], ...]
     rss_bins: tuple[tuple[int, int, float], ...]
     provenance: dict[str, Any]
+    argv_capture_flags: int = 0
 
 
 def _attribute(
@@ -946,8 +1017,7 @@ def _attribute(
     ) -> tuple[Clause | None, dict[str, Any], str | None]:
         ts, pid, tid = event["ts_ns"], event["host_pid"], event["host_tid"]
         if any(
-            boundary["ts_ns"] <= ts
-            for boundary in exec_boundaries_by_tid.get(tid, ())
+            boundary["ts_ns"] <= ts for boundary in exec_boundaries_by_tid.get(tid, ())
         ):
             return None, {}, "sentinel_after_successful_exec"
 
@@ -974,9 +1044,7 @@ def _attribute(
             ]
             if len(pending_successes) == 1:
                 boundary = pending_successes[0]
-                arg_start = exec_arg_start_by_tid_seq[
-                    (tid, boundary["exec_seq"])
-                ]
+                arg_start = exec_arg_start_by_tid_seq[(tid, boundary["exec_seq"])]
                 return (
                     None,
                     {
@@ -1001,9 +1069,7 @@ def _attribute(
         while current != entry_pid:
             all_records = fork_records.get(current, ())
             eligible = [
-                record
-                for record in all_records
-                if record["ts_ns"] <= ancestor_ts_bound
+                record for record in all_records if record["ts_ns"] <= ancestor_ts_bound
             ]
             if len(eligible) != 1:
                 reason = (
@@ -1076,9 +1142,7 @@ def _attribute(
                         "fork_chain_records": fork_chain_records,
                         "fork_resolution_failure": {
                             "failure_kind": (
-                                "nonpositive_parent"
-                                if parent <= 0
-                                else "cyclic_parent"
+                                "nonpositive_parent" if parent <= 0 else "cyclic_parent"
                             ),
                             "child_id": current,
                             "timestamp_bound_ns": ancestor_ts_bound,
@@ -1280,9 +1344,9 @@ def _cpu_counter_points(
     per_tid: dict[int, dict[int, int]] = {}
     for sample in samples:
         if sample["cpu_ns"] > 0:
-            per_tid.setdefault(sample["host_tid"], {})[
-                sample["ts_ns"]
-            ] = sample["cpu_ns"]
+            per_tid.setdefault(sample["host_tid"], {})[sample["ts_ns"]] = sample[
+                "cpu_ns"
+            ]
         support = sample.get("attribution", {}).get("cpu_counter_support")
         if not isinstance(support, dict):
             continue
@@ -1292,10 +1356,7 @@ def _cpu_counter_points(
             ts_ns, cpu_ns = point.get("ts_ns"), point.get("cpu_ns")
             if isinstance(ts_ns, int) and isinstance(cpu_ns, int):
                 per_tid.setdefault(sample["host_tid"], {})[ts_ns] = cpu_ns
-    return {
-        tid: sorted(points.items())
-        for tid, points in per_tid.items()
-    }
+    return {tid: sorted(points.items()) for tid, points in per_tid.items()}
 
 
 def cpu_window_profile(samples: list[dict[str, Any]]) -> tuple[tuple[int, int], ...]:
@@ -1422,9 +1483,7 @@ def _fork_io_baselines(
     for event in events:
         if event["type"] != "fork" or not event.get("child_host_tid"):
             continue
-        target = _clause_at(
-            clause_by_pid.get(event["host_pid"], ()), event["ts_ns"]
-        )
+        target = _clause_at(clause_by_pid.get(event["host_pid"], ()), event["ts_ns"])
         if target is None:
             target = _ancestor_clause_pid(
                 event["host_pid"],
@@ -1477,9 +1536,7 @@ def _task_io_totals(
         "exec_boundary_baseline_tids": [],
         "zero_fork_baseline_tids": sorted(fork_baselines),
         "exact_endpoint_tids": [],
-        "perf_sample_count": sum(
-            event["type"] == "perf" for event in samples
-        ),
+        "perf_sample_count": sum(event["type"] == "perf" for event in samples),
         "counter_regression_clamps": 0,
     }
     if len(exec_baselines) != 1:
@@ -1564,9 +1621,7 @@ def analyze(
     for c in clauses:
         attributed_samples = per_clause[(c.host_pid, c.exec_seq)]
         samples = [
-            sample
-            for sample in attributed_samples
-            if "metric_excluded" not in sample
+            sample for sample in attributed_samples if "metric_excluded" not in sample
         ]
         identity_only_samples = [
             {
@@ -1581,7 +1636,8 @@ def analyze(
             if "metric_excluded" in sample
         ]
         in_window = sum(
-            1 for e in run.events
+            1
+            for e in run.events
             if e["type"] in {"perf", "exec_boundary", "exit_boundary"}
             and c.t_exec_ns <= e["ts_ns"] <= c.t_end_ns
             and e["host_pid"] == c.host_pid
@@ -1602,7 +1658,8 @@ def analyze(
         # deterministic group sum across the terminal process's threads.
         if c.terminal:
             exits = [
-                e for e in run.events
+                e
+                for e in run.events
                 if e["type"] == "exit_boundary" and e["host_pid"] == c.host_pid
             ]
             cpu_cum = sum(e["cpu_ns"] for e in exits)
@@ -1641,9 +1698,7 @@ def analyze(
                 peak_cpu_cores_reason=cpu_reason,
                 sampled_peak_rss_mb=rss,
                 sampled_peak_rss_reason=rss_reason,
-                disk_read_bytes_total=(
-                    io_totals[0] if io_totals is not None else None
-                ),
+                disk_read_bytes_total=(io_totals[0] if io_totals is not None else None),
                 disk_write_bytes_total=(
                     io_totals[1] if io_totals is not None else None
                 ),
@@ -1660,9 +1715,7 @@ def analyze(
                     "attributed_samples": len(samples),
                     "identity_only_sample_count": len(identity_only_samples),
                     "identity_only_samples": identity_only_samples,
-                    "attribution_coverage": round(
-                        len(samples) / max(in_window, 1), 3
-                    ),
+                    "attribution_coverage": round(len(samples) / max(in_window, 1), 3),
                     "boundary_coverage": {
                         "has_exec": True,
                         "has_exit": has_exit,
@@ -1683,6 +1736,7 @@ def analyze(
                         ],
                     },
                 },
+                argv_capture_flags=c.argv_capture_flags,
             )
         )
     return metrics, gaps
@@ -1756,10 +1810,7 @@ def _command_tree_provenance(
                     {
                         "child_pid": current,
                         "parent_candidates": sorted(
-                            {
-                                int(record["host_pid"])
-                                for record in evidence_records
-                            }
+                            {int(record["host_pid"]) for record in evidence_records}
                         ),
                         "candidate_records": sorted(
                             (
@@ -1909,6 +1960,7 @@ def _event_row(table: Any, data: int) -> dict[str, Any]:
         "child_host_pid": int(event.child_host_pid),
         "child_host_tid": int(event.child_host_tid),
         "arg_index": int(event.arg_index),
+        "arg_flags": int(event.arg_flags),
         "exit_code": int(event.exit_code),
         "errno": (
             int(event.exit_code)
@@ -1917,9 +1969,7 @@ def _event_row(table: Any, data: int) -> dict[str, Any]:
         ),
     }
     if event.type == 1:
-        row["arg"] = bytes(event.arg).split(b"\0", 1)[0].decode(
-            "utf-8", "replace"
-        )
+        row["arg"] = bytes(event.arg).split(b"\0", 1)[0].decode("utf-8", "replace")
     return row
 
 
@@ -1952,6 +2002,7 @@ def _exec_image_record(metric: ClauseMetrics) -> Any:
         exit_signal=metric.exit_signal,
         normal_exit_status=metric.normal_exit_status,
         has_causal_end=metric.has_causal_end,
+        argv_capture_flags=metric.argv_capture_flags,
         provenance=metric.provenance,
     )
 
@@ -1960,11 +2011,22 @@ def _failed_exec_attempt_records(events: list[dict[str, Any]]) -> list[Any]:
     from tool_resource.clause_bridge import FailedExecAttempt
 
     argv_words: dict[tuple[int, int], dict[int, str]] = {}
+    argv_capture_flags: dict[tuple[int, int], int] = {}
     for event in events:
         if event["type"] == "exec_arg":
-            argv_words.setdefault(
-                (event["host_pid"], event["exec_seq"]), {}
-            )[event["arg_index"]] = event["arg"]
+            key = (event["host_pid"], event["exec_seq"])
+            index = event["arg_index"]
+            event_flags = int(event.get("arg_flags", 0))
+            if index < MAX_ARGS:
+                argv_words.setdefault(key, {})[index] = event["arg"]
+                if event_flags & ARG_FLAG_TRUNCATED:
+                    argv_capture_flags[key] = argv_capture_flags.get(key, 0) | (
+                        1 << index
+                    )
+            if index == MAX_ARGS and event_flags & ARG_FLAG_ARGV_CAPPED:
+                argv_capture_flags[key] = argv_capture_flags.get(key, 0) | (
+                    1 << MAX_ARGS
+                )
     attempts: list[FailedExecAttempt] = []
     for event in events:
         if event["type"] != "failed_exec_attempt":
@@ -1978,6 +2040,9 @@ def _failed_exec_attempt_records(events: list[dict[str, Any]]) -> list[Any]:
                 ts_ns=event["ts_ns"],
                 argv=argv,
                 errno=event["errno"],
+                argv_capture_flags=argv_capture_flags.get(
+                    (event["host_pid"], event["exec_seq"]), 0
+                ),
             )
         )
     return attempts
@@ -2037,9 +2102,7 @@ class ClauseTelemetryCollector:
         for sequence in range(8192):
             queue.push(ctypes.c_ulonglong(sequence))
         self._bpf["sequence_ready"][ctypes.c_int(0)] = ctypes.c_uint(1)
-        self._bpf["target_cgroup"][ctypes.c_int(0)] = ctypes.c_ulonglong(
-            self.cgroup_id
-        )
+        self._bpf["target_cgroup"][ctypes.c_int(0)] = ctypes.c_ulonglong(self.cgroup_id)
         self._table = self._bpf["events"]
 
         def receive(_ctx: int, data: int, _size: int) -> int:
@@ -2089,8 +2152,8 @@ class ClauseTelemetryCollector:
             else None
         )
         self._source_exec_index += 1
-        source_tool_call_id, source_command, source_tool_result = (
-            _source_exec_fields(source_action)
+        source_tool_call_id, source_command, source_tool_result = _source_exec_fields(
+            source_action
         )
         token = ToolCallToken(
             tool_call_id=tool_call_id,
@@ -2145,15 +2208,17 @@ class ClauseTelemetryCollector:
             else ""
         )
         raw_replay_exit = (
-            replay_response.get("returncode")
-            if replay_response is not None
-            else None
+            replay_response.get("returncode") if replay_response is not None else None
         )
         replay_exit_code = (
             raw_replay_exit
             if isinstance(raw_replay_exit, int)
             and not isinstance(raw_replay_exit, bool)
             else None
+        )
+        protocol_timeout = _is_protocol_timeout(
+            replay_exit_code,
+            replay_result,
         )
         source_exit_code = _strict_exit_code(token.source_tool_result)
         replay_tool_result = _replay_tool_result(
@@ -2199,6 +2264,7 @@ class ClauseTelemetryCollector:
                 perf_samples=perf_samples,
                 command_lookup_failure=lookup_failure,
                 control_flow_fidelity=control_flow_fidelity,
+                protocol_timeout=protocol_timeout,
             )
         except Exception as exc:
             message = (
@@ -2282,6 +2348,7 @@ class ClauseTelemetryCollector:
         command_lookup_failure: ShellCommandLookupFailure | None = None,
         control_flow_fidelity: Mapping[str, Any] | None = None,
         safety_guard_blocked: Any | None = None,
+        protocol_timeout: bool = False,
     ) -> tuple[dict[str, Any], list[str]]:
         from tool_resource.clause_bridge import bridge_command
 
@@ -2372,9 +2439,7 @@ class ClauseTelemetryCollector:
             if "fork_ancestry" in event:
                 payload["fork_ancestry"] = list(event["fork_ancestry"])
             if "fork_chain_records" in event:
-                payload["fork_chain_records"] = list(
-                    event["fork_chain_records"]
-                )
+                payload["fork_chain_records"] = list(event["fork_chain_records"])
             if "fork_resolution_failure" in event:
                 payload["fork_resolution_failure"] = dict(
                     event["fork_resolution_failure"]
@@ -2382,9 +2447,7 @@ class ClauseTelemetryCollector:
             if "fork_ts_ns" in event:
                 payload["fork_ts_ns"] = event["fork_ts_ns"]
             if "pending_exec_evidence" in event:
-                payload["pending_exec_evidence"] = dict(
-                    event["pending_exec_evidence"]
-                )
+                payload["pending_exec_evidence"] = dict(event["pending_exec_evidence"])
             return payload
 
         gap_evidence = [gap_payload(event) for event in attribution_gaps]
@@ -2429,10 +2492,10 @@ class ClauseTelemetryCollector:
             fork_parent=fork_parent,
             epoch_offset=self._epoch_offset_s,
             loss_count=loss,
+            protocol_timeout=protocol_timeout,
         )
         mapping_gaps = [
-            {"kind": gap.kind, "detail": gap.detail}
-            for gap in bridge.coverage_gaps
+            {"kind": gap.kind, "detail": gap.detail} for gap in bridge.coverage_gaps
         ]
         clauses = [
             {
@@ -2449,8 +2512,7 @@ class ClauseTelemetryCollector:
                         bridged.disk_cancelled_write_bytes_total
                     ),
                     "read_write_bytes_total": (
-                        bridged.disk_read_bytes_total
-                        + bridged.disk_write_bytes_total
+                        bridged.disk_read_bytes_total + bridged.disk_write_bytes_total
                         if bridged.disk_read_bytes_total is not None
                         and bridged.disk_write_bytes_total is not None
                         else None
@@ -2464,6 +2526,7 @@ class ClauseTelemetryCollector:
             }
             for bridged in bridge.bridged
         ]
+
         def no_runtime_exec_row(resolved: Any) -> dict[str, Any]:
             row = {
                 "bin": resolved.bin,
@@ -2495,9 +2558,7 @@ class ClauseTelemetryCollector:
                 }
                 return row
             if resolved.command_lookup_failure is None:
-                row["errno"] = sorted(
-                    {attempt.errno for attempt in resolved.attempts}
-                )
+                row["errno"] = sorted({attempt.errno for attempt in resolved.attempts})
                 row["provenance"] = {
                     "evidence_kind": "failed_execve",
                     "failed_exec_attempts": [
@@ -2508,7 +2569,7 @@ class ClauseTelemetryCollector:
                             "errno": attempt.errno,
                         }
                         for attempt in resolved.attempts
-                    ]
+                    ],
                 }
                 return row
             evidence = resolved.command_lookup_failure
@@ -2534,8 +2595,7 @@ class ClauseTelemetryCollector:
             return row
 
         no_runtime_exec = [
-            no_runtime_exec_row(resolved)
-            for resolved in bridge.no_runtime_exec
+            no_runtime_exec_row(resolved) for resolved in bridge.no_runtime_exec
         ]
         target_availability: dict[str, Any] = {}
         for target in ("latency", "cpu", "memory"):
@@ -2561,7 +2621,7 @@ class ClauseTelemetryCollector:
                 "static_clause_count": bridge.static_clause_count,
                 "mappable_clause_count": mappable,
                 "mapped_clause_count": mapped,
-                "observation_clause_count": len(bridge.bridged),
+                "observation_clause_count": len(bridge.observations),
                 "no_runtime_exec_count": len(bridge.no_runtime_exec),
                 "coverage": mapped / max(mappable, 1),
                 "gaps": mapping_gaps,
@@ -2618,18 +2678,14 @@ class ClauseTelemetryCollector:
         }
         violations: list[str] = []
         if loss:
-            violations.append(
-                f"{token.tool_call_id}: ring-buffer loss={loss}"
-            )
+            violations.append(f"{token.tool_call_id}: ring-buffer loss={loss}")
         if relevant_gaps:
             violations.append(
                 f"{token.tool_call_id}: relevant coverage gaps={len(relevant_gaps)}"
             )
         if mapping_gaps:
             kinds = sorted({gap["kind"] for gap in mapping_gaps})
-            violations.append(
-                f"{token.tool_call_id}: mapping gaps={','.join(kinds)}"
-            )
+            violations.append(f"{token.tool_call_id}: mapping gaps={','.join(kinds)}")
         summary["integrity"] = {
             "status": "failed" if violations else "ok",
             "errors": violations,
@@ -2676,9 +2732,7 @@ class ClauseTelemetryCollector:
                     "ring_loss_total": total_loss,
                     "cleanup": self._cleanup_status,
                     "integrity": {
-                        "status": (
-                            "failed" if self._integrity_errors else "ok"
-                        ),
+                        "status": ("failed" if self._integrity_errors else "ok"),
                         "errors": self._integrity_errors,
                     },
                     "provenance": {

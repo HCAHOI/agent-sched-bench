@@ -27,8 +27,7 @@ def _collect(case: tuple[str, int, str]):
     tag, blocks, output_path = case
     output = shlex.quote(output_path)
     command = (
-        f"dd if=/dev/zero of={output} bs=4096 count={blocks} "
-        "conv=fsync status=none"
+        f"dd if=/dev/zero of={output} bs=4096 count={blocks} conv=fsync status=none"
     )
     return tag, blocks, collect_case(command, f"io_{tag}")
 
@@ -95,8 +94,54 @@ def test_failed_execve_emits_pending_argv_and_errno() -> None:
     assert attempts[0].errno == 2
     metrics, gaps = analyze(run)
     _assert_only_harness_root_pre_exec_gaps(run, gaps)
-    assert next(metric for metric in metrics if metric.bin == "python3").normal_exit_status == 1
+    assert (
+        next(metric for metric in metrics if metric.bin == "python3").normal_exit_status
+        == 1
+    )
     assert run.lifecycle_map_entries == {"current_seq": 0, "pending_seq": 0}
+
+
+def test_argv_capture_flags_cover_truncation_cap_and_short_argv() -> None:
+    payload = (
+        "import subprocess;"
+        "subprocess.run(['/bin/true','e'*511],check=True);"
+        "subprocess.run(['/bin/true','x'*600],check=True);"
+        "subprocess.run(['/bin/true',*map(str,range(9))],check=True);"
+        "subprocess.run(['/bin/true','ok'],check=True)"
+    )
+    run = collect_case(
+        f"{shlex.quote(sys.executable)} -c {shlex.quote(payload)}",
+        "argv_capture_flags",
+    )
+
+    assert run.reserve_failures == 0
+    metrics, gaps = analyze(run)
+    _assert_only_harness_root_pre_exec_gaps(run, gaps)
+    true_metrics = [metric for metric in metrics if metric.bin == "true"]
+    exact_buffer_edge = next(
+        metric
+        for metric in true_metrics
+        if len(metric.argv) == 2 and metric.argv[1].startswith("e")
+    )
+    truncated = next(
+        metric
+        for metric in true_metrics
+        if len(metric.argv) == 2 and metric.argv[1].startswith("x")
+    )
+    capped = next(metric for metric in true_metrics if metric.argv[1:3] == ("0", "1"))
+    short = next(
+        metric
+        for metric in true_metrics
+        if len(metric.argv) == 2 and metric.argv[1] == "ok"
+    )
+
+    assert len(exact_buffer_edge.argv[1]) == C.ARG_BYTES - 1
+    assert exact_buffer_edge.argv_capture_flags == 0
+    assert len(truncated.argv[1]) == C.ARG_BYTES - 1
+    assert truncated.argv_capture_flags == 1 << 1
+    assert len(capped.argv) == C.MAX_ARGS
+    assert capped.argv_capture_flags == 1 << C.MAX_ARGS
+    assert short.argv_capture_flags == 0
 
 
 def test_normal_exec_exit_status_is_decoded_from_kernel_wait_status() -> None:
@@ -124,10 +169,7 @@ def test_terminal_scheduler_sample_keeps_identity_but_not_metrics(
         for event in run.events
         if event["type"] == "perf"
         and event["exec_seq"] != C.SENTINEL
-        and (
-            clause := by_key.get((event["host_pid"], event["exec_seq"]))
-        )
-        is not None
+        and (clause := by_key.get((event["host_pid"], event["exec_seq"]))) is not None
         and event["ts_ns"] >= clause.t_end_ns
     ]
 
@@ -135,12 +177,8 @@ def test_terminal_scheduler_sample_keeps_identity_but_not_metrics(
     assert terminal_samples
     metrics, gaps = analyze(run)
     _assert_only_harness_root_pre_exec_gaps(run, gaps)
-    assert not {
-        gap["reason"] for gap in gaps
-    } & {"sentinel_after_successful_exec"}
-    affected = {
-        (event["host_pid"], event["exec_seq"]) for event in terminal_samples
-    }
+    assert not {gap["reason"] for gap in gaps} & {"sentinel_after_successful_exec"}
+    affected = {(event["host_pid"], event["exec_seq"]) for event in terminal_samples}
     assert all(
         metric.provenance["identity_only_sample_count"] > 0
         for metric in metrics
@@ -167,16 +205,14 @@ def test_fork_reinitializes_child_slot_before_first_exec(
         "pid=os.fork();"
         "deadline=time.thread_time()+0.03 if pid==0 else 0;"
         "exec('while time.thread_time() < deadline: pass\\n"
-        "os.execve(\"/bin/true\", [\"true\"], os.environ)' if pid==0 else "
+        'os.execve("/bin/true", ["true"], os.environ)\' if pid==0 else '
         "'os.waitpid(pid, 0)')"
     )
     run = collect_case(
         f"{shlex.quote(sys.executable)} -c {shlex.quote(payload)}",
         "fork_slot_reinit",
     )
-    child_fork = next(
-        event for event in run.events if event["type"] == "fork"
-    )
+    child_fork = next(event for event in run.events if event["type"] == "fork")
     child_tid = child_fork["child_host_tid"]
     child_exec = next(
         event

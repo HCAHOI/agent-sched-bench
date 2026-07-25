@@ -19,6 +19,7 @@ from trace_collect.clause_telemetry import (
     ClauseTelemetryCollector,
     ClauseTelemetryIntegrityError,
     ToolCallToken,
+    _is_protocol_timeout,
     shell_command_lookup_failure_evidence,
     validate_clause_telemetry_runtime,
 )
@@ -38,6 +39,7 @@ def _event(
     child_tid: int = 0,
     arg_index: int = 0,
     arg: str = "",
+    arg_flags: int = 0,
     cpu_ns: int = 0,
     rss_pages: int = 0,
     mm_ptr: int = 0,
@@ -65,6 +67,7 @@ def _event(
         "child_host_tid": child_tid or child,
         "arg_index": arg_index,
         "arg": arg,
+        "arg_flags": arg_flags,
         "exit_code": exit_code,
         "errno": exit_code if event_type == "failed_exec_attempt" else 0,
     }
@@ -277,9 +280,7 @@ def test_summary_preserves_structural_gap_and_target_availability() -> None:
             "entry_pid": 50,
             "entry_parent_relation": "entry_parent",
             "fork_parent_pid": None,
-            "reason": (
-                "sentinel_exec_seq_without_active_exec_image_or_owned_ancestor"
-            ),
+            "reason": ("sentinel_exec_seq_without_active_exec_image_or_owned_ancestor"),
         }
     ]
     assert summary["target_availability"]["latency"]["available"] == 1
@@ -313,6 +314,103 @@ def test_summary_preserves_structural_gap_and_target_availability() -> None:
             }
         ],
     }
+
+
+@pytest.mark.parametrize(
+    "marker",
+    ["[timeout]", "[resource_timeout]", "[resource_stall_timeout]"],
+)
+def test_protocol_timeout_requires_124_and_exact_marker_line(marker: str) -> None:
+    assert _is_protocol_timeout(124, f"output\n{marker}\n")
+    assert not _is_protocol_timeout(124, "ordinary failure")
+    assert not _is_protocol_timeout(1, marker)
+    assert not _is_protocol_timeout(124, f"prefix {marker} suffix")
+
+
+def test_protocol_timeout_artifact_keeps_metrics_without_new_schema_fields() -> None:
+    collector = _collector_without_bpf()
+    events = [
+        _event("fork", 1, 50, child=100),
+        _event("exec_arg", 10_000_000, 100, seq=0, arg="/bin/slow"),
+        _event(
+            "exec_boundary",
+            20_000_000,
+            100,
+            seq=0,
+            parent=50,
+            rss_pages=256,
+            mm_ptr=10,
+        ),
+        _event(
+            "perf",
+            520_000_000,
+            100,
+            seq=0,
+            cpu_ns=400_000_000,
+            rss_pages=256,
+            mm_ptr=10,
+        ),
+        _event(
+            "perf",
+            1_020_000_000,
+            100,
+            seq=0,
+            cpu_ns=800_000_000,
+            rss_pages=512,
+            mm_ptr=10,
+        ),
+        _event(
+            "exit_boundary",
+            1_220_000_000,
+            100,
+            seq=0,
+            parent=50,
+            cpu_ns=900_000_000,
+            rss_pages=512,
+            mm_ptr=10,
+            exit_code=9,
+            io_read=10,
+            io_write=20,
+        ),
+    ]
+
+    summary, violations = collector._summarize_call(
+        token=ToolCallToken("call-timeout", "slow", 0, 0, 0),
+        ended_ns=1_300_000_000,
+        events=events,
+        loss=0,
+        perf_samples=2,
+        protocol_timeout=True,
+    )
+
+    assert violations == []
+    row = summary["clauses"][0]
+    assert row["latency_ms"] is None
+    assert row["peak_cpu_cores"] is not None
+    assert row["sampled_peak_rss_mb"] is not None
+    assert row["cpu_ns_cumulative"] == 900_000_000
+    assert row["disk_io"]["read_bytes_total"] == 10
+    assert row["disk_io"]["write_bytes_total"] == 20
+    assert set(row["availability"].values()) == {"unknown:protocol_timeout"}
+    assert summary["mapping"]["observation_clause_count"] == 0
+
+    def keys(value: Any) -> set[str]:
+        if isinstance(value, dict):
+            return set(value) | {key for child in value.values() for key in keys(child)}
+        if isinstance(value, list):
+            return {key for child in value for key in keys(child)}
+        return set()
+
+    assert keys(summary).isdisjoint(
+        {
+            "argv_capture_flags",
+            "right_censored",
+            "censored_wall_ms",
+            "source_agreed",
+            "timeout_evidence",
+            "protocol_timeout",
+        }
+    )
 
 
 def test_fork_only_processes_collapse_to_nearest_transitive_exec_ancestor() -> None:
@@ -580,8 +678,7 @@ def test_entry_fork_pre_exec_gap_is_structural_with_payload() -> None:
     setup = [
         event
         for event in summary["coverage_gaps"]["structural"]["events"]
-        if event["entry_parent_relation"]
-        == "entry_fork_pre_exec_structural_setup"
+        if event["entry_parent_relation"] == "entry_fork_pre_exec_structural_setup"
     ]
     assert setup == [
         {
@@ -591,15 +688,11 @@ def test_entry_fork_pre_exec_gap_is_structural_with_payload() -> None:
             "host_tid": 100,
             "exec_seq": 2**64 - 1,
             "entry_pid": 50,
-            "entry_parent_relation": (
-                "entry_fork_pre_exec_structural_setup"
-            ),
+            "entry_parent_relation": ("entry_fork_pre_exec_structural_setup"),
             "fork_parent_pid": 50,
             "reason": "entry_fork_pre_exec_structural_setup",
             "fork_ancestry": [100, 50],
-            "fork_chain_records": [
-                {"child_id": 100, "parent_pid": 50, "ts_ns": 110}
-            ],
+            "fork_chain_records": [{"child_id": 100, "parent_pid": 50, "ts_ns": 110}],
             "fork_ts_ns": 110,
         }
     ]
@@ -706,9 +799,7 @@ def test_unmatched_static_without_failed_exec_evidence_remains_fatal() -> None:
         perf_samples=0,
     )
     assert summary["no_runtime_exec"] == []
-    assert violations == [
-        "call-unmatched: mapping gaps=unmatched_static_clause"
-    ]
+    assert violations == ["call-unmatched: mapping gaps=unmatched_static_clause"]
 
 
 def test_direct_command_not_found_is_separate_target_unavailable_evidence() -> None:
@@ -859,9 +950,7 @@ def test_command_not_found_path_heads_must_agree_exactly() -> None:
             source_tool_call_id="source-1",
             replay_tool_call_id="replay-1",
             source_command=command,
-            source_tool_result=(
-                "/bin/sh: 1: /opt/python: not found\n\nExit code: 127"
-            ),
+            source_tool_result=("/bin/sh: 1: /opt/python: not found\n\nExit code: 127"),
             replay_result="/bin/sh: 1: /usr/bin/python: not found",
             replay_stderr="/bin/sh: 1: /usr/bin/python: not found",
             replay_exit_code=127,
@@ -965,9 +1054,7 @@ def test_unrelated_failed_exec_evidence_does_not_resolve_static_clause() -> None
         perf_samples=0,
     )
     assert summary["no_runtime_exec"] == []
-    assert violations == [
-        "call-unrelated: mapping gaps=unmatched_static_clause"
-    ]
+    assert violations == ["call-unrelated: mapping gaps=unmatched_static_clause"]
 
 
 def test_guard_blocked_exec_is_explicit_no_runtime_and_advances_source(
@@ -1110,9 +1197,7 @@ def test_exec_delimiter_uses_tool_call_id_and_original_command() -> None:
         clause_telemetry=collector,
     )
     tool.set_tool_call_context("tc-123", {"command": "echo hi"})
-    result = asyncio.run(
-        tool.execute("echo hi", working_dir="/tmp", timeout=10)
-    )
+    result = asyncio.run(tool.execute("echo hi", working_dir="/tmp", timeout=10))
     tool.finish_clause_telemetry()
     assert result == "hi\n\nExit code: 0"
     assert collector.calls == [("tc-123", "echo hi")]
@@ -1319,9 +1404,7 @@ def test_integrity_finalization_preserves_tool_result_for_trace_hook() -> None:
 
         async def after_iteration(self, context: AgentHookContext) -> None:
             self.tool_rows = [
-                message
-                for message in context.messages
-                if message.get("role") == "tool"
+                message for message in context.messages if message.get("role") == "tool"
             ]
 
     registry = ToolRegistry()

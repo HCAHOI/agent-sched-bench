@@ -55,6 +55,8 @@ from tool_resource.runtime_kb import ClauseObservation
 _WINDOW_NS = 500_000_000
 _MIN_ELIGIBLE_SPAN_NS = 1_000_000_000  # resource_timeline: clause >= 1 s
 _MIN_WINDOW_SPAN_NS = 100_000_000
+_MAX_CAPTURED_ARGS = 8
+_ARGV_CAPPED_FLAG = 1 << _MAX_CAPTURED_ARGS
 
 _SHELL_BINS = frozenset({"sh", "dash", "bash", "ash", "zsh"})
 _SHELL_LOOKUP_DIAGNOSTIC = re.compile(
@@ -65,11 +67,39 @@ _SHELL_LOOKUP_DIAGNOSTIC = re.compile(
 )
 _NOEXEC_BUILTINS = frozenset(
     {
-        "cd", "export", "unset", "set", "true", "false", ":", "alias", "umask",
-        "shift", "local", "read", "echo", "printf", "test", "[", "wait", "eval",
-        "source", ".", "pwd", "exit", "return", "break", "continue", "trap",
+        "cd",
+        "export",
+        "unset",
+        "set",
+        "true",
+        "false",
+        ":",
+        "alias",
+        "umask",
+        "shift",
+        "local",
+        "read",
+        "echo",
+        "printf",
+        "test",
+        "[",
+        "wait",
+        "eval",
+        "source",
+        ".",
+        "pwd",
+        "exit",
+        "return",
+        "break",
+        "continue",
+        "trap",
     }
 )
+# `source` is a bash-ism: the ONLY _NOEXEC_BUILTINS member a real POSIX sh
+# (dash/ash) can report "not found" for. Every other member is mandated or
+# universally built in, so a "not found" diagnostic naming it can only be
+# forged payload and must keep failing closed.
+_DIALECT_DEPENDENT_BUILTINS = frozenset({"source"})
 
 
 @dataclass(frozen=True)
@@ -103,6 +133,7 @@ class ExecImageRecord:
     exit_signal: int | None = None
     normal_exit_status: int | None = None
     has_causal_end: bool = True  # real exit / next same-pid exec; else fail closed
+    argv_capture_flags: int = 0
     provenance: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -115,6 +146,7 @@ class FailedExecAttempt:
     ts_ns: int
     argv: tuple[str, ...]
     errno: int
+    argv_capture_flags: int = 0
 
 
 @dataclass(frozen=True)
@@ -197,7 +229,14 @@ class BridgeResult:
 
     @property
     def observations(self) -> list[ClauseObservation]:
-        return [bc.observation for bc in self.bridged]
+        return [
+            bc.observation
+            for bc in self.bridged
+            if not all(
+                reason == "unknown:protocol_timeout"
+                for reason in bc.availability.values()
+            )
+        ]
 
 
 # --------------------------------------------------------------------------
@@ -299,11 +338,7 @@ def _merge_disk_io(
         "disk_write_bytes_total",
         "disk_cancelled_write_bytes_total",
     )
-    if any(
-        getattr(image, field) is None
-        for image in owned
-        for field in fields
-    ):
+    if any(getattr(image, field) is None for image in owned for field in fields):
         reasons = sorted(
             {
                 image.disk_io_reason
@@ -313,8 +348,7 @@ def _merge_disk_io(
         )
         return None, "owned_image_unavailable:" + ",".join(reasons)
     values = tuple(
-        sum(int(getattr(image, field)) for image in owned)
-        for field in fields
+        sum(int(getattr(image, field)) for image in owned) for field in fields
     )
     if any(value < 0 for value in values):
         return None, "invalid_negative_disk_io"
@@ -418,8 +452,9 @@ def _valid_lookup_failure(
 class _ControlState:
     status: int
     controller_clause_index: int
-    controller_pid: int
-    controller_exec_seq: int
+    controller_pid: int | None
+    controller_exec_seq: int | None
+    controller_evidence: str = "mapped_exec_image"
     edge_path: tuple[int, ...] = ()
 
 
@@ -429,9 +464,10 @@ def _resolve_control_short_circuits(
     assigned: Mapping[int, int],
     evidence: Mapping[int, str],
     chains: Mapping[int, Sequence[ExecImageRecord]],
+    lookup_assigned: Mapping[int, ShellCommandLookupFailure],
     excluded: set[int],
 ) -> tuple[dict[int, Mapping[str, Any]], list[MappingGap]]:
-    """Resolve only parser-proven short-circuits from normal mapped exits."""
+    """Resolve parser-proven short-circuits from exact controller evidence."""
 
     leaf_states: dict[int, _ControlState] = {}
     for clause_index, pid in assigned.items():
@@ -449,6 +485,15 @@ def _resolve_control_short_circuits(
                 controller_clause_index=clause_index,
                 controller_pid=pid,
                 controller_exec_seq=terminal.exec_seq,
+            )
+    for clause_index, failure in lookup_assigned.items():
+        if failure.exit_code_semantics == "direct_command_not_found_127":
+            leaf_states[clause_index] = _ControlState(
+                status=127,
+                controller_clause_index=clause_index,
+                controller_pid=None,
+                controller_exec_seq=None,
+                controller_evidence="shell_command_lookup_failure_exact_head",
             )
 
     edge_states: dict[int, _ControlState] = {}
@@ -479,9 +524,7 @@ def _resolve_control_short_circuits(
                     edge_path=(*rhs.edge_path, edge_id),
                 )
             continue
-        short_circuited = (
-            edge["operator"] == "&&" and lhs.status != 0
-        ) or (
+        short_circuited = (edge["operator"] == "&&" and lhs.status != 0) or (
             edge["operator"] == "||" and lhs.status == 0
         )
         if not short_circuited:
@@ -520,6 +563,7 @@ def _resolve_control_short_circuits(
                     "controller_bin": static[lhs.controller_clause_index]["bin"],
                     "controller_pid": lhs.controller_pid,
                     "controller_exec_seq": lhs.controller_exec_seq,
+                    "controller_mapping_evidence": lhs.controller_evidence,
                     "controller_normal_exit_status": lhs.status,
                     "controlled_clause_index": index,
                     "controlled_rhs_clause_indices": rhs_indices,
@@ -527,15 +571,14 @@ def _resolve_control_short_circuits(
                         executable_rhs_indices
                     ),
                     "controlled_rhs_subtree": dict(edge["rhs"]),
-                    "source_replay_fidelity": (
-                        "exact_tool_result_and_exit_code"
-                    ),
+                    "source_replay_fidelity": ("exact_tool_result_and_exit_code"),
                 }
         edge_states[edge_id] = _ControlState(
             status=lhs.status,
             controller_clause_index=lhs.controller_clause_index,
             controller_pid=lhs.controller_pid,
             controller_exec_seq=lhs.controller_exec_seq,
+            controller_evidence=lhs.controller_evidence,
             edge_path=(*lhs.edge_path, edge_id),
         )
     return resolved, gaps
@@ -549,22 +592,42 @@ def _is_subsequence(sub: Sequence[str], seq: Sequence[str]) -> bool:
 def _evidence_tier(
     static_argv: tuple[str, ...], static_bin: str, chain: Sequence[ExecImageRecord]
 ) -> int | None:
-    """1=exact argv, 2=wrapper-subsequence/argv-prefix, 3=bin-only, None=no match."""
+    """1=exact, 2=truncated prefix, 3=wrapper/prefix, 4=bin, None=no match."""
 
     chain_bins = tuple(img.bin for img in chain)
     terminal_argv = _norm(chain[-1].argv)
-    if terminal_argv == static_argv:
+    terminal_flags = chain[-1].argv_capture_flags
+    argv_capped = any(img.argv_capture_flags & _ARGV_CAPPED_FLAG for img in chain)
+    if argv_capped:
+        return None
+    if terminal_flags == 0 and terminal_argv == static_argv:
         return 1
-    if len(chain_bins) >= 2 and _is_subsequence(chain_bins, static_argv):
+    valid_word_flags = (1 << len(terminal_argv)) - 1
+    truncated_flags = terminal_flags & valid_word_flags
+    if (
+        truncated_flags
+        and terminal_flags == truncated_flags
+        and len(terminal_argv) == len(static_argv)
+        and all(
+            static_word.startswith(runtime_word)
+            if truncated_flags & (1 << index)
+            else runtime_word == static_word
+            for index, (runtime_word, static_word) in enumerate(
+                zip(terminal_argv, static_argv, strict=True)
+            )
+        )
+    ):
         return 2
+    if len(chain_bins) >= 2 and _is_subsequence(chain_bins, static_argv):
+        return 3
     if (
         len(terminal_argv) >= 2
         and len(terminal_argv) < len(static_argv)
         and static_argv[: len(terminal_argv)] == terminal_argv
     ):
-        return 2
-    if chain[0].bin == static_bin:
         return 3
+    if chain[0].bin == static_bin:
+        return 4
     return None
 
 
@@ -578,7 +641,7 @@ def _components(
         adj.setdefault(("s", si), [])
     for pid in chains:
         adj.setdefault(("c", pid), [])
-    for (si, pid) in tier:
+    for si, pid in tier:
         if si in statics and pid in chains:
             adj[("s", si)].append(("c", pid))
             adj[("c", pid)].append(("s", si))
@@ -619,7 +682,13 @@ def _assign(
     assigned: dict[int, int] = {}
     used: set[int] = set()
     evidence: dict[int, str] = {}
-    for tv in (1, 2, 3):
+    evidence_labels = {
+        1: "tier1",
+        2: "tier1_truncated_prefix",
+        3: "tier2",
+        4: "tier3",
+    }
+    for tv in (1, 2, 3, 4):
         changed = True
         while changed:
             changed = False
@@ -642,7 +711,7 @@ def _assign(
                 if len(claimants) == 1:
                     assigned[si] = pid
                     used.add(pid)
-                    evidence[si] = f"tier{tv}"
+                    evidence[si] = evidence_labels[tv]
                     changed = True
 
     ambiguous: set[int] = set()
@@ -683,6 +752,7 @@ def bridge_command(
     fork_parent: Mapping[int, int],
     epoch_offset: float = 0.0,
     loss_count: int = 0,
+    protocol_timeout: bool = False,
 ) -> BridgeResult:
     """Map exec images to static mvdan clauses and aggregate per clause.
 
@@ -716,8 +786,19 @@ def bridge_command(
     for child, parent in fork_parent.items():
         children.setdefault(parent, []).append(child)
 
+    statics = {si: (str(c["bin"]), _norm(c["argv"])) for si, c in enumerate(static)}
+
     def is_shell(pid: int) -> bool:
-        return pid in chains and all(img.bin in _SHELL_BINS for img in chains[pid])
+        if pid not in chains or not all(img.bin in _SHELL_BINS for img in chains[pid]):
+            return False
+        # Ignore orchestration shells, but preserve an explicitly requested
+        # shell clause (for example ``bash installer.sh``). Bin-only evidence is
+        # intentionally insufficient here: the outer ``sh -c <command>`` often
+        # shares the same bin and must remain structural.
+        return not any(
+            _evidence_tier(static_argv, static_bin, chains[pid]) in {1, 2, 3}
+            for static_bin, static_argv in statics.values()
+        )
 
     def nearest_nonstructural_ancestor(pid: int) -> int | None:
         cur = fork_parent.get(pid)
@@ -732,23 +813,16 @@ def bridge_command(
         for pid in chains
         if not is_shell(pid) and nearest_nonstructural_ancestor(pid) is None
     }
-    statics = {
-        si: (str(c["bin"]), _norm(c["argv"])) for si, c in enumerate(static)
-    }
     assigned, evidence, ambiguous = _assign(statics, first_level)
     mapped_roots = set(assigned.values())
-    failed_by_identity: dict[
-        tuple[str, tuple[str, ...]], list[FailedExecAttempt]
-    ] = {}
+    failed_by_identity: dict[tuple[str, tuple[str, ...]], list[FailedExecAttempt]] = {}
     for attempt in failed_exec_attempts:
         normalized = _norm(attempt.argv)
-        if normalized:
+        if normalized and attempt.argv_capture_flags == 0:
             failed_by_identity.setdefault((normalized[0], normalized), []).append(
                 attempt
             )
-    failed_static_candidates: dict[
-        tuple[str, tuple[str, ...]], list[int]
-    ] = {}
+    failed_static_candidates: dict[tuple[str, tuple[str, ...]], list[int]] = {}
     for si, identity in statics.items():
         if (
             si not in assigned
@@ -775,7 +849,8 @@ def bridge_command(
             and si not in ambiguous
             and si not in failed_assigned
             and clause["argv"][0] == command_lookup_failure.executable_head
-            and str(clause["bin"]) not in _NOEXEC_BUILTINS
+            and str(clause["bin"])
+            not in (_NOEXEC_BUILTINS - _DIALECT_DEPENDENT_BUILTINS)
         ]
         if len(lookup_candidates) == 1:
             lookup_assigned[lookup_candidates[0]] = command_lookup_failure
@@ -804,6 +879,7 @@ def bridge_command(
             assigned,
             evidence,
             chains,
+            lookup_assigned,
             {
                 *ambiguous,
                 *failed_assigned,
@@ -838,8 +914,18 @@ def bridge_command(
             else:
                 bridged.append(
                     _aggregate(
-                        repo, clause, owned_pids, owned_images, evidence[si],
+                        repo,
+                        clause,
+                        owned_pids,
+                        owned_images,
+                        evidence[si],
                         epoch_offset,
+                        protocol_timeout_terminated=(
+                            protocol_timeout
+                            and any(
+                                image.exit_signal is not None for image in owned_images
+                            )
+                        ),
                     )
                 )
         elif si in ambiguous:
@@ -956,6 +1042,8 @@ def _aggregate(
     owned_images: Sequence[ExecImageRecord],
     evidence: str,
     epoch_offset: float,
+    *,
+    protocol_timeout_terminated: bool = False,
 ) -> BridgedClause:
     t_exec = min(img.t_exec_ns for img in owned_images)
     t_end = max(img.t_end_ns for img in owned_images)
@@ -980,7 +1068,7 @@ def _aggregate(
         argv=tuple(clause["argv"]),
         ts_start=epoch_offset + t_exec / 1e9,
         ts_end=epoch_offset + t_end / 1e9,
-        latency_ms=(t_end - t_exec) / 1e6,
+        latency_ms=(None if protocol_timeout_terminated else (t_end - t_exec) / 1e6),
         peak_cpu_cores=peak_cpu,
         sampled_peak_rss_mb=peak_rss,
         cpu_ns_cumulative=sum(i.cpu_ns_cumulative for i in owned_images),
@@ -989,14 +1077,19 @@ def _aggregate(
         in_subst=bool(clause.get("in_subst", False)),
         pipeline_position=int(clause.get("pipeline_position", -1)),
     )
-    availability = {
-        "latency": "ok",
-        "cpu": "ok" if peak_cpu is not None else f"unknown:{cpu_reason}",
-        "memory": "ok" if peak_rss is not None else f"unknown:{rss_reason}",
-        "disk_io": (
-            "ok" if disk_io is not None else f"unknown:{disk_io_reason}"
-        ),
-    }
+    availability = (
+        dict.fromkeys(
+            ("latency", "cpu", "memory", "disk_io"),
+            "unknown:protocol_timeout",
+        )
+        if protocol_timeout_terminated
+        else {
+            "latency": "ok",
+            "cpu": "ok" if peak_cpu is not None else f"unknown:{cpu_reason}",
+            "memory": "ok" if peak_rss is not None else f"unknown:{rss_reason}",
+            "disk_io": ("ok" if disk_io is not None else f"unknown:{disk_io_reason}"),
+        }
+    )
     provenance = {
         "mapping_evidence": evidence,
         "owned_exec_image_count": len(owned_images),
@@ -1032,9 +1125,7 @@ def _aggregate(
                 "identity_only_sample_count": i.provenance.get(
                     "identity_only_sample_count", 0
                 ),
-                "identity_only_samples": i.provenance.get(
-                    "identity_only_samples", []
-                ),
+                "identity_only_samples": i.provenance.get("identity_only_samples", []),
             }
             for i in owned_images
         ],
@@ -1046,9 +1137,7 @@ def _aggregate(
         mapping_evidence=evidence,
         disk_read_bytes_total=disk_io[0] if disk_io is not None else None,
         disk_write_bytes_total=disk_io[1] if disk_io is not None else None,
-        disk_cancelled_write_bytes_total=(
-            disk_io[2] if disk_io is not None else None
-        ),
+        disk_cancelled_write_bytes_total=(disk_io[2] if disk_io is not None else None),
         availability=availability,
         provenance=provenance,
     )
