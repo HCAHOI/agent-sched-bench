@@ -44,7 +44,8 @@ not update the KB; ties over *identical* static identities map interchangeably
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping, Sequence
 
 from tool_resource.features import parse_command_clauses
@@ -56,6 +57,12 @@ _MIN_ELIGIBLE_SPAN_NS = 1_000_000_000  # resource_timeline: clause >= 1 s
 _MIN_WINDOW_SPAN_NS = 100_000_000
 
 _SHELL_BINS = frozenset({"sh", "dash", "bash", "ash", "zsh"})
+_SHELL_LOOKUP_DIAGNOSTIC = re.compile(
+    r"^(?:/[^:\n]+|(?:ba|da|a|z)?sh): "
+    r"(?:(?:line )?\d+): "
+    r"(?P<head>[A-Za-z0-9_./+@%-]+): "
+    r"(?:(?:command )?not found)$"
+)
 _NOEXEC_BUILTINS = frozenset(
     {
         "cd", "export", "unset", "set", "true", "false", ":", "alias", "umask",
@@ -88,10 +95,44 @@ class ExecImageRecord:
     peak_cpu_reason: str = "ok"
     sampled_peak_rss_mb: float | None = None  # diagnostic only
     sampled_rss_reason: str = "ok"
+    disk_read_bytes_total: int | None = None
+    disk_write_bytes_total: int | None = None
+    disk_cancelled_write_bytes_total: int | None = None
+    disk_io_reason: str = "missing_disk_io"
     cpu_ns_cumulative: int = 0
     exit_signal: int | None = None
+    normal_exit_status: int | None = None
     has_causal_end: bool = True  # real exit / next same-pid exec; else fail closed
     provenance: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class FailedExecAttempt:
+    """One execve/execveat syscall that returned an errno without a new image."""
+
+    host_pid: int
+    exec_seq: int
+    ts_ns: int
+    argv: tuple[str, ...]
+    errno: int
+
+
+@dataclass(frozen=True)
+class ShellCommandLookupFailure:
+    """Source/replay-agreed shell command-not-found evidence."""
+
+    executable_head: str
+    command: str
+    source_tool_call_id: str
+    replay_tool_call_id: str
+    source_exit_code: int
+    replay_exit_code: int
+    source_diagnostic: str
+    replay_diagnostic: str
+    source_channel: str
+    replay_channel: str
+    parser: str
+    exit_code_semantics: str
 
 
 @dataclass(frozen=True)
@@ -106,13 +147,37 @@ class BridgedClause:
     owned_pids: tuple[int, ...]
     owned_exec_images: tuple[tuple[int, int], ...]
     mapping_evidence: str
-    availability: dict[str, str]  # cpu/memory/latency -> "ok" | "unknown:<reason>"
+    disk_read_bytes_total: int | None
+    disk_write_bytes_total: int | None
+    disk_cancelled_write_bytes_total: int | None
+    availability: dict[str, str]
     provenance: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class NoRuntimeExec:
+    """A static clause resolved to explicit non-runtime evidence."""
+
+    bin: str
+    argv: tuple[str, ...]
+    mapping_evidence: str
+    attempts: tuple[FailedExecAttempt, ...] = ()
+    command_lookup_failure: ShellCommandLookupFailure | None = None
+    control_short_circuit: Mapping[str, Any] | None = None
+    availability: dict[str, str] = field(
+        default_factory=lambda: {
+            "latency": "unknown:no_runtime_exec",
+            "cpu": "unknown:no_runtime_exec",
+            "memory": "unknown:no_runtime_exec",
+            "disk_io": "unknown:no_runtime_exec",
+        }
+    )
 
 
 @dataclass(frozen=True)
 class BridgeResult:
     bridged: list[BridgedClause]
+    no_runtime_exec: list[NoRuntimeExec]
     coverage_gaps: list[MappingGap]
     unobserved_builtins: list[str]
     static_clause_count: int
@@ -213,6 +278,36 @@ def _merge_rss(owned: Sequence[ExecImageRecord]) -> tuple[float | None, str]:
     return peak, "ok"
 
 
+def _merge_disk_io(
+    owned: Sequence[ExecImageRecord],
+) -> tuple[tuple[int, int, int] | None, str]:
+    fields = (
+        "disk_read_bytes_total",
+        "disk_write_bytes_total",
+        "disk_cancelled_write_bytes_total",
+    )
+    if any(
+        getattr(image, field) is None
+        for image in owned
+        for field in fields
+    ):
+        reasons = sorted(
+            {
+                image.disk_io_reason
+                for image in owned
+                if any(getattr(image, field) is None for field in fields)
+            }
+        )
+        return None, "owned_image_unavailable:" + ",".join(reasons)
+    values = tuple(
+        sum(int(getattr(image, field)) for image in owned)
+        for field in fields
+    )
+    if any(value < 0 for value in values):
+        return None, "invalid_negative_disk_io"
+    return values, "ok"
+
+
 # --------------------------------------------------------------------------
 # Evidence-prioritized staged matching
 # --------------------------------------------------------------------------
@@ -228,6 +323,209 @@ def _norm(argv: Sequence[str]) -> tuple[str, ...]:
     if not argv:
         return ()
     return (argv[0].rsplit("/", 1)[-1], *argv[1:])
+
+
+def parse_shell_lookup_diagnostic(line: str) -> str | None:
+    """Return the exact missing executable head from one anchored shell line."""
+
+    match = _SHELL_LOOKUP_DIAGNOSTIC.fullmatch(line)
+    return match.group("head") if match is not None else None
+
+
+def _lookup_exit_semantics(
+    static: Sequence[Mapping[str, Any]],
+    executable_head: str,
+    exit_code: int,
+) -> str | None:
+    if exit_code == 127:
+        return "direct_command_not_found_127"
+    if exit_code != 0:
+        return None
+    candidates = [
+        index
+        for index, clause in enumerate(static)
+        if clause.get("argv") and clause["argv"][0] == executable_head
+    ]
+    if len(candidates) != 1:
+        return None
+    index = candidates[0]
+    clause = static[index]
+    if index + 1 >= len(static) or not clause.get("in_pipe"):
+        return None
+    next_clause = static[index + 1]
+    if (
+        not next_clause.get("in_pipe")
+        or int(next_clause.get("pipeline_position", -1))
+        != int(clause.get("pipeline_position", -1)) + 1
+    ):
+        return None
+    return "nonfinal_pipeline_masked_0"
+
+
+def shell_lookup_exit_semantics(
+    command: str,
+    executable_head: str,
+    exit_code: int,
+) -> str | None:
+    """Classify the only accepted source/replay exit-code semantics."""
+
+    parsed = parse_command_clauses(command)
+    if parsed["parse_failed"]:
+        return None
+    return _lookup_exit_semantics(parsed["clauses"], executable_head, exit_code)
+
+
+def _valid_lookup_failure(
+    evidence: ShellCommandLookupFailure,
+    command: str,
+    static: Sequence[Mapping[str, Any]],
+) -> bool:
+    source_head = parse_shell_lookup_diagnostic(evidence.source_diagnostic)
+    replay_head = parse_shell_lookup_diagnostic(evidence.replay_diagnostic)
+    expected_semantics = _lookup_exit_semantics(
+        static,
+        evidence.executable_head,
+        evidence.source_exit_code,
+    )
+    return (
+        bool(evidence.source_tool_call_id)
+        and bool(evidence.replay_tool_call_id)
+        and evidence.command == command
+        and evidence.source_exit_code == evidence.replay_exit_code
+        and source_head == replay_head == evidence.executable_head
+        and evidence.source_channel == "source_tool_result"
+        and evidence.replay_channel in {"raw_stderr", "tool_result"}
+        and evidence.parser == "anchored_shell_command_not_found_v1"
+        and expected_semantics is not None
+        and evidence.exit_code_semantics == expected_semantics
+    )
+
+
+@dataclass(frozen=True)
+class _ControlState:
+    status: int
+    controller_clause_index: int
+    controller_pid: int
+    controller_exec_seq: int
+    edge_path: tuple[int, ...] = ()
+
+
+def _resolve_control_short_circuits(
+    static: Sequence[Mapping[str, Any]],
+    edges: Sequence[Mapping[str, Any]],
+    assigned: Mapping[int, int],
+    evidence: Mapping[int, str],
+    chains: Mapping[int, Sequence[ExecImageRecord]],
+    excluded: set[int],
+) -> tuple[dict[int, Mapping[str, Any]], list[MappingGap]]:
+    """Resolve only parser-proven short-circuits from normal mapped exits."""
+
+    leaf_states: dict[int, _ControlState] = {}
+    for clause_index, pid in assigned.items():
+        chain = chains[pid]
+        terminal = chain[-1]
+        if (
+            evidence.get(clause_index) != "interchangeable_identical"
+            and terminal.terminal
+            and terminal.has_causal_end
+            and terminal.exit_signal is None
+            and terminal.normal_exit_status is not None
+        ):
+            leaf_states[clause_index] = _ControlState(
+                status=terminal.normal_exit_status,
+                controller_clause_index=clause_index,
+                controller_pid=pid,
+                controller_exec_seq=terminal.exec_seq,
+            )
+
+    edge_states: dict[int, _ControlState] = {}
+    resolved: dict[int, Mapping[str, Any]] = {}
+    gaps: list[MappingGap] = []
+
+    def operand_state(operand: Mapping[str, Any]) -> _ControlState | None:
+        if operand["kind"] == "clause":
+            if (
+                operand["negated"]
+                or operand["contains_pipeline"]
+                or operand["contains_subshell"]
+            ):
+                return None
+            return leaf_states.get(int(operand["index"]))
+        if operand["kind"] == "edge":
+            return edge_states.get(int(operand["index"]))
+        return None
+
+    for edge in edges:
+        edge_id = int(edge["id"])
+        lhs = operand_state(edge["lhs"])
+        if lhs is None:
+            rhs = operand_state(edge["rhs"])
+            if rhs is not None:
+                edge_states[edge_id] = replace(
+                    rhs,
+                    edge_path=(*rhs.edge_path, edge_id),
+                )
+            continue
+        short_circuited = (
+            edge["operator"] == "&&" and lhs.status != 0
+        ) or (
+            edge["operator"] == "||" and lhs.status == 0
+        )
+        if not short_circuited:
+            rhs = operand_state(edge["rhs"])
+            if rhs is not None:
+                edge_states[edge_id] = replace(
+                    rhs,
+                    edge_path=(*rhs.edge_path, edge_id),
+                )
+            continue
+
+        rhs_indices = [int(index) for index in edge["rhs"]["clause_indices"]]
+        if any(index in assigned or index in excluded for index in rhs_indices):
+            gaps.append(
+                MappingGap(
+                    "control_flow_contradiction",
+                    f"control edge {edge_id} {edge['operator']} short-circuits "
+                    "an RHS clause with runtime or conflicting evidence",
+                )
+            )
+        else:
+            executable_rhs_indices = [
+                index
+                for index in rhs_indices
+                if str(static[index]["bin"]) not in _NOEXEC_BUILTINS
+            ]
+            for index in executable_rhs_indices:
+                if index in resolved:
+                    continue
+                resolved[index] = {
+                    "parser": "mvdan.cc/sh/v3",
+                    "control_edge_id": edge_id,
+                    "control_edge_path": [*lhs.edge_path, edge_id],
+                    "operator": edge["operator"],
+                    "controller_clause_index": lhs.controller_clause_index,
+                    "controller_bin": static[lhs.controller_clause_index]["bin"],
+                    "controller_pid": lhs.controller_pid,
+                    "controller_exec_seq": lhs.controller_exec_seq,
+                    "controller_normal_exit_status": lhs.status,
+                    "controlled_clause_index": index,
+                    "controlled_rhs_clause_indices": rhs_indices,
+                    "controlled_rhs_executable_clause_indices": (
+                        executable_rhs_indices
+                    ),
+                    "controlled_rhs_subtree": dict(edge["rhs"]),
+                    "source_replay_fidelity": (
+                        "exact_tool_result_and_exit_code"
+                    ),
+                }
+        edge_states[edge_id] = _ControlState(
+            status=lhs.status,
+            controller_clause_index=lhs.controller_clause_index,
+            controller_pid=lhs.controller_pid,
+            controller_exec_seq=lhs.controller_exec_seq,
+            edge_path=(*lhs.edge_path, edge_id),
+        )
+    return resolved, gaps
 
 
 def _is_subsequence(sub: Sequence[str], seq: Sequence[str]) -> bool:
@@ -364,6 +662,9 @@ def bridge_command(
     command: str,
     exec_images: Sequence[ExecImageRecord],
     *,
+    failed_exec_attempts: Sequence[FailedExecAttempt] = (),
+    command_lookup_failure: ShellCommandLookupFailure | None = None,
+    allow_control_short_circuit: bool = False,
     entry_pid: int,
     fork_parent: Mapping[int, int],
     epoch_offset: float = 0.0,
@@ -383,6 +684,7 @@ def bridge_command(
         reason = "parse_failed" if parsed["parse_failed"] else "nonzero_loss"
         return BridgeResult(
             bridged=[],
+            no_runtime_exec=[],
             coverage_gaps=[
                 MappingGap(reason, f"{reason}: run withheld from KB ({command!r})")
             ],
@@ -421,9 +723,68 @@ def bridge_command(
     }
     assigned, evidence, ambiguous = _assign(statics, first_level)
     mapped_roots = set(assigned.values())
+    failed_by_identity: dict[
+        tuple[str, tuple[str, ...]], list[FailedExecAttempt]
+    ] = {}
+    for attempt in failed_exec_attempts:
+        normalized = _norm(attempt.argv)
+        if normalized:
+            failed_by_identity.setdefault((normalized[0], normalized), []).append(
+                attempt
+            )
+    failed_static_candidates: dict[
+        tuple[str, tuple[str, ...]], list[int]
+    ] = {}
+    for si, identity in statics.items():
+        if (
+            si not in assigned
+            and si not in ambiguous
+            and identity[0] not in _NOEXEC_BUILTINS
+        ):
+            failed_static_candidates.setdefault(identity, []).append(si)
+    failed_assigned = {
+        indices[0]: tuple(failed_by_identity[identity])
+        for identity, indices in failed_static_candidates.items()
+        if len(indices) == 1 and identity in failed_by_identity
+    }
+    lookup_assigned: dict[int, ShellCommandLookupFailure] = {}
+    if command_lookup_failure is not None and _valid_lookup_failure(
+        command_lookup_failure,
+        command,
+        static,
+    ):
+        lookup_candidates = [
+            si
+            for si, clause in enumerate(static)
+            if clause.get("argv")
+            if si not in assigned
+            and si not in ambiguous
+            and si not in failed_assigned
+            and clause["argv"][0] == command_lookup_failure.executable_head
+            and str(clause["bin"]) not in _NOEXEC_BUILTINS
+        ]
+        if len(lookup_candidates) == 1:
+            lookup_assigned[lookup_candidates[0]] = command_lookup_failure
+    control_assigned, control_gaps = (
+        _resolve_control_short_circuits(
+            static,
+            parsed["control_edges"],
+            assigned,
+            evidence,
+            chains,
+            {
+                *ambiguous,
+                *failed_assigned,
+                *lookup_assigned,
+            },
+        )
+        if allow_control_short_circuit
+        else ({}, [])
+    )
 
     bridged: list[BridgedClause] = []
-    gaps: list[MappingGap] = []
+    no_runtime_exec: list[NoRuntimeExec] = []
+    gaps: list[MappingGap] = list(control_gaps)
     unobserved: list[str] = []
     owned_all: set[int] = set()
 
@@ -454,6 +815,33 @@ def bridge_command(
                     "ambiguous",
                     f"clause {si} bin={cbin!r} argv={list(clause['argv'])} "
                     "has multiple equally-valid runtime chains",
+                )
+            )
+        elif si in failed_assigned:
+            no_runtime_exec.append(
+                NoRuntimeExec(
+                    bin=cbin,
+                    argv=tuple(clause["argv"]),
+                    mapping_evidence="failed_exec_exact",
+                    attempts=failed_assigned[si],
+                )
+            )
+        elif si in lookup_assigned:
+            no_runtime_exec.append(
+                NoRuntimeExec(
+                    bin=cbin,
+                    argv=tuple(clause["argv"]),
+                    mapping_evidence="shell_command_lookup_failure_exact_head",
+                    command_lookup_failure=lookup_assigned[si],
+                )
+            )
+        elif si in control_assigned:
+            no_runtime_exec.append(
+                NoRuntimeExec(
+                    bin=cbin,
+                    argv=tuple(clause["argv"]),
+                    mapping_evidence="shell_control_short_circuit",
+                    control_short_circuit=control_assigned[si],
                 )
             )
         elif cbin in _NOEXEC_BUILTINS:
@@ -494,6 +882,7 @@ def bridge_command(
 
     return BridgeResult(
         bridged=bridged,
+        no_runtime_exec=no_runtime_exec,
         coverage_gaps=gaps,
         unobserved_builtins=unobserved,
         static_clause_count=len(static),
@@ -540,6 +929,7 @@ def _aggregate(
     quota = quotas.pop() if len(quotas) == 1 else None
     peak_cpu, cpu_reason = _merge_cpu(owned_images, t_exec, t_end, quota)
     peak_rss, rss_reason = _merge_rss(owned_images)
+    disk_io, disk_io_reason = _merge_disk_io(owned_images)
     exit_signals = [i.exit_signal for i in owned_images if i.exit_signal]
 
     obs = ClauseObservation(
@@ -561,6 +951,9 @@ def _aggregate(
         "latency": "ok",
         "cpu": "ok" if peak_cpu is not None else f"unknown:{cpu_reason}",
         "memory": "ok" if peak_rss is not None else f"unknown:{rss_reason}",
+        "disk_io": (
+            "ok" if disk_io is not None else f"unknown:{disk_io_reason}"
+        ),
     }
     provenance = {
         "mapping_evidence": evidence,
@@ -573,15 +966,33 @@ def _aggregate(
         "exit_signals": exit_signals,
         "merged_cpu_reason": cpu_reason,
         "merged_rss_reason": rss_reason,
+        "merged_disk_io_reason": disk_io_reason,
+        "disk_io_reduction": "sum_disjoint_owned_exec_image_totals",
         "per_image_diagnostics": [
             {
                 "host_pid": i.host_pid,
                 "exec_seq": i.exec_seq,
                 "bin": i.bin,
+                "normal_exit_status": i.normal_exit_status,
+                "exit_signal": i.exit_signal,
                 "scalar_peak_cpu_cores": i.peak_cpu_cores,
                 "scalar_sampled_peak_rss_mb": i.sampled_peak_rss_mb,
                 "has_cpu_profile": i.cpu_windows is not None,
                 "has_rss_profile": i.rss_bins is not None,
+                "disk_io_reason": i.disk_io_reason,
+                "disk_read_bytes_total": i.disk_read_bytes_total,
+                "disk_write_bytes_total": i.disk_write_bytes_total,
+                "disk_cancelled_write_bytes_total": (
+                    i.disk_cancelled_write_bytes_total
+                ),
+                "disk_io_provenance": i.provenance.get("disk_io"),
+                "sample_attribution": i.provenance.get("sample_attribution"),
+                "identity_only_sample_count": i.provenance.get(
+                    "identity_only_sample_count", 0
+                ),
+                "identity_only_samples": i.provenance.get(
+                    "identity_only_samples", []
+                ),
             }
             for i in owned_images
         ],
@@ -591,6 +1002,11 @@ def _aggregate(
         owned_pids=owned_pids,
         owned_exec_images=tuple((i.host_pid, i.exec_seq) for i in owned_images),
         mapping_evidence=evidence,
+        disk_read_bytes_total=disk_io[0] if disk_io is not None else None,
+        disk_write_bytes_total=disk_io[1] if disk_io is not None else None,
+        disk_cancelled_write_bytes_total=(
+            disk_io[2] if disk_io is not None else None
+        ),
         availability=availability,
         provenance=provenance,
     )
@@ -600,6 +1016,11 @@ __all__ = [
     "BridgeResult",
     "BridgedClause",
     "ExecImageRecord",
+    "FailedExecAttempt",
     "MappingGap",
+    "NoRuntimeExec",
+    "ShellCommandLookupFailure",
     "bridge_command",
+    "parse_shell_lookup_diagnostic",
+    "shell_lookup_exit_semantics",
 ]

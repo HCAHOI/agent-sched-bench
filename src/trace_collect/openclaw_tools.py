@@ -756,6 +756,8 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
                 resp = {
                     "ok": True,
                     "result": _truncate_output(output),
+                    "stdout": _truncate_output(stdout or ""),
+                    "stderr": _truncate_output(stderr or ""),
                     "returncode": process.returncode,
                     "resource_timeout_policy": "resource_integrated",
                     "resource_virtual_time_s": round(virtual_time_s, 6),
@@ -791,6 +793,8 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
                     resp = {
                         "ok": False,
                         "result": output,
+                        "stdout": _truncate_output(stdout or ""),
+                        "stderr": _truncate_output(stderr or ""),
                         "returncode": 124,
                         "resource_timeout_policy": "resource_integrated",
                         "resource_virtual_time_s": round(virtual_time_s, 6),
@@ -814,6 +818,8 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
                     resp = {
                         "ok": False,
                         "result": output,
+                        "stdout": _truncate_output(stdout or ""),
+                        "stderr": _truncate_output(stderr or ""),
                         "returncode": 124,
                         "resource_timeout_policy": "resource_integrated",
                         "resource_virtual_time_s": round(virtual_time_s, 6),
@@ -851,10 +857,22 @@ def handle_exec(args):
                                universal_newlines=True, timeout=timeout, **launch_kwargs)
             end_wall = time.time()
             output = (r.stdout or "") + (r.stderr or "")
-            resp = {"ok": True, "result": _truncate_output(output), "returncode": r.returncode}
+            resp = {
+                "ok": True,
+                "result": _truncate_output(output),
+                "stdout": _truncate_output(r.stdout or ""),
+                "stderr": _truncate_output(r.stderr or ""),
+                "returncode": r.returncode,
+            }
         except subprocess.TimeoutExpired:
             end_wall = time.time()
-            resp = {"ok": False, "result": "[timeout]", "returncode": 124}
+            resp = {
+                "ok": False,
+                "result": "[timeout]",
+                "stdout": "",
+                "stderr": "",
+                "returncode": 124,
+            }
         # subprocess.run hides the child pid, so this fallback path (only taken
         # when the source trace has no resource_timeline) attributes by exit
         # window without ppid filtering. ponytail: a lingering `&` job from a

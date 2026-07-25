@@ -162,7 +162,11 @@ def parse_command_clauses(command: str) -> dict[str, Any]:
 
     response = get_mvdan_client().parse(command)
     if not response.get("ok"):
-        return {"clauses": _fallback_clauses(command), "parse_failed": True}
+        return {
+            "clauses": _fallback_clauses(command),
+            "control_edges": [],
+            "parse_failed": True,
+        }
     raw_clauses = response.get("clauses")
     if not isinstance(raw_clauses, list):
         raise MvdanClientError("mvdan adapter response has no clause list")
@@ -171,7 +175,23 @@ def parse_command_clauses(command: str) -> dict[str, Any]:
         _clause_from_adapter(command, raw_clause, byte_to_character)
         for raw_clause in raw_clauses
     ]
-    return {"clauses": clauses, "parse_failed": False}
+    raw_control_edges = response.get("control_edges")
+    if not isinstance(raw_control_edges, list):
+        raise MvdanClientError("mvdan adapter response has no control-edge list")
+    control_edges = [
+        _control_edge_from_adapter(
+            raw_edge,
+            edge_id,
+            len(clauses),
+            byte_to_character,
+        )
+        for edge_id, raw_edge in enumerate(raw_control_edges)
+    ]
+    return {
+        "clauses": clauses,
+        "control_edges": control_edges,
+        "parse_failed": False,
+    }
 
 
 def build_tabular_dataset(
@@ -585,6 +605,75 @@ def _clause_from_adapter(
         "in_pipe": bool(raw_clause["in_pipe"]),
         "in_subst": bool(raw_clause["in_subst"]),
         "pipeline_position": int(raw_clause["pipeline_position"]),
+    }
+
+
+def _control_edge_from_adapter(
+    raw_edge: object,
+    edge_id: int,
+    clause_count: int,
+    byte_to_character: Sequence[int],
+) -> dict[str, Any]:
+    if (
+        not isinstance(raw_edge, dict)
+        or raw_edge.get("id") != edge_id
+        or raw_edge.get("operator") not in {"&&", "||"}
+    ):
+        raise MvdanClientError("mvdan adapter returned an invalid control edge")
+
+    def operand(name: str) -> dict[str, Any]:
+        raw = raw_edge.get(name)
+        if not isinstance(raw, dict):
+            raise MvdanClientError("mvdan adapter returned an invalid control operand")
+        kind, index, indices = raw.get("kind"), raw.get("index"), raw.get(
+            "clause_indices"
+        )
+        raw_span = raw.get("span")
+        negated = raw.get("negated")
+        contains_pipeline = raw.get("contains_pipeline")
+        contains_subshell = raw.get("contains_subshell")
+        if (
+            kind not in {"clause", "edge", "unsupported"}
+            or not isinstance(index, int)
+            or not isinstance(indices, list)
+            or not all(
+                isinstance(item, int) and 0 <= item < clause_count
+                for item in indices
+            )
+            or (kind == "clause" and (index not in indices or len(indices) != 1))
+            or (kind == "edge" and not 0 <= index < edge_id)
+            or (kind == "unsupported" and index != -1)
+            or not isinstance(raw_span, list)
+            or len(raw_span) != 2
+            or not all(isinstance(offset, int) for offset in raw_span)
+            or raw_span[0] < 0
+            or raw_span[1] < raw_span[0]
+            or raw_span[1] >= len(byte_to_character)
+            or byte_to_character[raw_span[0]] < 0
+            or byte_to_character[raw_span[1]] < 0
+            or not isinstance(negated, bool)
+            or not isinstance(contains_pipeline, bool)
+            or not isinstance(contains_subshell, bool)
+        ):
+            raise MvdanClientError("mvdan adapter returned an invalid control operand")
+        return {
+            "kind": kind,
+            "index": index,
+            "clause_indices": indices,
+            "span": (
+                byte_to_character[raw_span[0]],
+                byte_to_character[raw_span[1]],
+            ),
+            "negated": negated,
+            "contains_pipeline": contains_pipeline,
+            "contains_subshell": contains_subshell,
+        }
+
+    return {
+        "id": edge_id,
+        "operator": raw_edge["operator"],
+        "lhs": operand("lhs"),
+        "rhs": operand("rhs"),
     }
 
 

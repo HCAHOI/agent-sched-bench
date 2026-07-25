@@ -21,10 +21,12 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_REPO = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(_REPO / "src"))
 
-import collector as C
+from trace_collect import clause_telemetry as C  # noqa: E402
 
 # --- Scenario A1: reach /bin/true via execveat, not execve -------------------
 # ctypes issues execveat(fd, "", argv, envp, AT_EMPTY_PATH) on an fd of /bin/true.

@@ -17,6 +17,27 @@ _CLAUSE_KEYS = {
 }
 
 
+def _operand(
+    kind: str,
+    index: int,
+    clause_indices: list[int],
+    span: tuple[int, int],
+    *,
+    negated: bool = False,
+    pipeline: bool = False,
+    subshell: bool = False,
+) -> dict[str, object]:
+    return {
+        "kind": kind,
+        "index": index,
+        "clause_indices": clause_indices,
+        "span": span,
+        "negated": negated,
+        "contains_pipeline": pipeline,
+        "contains_subshell": subshell,
+    }
+
+
 @pytest.mark.parametrize(
     ("command", "bins", "spans"),
     [
@@ -100,6 +121,88 @@ def test_nested_pipeline_and_command_substitution_context() -> None:
     assert by_bin["wc"]["in_subst"]
     assert by_bin["wc"]["pipeline_position"] == 1
     assert by_bin["tail"]["pipeline_position"] == 1
+
+
+def test_control_edges_preserve_mvdan_short_circuit_tree() -> None:
+    parsed = parse_command_clauses("left && middle && right || fallback")
+
+    assert [clause["bin"] for clause in parsed["clauses"]] == [
+        "left",
+        "middle",
+        "right",
+        "fallback",
+    ]
+    assert parsed["control_edges"] == [
+        {
+            "id": 0,
+            "operator": "&&",
+            "lhs": _operand("clause", 0, [0], (0, 4)),
+            "rhs": _operand("clause", 1, [1], (8, 14)),
+        },
+        {
+            "id": 1,
+            "operator": "&&",
+            "lhs": _operand("edge", 0, [0, 1], (0, 14)),
+            "rhs": _operand("clause", 2, [2], (18, 23)),
+        },
+        {
+            "id": 2,
+            "operator": "||",
+            "lhs": _operand("edge", 1, [0, 1, 2], (0, 23)),
+            "rhs": _operand("clause", 3, [3], (27, 35)),
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("command", "operator", "rhs_span"),
+    [
+        ("false && (b | c)", "&&", (9, 16)),
+        ("true || (b | c)", "||", (8, 15)),
+    ],
+)
+def test_outer_control_edge_preserves_rhs_pipeline_subtree(
+    command: str,
+    operator: str,
+    rhs_span: tuple[int, int],
+) -> None:
+    edge = parse_command_clauses(command)["control_edges"][0]
+
+    assert edge == {
+        "id": 0,
+        "operator": operator,
+        "lhs": _operand("clause", 0, [0], (0, len(command.split()[0]))),
+        "rhs": _operand(
+            "unsupported",
+            -1,
+            [1, 2],
+            rhs_span,
+            pipeline=True,
+            subshell=True,
+        ),
+    }
+
+
+@pytest.mark.parametrize("command", ["! left && right", "! left || right"])
+def test_negated_control_operand_is_not_runtime_status_evidence(
+    command: str,
+) -> None:
+    parsed = parse_command_clauses(command)
+
+    assert parsed["control_edges"] == [
+        {
+            "id": 0,
+            "operator": command.split()[2],
+            "lhs": _operand(
+                "unsupported",
+                -1,
+                [0],
+                (0, 6),
+                negated=True,
+            ),
+            "rhs": _operand("clause", 1, [1], (10, 15)),
+        }
+    ]
 
 
 def test_quoted_and_multiple_heredoc_spans_exclude_bodies() -> None:

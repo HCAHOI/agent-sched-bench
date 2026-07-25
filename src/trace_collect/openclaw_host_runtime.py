@@ -550,13 +550,145 @@ def build_container_tools_for_agent(
     exec_timeout: int,
     exec_path_append: str = "",
     workspace: str = "/testbed",
+    clause_telemetry: Any | None = None,
 ) -> list[Any]:
     return build_container_tool_overrides(
         agent,
         exec_timeout=exec_timeout,
         exec_path_append=exec_path_append,
         workspace=workspace,
+        clause_telemetry=clause_telemetry,
     )
+
+
+def _attach_clause_telemetry(
+    trace_path: Path,
+    calls: list[dict[str, Any]],
+    source_actions: list[dict[str, Any]],
+) -> list[str]:
+    errors: list[str] = []
+    by_id: dict[str, dict[str, Any]] = {}
+    duplicate_call_ids: set[str] = set()
+    for call in calls:
+        tool_call_id = str(call.get("tool_call_id") or "")
+        if not tool_call_id:
+            errors.append("clause telemetry has no tool_call_id")
+        elif tool_call_id in by_id:
+            duplicate_call_ids.add(tool_call_id)
+        else:
+            by_id[tool_call_id] = call
+    for tool_call_id in sorted(duplicate_call_ids):
+        errors.append(f"duplicate clause telemetry tool_call_id {tool_call_id}")
+        by_id.pop(tool_call_id)
+
+    seen: set[str] = set()
+    if not trace_path.exists():
+        return [*errors, "clause telemetry trace is missing"]
+    records = [
+        json.loads(line)
+        for line in trace_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    exec_action_ids: list[str] = []
+    for record in records:
+        if record.get("type") != "action" or record.get("action_type") != "tool_exec":
+            continue
+        data = record.get("data")
+        if isinstance(data, dict) and data.get("tool_name") == "exec":
+            exec_action_ids.append(str(data.get("tool_call_id") or ""))
+    duplicate_action_ids = {
+        tool_call_id
+        for tool_call_id in exec_action_ids
+        if tool_call_id and exec_action_ids.count(tool_call_id) > 1
+    }
+    for tool_call_id in sorted(duplicate_action_ids):
+        errors.append(f"duplicate exec action tool_call_id {tool_call_id}")
+
+    updated: list[str] = []
+    source_replay_actions = _replayable_source_actions(source_actions)
+    replay_action_index = 0
+    for record in records:
+        source_action: dict[str, Any] | None = None
+        if record.get("type") == "action":
+            if replay_action_index < len(source_replay_actions):
+                source_action = source_replay_actions[replay_action_index]
+            replay_action_index += 1
+            if source_action is not None and not _action_matches_source(
+                record, source_action
+            ):
+                source_action = None
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec":
+            data = record.get("data")
+            if isinstance(data, dict) and data.get("tool_name") == "exec":
+                tool_call_id = str(data.get("tool_call_id") or "")
+                summary = (
+                    None
+                    if tool_call_id in duplicate_action_ids
+                    else by_id.get(tool_call_id)
+                )
+                if summary is None:
+                    errors.append(
+                        f"exec action {tool_call_id or '<missing>'} has no "
+                        "clause telemetry"
+                    )
+                else:
+                    raw_tool_args = data.get("tool_args")
+                    try:
+                        tool_args = (
+                            raw_tool_args
+                            if isinstance(raw_tool_args, dict)
+                            else json.loads(str(raw_tool_args or "{}"))
+                        )
+                    except json.JSONDecodeError:
+                        tool_args = {}
+                    command = tool_args.get("command")
+                    if command != summary.get("command"):
+                        errors.append(
+                            f"exec action {tool_call_id} command does not match "
+                            "clause telemetry"
+                        )
+                    else:
+                        data["clause_telemetry"] = summary
+                        seen.add(tool_call_id)
+                source_data = (
+                    source_action.get("data")
+                    if isinstance(source_action, dict)
+                    else None
+                )
+                source_result = (
+                    source_data.get("tool_result", source_data.get("result", ""))
+                    if isinstance(source_data, dict)
+                    else ""
+                )
+                source_exit = _command_exit_code(str(source_result))
+                replay_exit = _command_exit_code(str(data.get("tool_result") or ""))
+                available = source_exit is not None and replay_exit is not None
+                data["exit_code_agreement"] = {
+                    "source": source_exit,
+                    "replay": replay_exit,
+                    "available": available,
+                    "matches": (
+                        source_exit == replay_exit if available else None
+                    ),
+                }
+        updated.append(json.dumps(record, ensure_ascii=False))
+    for tool_call_id in sorted(set(by_id) - seen):
+        errors.append(
+            f"clause telemetry {tool_call_id} has no matching exec action"
+        )
+    trace_path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+    return errors
+
+
+def _command_exit_code(tool_result: str) -> int | None:
+    marker = "Exit code:"
+    if marker not in tool_result:
+        return None
+    value = tool_result.rsplit(marker, 1)[1].strip().splitlines()[0].strip()
+    try:
+        return int(value)
+    except ValueError:
+        return None
 
 
 def _update_trace_metadata(trace_path: Path, extra: dict[str, Any]) -> None:
@@ -609,6 +741,17 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
     status_path = Path(request["status_path"])
     replay_speed = float(request["replay_speed"])
     llm_timing = dict(request["llm_timing"])
+    tool_resource_telemetry = str(
+        request.get("tool_resource_telemetry") or "command"
+    )
+    if tool_resource_telemetry not in {"off", "command", "clause"}:
+        raise ValueError(
+            "tool_resource_telemetry must be one of: off, command, clause"
+        )
+    os.environ["OPENCLAW_TOOL_RESOURCE_TELEMETRY"] = tool_resource_telemetry
+    repo = str(request.get("repo") or "")
+    if tool_resource_telemetry == "clause" and not repo:
+        raise ValueError("clause telemetry requires task repository identity")
     command_timeout_s = float(request["command_timeout_s"])
     run_instance_id = str(request["run_instance_id"])
     prompt = str(request["prompt"])
@@ -628,8 +771,20 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
         workdir=container_workdir,
     )
     status: dict[str, Any]
+    clause_collector: Any | None = None
+    clause_collector_finalized = False
     wall_start = time.time()
     try:
+        if tool_resource_telemetry == "clause":
+            from trace_collect.clause_telemetry import ClauseTelemetryCollector
+
+            clause_collector = ClauseTelemetryCollector(
+                container_id=container_id,
+                container_executable=container_executable,
+                repo=repo,
+                artifact_path=Path(request["clause_telemetry_path"]),
+                source_actions=source_actions,
+            )
         await agent.start()
         proof = await container_runtime_proof(
             agent,
@@ -655,6 +810,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 agent,
                 exec_timeout=int(command_timeout_s),
                 workspace=container_workdir,
+                clause_telemetry=clause_collector,
             ),
         )
         metadata_extra = {
@@ -664,6 +820,22 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             "source_agent_id": request["source_action_agent_id"],
             "run_instance_id": run_instance_id,
             "replay_mode": "openclaw_host_worker",
+            "tool_resource_telemetry": {
+                "mode": tool_resource_telemetry,
+                "command_envelope_enabled": tool_resource_telemetry != "off",
+                "clause_observations_enabled": (
+                    tool_resource_telemetry == "clause"
+                ),
+                "segment_timeline_requested": bool(
+                    request.get("segment_timeline_requested", True)
+                ),
+                "segment_timeline_enabled": bool(
+                    request.get("segment_timeline_enabled", True)
+                ),
+                "segment_timeline_decision": request.get(
+                    "segment_timeline_decision", "as_requested"
+                ),
+            },
         }
         result = await runner.run(
             prompt=prompt,
@@ -679,6 +851,17 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             runtime_label=runtime_label,
         )
         _update_trace_metadata(output_trace, metadata_extra)
+        if clause_collector is not None:
+            for error in _attach_clause_telemetry(
+                output_trace,
+                clause_collector.calls,
+                source_actions,
+            ):
+                clause_collector.add_integrity_error(error)
+            try:
+                clause_collector.finalize()
+            finally:
+                clause_collector_finalized = True
         sleep_records = [record.to_dict() for record in provider.sleep_records]
         action_counts = _worker_trace_action_counts(output_trace, source_actions)
         expected_actions = int(request.get("expected_action_count") or 0)
@@ -707,6 +890,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             ),
             "expected_actions": expected_actions,
             "missing_source_action_count": missing_actions,
+            "telemetry_integrity_failed": False,
             **metadata_extra,
         }
     except BaseException as exc:
@@ -727,11 +911,60 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             "source_action_agent_id": request.get("source_action_agent_id"),
             "run_instance_id": run_instance_id,
             "replay_mode": "openclaw_host_worker",
+            "telemetry_integrity_failed": (
+                tool_resource_telemetry == "clause"
+                and (
+                    clause_collector is None
+                    or type(exc).__name__ == "ClauseTelemetryIntegrityError"
+                )
+            ),
+            "tool_resource_telemetry": {
+                "mode": tool_resource_telemetry,
+                "command_envelope_enabled": tool_resource_telemetry != "off",
+                "clause_observations_enabled": (
+                    tool_resource_telemetry == "clause"
+                ),
+                "segment_timeline_requested": bool(
+                    request.get("segment_timeline_requested", True)
+                ),
+                "segment_timeline_enabled": bool(
+                    request.get("segment_timeline_enabled", True)
+                ),
+                "segment_timeline_decision": request.get(
+                    "segment_timeline_decision", "as_requested"
+                ),
+            },
         }
     finally:
         try:
             await agent.stop()
         finally:
+            if clause_collector is not None and not clause_collector_finalized:
+                try:
+                    if output_trace.exists():
+                        for error in _attach_clause_telemetry(
+                            output_trace,
+                            clause_collector.calls,
+                            source_actions,
+                        ):
+                            clause_collector.add_integrity_error(error)
+                    try:
+                        clause_collector.finalize()
+                    finally:
+                        clause_collector_finalized = True
+                except BaseException as telemetry_exc:
+                    status["success"] = False
+                    status["stop_reason"] = "error"
+                    status["telemetry_integrity_failed"] = True
+                    telemetry_error = (
+                        f"{type(telemetry_exc).__name__}: {telemetry_exc}"
+                    )
+                    prior_error = status.get("error")
+                    status["error"] = (
+                        f"{prior_error}; {telemetry_error}"
+                        if prior_error
+                        else telemetry_error
+                    )
             status_path.parent.mkdir(parents=True, exist_ok=True)
             status_path.write_text(
                 json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True) + "\n",

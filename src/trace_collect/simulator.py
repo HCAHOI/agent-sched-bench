@@ -119,6 +119,21 @@ __all__ = (
 )
 
 
+class _ReplayPreparationError(RuntimeError):
+    def __init__(
+        self,
+        prepared: PreparedTraceSession,
+        reason: str,
+        cause: RuntimeError,
+        cleanup_error: BaseException | None = None,
+    ) -> None:
+        super().__init__(str(cause))
+        self.prepared = prepared
+        self.reason = reason
+        self.cause = cause
+        self.cleanup_error = cleanup_error
+
+
 class ContainerStartupRecorder:
     """Collect and persist one task's container startup facts."""
 
@@ -2145,10 +2160,90 @@ async def _prepare_replay_session(
                 sampler.start()
                 prepared.sampler = sampler
         return prepared
-    except (Exception, asyncio.CancelledError):
+    except (Exception, asyncio.CancelledError) as exc:
+        cleanup_error: BaseException | None = None
         if prepared is not None:
-            await _finalize_prepared_session(prepared)
+            try:
+                await _finalize_prepared_session(prepared)
+            except (Exception, asyncio.CancelledError) as finalize_exc:
+                cleanup_error = finalize_exc
+        if isinstance(exc, RuntimeError) and prepared is not None:
+            raise _ReplayPreparationError(
+                prepared,
+                _container_prep_failure_reason(exc),
+                exc,
+                cleanup_error,
+            ) from exc
+        if cleanup_error is not None:
+            raise cleanup_error from exc
         raise
+
+
+def _container_prep_failure_reason(error: RuntimeError) -> str:
+    message = str(error).lower()
+    if "python probe failed" in message or "no python >=3.11" in message:
+        return "container_python_unavailable"
+    return "container_prep_failed"
+
+
+def _failed_prepared_session(
+    loaded: LoadedTraceSession,
+    *,
+    output_path: Path,
+    container_executable: str | None,
+    network_mode: str,
+    reason: str,
+    error: RuntimeError,
+) -> PreparedTraceSession:
+    prepared = PreparedTraceSession(loaded=loaded)
+    _assign_task_output_dir(prepared, output_path)
+    assert prepared.task_output_dir is not None
+    recorder = ContainerStartupRecorder(
+        loaded=loaded,
+        task_output_dir=prepared.task_output_dir,
+        container_executable=container_executable,
+        network_mode=network_mode,
+        source_image=None,
+    )
+    recorder.write(status="failed", reason=reason, error=error)
+    return prepared
+
+
+def _record_prepare_failure(
+    prepared: PreparedTraceSession,
+    *,
+    trace_logger: TraceLogger,
+    reason: str,
+    error: RuntimeError,
+    cleanup_error: BaseException | None = None,
+) -> ReplayTaskStats:
+    loaded = prepared.loaded
+    extra = {
+        "replay_mode": "cloud_model",
+        "status": "failed",
+        "reason": reason,
+        "failure_phase": "container_prep",
+        "failed_actions": 1,
+        "error": _exception_payload(error),
+    }
+    if cleanup_error is not None:
+        extra["cleanup_error"] = _exception_payload(cleanup_error)
+    trace_logger.log_summary(
+        loaded.agent_id,
+        _make_trace_summary(
+            loaded=loaded,
+            success=False,
+            elapsed_s=0.0,
+            source_model=_source_model(loaded),
+            extra=extra,
+        ),
+    )
+    return _make_task_stats(
+        loaded=loaded,
+        success=False,
+        elapsed_s=0.0,
+        failed_action_count=1,
+    )
 
 
 async def _run_cloud_model_queue(
@@ -2216,6 +2311,7 @@ async def _run_cloud_model_queue(
                 prepared: PreparedTraceSession | None = None
                 stats: ReplayTaskStats | None = None
                 session_error: BaseException | None = None
+                preparation_already_finalized = False
                 try:
                     logger.info(
                         "Worker %d replaying %s (%d ready)",
@@ -2234,18 +2330,48 @@ async def _run_cloud_model_queue(
                         memory_bandwidth_enabled=memory_bandwidth_enabled,
                         monitoring_policy=monitoring_policy,
                     )
-                    stats = await _replay_cloud_model_session(
+                except _ReplayPreparationError as exc:
+                    prepared = exc.prepared
+                    preparation_already_finalized = True
+                    stats = _record_prepare_failure(
                         prepared,
                         trace_logger=trace_logger,
-                        replay_speed=replay_speed,
-                        llm_timing=llm_timing,
-                        command_timeout_s=command_timeout_s,
-                        warmup_skip_iterations=warmup_skip_iterations,
+                        reason=exc.reason,
+                        error=exc.cause,
+                        cleanup_error=exc.cleanup_error,
+                    )
+                except RuntimeError as exc:
+                    reason = _container_prep_failure_reason(exc)
+                    prepared = _failed_prepared_session(
+                        loaded,
+                        output_path=output_path,
+                        container_executable=container_executable,
+                        network_mode=network_mode,
+                        reason=reason,
+                        error=exc,
+                    )
+                    stats = _record_prepare_failure(
+                        prepared,
+                        trace_logger=trace_logger,
+                        reason=reason,
+                        error=exc,
                     )
                 except Exception as exc:
                     session_error = exc
+                else:
+                    try:
+                        stats = await _replay_cloud_model_session(
+                            prepared,
+                            trace_logger=trace_logger,
+                            replay_speed=replay_speed,
+                            llm_timing=llm_timing,
+                            command_timeout_s=command_timeout_s,
+                            warmup_skip_iterations=warmup_skip_iterations,
+                        )
+                    except Exception as exc:
+                        session_error = exc
                 try:
-                    if prepared is not None:
+                    if prepared is not None and not preparation_already_finalized:
                         await _finalize_prepared_session(prepared)
                 except Exception as exc:
                     if session_error is None:
@@ -2410,12 +2536,39 @@ async def _run_worker_wave_async(
             ),
             return_exceptions=True,
         )
+        replay_sessions: list[PreparedTraceSession] = []
+        prep_failures: list[
+            tuple[PreparedTraceSession, str, RuntimeError, BaseException | None]
+        ] = []
         prep_errors: list[BaseException] = []
-        for result in prep_results:
-            if isinstance(result, BaseException):
+        for loaded, result in zip(loaded_sessions, prep_results, strict=True):
+            if isinstance(result, _ReplayPreparationError):
+                prepared_sessions.append(result.prepared)
+                prep_failures.append(
+                    (
+                        result.prepared,
+                        result.reason,
+                        result.cause,
+                        result.cleanup_error,
+                    )
+                )
+            elif isinstance(result, RuntimeError):
+                reason = _container_prep_failure_reason(result)
+                prepared = _failed_prepared_session(
+                    loaded,
+                    output_path=output_path,
+                    container_executable=container_executable,
+                    network_mode=network_mode,
+                    reason=reason,
+                    error=result,
+                )
+                prepared_sessions.append(prepared)
+                prep_failures.append((prepared, reason, result, None))
+            elif isinstance(result, BaseException):
                 prep_errors.append(result)
             else:
                 prepared_sessions.append(result)
+                replay_sessions.append(result)
         if prep_errors:
             raise SimulateError(
                 f"{len(prep_errors)}/{len(prep_results)} worker preparations failed"
@@ -2454,14 +2607,26 @@ async def _run_worker_wave_async(
             coordinator=worker_index == 0,
         )
         replay_started = True
-        task_stats = await _run_prepared_cloud_model_sessions(
-            prepared_sessions,
-            trace_logger=trace_logger,
-            replay_zero_monotonic=replay_zero_monotonic,
-            replay_speed=replay_speed,
-            llm_timing=llm_timing,
-            command_timeout_s=command_timeout_s,
-            warmup_skip_iterations=warmup_skip_iterations,
+        task_stats = [
+            _record_prepare_failure(
+                prepared,
+                trace_logger=trace_logger,
+                reason=reason,
+                error=error,
+                cleanup_error=cleanup_error,
+            )
+            for prepared, reason, error, cleanup_error in prep_failures
+        ]
+        task_stats.extend(
+            await _run_prepared_cloud_model_sessions(
+                replay_sessions,
+                trace_logger=trace_logger,
+                replay_zero_monotonic=replay_zero_monotonic,
+                replay_speed=replay_speed,
+                llm_timing=llm_timing,
+                command_timeout_s=command_timeout_s,
+                warmup_skip_iterations=warmup_skip_iterations,
+            )
         )
         pacct_metadata_by_agent = {
             prepared.loaded.run_instance_id: _pacct_trace_metadata(prepared)
@@ -3218,6 +3383,7 @@ async def simulate(
     llm_tpot_ms: float | None = None,
     structured_output: bool = False,
     segment_timeline: bool = True,
+    tool_resource_telemetry: str = "command",
     pacct: bool = False,
     cleanup_images: bool = False,
 ) -> Path:
@@ -3229,10 +3395,31 @@ async def simulate(
         raise ValueError("workers must be >= 1")
     if prep_concurrency < 0:
         raise ValueError("prep_concurrency must be >= 0")
+    if tool_resource_telemetry not in {"off", "command", "clause"}:
+        raise ValueError(
+            "tool_resource_telemetry must be one of: off, command, clause"
+        )
+    requested_segment_timeline = segment_timeline
+    if tool_resource_telemetry == "clause":
+        from trace_collect.clause_telemetry import (
+            validate_clause_telemetry_runtime,
+        )
+
+        validate_clause_telemetry_runtime(
+            container_executable=container_executable,
+            concurrency=concurrency,
+            workers=workers,
+            pacct=pacct,
+        )
+        segment_timeline = False
     # Transport the segment-timeline toggle to every replay ContainerAgent
     # (including worker subprocesses, which inherit os.environ at spawn) via the
     # same env-var channel used for OPENCLAW_CONTAINER_WORKDIR. Replay only.
     os.environ["OPENCLAW_SEGMENT_TIMELINE"] = "1" if segment_timeline else "0"
+    os.environ["OPENCLAW_SEGMENT_TIMELINE_REQUESTED"] = (
+        "1" if requested_segment_timeline else "0"
+    )
+    os.environ["OPENCLAW_TOOL_RESOURCE_TELEMETRY"] = tool_resource_telemetry
     # Per-binary process accounting toggle, same replay-only env channel; the
     # container also needs --cap-add SYS_PACCT (added in _prepare_container_session).
     os.environ["OPENCLAW_PACCT"] = "1" if pacct else "0"
@@ -3367,6 +3554,22 @@ async def simulate(
                     "workers": workers,
                     "prep_concurrency": prep_concurrency,
                     "monitoring": monitoring_policy_dict,
+                    "tool_resource_telemetry": {
+                        "mode": tool_resource_telemetry,
+                        "command_envelope_enabled": (
+                            tool_resource_telemetry != "off"
+                        ),
+                        "clause_observations_enabled": (
+                            tool_resource_telemetry == "clause"
+                        ),
+                        "segment_timeline_requested": requested_segment_timeline,
+                        "segment_timeline_enabled": segment_timeline,
+                        "segment_timeline_decision": (
+                            "disabled_in_clause_mode"
+                            if tool_resource_telemetry == "clause"
+                            else "as_requested"
+                        ),
+                    },
                 },
             )
             if monitoring_policy.global_container_resource_enabled:

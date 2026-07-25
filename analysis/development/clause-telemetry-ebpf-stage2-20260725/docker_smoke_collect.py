@@ -16,13 +16,17 @@ import dataclasses
 import json
 import os
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 
 from bcc import BPF, PerfSWConfig, PerfType
 
-import collector as C
+_REPO = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(_REPO / "src"))
+
+from trace_collect import clause_telemetry as C  # noqa: E402
 
 _HERE = Path(__file__).resolve().parent
 

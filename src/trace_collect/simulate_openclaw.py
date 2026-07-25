@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -125,7 +126,17 @@ async def _run_openclaw_replay_session(
     request_path = task_output_dir / "openclaw_host_replay_request.json"
     stdout_path = task_output_dir / "openclaw_host_replay_stdout.txt"
     stderr_path = task_output_dir / "openclaw_host_replay_stderr.txt"
+    clause_telemetry_path = task_output_dir / "clause_telemetry.json"
     prompt = str(loaded.task.get("problem_statement") or "Replay source OpenClaw trace.")
+    tool_resource_telemetry = os.environ.get(
+        "OPENCLAW_TOOL_RESOURCE_TELEMETRY", "command"
+    )
+    segment_timeline_enabled = (
+        os.environ.get("OPENCLAW_SEGMENT_TIMELINE", "1") == "1"
+    )
+    segment_timeline_requested = (
+        os.environ.get("OPENCLAW_SEGMENT_TIMELINE_REQUESTED", "1") == "1"
+    )
     request = {
         "source_trace": str(loaded.source_trace),
         "source_actions": loaded.actions,
@@ -135,6 +146,7 @@ async def _run_openclaw_replay_session(
         "runtime_dir": str(runtime_dir),
         "workspace": str(workspace),
         "status_path": str(status_path),
+        "clause_telemetry_path": str(clause_telemetry_path),
         "container_executable": ctr.container_executable,
         "container_id": ctr.container_id,
         "container_workdir": ctr.workdir,
@@ -147,7 +159,16 @@ async def _run_openclaw_replay_session(
             "tpot_ms": llm_timing.tpot_ms,
         },
         "command_timeout_s": command_timeout_s,
+        "tool_resource_telemetry": tool_resource_telemetry,
+        "segment_timeline_requested": segment_timeline_requested,
+        "segment_timeline_enabled": segment_timeline_enabled,
+        "segment_timeline_decision": (
+            "disabled_in_clause_mode"
+            if tool_resource_telemetry == "clause"
+            else "as_requested"
+        ),
         "task_instance_id": loaded.task_instance_id,
+        "repo": loaded.task.get("repo"),
         "source_action_agent_id": loaded.source_action_agent_id,
         "run_instance_id": loaded.run_instance_id,
         "manifest_index": loaded.manifest_index,
@@ -187,7 +208,15 @@ async def _run_openclaw_replay_session(
             "tool_container_id": ctr.container_id,
             "tool_container_user": "unknown",
             "openclaw_host_pid": None,
+            "telemetry_integrity_failed": (
+                tool_resource_telemetry == "clause"
+            ),
         }
+    if (
+        tool_resource_telemetry == "clause"
+        and (worker_returncode != 0 or status.get("success") is not True)
+    ):
+        status["telemetry_integrity_failed"] = True
 
     emitted_records: list[dict[str, Any]] = []
     replay_action_records: list[dict[str, Any]] = []
@@ -260,6 +289,27 @@ async def _run_openclaw_replay_session(
         "tool_container_user_id": status.get("tool_container_user_id"),
         "tool_container_workdir": status.get("tool_container_workdir"),
         "openclaw_host_pid": status.get("openclaw_host_pid"),
+        "tool_resource_telemetry": status.get(
+            "tool_resource_telemetry",
+            {
+                "mode": tool_resource_telemetry,
+                "command_envelope_enabled": tool_resource_telemetry != "off",
+                "clause_observations_enabled": (
+                    tool_resource_telemetry == "clause"
+                ),
+                "segment_timeline_requested": segment_timeline_requested,
+                "segment_timeline_enabled": segment_timeline_enabled,
+                "segment_timeline_decision": request["segment_timeline_decision"],
+            },
+        ),
+        "clause_telemetry_path": (
+            str(clause_telemetry_path)
+            if tool_resource_telemetry == "clause"
+            else None
+        ),
+        "telemetry_integrity_failed": bool(
+            status.get("telemetry_integrity_failed", False)
+        ),
     }
     summary_seen = False
     for record in emitted_records:
@@ -286,9 +336,15 @@ async def _run_openclaw_replay_session(
                 extra=summary_extra,
             ),
         )
-    return _make_task_stats(
+    task_stats = _make_task_stats(
         loaded=loaded,
         success=failed_actions == 0,
         elapsed_s=float(status.get("elapsed_s") or 0.0),
         failed_action_count=failed_actions,
     )
+    if status.get("telemetry_integrity_failed") is True:
+        raise RuntimeError(
+            "clause telemetry integrity failure: "
+            f"{status.get('error') or 'unknown error'}"
+        )
+    return task_stats

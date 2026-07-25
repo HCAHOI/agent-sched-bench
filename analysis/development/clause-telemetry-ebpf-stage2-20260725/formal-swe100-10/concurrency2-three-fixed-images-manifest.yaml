@@ -1,0 +1,9 @@
+defaults:
+  task_source: /home/chiyu/workspace/agent-sched-bench/data/swe-rebench/tasks.json
+traces:
+  - trace: /home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/offline-gated-confirm-100-v2/ArkEcosystem__python-crypto-116/attempt_1/trace.jsonl
+    docker_image: swebench-fixed-docker.io_swerebench_sweb.eval.x86_64.arkecosystem_1776_python-crypto-116
+  - trace: /home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/offline-gated-confirm-100-v2/AzureAD__microsoft-authentication-library-for-python-315/attempt_1/trace.jsonl
+    docker_image: swebench-fixed-docker.io_swerebench_sweb.eval.x86_64.azuread_1776_microsoft-authentication-library-for-python-315
+  - trace: /home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/offline-gated-confirm-100-v2/Azure__azure-cli-1876/attempt_1/trace.jsonl
+    docker_image: swebench-fixed-docker.io_swerebench_sweb.eval.x86_64.azure_1776_azure-cli-1876

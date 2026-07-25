@@ -213,11 +213,16 @@ class ContainerExecTool(_ContainerTool):
         path_append: str = "",
         restrict_to_workspace: bool = False,
         workspace: str = "/testbed",
+        clause_telemetry: Any | None = None,
     ) -> None:
         super().__init__(agent)
         self.timeout = timeout
         self.path_append = path_append
         self.workspace = workspace or "/testbed"
+        self._clause_telemetry = clause_telemetry
+        self._tool_call_id: str | None = None
+        self._pending_clause_token: Any | None = None
+        self._pending_clause_response: dict[str, Any] | None = None
         self._guard = ExecTool(
             timeout=timeout,
             working_dir=self.workspace,
@@ -235,6 +240,29 @@ class ContainerExecTool(_ContainerTool):
         # container response's `per_process` list is stashed for _run_tool to
         # pick up (execute() must keep returning a plain str).
         self.last_per_process: list[dict[str, Any]] | None = None
+
+    def set_tool_call_context(
+        self,
+        tool_call_id: str,
+        _arguments: dict[str, Any],
+    ) -> None:
+        self._tool_call_id = tool_call_id
+
+    def finish_clause_telemetry(self) -> None:
+        token, self._pending_clause_token = self._pending_clause_token, None
+        response, self._pending_clause_response = (
+            self._pending_clause_response,
+            None,
+        )
+        if token is not None:
+            self._clause_telemetry.finish_tool_call(
+                token,
+                replay_response=response,
+            )
+
+    @property
+    def clause_telemetry_enabled(self) -> bool:
+        return self._clause_telemetry is not None
 
     @property
     def name(self) -> str:
@@ -264,6 +292,7 @@ class ContainerExecTool(_ContainerTool):
         # telemetry would silently corrupt the segment dataset).
         self.last_segment_timeline = None
         self.last_per_process = None
+        self._pending_clause_response = None
         workdir = working_dir or self.workspace
         guard_error = self._guard._guard_command(command, workdir)
         if guard_error:
@@ -272,11 +301,17 @@ class ContainerExecTool(_ContainerTool):
         effective_command = command
         if workdir != self.workspace:
             effective_command = f"cd {shlex.quote(workdir)} && {command}"
+        if self._clause_telemetry is not None:
+            self._pending_clause_token = self._clause_telemetry.begin_tool_call(
+                self._tool_call_id or "",
+                command,
+            )
         response = await self._request(
             "exec",
             {"command": effective_command, "timeout": effective_timeout},
             timeout_s=float(effective_timeout),
         )
+        self._pending_clause_response = response
         segment_timeline = response.get("segment_timeline")
         if isinstance(segment_timeline, dict):
             self.last_segment_timeline = segment_timeline
@@ -337,6 +372,7 @@ def build_container_tool_overrides(
     exec_path_append: str = "",
     restrict_to_workspace: bool = False,
     workspace: str = "/testbed",
+    clause_telemetry: Any | None = None,
 ) -> list[Tool]:
     """Return OpenClaw tool replacements backed by a task-container agent."""
 
@@ -351,6 +387,7 @@ def build_container_tool_overrides(
             path_append=exec_path_append,
             restrict_to_workspace=restrict_to_workspace,
             workspace=workspace,
+            clause_telemetry=clause_telemetry,
         ),
         *[UnsupportedReplayTool(name) for name in _UNSUPPORTED_REPLAY_TOOL_NAMES],
     ]

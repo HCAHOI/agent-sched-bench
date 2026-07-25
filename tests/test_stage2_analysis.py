@@ -2,30 +2,57 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+import os
 
-_STAGE2 = Path(__file__).resolve().parents[1] / (
-    "analysis/development/clause-telemetry-ebpf-stage2-20260725"
-)
-sys.path.insert(0, str(_STAGE2))
+import pytest
 
-import collector as C  # noqa: E402
+from trace_collect import clause_telemetry as C
 
 _W = C.WINDOW_NS
 
 
+def test_bpf_lifecycle_keeps_identity_until_free_and_clears_new_child() -> None:
+    fork_probe = C.BPF_PROGRAM.split(
+        "RAW_TRACEPOINT_PROBE(sched_process_fork)", 1
+    )[1].split("TRACEPOINT_PROBE(sched, sched_process_exit)", 1)[0]
+    exit_probe = C.BPF_PROGRAM.split(
+        "TRACEPOINT_PROBE(sched, sched_process_exit)", 1
+    )[1].split("RAW_TRACEPOINT_PROBE(sched_process_free)", 1)[0]
+    free_probe = C.BPF_PROGRAM.split(
+        "RAW_TRACEPOINT_PROBE(sched_process_free)", 1
+    )[1].split("int on_cpu_clock", 1)[0]
+
+    assert fork_probe.index("current_seq.delete(&child_key)") < (
+        fork_probe.index("events.ringbuf_reserve")
+    )
+    assert fork_probe.index("pending_seq.delete(&child_key)") < (
+        fork_probe.index("events.ringbuf_reserve")
+    )
+    assert "current_seq.delete" not in exit_probe
+    assert "pending_seq.delete" not in exit_probe
+    assert "if (!wanted())" not in free_probe
+    assert ".task_ptr = (u64)task" in free_probe
+    assert "current_seq.delete(&task_key)" in free_probe
+    assert "pending_seq.delete(&task_key)" in free_probe
+    assert "BPF_HASH(current_seq, struct task_key_t, u64)" in C.BPF_PROGRAM
+    assert "BPF_HASH(pending_seq, struct task_key_t, u64)" in C.BPF_PROGRAM
+
+
 def _ev(type_, ts, pid, *, tid=None, seq=C.SENTINEL, cpu_ns=0, rss=0, mm=0,
-        arg_index=0, arg="", child=0, exit_code=0):
+        arg_index=0, arg="", child=0, child_tid=0, exit_code=0,
+        io_read=0, io_write=0, io_cancelled=0):
     return {
         "type": type_, "ts_ns": ts, "cgroup_id": 1, "host_pid": pid,
         "host_tid": tid if tid is not None else pid, "exec_seq": seq,
         "cpu_ns": cpu_ns, "rss_pages": rss, "mm_ptr": mm, "arg_index": arg_index,
-        "arg": arg, "child_host_pid": child, "exit_code": exit_code,
+        "arg": arg, "child_host_pid": child, "child_host_tid": child_tid,
+        "exit_code": exit_code, "io_read_bytes": io_read,
+        "io_write_bytes": io_write,
+        "io_cancelled_write_bytes": io_cancelled,
     }
 
 
-def test_direct_seq_and_half_open_windows() -> None:
+def test_direct_seq_precedes_post_exec_sentinel_failure() -> None:
     # pid 100 execs A (seq 0 @0) then B (seq 1 @1000); exits @2000.
     events = [
         _ev("exec_boundary", 0, 100, seq=0),
@@ -36,21 +63,440 @@ def test_direct_seq_and_half_open_windows() -> None:
         # a resolved-seq sample carrying seq 0 must attribute to A even though ts
         # falls in B's window (direct-seq before window fallback)
         _ev("perf", 1500, 100, seq=0, cpu_ns=5),
-        # a sentinel sample exactly at the boundary ts=1000 belongs to B
-        # (half-open: A's window is [0,1000), B's is [1000,2000))
+        # Sentinel samples after this PID has successfully exec'd are never
+        # repaired from its window; losing current_seq after exec is fatal.
         _ev("perf", 1000, 100, seq=C.SENTINEL, cpu_ns=5),
-        # a sentinel sample inside A's window
         _ev("perf", 500, 100, seq=C.SENTINEL, cpu_ns=5),
     ]
     clauses, fork_parent = C._clauses_and_lineage(events)
     per_clause, gaps = C._attribute(events, clauses, fork_parent)
-    assert not gaps
     a = per_clause[(100, 0)]
     b = per_clause[(100, 1)]
-    # A gets the direct-seq sample (ts 1500) and the in-window sentinel (ts 500)
-    assert {s["ts_ns"] for s in a} == {0, 500, 1500}
-    # B gets the boundary sentinel (ts 1000), its own exec + exit boundaries
+    assert {s["ts_ns"] for s in a} == {0, 1500}
     assert {s["ts_ns"] for s in b} == {1000, 2000}
+    assert [gap["ts_ns"] for gap in gaps] == [1000, 500]
+    assert {gap["reason"] for gap in gaps} == {
+        "sentinel_after_successful_exec"
+    }
+
+
+def test_direct_entry_child_pre_exec_is_structural_setup() -> None:
+    events = [
+        _ev("fork", 10, 50, child=100, child_tid=100),
+        _ev("perf", 15, 100, cpu_ns=1, rss=1, mm=10),
+        _ev("exec_arg", 20, 100, seq=0, arg="prog"),
+        _ev("exec_boundary", 20, 100, seq=0),
+        _ev("exit_boundary", 30, 100, seq=0),
+    ]
+    clauses, fork_parent = C._clauses_and_lineage(events)
+    per_clause, gaps = C._attribute(
+        events,
+        clauses,
+        fork_parent,
+        entry_pid=50,
+    )
+
+    assert [sample["type"] for sample in per_clause[(100, 0)]] == [
+        "exec_boundary",
+        "exit_boundary",
+    ]
+    assert [
+        {
+            "reason": gap["reason"],
+            "fork_ancestry": gap["fork_ancestry"],
+            "fork_ts_ns": gap["fork_ts_ns"],
+        }
+        for gap in gaps
+    ] == [
+        {
+            "reason": "entry_fork_pre_exec_structural_setup",
+            "fork_ancestry": [100, 50],
+            "fork_ts_ns": 10,
+        }
+    ]
+
+
+def test_initial_pending_exec_sample_without_fork_is_structural_setup() -> None:
+    events = [
+        _ev("exec_arg", 10, 100, seq=0, arg="sh"),
+        _ev("perf", 15, 100, cpu_ns=1, rss=1, mm=10),
+        _ev("exec_boundary", 20, 100, seq=0),
+        _ev("exit_boundary", 30, 100, seq=0),
+    ]
+    clauses, fork_parent = C._clauses_and_lineage(events)
+    per_clause, gaps = C._attribute(
+        events,
+        clauses,
+        fork_parent,
+        entry_pid=50,
+    )
+
+    assert [sample["type"] for sample in per_clause[(100, 0)]] == [
+        "exec_boundary",
+        "exit_boundary",
+    ]
+    assert len(gaps) == 1
+    assert gaps[0]["reason"] == (
+        "initial_exec_pending_pre_boundary_structural_setup"
+    )
+    assert gaps[0]["pending_exec_evidence"] == {
+        "host_pid": 100,
+        "host_tid": 100,
+        "pending_exec_seq": 0,
+        "exec_arg_start_ns": 10,
+        "sample_ts_ns": 15,
+        "successful_exec_boundary_ns": 20,
+    }
+
+
+def test_failed_pending_exec_sample_without_fork_remains_fatal() -> None:
+    events = [
+        _ev("exec_arg", 10, 100, seq=0, arg="missing"),
+        _ev("perf", 15, 100, cpu_ns=1, rss=1, mm=10),
+        _ev("failed_exec_attempt", 20, 100, seq=0, exit_code=2),
+    ]
+    clauses, fork_parent = C._clauses_and_lineage(events)
+    _, gaps = C._attribute(events, clauses, fork_parent, entry_pid=50)
+
+    assert len(gaps) == 1
+    assert gaps[0]["reason"] == "sentinel_pre_exec_missing_fork_ancestry"
+    assert "pending_exec_evidence" not in gaps[0]
+
+
+def test_fork_only_intermediary_to_entry_is_structural_setup() -> None:
+    events = [
+        _ev("fork", 10, 50, child=60, child_tid=60),
+        _ev("fork", 12, 60, child=100, child_tid=100),
+        _ev("perf", 15, 100, cpu_ns=1, rss=1, mm=10),
+        _ev("exec_arg", 20, 100, seq=0, arg="prog"),
+        _ev("exec_boundary", 20, 100, seq=0),
+        _ev("exit_boundary", 30, 100, seq=0),
+    ]
+    clauses, fork_parent = C._clauses_and_lineage(events)
+    _, gaps = C._attribute(
+        events,
+        clauses,
+        fork_parent,
+        entry_pid=50,
+    )
+
+    assert gaps[0]["reason"] == "entry_fork_pre_exec_structural_setup"
+    assert gaps[0]["fork_ancestry"] == [100, 60, 50]
+
+
+def test_pre_exec_sample_inherits_active_exec_once() -> None:
+    events = [
+        _ev("fork", 10, 50, child=100, child_tid=100),
+        _ev("exec_arg", 20, 100, seq=0, arg="root"),
+        _ev("exec_boundary", 20, 100, seq=0, rss=100, mm=10),
+        _ev(
+            "fork",
+            100_000_000,
+            100,
+            child=200,
+            child_tid=200,
+        ),
+        _ev(
+            "perf",
+            400_000_000,
+            100,
+            seq=0,
+            rss=100,
+            mm=10,
+        ),
+        _ev(
+            "perf",
+            400_000_000,
+            200,
+            cpu_ns=100_000_000,
+            rss=200,
+            mm=10,
+        ),
+        _ev("exec_arg", 600_000_000, 200, seq=1, arg="child"),
+        _ev(
+            "exec_boundary",
+            600_000_000,
+            200,
+            seq=1,
+            cpu_ns=200_000_000,
+            rss=50,
+            mm=20,
+        ),
+        _ev(
+            "exit_boundary",
+            1_000_000_000,
+            200,
+            seq=1,
+            cpu_ns=250_000_000,
+            rss=50,
+            mm=20,
+        ),
+        _ev(
+            "exit_boundary",
+            1_200_000_000,
+            100,
+            seq=0,
+            rss=100,
+            mm=10,
+        ),
+    ]
+    metrics, gaps = C.analyze(
+        C.RawRun(
+            1,
+            8.0,
+            0,
+            1_200_000_000,
+            0,
+            0,
+            2,
+            0,
+            0,
+            True,
+            events,
+        ),
+        entry_pid=50,
+    )
+
+    assert gaps == []
+    root = next(metric for metric in metrics if metric.host_pid == 100)
+    child = next(metric for metric in metrics if metric.host_pid == 200)
+    assert sum(cpu_ns for _, cpu_ns in root.cpu_windows) == 200_000_000
+    assert sum(cpu_ns for _, cpu_ns in child.cpu_windows) == 50_000_000
+    assert root.sampled_peak_rss_mb == pytest.approx(200 * C.PAGE / 1e6)
+    attribution = root.provenance["sample_attribution"]
+    assert attribution["inherited_owner_sample_count"] == 1
+    inherited = attribution["inherited_owner_samples"][0]
+    assert inherited["original_host_pid"] == 200
+    assert inherited["original_host_tid"] == 200
+    assert inherited["original_exec_seq"] == C.SENTINEL
+    assert inherited["owner_host_pid"] == 100
+    assert inherited["owner_exec_seq"] == 0
+    assert inherited["fork_ancestry"] == [200, 100, 50]
+
+
+def test_new_thread_pre_exec_sample_inherits_active_tgid_image() -> None:
+    events = [
+        _ev("fork", 10, 50, child=100, child_tid=100),
+        _ev(
+            "exec_boundary",
+            20,
+            100,
+            seq=0,
+            rss=100,
+            mm=10,
+        ),
+        _ev("exec_arg", 20, 100, seq=0, arg="root"),
+        _ev("fork", 30, 100, child=101, child_tid=101),
+        _ev(
+            "perf",
+            40,
+            100,
+            tid=101,
+            cpu_ns=100,
+            rss=200,
+            mm=10,
+        ),
+        _ev(
+            "exit_boundary",
+            60,
+            100,
+            tid=101,
+            cpu_ns=200,
+            rss=200,
+            mm=10,
+        ),
+        _ev(
+            "exit_boundary",
+            1_200_000_000,
+            100,
+            seq=0,
+            rss=100,
+            mm=10,
+        ),
+    ]
+
+    metrics, gaps = C.analyze(
+        C.RawRun(1, 8.0, 0, 1_200_000_000, 0, 0, 1, 0, 0, True, events),
+        entry_pid=50,
+    )
+
+    assert gaps == []
+    root = metrics[0]
+    assert sum(cpu_ns for _, cpu_ns in root.cpu_windows) == 200
+    assert root.sampled_peak_rss_mb == pytest.approx(200 * C.PAGE / 1e6)
+    inherited = root.provenance["sample_attribution"]
+    assert inherited["inherited_owner_sample_count"] == 2
+    assert {
+        (
+            sample["original_host_pid"],
+            sample["original_host_tid"],
+            tuple(sample["fork_ancestry"]),
+            sample["owner_host_pid"],
+        )
+        for sample in inherited["inherited_owner_samples"]
+    } == {(100, 101, (101, 100, 50), 100)}
+
+
+def test_pre_exec_ambiguous_fork_ancestry_is_fatal() -> None:
+    events = [
+        _ev("fork", 10, 50, child=100, child_tid=100),
+        _ev("fork", 11, 51, child=100, child_tid=100),
+        _ev("perf", 15, 100, cpu_ns=1),
+        _ev("exec_arg", 20, 100, seq=0, arg="prog"),
+        _ev("exec_boundary", 20, 100, seq=0),
+        _ev("exit_boundary", 30, 100, seq=0),
+    ]
+    clauses, fork_parent = C._clauses_and_lineage(events)
+    _, gaps = C._attribute(
+        events,
+        clauses,
+        fork_parent,
+        entry_pid=50,
+    )
+
+    assert [gap["reason"] for gap in gaps] == [
+        "sentinel_pre_exec_ambiguous_fork_ancestry"
+    ]
+
+
+def test_pre_exec_active_owner_does_not_hide_ambiguity_above_it() -> None:
+    events = [
+        _ev("fork", 10, 50, child=100, child_tid=100),
+        _ev("fork", 11, 51, child=100, child_tid=100),
+        _ev("exec_arg", 20, 100, seq=0, arg="root"),
+        _ev("exec_boundary", 20, 100, seq=0),
+        _ev("fork", 30, 100, child=200, child_tid=200),
+        _ev("perf", 40, 200, cpu_ns=1),
+        _ev("exit_boundary", 50, 100, seq=0),
+    ]
+    clauses, fork_parent = C._clauses_and_lineage(events)
+    _, gaps = C._attribute(
+        events,
+        clauses,
+        fork_parent,
+        entry_pid=50,
+    )
+
+    assert len(gaps) == 1
+    assert gaps[0]["reason"] == "sentinel_pre_exec_ambiguous_fork_ancestry"
+    assert gaps[0]["fork_ancestry"] == [200, 100]
+
+
+def test_pre_exec_ancestry_edges_must_precede_the_child_fork() -> None:
+    events = [
+        _ev("fork", 10, 100, child=200, child_tid=200),
+        _ev("fork", 30, 50, child=100, child_tid=100),
+        _ev("exec_arg", 35, 100, seq=0, arg="root"),
+        _ev("exec_boundary", 35, 100, seq=0),
+        _ev("perf", 40, 200, cpu_ns=1),
+        _ev("exit_boundary", 50, 100, seq=0),
+    ]
+    clauses, fork_parent = C._clauses_and_lineage(events)
+    per_clause, gaps = C._attribute(
+        events,
+        clauses,
+        fork_parent,
+        entry_pid=50,
+    )
+
+    assert all(
+        sample["host_pid"] != 200
+        for sample in per_clause[(100, 0)]
+    )
+    assert gaps[0]["reason"] == "sentinel_pre_exec_missing_fork_ancestry"
+    assert gaps[0]["fork_ancestry"] == [200, 100]
+    assert gaps[0]["fork_chain_records"] == [
+        {"child_id": 200, "parent_pid": 100, "ts_ns": 10}
+    ]
+    assert gaps[0]["fork_resolution_failure"] == {
+        "failure_kind": "missing_generation",
+        "child_id": 100,
+        "timestamp_bound_ns": 10,
+        "eligible_records": [],
+        "rejected_records": [{"parent_pid": 50, "ts_ns": 30}],
+    }
+
+
+def test_repeated_same_parent_fork_generation_is_ambiguous() -> None:
+    events = [
+        _ev("fork", 10, 50, child=100, child_tid=100),
+        _ev("fork", 11, 50, child=100, child_tid=100),
+        _ev("perf", 15, 100, cpu_ns=1),
+        _ev("exec_arg", 20, 100, seq=0, arg="prog"),
+        _ev("exec_boundary", 20, 100, seq=0),
+        _ev("exit_boundary", 30, 100, seq=0),
+    ]
+    clauses, fork_parent = C._clauses_and_lineage(events)
+    _, gaps = C._attribute(
+        events,
+        clauses,
+        fork_parent,
+        entry_pid=50,
+    )
+
+    assert gaps[0]["reason"] == "sentinel_pre_exec_ambiguous_fork_ancestry"
+    assert gaps[0]["fork_ancestry"] == [100]
+    assert gaps[0]["fork_chain_records"] == []
+    assert gaps[0]["fork_resolution_failure"] == {
+        "failure_kind": "ambiguous_generation",
+        "child_id": 100,
+        "timestamp_bound_ns": 15,
+        "eligible_records": [
+            {"parent_pid": 50, "ts_ns": 10},
+            {"parent_pid": 50, "ts_ns": 11},
+        ],
+        "rejected_records": [],
+    }
+
+
+def test_cyclic_pre_exec_ancestry_persists_the_failing_edge() -> None:
+    events = [
+        _ev("fork", 30, 200, child=300, child_tid=300),
+        _ev("fork", 31, 300, child=200, child_tid=200),
+        _ev("perf", 40, 200, cpu_ns=1),
+    ]
+    clauses, fork_parent = C._clauses_and_lineage(events)
+    _, gaps = C._attribute(
+        events,
+        clauses,
+        fork_parent,
+        entry_pid=50,
+    )
+
+    assert gaps[0]["reason"] == "sentinel_pre_exec_ambiguous_fork_ancestry"
+    assert gaps[0]["fork_ancestry"] == [200, 300]
+    assert gaps[0]["fork_chain_records"] == [
+        {"child_id": 200, "parent_pid": 300, "ts_ns": 31}
+    ]
+    assert gaps[0]["fork_resolution_failure"] == {
+        "failure_kind": "cyclic_parent",
+        "child_id": 300,
+        "timestamp_bound_ns": 31,
+        "eligible_records": [{"parent_pid": 200, "ts_ns": 30}],
+        "rejected_records": [],
+    }
+
+
+def test_nonpositive_pre_exec_parent_persists_the_failing_edge() -> None:
+    events = [
+        _ev("fork", 30, 0, child=200, child_tid=200),
+        _ev("perf", 40, 200, cpu_ns=1),
+    ]
+    clauses, fork_parent = C._clauses_and_lineage(events)
+    _, gaps = C._attribute(
+        events,
+        clauses,
+        fork_parent,
+        entry_pid=50,
+    )
+
+    assert gaps[0]["fork_resolution_failure"] == {
+        "failure_kind": "nonpositive_parent",
+        "child_id": 200,
+        "timestamp_bound_ns": 40,
+        "eligible_records": [{"parent_pid": 0, "ts_ns": 30}],
+        "rejected_records": [],
+    }
 
 
 def test_cpu_delta_apportioned_across_intersected_windows() -> None:
@@ -85,6 +531,67 @@ def test_sentinel_at_terminal_end_is_half_open() -> None:
     assert [g["exec_seq"] for g in gaps] == [C.SENTINEL]
 
 
+def test_resolved_terminal_sample_after_end_is_identity_only() -> None:
+    events = [
+        _ev(
+            "exec_boundary",
+            0,
+            100,
+            seq=7,
+            cpu_ns=10,
+            rss=10,
+            mm=1,
+        ),
+        _ev("exec_arg", 0, 100, seq=7, arg="prog"),
+        _ev(
+            "exit_boundary",
+            1_000,
+            100,
+            seq=7,
+            cpu_ns=20,
+            rss=20,
+            mm=1,
+            io_read=100,
+        ),
+        _ev(
+            "perf",
+            1_025,
+            100,
+            seq=7,
+            cpu_ns=1_000,
+            rss=1_000,
+            mm=1,
+            io_read=10_000,
+        ),
+    ]
+    metrics, gaps = C.analyze(
+        C.RawRun(1, 8.0, 0, 1_025, 0, 0, 1, 0, 0, True, events)
+    )
+
+    assert gaps == []
+    metric = metrics[0]
+    assert metric.t_end_ns == 1_000
+    assert sum(cpu_ns for _, cpu_ns in metric.cpu_windows) == 10
+    assert metric.rss_bins == (
+        (0, 1, 10 * C.PAGE / 1e6),
+        (0, 1, 20 * C.PAGE / 1e6),
+    )
+    assert metric.disk_read_bytes_total == 100
+    assert metric.provenance["identity_only_samples"] == [
+        {
+            "type": "perf",
+            "ts_ns": 1_025,
+            "host_pid": 100,
+            "host_tid": 100,
+            "exec_seq": 7,
+            "reason": "outside_half_open_exec_window",
+            "t_exec_ns": 0,
+            "t_end_ns": 1_000,
+            "offset_from_end_ns": 25,
+        }
+    ]
+
+
 def test_no_exit_marks_clause_without_causal_end() -> None:
     # terminal clause with no exit boundary -> has_causal_end False (fail closed)
     events = [
@@ -95,3 +602,81 @@ def test_no_exit_marks_clause_without_causal_end() -> None:
     clauses, _ = C._clauses_and_lineage(events)
     assert len(clauses) == 1
     assert clauses[0].has_causal_end is False
+
+
+def test_rss_conversion_uses_host_page_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert C.PAGE == os.sysconf("SC_PAGE_SIZE")
+    monkeypatch.setattr(C, "PAGE", 65_536)
+    assert C.rss_bin_profile(
+        [{"ts_ns": 0, "mm_ptr": 1, "rss_pages": 2}]
+    ) == ((0, 1, 0.131072),)
+
+
+def test_disk_io_uses_disjoint_exec_baselines_not_scalar_peaks() -> None:
+    events = [
+        _ev(
+            "exec_boundary", 0, 100, seq=0,
+            io_read=100, io_write=200, io_cancelled=10,
+        ),
+        _ev("exec_arg", 0, 100, seq=0, arg="A"),
+        _ev(
+            "perf", 500, 100, seq=0,
+            io_read=140, io_write=240, io_cancelled=10,
+        ),
+        _ev(
+            "exec_boundary", 1000, 100, seq=1,
+            io_read=180, io_write=300, io_cancelled=20,
+        ),
+        _ev("exec_arg", 1000, 100, seq=1, arg="B"),
+        _ev(
+            "exit_boundary", 2000, 100, seq=1,
+            io_read=230, io_write=420, io_cancelled=25,
+        ),
+    ]
+    metrics, gaps = C.analyze(
+        C.RawRun(1, 8.0, 0, 2000, 0, 0, 1, 0, 0, True, events)
+    )
+    assert gaps == []
+    assert [
+        (
+            metric.disk_read_bytes_total,
+            metric.disk_write_bytes_total,
+            metric.disk_cancelled_write_bytes_total,
+            metric.disk_io_reason,
+        )
+        for metric in metrics
+    ] == [(80, 100, 10, "ok"), (50, 120, 5, "ok")]
+
+
+def test_disk_io_new_forked_tid_uses_zero_baseline() -> None:
+    events = [
+        _ev("fork", 0, 50, child=100, child_tid=100),
+        _ev(
+            "exec_boundary", 1, 100, seq=0,
+            io_read=100, io_write=200,
+        ),
+        _ev("exec_arg", 1, 100, seq=0, arg="A"),
+        _ev("fork", 100, 100, child=101, child_tid=101),
+        _ev(
+            "exit_boundary", 500, 101, tid=101,
+            io_read=300, io_write=400, io_cancelled=50,
+        ),
+        _ev(
+            "exit_boundary", 1000, 100, seq=0,
+            io_read=110, io_write=220,
+        ),
+    ]
+    metrics, gaps = C.analyze(
+        C.RawRun(1, 8.0, 0, 1000, 0, 0, 0, 0, 0, True, events),
+        entry_pid=50,
+    )
+    assert gaps == []
+    assert len(metrics) == 1
+    assert (
+        metrics[0].disk_read_bytes_total,
+        metrics[0].disk_write_bytes_total,
+        metrics[0].disk_cancelled_write_bytes_total,
+    ) == (310, 420, 50)
+    assert metrics[0].provenance["disk_io"]["zero_fork_baseline_tids"] == [101]

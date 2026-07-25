@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -235,7 +236,11 @@ class AgentRunner:
                 context.tool_segment_timelines = tool_segment_timelines
                 context.tool_per_process_records = tool_per_process_records
                 context.tool_timings = tool_timings
-                if fatal_error is not None:
+                preserve_tool_result = (
+                    fatal_error is not None
+                    and getattr(fatal_error, "preserve_tool_result", False)
+                )
+                if fatal_error is not None and not preserve_tool_result:
                     error = f"Error: {type(fatal_error).__name__}: {fatal_error}"
                     final_content = error
                     stop_reason = "tool_error"
@@ -263,6 +268,16 @@ class AgentRunner:
                     }
                     messages.append(tool_message)
                 self._refresh_hook_context_messages(context, messages)
+                if fatal_error is not None:
+                    error = f"Error: {type(fatal_error).__name__}: {fatal_error}"
+                    final_content = error
+                    stop_reason = "tool_error"
+                    context.final_content = final_content
+                    context.error = error
+                    context.stop_reason = stop_reason
+                    await hook.after_iteration(context)
+                    self._append_final_message(messages, final_content)
+                    break
                 if should_yield:
                     stop_reason = "yielded"
                     final_content = None
@@ -605,6 +620,7 @@ class AgentRunner:
         dict[str, float],
     ]:
         started_wall = time.time()
+        tool_ended_wall: float | None = None
 
         def finish(
             result: Any,
@@ -623,7 +639,11 @@ class AgentRunner:
             list[dict[str, Any]] | None,
             dict[str, float],
         ]:
-            ended_wall = time.time()
+            ended_wall = (
+                tool_ended_wall
+                if tool_ended_wall is not None
+                else time.time()
+            )
             return (
                 result,
                 event,
@@ -669,11 +689,19 @@ class AgentRunner:
         resource_timeline: dict[str, Any] | None = None
         segment_timeline: dict[str, Any] | None = None
         per_process: list[dict[str, Any]] | None = None
+        telemetry_failure: BaseException | None = None
         try:
+            set_call_context = getattr(tool, "set_tool_call_context", None)
+            if callable(set_call_context):
+                set_call_context(tool_call.id, tool_call.arguments)
             # Keep telemetry scoped to OpenClaw exec intervals until other tool
             # runtimes have per-action resource isolation.
             resource_recorder = ResourceTimelineRecorder(
-                enabled=tool_call.name == "exec",
+                enabled=(
+                    tool_call.name == "exec"
+                    and os.environ.get("OPENCLAW_TOOL_RESOURCE_TELEMETRY", "command")
+                    != "off"
+                ),
                 scope="openclaw_exec_tool_interval",
             )
             async with resource_recorder:
@@ -681,6 +709,19 @@ class AgentRunner:
                     result = await tool.execute(**params)
                 else:
                     result = await spec.tools.execute(tool_call.name, params)
+            finish_clause_telemetry = getattr(tool, "finish_clause_telemetry", None)
+            if (
+                getattr(tool, "clause_telemetry_enabled", False)
+                and callable(finish_clause_telemetry)
+            ):
+                tool_ended_wall = time.time()
+                try:
+                    finish_clause_telemetry()
+                except BaseException as exc:
+                    if getattr(exc, "fatal_replay_error", False):
+                        telemetry_failure = exc
+                    else:
+                        raise
             resource_timeline = resource_recorder.to_trace_dict()
             # Side-channel populated only by ContainerExecTool during replay
             # (see agents/openclaw/tools/container.py); None for every other
@@ -690,17 +731,39 @@ class AgentRunner:
             per_process = getattr(tool, "last_per_process", None)
         except asyncio.CancelledError:
             raise
-        except BaseException as exc:
+        except BaseException as caught:
+            failure = caught
+            telemetry_failure = (
+                caught if getattr(caught, "fatal_replay_error", False) else None
+            )
+            finish_clause_telemetry = getattr(tool, "finish_clause_telemetry", None)
+            if (
+                getattr(tool, "clause_telemetry_enabled", False)
+                and callable(finish_clause_telemetry)
+            ):
+                if tool_ended_wall is None:
+                    tool_ended_wall = time.time()
+                try:
+                    finish_clause_telemetry()
+                except BaseException as telemetry_exc:
+                    if getattr(telemetry_exc, "fatal_replay_error", False):
+                        telemetry_failure = telemetry_exc
+                    else:
+                        failure = telemetry_exc
             if resource_recorder is not None:
                 resource_timeline = resource_recorder.to_trace_dict()
             event = {
                 "name": tool_call.name,
                 "status": "error",
-                "detail": str(exc),
+                "detail": str(failure),
             }
-            error = exc if spec.fail_on_tool_error else None
+            error = (
+                telemetry_failure or failure
+                if spec.fail_on_tool_error or telemetry_failure is not None
+                else None
+            )
             return finish(
-                f"Error: {type(exc).__name__}: {exc}",
+                f"Error: {type(failure).__name__}: {failure}",
                 event,
                 error,
                 resource_timeline,
@@ -712,7 +775,10 @@ class AgentRunner:
                 "status": "error",
                 "detail": result.replace("\n", " ").strip()[:120],
             }
-            error = RuntimeError(result) if spec.fail_on_tool_error else None
+            error = (
+                telemetry_failure
+                or (RuntimeError(result) if spec.fail_on_tool_error else None)
+            )
             return finish(
                 result + _HINT, event, error, resource_timeline, segment_timeline, per_process
             )
@@ -726,7 +792,7 @@ class AgentRunner:
         return finish(
             result,
             {"name": tool_call.name, "status": "ok", "detail": detail},
-            None,
+            telemetry_failure,
             resource_timeline,
             segment_timeline,
             per_process,

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime/debug"
+	"sort"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -31,17 +32,35 @@ type clause struct {
 	PipelinePosition int      `json:"pipeline_position"`
 }
 
+type controlOperand struct {
+	Kind             string `json:"kind"`
+	Index            int    `json:"index"`
+	ClauseIndices    []int  `json:"clause_indices"`
+	Span             span   `json:"span"`
+	Negated          bool   `json:"negated"`
+	ContainsPipeline bool   `json:"contains_pipeline"`
+	ContainsSubshell bool   `json:"contains_subshell"`
+}
+
+type controlEdge struct {
+	ID       int            `json:"id"`
+	Operator string         `json:"operator"`
+	LHS      controlOperand `json:"lhs"`
+	RHS      controlOperand `json:"rhs"`
+}
+
 type parserInfo struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
 }
 
 type response struct {
-	ID      int64      `json:"id"`
-	OK      bool       `json:"ok"`
-	Parser  parserInfo `json:"parser"`
-	Clauses []clause   `json:"clauses"`
-	Error   *string    `json:"error"`
+	ID           int64         `json:"id"`
+	OK           bool          `json:"ok"`
+	Parser       parserInfo    `json:"parser"`
+	Clauses      []clause      `json:"clauses"`
+	ControlEdges []controlEdge `json:"control_edges"`
+	Error        *string       `json:"error"`
 }
 
 func parserVersion() string {
@@ -294,6 +313,32 @@ func binaryName(head string) string {
 	return head
 }
 
+func controlOperator(binary *syntax.BinaryCmd) string {
+	switch binary.Op {
+	case syntax.AndStmt:
+		return "&&"
+	case syntax.OrStmt:
+		return "||"
+	default:
+		return ""
+	}
+}
+
+func controlOperandContext(stmt *syntax.Stmt) (bool, bool) {
+	containsPipeline := false
+	containsSubshell := false
+	syntax.Walk(stmt, func(node syntax.Node) bool {
+		switch item := node.(type) {
+		case *syntax.BinaryCmd:
+			containsPipeline = containsPipeline || isPipe(item)
+		case *syntax.Subshell:
+			containsSubshell = true
+		}
+		return true
+	})
+	return containsPipeline, containsSubshell
+}
+
 func analyze(input request) response {
 	out := response{
 		ID: input.ID,
@@ -301,7 +346,8 @@ func analyze(input request) response {
 			Name:    parserName,
 			Version: parserVersion(),
 		},
-		Clauses: []clause{},
+		Clauses:      []clause{},
+		ControlEdges: []controlEdge{},
 	}
 	if input.Op == "handshake" {
 		out.OK = true
@@ -322,6 +368,7 @@ func analyze(input request) response {
 	}
 
 	stack := []syntax.Node{}
+	clauseByStatement := map[*syntax.Stmt]int{}
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if node == nil {
 			stack = stack[:len(stack)-1]
@@ -342,6 +389,7 @@ func analyze(input request) response {
 		}
 		bounds := commandSpan(stmt)
 		inPipe, position := pipelinePosition(stack, bounds[0])
+		clauseByStatement[stmt] = len(out.Clauses)
 		out.Clauses = append(out.Clauses, clause{
 			Bin:              binaryName(argv[0]),
 			Argv:             argv,
@@ -351,6 +399,77 @@ func analyze(input request) response {
 			InSubst:          substitutionContext(stack),
 			PipelinePosition: position,
 		})
+		return true
+	})
+
+	clauseIndices := func(stmt *syntax.Stmt) []int {
+		indices := []int{}
+		syntax.Walk(stmt, func(node syntax.Node) bool {
+			if statement, ok := node.(*syntax.Stmt); ok {
+				if index, found := clauseByStatement[statement]; found {
+					indices = append(indices, index)
+				}
+			}
+			return true
+		})
+		sort.Ints(indices)
+		return indices
+	}
+	edgeByBinary := map[*syntax.BinaryCmd]int{}
+	var buildEdge func(*syntax.BinaryCmd) int
+	var operand func(*syntax.Stmt) controlOperand
+	operand = func(stmt *syntax.Stmt) controlOperand {
+		containsPipeline, containsSubshell := controlOperandContext(stmt)
+		result := controlOperand{
+			Index:            -1,
+			ClauseIndices:    clauseIndices(stmt),
+			Span:             nodeSpan(stmt),
+			Negated:          stmt.Negated,
+			ContainsPipeline: containsPipeline,
+			ContainsSubshell: containsSubshell,
+		}
+		if stmt.Negated {
+			result.Kind = "unsupported"
+			return result
+		}
+		if binary, ok := stmt.Cmd.(*syntax.BinaryCmd); ok && controlOperator(binary) != "" {
+			index := buildEdge(binary)
+			indices := append([]int{}, out.ControlEdges[index].LHS.ClauseIndices...)
+			indices = append(indices, out.ControlEdges[index].RHS.ClauseIndices...)
+			result.Kind = "edge"
+			result.Index = index
+			result.ClauseIndices = indices
+			return result
+		}
+		if index, found := clauseByStatement[stmt]; found {
+			result.Kind = "clause"
+			result.Index = index
+			result.ClauseIndices = []int{index}
+			return result
+		}
+		result.Kind = "unsupported"
+		return result
+	}
+	buildEdge = func(binary *syntax.BinaryCmd) int {
+		if index, found := edgeByBinary[binary]; found {
+			return index
+		}
+		lhs := operand(binary.X)
+		rhs := operand(binary.Y)
+		index := len(out.ControlEdges)
+		edgeByBinary[binary] = index
+		out.ControlEdges = append(out.ControlEdges, controlEdge{
+			ID:       index,
+			Operator: controlOperator(binary),
+			LHS:      lhs,
+			RHS:      rhs,
+		})
+		return index
+	}
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if binary, ok := node.(*syntax.BinaryCmd); ok && controlOperator(binary) != "" {
+			buildEdge(binary)
+		}
 		return true
 	})
 	out.OK = true

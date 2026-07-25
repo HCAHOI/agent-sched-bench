@@ -276,10 +276,9 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         type=positive_float_arg,
         default=1.0,
         help=(
-            "Wall-clock acceleration factor for source inter-action gaps and "
-            "source-scaled action durations. Fixed TTFT/TPOT LLM timing requires "
-            "the default --replay-speed 1.0. Example: --replay-speed 50 replays "
-            "source timing at 50x."
+            "Acceleration factor for source inter-action gaps and LLM sleeps. "
+            "It never scales command execution, timeouts, or telemetry clocks. "
+            "Fixed TTFT/TPOT LLM timing requires --replay-speed 1.0."
         ),
     )
     parser.add_argument(
@@ -304,6 +303,17 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         type=nonnegative_float_arg,
         default=None,
         help="Simulated TPOT in milliseconds when --llm-timing ttft-tpot.",
+    )
+    parser.add_argument(
+        "--tool-resource-telemetry",
+        choices=["off", "command", "clause"],
+        default="command",
+        help=(
+            "Per-tool resource telemetry: off disables new command envelopes, "
+            "command preserves resource_timeline, and clause adds Stage-2 eBPF "
+            "clause observations. Clause mode requires root/BCC, Docker, "
+            "workers=1, and cannot be combined with --pacct."
+        ),
     )
     parser.add_argument(
         "--no-segment-timeline",
@@ -483,7 +493,6 @@ def _run_simulate(args: argparse.Namespace) -> None:
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
-
     simulate_kwargs = {
         "manifest": Path(args.manifest),
         "task_source": Path(args.task_source) if args.task_source else None,
@@ -504,6 +513,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "llm_tpot_ms": args.llm_tpot_ms,
         "structured_output": args.output_dir == "traces/simulate",
         "segment_timeline": args.segment_timeline,
+        "tool_resource_telemetry": args.tool_resource_telemetry,
         "pacct": args.pacct,
         "cleanup_images": args.cleanup_images,
     }

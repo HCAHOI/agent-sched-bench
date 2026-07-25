@@ -150,6 +150,8 @@ def test_handle_exec_records_real_segment_boundaries(
     assert resp["ok"] is True
     assert resp["returncode"] == 0
     assert "ok" in resp["result"]
+    assert resp["stdout"] == "ok\n"
+    assert resp["stderr"] == ""
     # Telemetry must never leak into the command's own stdout/stderr.
     assert "EPOCHREALTIME" not in resp["result"]
     assert "+ " not in resp["result"]

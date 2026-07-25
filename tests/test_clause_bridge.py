@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from tool_resource.clause_bridge import ExecImageRecord, bridge_command
+from tool_resource.clause_bridge import (
+    ExecImageRecord,
+    FailedExecAttempt,
+    ShellCommandLookupFailure,
+    bridge_command,
+)
 from tool_resource.runtime_kb import CPU_HEAVY_TARGET, ClauseObservation, ClauseResourceKB
 
 _MS = 1_000_000
@@ -45,11 +50,16 @@ def _img(
     mm: int | None = None,
     cpu_ns: int = 0,
     signal: int | None = None,
+    status: int | None = 0,
     argv: tuple[str, ...] | None = None,
     cpu_profile: object = "auto",
     rss_profile: object = "auto",
     quota: float = 8.0,
     has_causal_end: bool = True,
+    disk_read: int | None = 0,
+    disk_write: int | None = 0,
+    disk_cancelled: int | None = 0,
+    disk_io_reason: str = "ok",
 ) -> ExecImageRecord:
     cpu_windows = (
         _cpu_windows(t_exec, t_end, cores) if cpu_profile == "auto" else cpu_profile
@@ -71,10 +81,21 @@ def _img(
         rss_bins=rss_bins,
         peak_cpu_cores=cores,
         sampled_peak_rss_mb=rss_mb,
+        disk_read_bytes_total=disk_read,
+        disk_write_bytes_total=disk_write,
+        disk_cancelled_write_bytes_total=disk_cancelled,
+        disk_io_reason=disk_io_reason,
         cpu_ns_cumulative=cpu_ns,
         exit_signal=signal,
+        normal_exit_status=None if signal else status,
         has_causal_end=has_causal_end,
-        provenance={"quota_cores": quota},
+        provenance={
+            "quota_cores": quota,
+            "disk_io": {
+                "source": "linux_task_io_accounting",
+                "exact_endpoint_tids": [pid],
+            },
+        },
     )
 
 
@@ -86,6 +107,31 @@ def _fit(bin_: str, *, cpu: float | None = 0.5, rss: float | None = 10.0):
     )
 
 
+def _lookup_failure(
+    exit_code: int = 127,
+    command: str = "cd /testbed && python -m pytest",
+) -> ShellCommandLookupFailure:
+    diagnostic = "/bin/sh: 1: python: not found"
+    return ShellCommandLookupFailure(
+        executable_head="python",
+        command=command,
+        source_tool_call_id="source-1",
+        replay_tool_call_id="replay-1",
+        source_exit_code=exit_code,
+        replay_exit_code=exit_code,
+        source_diagnostic=diagnostic,
+        replay_diagnostic=diagnostic,
+        source_channel="source_tool_result",
+        replay_channel="raw_stderr" if exit_code else "tool_result",
+        parser="anchored_shell_command_not_found_v1",
+        exit_code_semantics=(
+            "direct_command_not_found_127"
+            if exit_code == 127
+            else "nonfinal_pipeline_masked_0"
+        ),
+    )
+
+
 # --------------------------------------------------------------------------
 # Identity boundary (W/P/M/K/B) with profile-based aggregation
 # --------------------------------------------------------------------------
@@ -93,12 +139,13 @@ def _fit(bin_: str, *, cpu: float | None = 0.5, rss: float | None = 10.0):
 
 def test_W_exec_chain_becomes_one_clause_headed_by_env() -> None:
     images = [
-        _img(101, 0, "env", 0, 1000, terminal=False,
+        _img(101, 0, "env", 0, 1000, terminal=False, disk_read=10,
              argv=("env", "nice", "-n", "0", "workload")),
-        _img(101, 1, "nice", 1000, 2000, terminal=False,
+        _img(101, 1, "nice", 1000, 2000, terminal=False, disk_write=20,
              argv=("nice", "-n", "0", "workload")),
         _img(101, 2, "workload", 2000, 1300 * _MS, terminal=True, cores=1.0,
-             rss_mb=40.0, cpu_ns=1300 * _MS, argv=("workload", "cpu-threads", "1")),
+             rss_mb=40.0, cpu_ns=1300 * _MS, disk_read=30, disk_write=40,
+             disk_cancelled=5, argv=("workload", "cpu-threads", "1")),
     ]
     result = bridge_command(
         "r1", "env nice -n 0 workload cpu-threads 1 1.3", images,
@@ -111,6 +158,19 @@ def test_W_exec_chain_becomes_one_clause_headed_by_env() -> None:
     assert "workload" in obs.argv
     assert obs.peak_cpu_cores == pytest.approx(1.0, abs=0.05)
     assert result.bridged[0].owned_exec_images == ((101, 0), (101, 1), (101, 2))
+    assert (
+        result.bridged[0].disk_read_bytes_total,
+        result.bridged[0].disk_write_bytes_total,
+        result.bridged[0].disk_cancelled_write_bytes_total,
+    ) == (40, 60, 5)
+    assert result.bridged[0].availability["disk_io"] == "ok"
+    assert result.bridged[0].provenance["per_image_diagnostics"][0][
+        "disk_io_provenance"
+    ] == {
+        "source": "linux_task_io_accounting",
+        "exact_endpoint_tids": [101],
+    }
+    assert not hasattr(obs, "disk_read_bytes_total")
 
 
 def test_P_pipeline_two_separate_clauses_no_cross_leak() -> None:
@@ -149,6 +209,39 @@ def test_M_memory_flag_from_sampled_peak_rss_not_hiwater() -> None:
     assert not hasattr(obs, "hiwater_pages")
     assert result.bridged[0].availability["cpu"].startswith("unknown")
     assert result.bridged[0].availability["memory"] == "ok"
+
+
+def test_disk_io_unavailable_does_not_change_kb_observation() -> None:
+    result = bridge_command(
+        "r1",
+        "python3 -c 'x=1'",
+        [
+            _img(
+                101,
+                0,
+                "python3",
+                0,
+                1200 * _MS,
+                terminal=True,
+                cores=0.5,
+                rss_mb=10.0,
+                argv=("python3", "-c", "x=1"),
+                disk_read=None,
+                disk_write=None,
+                disk_cancelled=None,
+                disk_io_reason="missing_exact_tid_io_endpoint",
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+    clause = result.bridged[0]
+    assert clause.disk_read_bytes_total is None
+    assert clause.availability["disk_io"] == (
+        "unknown:owned_image_unavailable:missing_exact_tid_io_endpoint"
+    )
+    assert clause.observation.peak_cpu_cores == pytest.approx(0.5)
+    assert clause.observation.sampled_peak_rss_mb == pytest.approx(10.0)
 
 
 def test_K_killed_descendant_preserves_peak_and_signal() -> None:
@@ -195,6 +288,485 @@ def test_B_background_descendant_maps_without_leakage() -> None:
     assert all(
         o.peak_cpu_cores is None or o.peak_cpu_cores < 0.5 for o in by_bin["sleep"]
     )
+
+
+def test_failed_exec_exactly_resolves_one_static_clause_without_observation() -> None:
+    failed = FailedExecAttempt(
+        host_pid=101,
+        exec_seq=1,
+        ts_ns=10,
+        argv=("python", "-m", "pytest"),
+        errno=2,
+    )
+    result = bridge_command(
+        "r1",
+        "cd /testbed && python -m pytest",
+        [],
+        failed_exec_attempts=[failed],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+    assert result.observations == []
+    assert result.coverage_gaps == []
+    assert len(result.no_runtime_exec) == 1
+    assert result.no_runtime_exec[0].attempts == (failed,)
+    assert result.no_runtime_exec[0].availability == {
+        "latency": "unknown:no_runtime_exec",
+        "cpu": "unknown:no_runtime_exec",
+        "memory": "unknown:no_runtime_exec",
+        "disk_io": "unknown:no_runtime_exec",
+    }
+
+
+def test_failed_exec_does_not_resolve_ambiguous_repeated_static_clauses() -> None:
+    result = bridge_command(
+        "r1",
+        "missing; missing",
+        [],
+        failed_exec_attempts=[
+            FailedExecAttempt(101, 1, 10, ("missing",), 2)
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+    assert result.no_runtime_exec == []
+    assert [gap.kind for gap in result.coverage_gaps] == [
+        "unmatched_static_clause",
+        "unmatched_static_clause",
+    ]
+
+
+def test_shell_lookup_failure_resolves_one_exact_static_head_without_observation() -> None:
+    evidence = _lookup_failure()
+    result = bridge_command(
+        "r1",
+        evidence.command,
+        [],
+        command_lookup_failure=evidence,
+        entry_pid=100,
+        fork_parent={},
+    )
+    assert result.observations == []
+    assert result.coverage_gaps == []
+    assert result.no_runtime_exec[0].attempts == ()
+    assert result.no_runtime_exec[0].command_lookup_failure is evidence
+    assert (
+        result.no_runtime_exec[0].mapping_evidence
+        == "shell_command_lookup_failure_exact_head"
+    )
+
+
+def test_pipeline_masked_lookup_failure_maps_only_python() -> None:
+    command = "python -m pytest 2>&1 | tail -40"
+    evidence = _lookup_failure(0, command)
+    result = bridge_command(
+        "r1",
+        command,
+        [
+            _img(
+                102,
+                0,
+                "tail",
+                0,
+                10 * _MS,
+                terminal=True,
+                argv=("tail", "-40"),
+            )
+        ],
+        command_lookup_failure=evidence,
+        entry_pid=100,
+        fork_parent={102: 100},
+    )
+    assert [item.bin for item in result.no_runtime_exec] == ["python"]
+    assert [item.observation.bin for item in result.bridged] == ["tail"]
+    assert result.coverage_gaps == []
+
+
+def test_shell_lookup_failure_does_not_choose_between_repeated_static_heads() -> None:
+    result = bridge_command(
+        "r1",
+        "python -V; python --version",
+        [],
+        command_lookup_failure=_lookup_failure(),
+        entry_pid=100,
+        fork_parent={},
+    )
+    assert result.no_runtime_exec == []
+    assert [gap.kind for gap in result.coverage_gaps] == [
+        "unmatched_static_clause",
+        "unmatched_static_clause",
+    ]
+
+
+def test_exit_zero_lookup_failure_requires_nonfinal_pipeline_clause() -> None:
+    command = "python || true"
+    result = bridge_command(
+        "r1",
+        command,
+        [],
+        command_lookup_failure=_lookup_failure(0, command),
+        entry_pid=100,
+        fork_parent={},
+    )
+    assert result.no_runtime_exec == []
+    assert [gap.kind for gap in result.coverage_gaps] == [
+        "unmatched_static_clause"
+    ]
+
+
+def test_bridge_rejects_internally_inconsistent_lookup_evidence() -> None:
+    evidence = ShellCommandLookupFailure(
+        **{
+            **_lookup_failure().__dict__,
+            "replay_exit_code": 0,
+            "replay_diagnostic": "python not found",
+            "replay_tool_call_id": "",
+        }
+    )
+    result = bridge_command(
+        "r1",
+        evidence.command,
+        [],
+        command_lookup_failure=evidence,
+        entry_pid=100,
+        fork_parent={},
+    )
+    assert result.no_runtime_exec == []
+    assert [gap.kind for gap in result.coverage_gaps] == [
+        "unmatched_static_clause"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("command", "status", "operator"),
+    [
+        ("left && middle && right", 1, "&&"),
+        ("left || middle || right", 0, "||"),
+    ],
+)
+def test_shell_control_chain_resolves_only_proven_short_circuits(
+    command: str,
+    status: int,
+    operator: str,
+) -> None:
+    result = bridge_command(
+        "r1",
+        command,
+        [_img(101, 0, "left", 0, 10, terminal=True, status=status)],
+        allow_control_short_circuit=True,
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert not result.coverage_gaps
+    assert [item.bin for item in result.no_runtime_exec] == ["middle", "right"]
+    assert all(
+        item.mapping_evidence == "shell_control_short_circuit"
+        for item in result.no_runtime_exec
+    )
+    assert {
+        (
+            item.control_short_circuit["controller_clause_index"],
+            item.control_short_circuit["controller_normal_exit_status"],
+            item.control_short_circuit["operator"],
+        )
+        for item in result.no_runtime_exec
+    } == {(0, status, operator)}
+
+
+@pytest.mark.parametrize(
+    ("command", "image"),
+    [
+        (
+            "left && right",
+            _img(101, 0, "left", 0, 10, terminal=True, status=None),
+        ),
+        (
+            "left && right",
+            _img(101, 0, "left", 0, 10, terminal=True, signal=9),
+        ),
+        (
+            "left; right",
+            _img(101, 0, "left", 0, 10, terminal=True, status=1),
+        ),
+        (
+            "left | middle && right",
+            _img(101, 0, "left", 0, 10, terminal=True, status=1),
+        ),
+    ],
+)
+def test_shell_control_without_exact_normal_evidence_stays_fatal(
+    command: str,
+    image: ExecImageRecord,
+) -> None:
+    result = bridge_command(
+        "r1",
+        command,
+        [image],
+        allow_control_short_circuit=True,
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert result.no_runtime_exec == []
+    assert any(gap.kind == "unmatched_static_clause" for gap in result.coverage_gaps)
+
+
+@pytest.mark.parametrize(
+    ("command", "status", "operator"),
+    [
+        ("false && (b | c)", 1, "&&"),
+        ("true || (b | c)", 0, "||"),
+    ],
+)
+def test_outer_control_skips_every_rhs_pipeline_member(
+    command: str,
+    status: int,
+    operator: str,
+) -> None:
+    result = bridge_command(
+        "r1",
+        command,
+        [_img(101, 0, command.split()[0], 0, 10, terminal=True, status=status)],
+        allow_control_short_circuit=True,
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert not result.coverage_gaps
+    assert [item.observation.bin for item in result.bridged] == [
+        command.split()[0]
+    ]
+    assert [item.bin for item in result.no_runtime_exec] == ["b", "c"]
+    for index, item in enumerate(result.no_runtime_exec, start=1):
+        assert item.control_short_circuit == {
+            "parser": "mvdan.cc/sh/v3",
+            "control_edge_id": 0,
+            "control_edge_path": [0],
+            "operator": operator,
+            "controller_clause_index": 0,
+            "controller_bin": command.split()[0],
+            "controller_pid": 101,
+            "controller_exec_seq": 0,
+            "controller_normal_exit_status": status,
+            "controlled_clause_index": index,
+            "controlled_rhs_clause_indices": [1, 2],
+            "controlled_rhs_executable_clause_indices": [1, 2],
+            "controlled_rhs_subtree": {
+                "kind": "unsupported",
+                "index": -1,
+                "clause_indices": [1, 2],
+                "span": (9, 16) if operator == "&&" else (8, 15),
+                "negated": False,
+                "contains_pipeline": True,
+                "contains_subshell": True,
+            },
+            "source_replay_fidelity": "exact_tool_result_and_exit_code",
+        }
+
+
+def test_outer_control_skips_nested_rhs_subtree_deterministically() -> None:
+    result = bridge_command(
+        "r1",
+        "false && (b && (c | d))",
+        [_img(101, 0, "false", 0, 10, terminal=True, status=1)],
+        allow_control_short_circuit=True,
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert not result.coverage_gaps
+    assert [item.bin for item in result.no_runtime_exec] == ["b", "c", "d"]
+    assert {
+        tuple(item.control_short_circuit["controlled_rhs_clause_indices"])
+        for item in result.no_runtime_exec
+    } == {(1, 2, 3)}
+    assert {
+        item.control_short_circuit["controlled_clause_index"]
+        for item in result.no_runtime_exec
+    } == {1, 2, 3}
+
+
+def test_outer_control_rejects_nonunique_controller_mapping() -> None:
+    result = bridge_command(
+        "r1",
+        "left x && (b | c)",
+        [
+            _img(
+                101,
+                0,
+                "left",
+                0,
+                10,
+                terminal=True,
+                status=1,
+                argv=("left", "x"),
+            ),
+            _img(
+                102,
+                0,
+                "left",
+                0,
+                10,
+                terminal=True,
+                status=1,
+                argv=("left", "x"),
+            ),
+        ],
+        allow_control_short_circuit=True,
+        entry_pid=100,
+        fork_parent={101: 100, 102: 100},
+    )
+
+    assert result.no_runtime_exec == []
+    assert any(gap.kind == "unmatched_static_clause" for gap in result.coverage_gaps)
+
+
+@pytest.mark.parametrize(
+    ("command", "images", "fork_parent"),
+    [
+        (
+            "a | b && c",
+            [
+                _img(101, 0, "a", 0, 10, terminal=True, status=0),
+                _img(102, 0, "b", 0, 10, terminal=True, status=1),
+            ],
+            {101: 100, 102: 100},
+        ),
+        (
+            "(a) && c",
+            [_img(101, 0, "a", 0, 10, terminal=True, status=1)],
+            {101: 100},
+        ),
+    ],
+)
+def test_outer_control_rejects_lhs_pipeline_or_subshell_status(
+    command: str,
+    images: list[ExecImageRecord],
+    fork_parent: dict[int, int],
+) -> None:
+    result = bridge_command(
+        "r1",
+        command,
+        images,
+        allow_control_short_circuit=True,
+        entry_pid=100,
+        fork_parent=fork_parent,
+    )
+
+    assert result.no_runtime_exec == []
+    assert any(gap.kind == "unmatched_static_clause" for gap in result.coverage_gaps)
+
+
+def test_outer_control_rejects_partial_rhs_runtime_evidence() -> None:
+    result = bridge_command(
+        "r1",
+        "false && (b | c)",
+        [
+            _img(101, 0, "false", 0, 10, terminal=True, status=1),
+            _img(102, 0, "b", 0, 10, terminal=True, status=0),
+        ],
+        allow_control_short_circuit=True,
+        entry_pid=100,
+        fork_parent={101: 100, 102: 100},
+    )
+
+    assert result.no_runtime_exec == []
+    assert any(
+        gap.kind == "control_flow_contradiction"
+        for gap in result.coverage_gaps
+    )
+
+
+def test_outer_control_resolves_the_fixed_image_smoke_pipeline() -> None:
+    command = (
+        "cd /testbed && git stash && cd src/azure-cli-core && "
+        "/opt/conda/envs/testbed/bin/python -m pytest "
+        "azure/cli/core/tests/test_help.py::HelpTest::test_help_extra_missing_params "
+        "azure/cli/core/tests/test_vcr_security.py::Test_vcr_security::"
+        "test_deployment_name_scrub -v 2>&1 | tail -20"
+    )
+    result = bridge_command(
+        "r1",
+        command,
+        [
+            _img(
+                101,
+                0,
+                "git",
+                0,
+                10,
+                terminal=True,
+                status=128,
+                argv=("git", "stash"),
+            )
+        ],
+        allow_control_short_circuit=True,
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert not result.coverage_gaps
+    assert [item.bin for item in result.no_runtime_exec] == ["python", "tail"]
+    assert {
+        tuple(item.control_short_circuit["controlled_rhs_clause_indices"])
+        for item in result.no_runtime_exec
+    } == {(3, 4)}
+    assert {
+        tuple(item.control_short_circuit["control_edge_path"])
+        for item in result.no_runtime_exec
+    } == {(0, 1, 2)}
+
+
+def test_shell_control_mapping_ambiguity_stays_fatal() -> None:
+    result = bridge_command(
+        "r1",
+        "left x && left y && right",
+        [
+            _img(101, 0, "left", 0, 10, terminal=True, status=1),
+            _img(102, 0, "left", 0, 10, terminal=True, status=1),
+        ],
+        allow_control_short_circuit=True,
+        entry_pid=100,
+        fork_parent={101: 100, 102: 100},
+    )
+
+    assert result.no_runtime_exec == []
+    assert any(gap.kind == "ambiguous" for gap in result.coverage_gaps)
+
+
+@pytest.mark.parametrize(
+    ("command", "status"),
+    [("! left && right", 1), ("! left || right", 0)],
+)
+def test_negated_shell_control_stays_fatal(
+    command: str,
+    status: int,
+) -> None:
+    result = bridge_command(
+        "r1",
+        command,
+        [_img(101, 0, "left", 0, 10, terminal=True, status=status)],
+        allow_control_short_circuit=True,
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert result.no_runtime_exec == []
+    assert any(gap.kind == "unmatched_static_clause" for gap in result.coverage_gaps)
+
+
+def test_shell_control_requires_source_replay_fidelity_gate() -> None:
+    result = bridge_command(
+        "r1",
+        "left && right",
+        [_img(101, 0, "left", 0, 10, terminal=True, status=1)],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert result.no_runtime_exec == []
+    assert any(gap.kind == "unmatched_static_clause" for gap in result.coverage_gaps)
 
 
 # --------------------------------------------------------------------------
