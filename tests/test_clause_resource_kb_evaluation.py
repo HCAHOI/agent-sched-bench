@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from scripts.evaluation.evaluate_clause_resource_kb import (
@@ -7,6 +9,7 @@ from scripts.evaluation.evaluate_clause_resource_kb import (
     ScoredRow,
     _latency_false_negative_modes,
     _metrics,
+    _proxy_observations,
     _validate_partition,
 )
 from tool_resource.labels import ResourceCallSample
@@ -18,6 +21,7 @@ def _row(
     target: str = "cpu_heavy_2cores",
 ) -> ScoredRow:
     return ScoredRow(
+        policy="baseline",
         target=target,
         sample_id="sample",
         task_id="owner__repo-1",
@@ -99,7 +103,42 @@ def test_latency_false_negative_mechanism_counts_short_segment_sum() -> None:
         [row], [call], "latency_long_5000ms"
     ) == {
         "single_segment_exceeds": 0,
-        "short_segments_sum_exceeds": 1,
+        "short_sequential_segments_sum_exceeds": 1,
+        "pipeline_overlap_unresolved": 0,
         "command_envelope_only": 0,
         "mapping_unavailable": 0,
     }
+
+    pipeline_call = ProxyCall(
+        sample=sample,
+        command="a | b",
+        clauses=(
+            {"bin": "a", "argv": ["a"], "in_pipe": True},
+            {"bin": "b", "argv": ["b"], "in_pipe": True},
+        ),
+        mapping_evidence="bin_exact",
+        segment_times_ms=call.segment_times_ms,
+    )
+    assert _latency_false_negative_modes(
+        [row], [pipeline_call], "latency_long_5000ms"
+    )["pipeline_overlap_unresolved"] == 1
+
+    call_level_sample = replace(
+        sample,
+        peak_cpu_cores=3.0,
+        peak_cpu_cores_eligible=True,
+    )
+    leading_cd_call = ProxyCall(
+        sample=call_level_sample,
+        command="cd /tmp && a",
+        clauses=(
+            {"bin": "cd", "argv": ["cd", "/tmp"]},
+            {"bin": "a", "argv": ["a"]},
+        ),
+        mapping_evidence="bin_exact",
+        segment_times_ms=((0.0, 1.0), (1.0, 6000.0)),
+    )
+    observation = _proxy_observations(
+        leading_cd_call, "owner__repo", exclude_leading_cd=True
+    )[0]
+    assert observation.ts_end == call_level_sample.tool_ts_end

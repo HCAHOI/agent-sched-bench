@@ -47,6 +47,7 @@ class ProxyCall:
 
 @dataclass(frozen=True)
 class ScoredRow:
+    policy: str
     target: str
     sample_id: str
     task_id: str
@@ -159,21 +160,36 @@ def _segment_evidence(
     return "bin_exact", tuple(times)
 
 
-def _proxy_observations(call: ProxyCall, repo: str) -> list[ClauseObservation]:
+def _proxy_observations(
+    call: ProxyCall, repo: str, *, exclude_leading_cd: bool = False
+) -> list[ClauseObservation]:
     if (
         call.mapping_evidence != "bin_exact"
         or call.sample.censored
     ):
         return []
+    clauses = list(call.clauses)
+    times = list(call.segment_times_ms)
+    if exclude_leading_cd:
+        while len(clauses) > 1 and str(clauses[0]["bin"]) == "cd":
+            clauses.pop(0)
+            times.pop(0)
     sample = call.sample
-    single = len(call.clauses) == 1
+    single = len(clauses) == 1
+    has_call_level_value = single and (
+        sample.peak_cpu_cores_eligible or sample.peak_memory_mb_eligible
+    )
     return [
         ClauseObservation(
             repo=repo,
             bin=str(clause["bin"]),
             argv=tuple(clause["argv"]),
             ts_start=sample.tool_ts_start + start_ms / 1000.0,
-            ts_end=sample.tool_ts_start + end_ms / 1000.0,
+            ts_end=(
+                sample.tool_ts_end
+                if has_call_level_value
+                else sample.tool_ts_start + end_ms / 1000.0
+            ),
             latency_ms=end_ms - start_ms,
             peak_cpu_cores=(
                 sample.peak_cpu_cores
@@ -186,9 +202,7 @@ def _proxy_observations(call: ProxyCall, repo: str) -> list[ClauseObservation]:
                 else None
             ),
         )
-        for clause, (start_ms, end_ms) in zip(
-            call.clauses, call.segment_times_ms, strict=True
-        )
+        for clause, (start_ms, end_ms) in zip(clauses, times, strict=True)
     ]
 
 
@@ -258,7 +272,7 @@ def _structure(clauses: Sequence[Mapping[str, Any]]) -> str:
 
 
 def _score(
-    kb: ClauseResourceKB, calls: Sequence[ProxyCall]
+    kb: ClauseResourceKB, calls: Sequence[ProxyCall], policy: str
 ) -> list[ScoredRow]:
     rows: list[ScoredRow] = []
     for call in sorted(
@@ -278,6 +292,7 @@ def _score(
             layer, key_kind, evidence = _provenance(prediction, target)
             rows.append(
                 ScoredRow(
+                    policy=policy,
                     target=target,
                     sample_id=call.sample.sample_id,
                     task_id=call.sample.task_id,
@@ -292,7 +307,9 @@ def _score(
                     mapping_evidence=call.mapping_evidence,
                 )
             )
-        for observation in _proxy_observations(call, repo):
+        for observation in _proxy_observations(
+            call, repo, exclude_leading_cd=kb.exclude_leading_cd
+        ):
             kb.observe_completed_clause(observation)
     return rows
 
@@ -359,7 +376,8 @@ def _latency_false_negative_modes(
     calls_by_id = {call.sample.sample_id: call for call in calls}
     counts = {
         "single_segment_exceeds": 0,
-        "short_segments_sum_exceeds": 0,
+        "short_sequential_segments_sum_exceeds": 0,
+        "pipeline_overlap_unresolved": 0,
         "command_envelope_only": 0,
         "mapping_unavailable": 0,
     }
@@ -373,8 +391,10 @@ def _latency_false_negative_modes(
         durations = [end - start for start, end in call.segment_times_ms]
         if max(durations, default=0.0) > threshold:
             counts["single_segment_exceeds"] += 1
+        elif any(bool(clause.get("in_pipe")) for clause in call.clauses):
+            counts["pipeline_overlap_unresolved"] += 1
         elif sum(durations) > threshold:
-            counts["short_segments_sum_exceeds"] += 1
+            counts["short_sequential_segments_sum_exceeds"] += 1
         else:
             counts["command_envelope_only"] += 1
     return counts
@@ -385,44 +405,73 @@ def evaluate(
     eval_calls: Sequence[ProxyCall],
     provenance: Mapping[str, Any],
 ) -> tuple[dict[str, Any], list[ScoredRow]]:
-    fit_observations = [
-        observation
-        for call in fit_calls
-        for observation in _proxy_observations(call, "public")
-    ]
-    kb = ClauseResourceKB.fit_public(fit_observations)
-    rows = _score(kb, eval_calls)
+    policies = {"baseline": False, "exclude_leading_cd": True}
+    observations_by_policy = {
+        policy: [
+            observation
+            for call in fit_calls
+            for observation in _proxy_observations(
+                call, "public", exclude_leading_cd=exclude
+            )
+        ]
+        for policy, exclude in policies.items()
+    }
+    rows_by_policy = {
+        policy: _score(
+            ClauseResourceKB.fit_public(
+                observations_by_policy[policy], exclude_leading_cd=exclude
+            ),
+            eval_calls,
+            policy,
+        )
+        for policy, exclude in policies.items()
+    }
     targets: dict[str, Any] = {}
     for target in CLASSIFIER_TARGETS:
-        target_rows = [row for row in rows if row.target == target]
-        targets[target] = {
-            "overall": _metrics(target_rows),
-            "buckets": {
-                field: _bucket_metrics(target_rows, field)
-                for field in (
-                    "layer",
-                    "key_kind",
-                    "evidence_count",
-                    "command_structure",
-                    "mapping_evidence",
-                )
-            },
-            "false_negative_mechanism": (
-                _latency_false_negative_modes(rows, eval_calls, target)
-                if target.startswith("latency_long")
-                else {
-                    "status": (
-                        "unavailable: legacy proxy has no per-clause CPU/RSS "
-                        "target values for compound commands"
+        policy_results: dict[str, Any] = {}
+        for policy, rows in rows_by_policy.items():
+            target_rows = [row for row in rows if row.target == target]
+            policy_results[policy] = {
+                "overall": _metrics(target_rows),
+                "buckets": {
+                    field: _bucket_metrics(target_rows, field)
+                    for field in (
+                        "layer",
+                        "key_kind",
+                        "evidence_count",
+                        "command_structure",
+                        "mapping_evidence",
                     )
-                }
-            ),
+                },
+                "false_negative_mechanism": (
+                    _latency_false_negative_modes(rows, eval_calls, target)
+                    if target.startswith("latency_long")
+                    else {
+                        "status": (
+                            "unavailable: legacy proxy has no per-clause CPU/RSS "
+                            "target values for compound commands"
+                        )
+                    }
+                ),
+            }
+        baseline_ba = policy_results["baseline"]["overall"]["balanced_accuracy"]
+        candidate_ba = policy_results["exclude_leading_cd"]["overall"][
+            "balanced_accuracy"
+        ]
+        targets[target] = {
+            **policy_results,
+            "candidate_minus_baseline_balanced_accuracy": candidate_ba - baseline_ba,
         }
+    rows = [row for policy_rows in rows_by_policy.values() for row in policy_rows]
     return (
         {
             "status": "diagnostic_legacy_proxy_not_canonical_stage2",
             "provenance": dict(provenance),
-            "fit_clause_observation_count": len(fit_observations),
+            "selected_policy": "exclude_leading_cd",
+            "fit_clause_observation_count": {
+                policy: len(observations)
+                for policy, observations in observations_by_policy.items()
+            },
             "eval_exec_call_count": len(eval_calls),
             "targets": targets,
         },

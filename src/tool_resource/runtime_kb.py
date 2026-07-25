@@ -460,8 +460,9 @@ def _nodes_from_json(
 # Clause dominant-type classifier
 # ==========================================================================
 
-_CLAUSE_SCHEMA = "runtime_clause_resource_kb_v2"
+_CLAUSE_SCHEMA = "runtime_clause_resource_kb_v3"
 _CLAUSE_MAX_DEPTH = 4  # frozen ordered argv-prefix depth budget
+_DEFAULT_EXCLUDE_LEADING_CD = True
 _DELIM = "\x00"  # argv tokens may contain spaces; NUL cannot collide
 
 # Aggregated Stage-2 clause-observation value sources. Each is a per-clause
@@ -636,7 +637,10 @@ class ClauseResourceKB:
     monotonic-query guard as :class:`RuntimeToolResourceKB`.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self, *, exclude_leading_cd: bool = _DEFAULT_EXCLUDE_LEADING_CD
+    ) -> None:
+        self.exclude_leading_cd = exclude_leading_cd
         self._public: dict[str, dict[NodeKey, tuple[float, ...]]] = {
             source: {} for source in _CLAUSE_SOURCES
         }
@@ -646,7 +650,12 @@ class ClauseResourceKB:
         self._last_query_ts: float | None = None
 
     @classmethod
-    def fit_public(cls, observations: Iterable[ClauseObservation]) -> ClauseResourceKB:
+    def fit_public(
+        cls,
+        observations: Iterable[ClauseObservation],
+        *,
+        exclude_leading_cd: bool = _DEFAULT_EXCLUDE_LEADING_CD,
+    ) -> ClauseResourceKB:
         """Fit frozen public bin/global priors from historical clauses."""
 
         acc: dict[str, dict[NodeKey, list[float]]] = {
@@ -662,7 +671,7 @@ class ClauseResourceKB:
                     acc[source].setdefault(key, []).append(value)
         if not acc[_LATENCY_MS].get(("global", "")):
             raise ValueError("fit corpus has no clause latency (wall_ns) evidence")
-        kb = cls()
+        kb = cls(exclude_leading_cd=exclude_leading_cd)
         kb._public = {
             source: {key: tuple(values) for key, values in nodes.items()}
             for source, nodes in acc.items()
@@ -759,8 +768,12 @@ class ClauseResourceKB:
         """Advance causal state, then OR clause flags into command-level flags."""
 
         self._advance(ts_start)
+        effective = list(clauses)
+        if self.exclude_leading_cd:
+            while len(effective) > 1 and str(effective[0]["bin"]) == "cd":
+                effective.pop(0)
         per_clause = [
-            self.predict_clause(repo, str(c["bin"]), tuple(c["argv"])) for c in clauses
+            self.predict_clause(repo, str(c["bin"]), tuple(c["argv"])) for c in effective
         ]
         targets: dict[str, CommandFlagPrediction] = {}
         for target in CLASSIFIER_TARGETS:
@@ -770,7 +783,7 @@ class ClauseResourceKB:
             repo=repo,
             command=command,
             parse_failed=parse_failed,
-            clause_bins=tuple(str(c["bin"]) for c in clauses),
+            clause_bins=tuple(str(c["bin"]) for c in effective),
             targets=targets,
         )
 
@@ -808,6 +821,7 @@ class ClauseResourceKB:
         return {
             "schema": _CLAUSE_SCHEMA,
             "max_prefix_depth": _CLAUSE_MAX_DEPTH,
+            "exclude_leading_cd": self.exclude_leading_cd,
             "public": {
                 source: _nodes_to_json(nodes)
                 for source, nodes in self._public.items()
@@ -831,7 +845,10 @@ class ClauseResourceKB:
             raise ValueError(f"unsupported clause schema {obj.get('schema')!r}")
         if obj.get("max_prefix_depth") != _CLAUSE_MAX_DEPTH:
             raise ValueError("snapshot prefix depth differs from module depth")
-        kb = cls()
+        exclude_leading_cd = obj.get("exclude_leading_cd")
+        if not isinstance(exclude_leading_cd, bool):
+            raise TypeError("snapshot exclude_leading_cd must be boolean")
+        kb = cls(exclude_leading_cd=exclude_leading_cd)
         kb._public = {
             source: {
                 key: tuple(values)

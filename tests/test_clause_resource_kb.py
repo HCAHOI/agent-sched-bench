@@ -139,6 +139,27 @@ def test_argv_prefix_and_bin_backoff() -> None:
     assert binlevel.key_kind == "bin"
 
 
+def test_leading_cd_is_excluded_before_or() -> None:
+    kb = _fit(
+        _obs("pub", "cd", ("cd", "/tmp"), 0.0, 1.0, rss=700.0),
+        _obs("pub", "cat", ("cat", "x"), 1.0, 2.0, rss=10.0),
+    )
+    prediction = kb.predict_command("r1", "cd /tmp && cat x", 10.0)
+    assert prediction.clause_bins == ("cat",)
+    assert prediction.targets[MEMORY_HEAVY_TARGET].flag is False
+
+    baseline = ClauseResourceKB.fit_public(
+        [
+            _obs("pub", "cd", ("cd", "/tmp"), 0.0, 1.0, rss=700.0),
+            _obs("pub", "cat", ("cat", "x"), 1.0, 2.0, rss=10.0),
+        ],
+        exclude_leading_cd=False,
+    )
+    assert baseline.predict_command("r1", "cd /tmp && cat x", 10.0).targets[
+        MEMORY_HEAVY_TARGET
+    ].flag is True
+
+
 def test_repo_isolation() -> None:
     kb = _fit(_obs("pub", "pytest", ("pytest", "-q"), 0.0, 1.0, cpu=0.5))
     kb.observe_completed_clause(
@@ -235,6 +256,7 @@ def test_serialization_round_trip_preserves_predictions_and_pending() -> None:
         _obs("r1", "pytest", ("pytest", "-q"), 20.0, 30.0, cpu=8.0)
     )
     restored = ClauseResourceKB.from_json_obj(json.loads(json.dumps(kb.to_json_obj())))
+    assert restored.exclude_leading_cd is True
     for repo, bin_, argv in (
         ("r1", "pytest", ("pytest", "-q")),
         ("r2", "make", ("make", "all")),
