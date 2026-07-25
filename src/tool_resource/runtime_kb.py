@@ -90,7 +90,8 @@ vote over the selected node's observations. Backoff for clause identity
 argv prefixes (depth 4..2) -> repo bin -> public bin -> public global. Prefix
 keys are nested under ``bin``, so ``bin`` is queried only after every
 more-specific prefix. Public holds only bin and global nodes (coarse
-cold-start); exact/prefix nodes are repo-only, mirroring the q90 asymmetry.
+cold-start); exact/prefix nodes are repo-only, mirroring the secondary
+conditional-p90 layer's asymmetry.
 
 Command aggregation is the frozen per-target THREE-VALUED OR of clause flags:
 any True -> True; otherwise any Unknown -> Unknown; otherwise False. It never
@@ -112,7 +113,7 @@ from tool_resource.metrics import ecdf_quantile
 from tool_time.command import shell_command_heads, shell_command_prefix_tokens
 
 TARGETS = ("latency_ms", "peak_cpu_cores", "peak_memory_mb")
-_QUANTILE = 0.9
+_CONDITIONAL_P90_QUANTILE = 0.9
 _MAX_PREFIX_DEPTH = 4  # frozen depth budget, same as the evaluated lattice
 _SCHEMA = "runtime_tool_resource_kb_v1"
 
@@ -176,10 +177,10 @@ class ToolCallQuery:
 
 @dataclass(frozen=True)
 class TargetPrediction:
-    """q90 estimate plus provenance for one target."""
+    """Secondary conditional-p90 estimate plus provenance for one target."""
 
     target: str
-    q90: float | None
+    conditional_p90: float | None
     scope: str | None
     key_kind: str | None
     evidence_count: int
@@ -294,7 +295,7 @@ class RuntimeToolResourceKB:
         self._pending_seq += 1
 
     def query(self, query: ToolCallQuery) -> dict[str, TargetPrediction]:
-        """Predict q90 for all targets before the call at ``query.ts_start``."""
+        """Predict secondary conditional p90 before ``query.ts_start``."""
 
         if self._last_query_ts is not None and query.ts_start < self._last_query_ts:
             raise ValueError(
@@ -353,7 +354,7 @@ class RuntimeToolResourceKB:
         if target == "peak_memory_mb" and query.ambient_before_mb is None:
             return TargetPrediction(
                 target=target,
-                q90=None,
+                conditional_p90=None,
                 scope=None,
                 key_kind=None,
                 evidence_count=0,
@@ -363,14 +364,14 @@ class RuntimeToolResourceKB:
         values, scope, kind, path = self._select(
             query.repo, target, query.tool_name, query.command
         )
-        q90 = ecdf_quantile(values, _QUANTILE)
+        conditional_p90 = ecdf_quantile(values, _CONDITIONAL_P90_QUANTILE)
         note = None
         if target == "peak_memory_mb":
-            q90 += float(query.ambient_before_mb)
+            conditional_p90 += float(query.ambient_before_mb)
             note = "residual quantile plus query ambient_before_mb"
         return TargetPrediction(
             target=target,
-            q90=q90,
+            conditional_p90=conditional_p90,
             scope=scope,
             key_kind=kind,
             evidence_count=len(values),
@@ -383,7 +384,7 @@ class RuntimeToolResourceKB:
 
         return {
             "schema": _SCHEMA,
-            "quantile": _QUANTILE,
+            "quantile": _CONDITIONAL_P90_QUANTILE,
             "max_prefix_depth": _MAX_PREFIX_DEPTH,
             "public": {
                 target: _nodes_to_json(nodes)
@@ -408,7 +409,7 @@ class RuntimeToolResourceKB:
 
         if obj.get("schema") != _SCHEMA:
             raise ValueError(f"unsupported schema {obj.get('schema')!r}")
-        if obj.get("quantile") != _QUANTILE:
+        if obj.get("quantile") != _CONDITIONAL_P90_QUANTILE:
             raise ValueError("snapshot quantile differs from module quantile")
         if obj.get("max_prefix_depth") != _MAX_PREFIX_DEPTH:
             raise ValueError("snapshot prefix depth differs from module depth")
@@ -460,7 +461,7 @@ def _nodes_from_json(
 # ==========================================================================
 
 _CLAUSE_SCHEMA = "runtime_clause_resource_kb_v2"
-_CLAUSE_MAX_DEPTH = 4  # ordered argv-prefix budget, same frozen depth as q90
+_CLAUSE_MAX_DEPTH = 4  # frozen ordered argv-prefix depth budget
 _DELIM = "\x00"  # argv tokens may contain spaces; NUL cannot collide
 
 # Aggregated Stage-2 clause-observation value sources. Each is a per-clause

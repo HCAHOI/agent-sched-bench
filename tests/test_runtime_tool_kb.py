@@ -93,7 +93,7 @@ def test_public_has_no_prefix_or_exact_nodes_and_is_immutable() -> None:
     # a different repo still sees the untouched public node
     other = kb.query(_query("r2", "pytest -q tests", 40.0))
     assert other["peak_cpu_cores"].scope == "public"
-    assert other["peak_cpu_cores"].q90 == 1.0
+    assert other["peak_cpu_cores"].conditional_p90 == 1.0
 
 
 def test_completed_same_repo_exact_command_becomes_available() -> None:
@@ -104,7 +104,7 @@ def test_completed_same_repo_exact_command_becomes_available() -> None:
     cpu = prediction["peak_cpu_cores"]
     assert cpu.scope == "repo"
     assert cpu.key_kind == "exact_command"
-    assert cpu.q90 == 6.0
+    assert cpu.conditional_p90 == 6.0
     assert cpu.evidence_count == 1
 
 
@@ -116,7 +116,7 @@ def test_shared_ordered_prefix_backs_off_through_repo_prefix() -> None:
     cpu = prediction["peak_cpu_cores"]
     assert cpu.scope == "repo"
     assert cpu.key_kind == "command_prefix_depth_2"
-    assert cpu.q90 == 6.0
+    assert cpu.conditional_p90 == 6.0
 
 
 def test_argument_order_is_not_sorted_or_merged() -> None:
@@ -148,7 +148,7 @@ def test_repo_isolation() -> None:
 
     cpu = prediction["peak_cpu_cores"]
     assert cpu.scope == "public"
-    assert cpu.q90 == 1.0
+    assert cpu.conditional_p90 == 1.0
 
 
 def test_running_overlapping_same_start_and_future_do_not_leak() -> None:
@@ -163,7 +163,7 @@ def test_running_overlapping_same_start_and_future_do_not_leak() -> None:
     # strictly completed becomes visible; the future call (ts 20-21) does not
     warm = kb.query(_query("r1", "pytest -q tests", 10.5))["peak_cpu_cores"]
     assert warm.scope == "repo"
-    assert warm.q90 == 6.0
+    assert warm.conditional_p90 == 6.0
     assert warm.evidence_count == 1
 
 
@@ -193,11 +193,11 @@ def test_memory_residual_adds_query_ambient_and_never_future_state() -> None:
 
     low = kb.query(_query("r1", "pytest -q tests", 10.0, ambient=250.0))
     high = kb.query(_query("r1", "pytest -q tests", 11.0, ambient=300.0))
-    assert low["peak_memory_mb"].q90 == pytest.approx(350.0)
-    assert high["peak_memory_mb"].q90 == pytest.approx(400.0)
+    assert low["peak_memory_mb"].conditional_p90 == pytest.approx(350.0)
+    assert high["peak_memory_mb"].conditional_p90 == pytest.approx(400.0)
 
     missing = kb.query(_query("r1", "pytest -q tests", 12.0, ambient=None))
-    assert missing["peak_memory_mb"].q90 is None
+    assert missing["peak_memory_mb"].conditional_p90 is None
     assert missing["peak_memory_mb"].scope is None
     assert "ambient_before_mb" in missing["peak_memory_mb"].note
 
@@ -224,7 +224,7 @@ def test_serialization_round_trip_preserves_predictions_and_pending() -> None:
     # pending state survives the round trip and releases causally
     late = restored.query(_query("r1", "pytest -q tests", 31.0))["peak_cpu_cores"]
     assert late.evidence_count == 2
-    assert late.q90 == 9.0
+    assert late.conditional_p90 == 9.0
 
 
 def test_target_ineligibility_is_isolated() -> None:
@@ -245,7 +245,7 @@ def test_target_ineligibility_is_isolated() -> None:
     prediction = kb.query(_query("r1", "pytest -q tests", 13.0, ambient=100.0))
 
     assert prediction["peak_memory_mb"].scope == "repo"
-    assert prediction["peak_memory_mb"].q90 == pytest.approx(900.0)
+    assert prediction["peak_memory_mb"].conditional_p90 == pytest.approx(900.0)
     assert prediction["latency_ms"].scope == "public"
     assert prediction["peak_cpu_cores"].scope == "public"
 
