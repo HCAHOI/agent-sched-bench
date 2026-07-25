@@ -520,6 +520,48 @@ def test_unquoted_glob_zero_words_is_not_assumed_without_nullglob_evidence() -> 
     )
 
 
+def test_unquoted_glob_no_match_retains_only_the_whole_word() -> None:
+    retained = bridge_command(
+        "r1",
+        "install -e **/*.py",
+        [
+            _img(
+                101,
+                0,
+                "install",
+                0,
+                _S,
+                terminal=True,
+                argv=("install", "-e", "**/*.py"),
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+    partially_expanded = bridge_command(
+        "r2",
+        "install -e [abc]/*.py",
+        [
+            _img(
+                101,
+                0,
+                "install",
+                0,
+                _S,
+                terminal=True,
+                argv=("install", "-e", "[abc]/one.py"),
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert retained.data_valid
+    assert retained.bridged[0].mapping_evidence == "initial_invocation_exact"
+    assert not partially_expanded.data_valid
+    assert partially_expanded.observations == []
+
+
 def test_multiple_globs_require_a_unique_segmentation() -> None:
     unique = bridge_command(
         "r1",

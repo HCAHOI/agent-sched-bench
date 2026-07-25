@@ -588,6 +588,8 @@ def _resolve_control_short_circuits(
 def _pathname_match(value: str, pattern: str) -> bool:
     """Shell `*` and `?` do not cross `/` without a recursive-glob option."""
 
+    if value == pattern:
+        return True
     if "**" in pattern:
         return False
     value_parts = value.split("/")
