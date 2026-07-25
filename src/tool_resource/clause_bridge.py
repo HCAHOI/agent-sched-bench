@@ -605,13 +605,7 @@ def _alignment_evidence(
 ) -> tuple[str | None, str]:
     """Prove one full static-word to initial-runtime-argv alignment."""
 
-    if (
-        initial.argv_capture_flags
-        or initial.argv_capped
-        or initial.truncated_words
-        or initial.requested_executable_path_truncated
-        or initial.bprm_evidence_truncated
-    ):
+    if _incomplete_capture(initial):
         return None, "runtime_argv_incomplete"
     runtime = tuple(initial.argv)
     static = tuple(str(word) for word in clause["argv"])
@@ -696,6 +690,16 @@ def _alignment_evidence(
         if expanded or runtime != static
         else "initial_invocation_exact",
         "ok",
+    )
+
+
+def _incomplete_capture(image: ExecImageRecord) -> bool:
+    return bool(
+        image.argv_capture_flags
+        or image.argv_capped
+        or image.truncated_words
+        or image.requested_executable_path_truncated
+        or image.bprm_evidence_truncated
     )
 
 
@@ -1110,6 +1114,16 @@ def bridge_command(
                 )
             )
 
+    mapping_anchors = {
+        (pid, chains[pid][0].exec_seq)
+        for pid in assigned.values()
+    }
+    owned_exec_images = {
+        image
+        for clause in bridged
+        for image in clause.owned_exec_images
+    }
+    ownership_only_images = owned_exec_images - mapping_anchors
     incomplete_capture_gaps = [
         MappingGap(
             "runtime_argv_incomplete",
@@ -1117,11 +1131,8 @@ def bridge_command(
             "truncated argv",
         )
         for image in exec_images
-        if image.argv_capture_flags
-        or image.argv_capped
-        or image.truncated_words
-        or image.requested_executable_path_truncated
-        or image.bprm_evidence_truncated
+        if _incomplete_capture(image)
+        and (image.host_pid, image.exec_seq) not in ownership_only_images
     ]
     gaps.extend(incomplete_capture_gaps)
     transition_graph = [

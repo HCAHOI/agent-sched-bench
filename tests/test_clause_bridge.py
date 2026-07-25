@@ -749,6 +749,87 @@ def test_nine_word_console_script_owns_interpreter_and_descendant() -> None:
     assert result.bridged[0].mapping_evidence == "initial_invocation_exact"
 
 
+def test_capped_descendant_argv_is_safe_after_unique_ownership() -> None:
+    result = bridge_command(
+        "r1",
+        "find /tmp | xargs grep pattern",
+        [
+            _img(
+                101,
+                0,
+                "find",
+                0,
+                _S,
+                terminal=True,
+                argv=("find", "/tmp"),
+            ),
+            _img(
+                102,
+                0,
+                "xargs",
+                0,
+                _S,
+                terminal=True,
+                argv=("xargs", "grep", "pattern"),
+            ),
+            _img(
+                103,
+                0,
+                "grep",
+                10,
+                500,
+                terminal=True,
+                argv=("grep", "pattern", *[f"file-{i}" for i in range(14)]),
+                argv_capture_flags=1 << 16,
+            ),
+        ],
+        entry_pid=100,
+        fork_parent={101: 100, 102: 100, 103: 102},
+    )
+
+    assert result.data_valid
+    assert result.invalid_reasons == []
+    assert [clause.owned_pids for clause in result.bridged] == [
+        (101,),
+        (102, 103),
+    ]
+
+
+def test_capped_owned_descendant_cannot_hide_an_unmatched_static_clause() -> None:
+    result = bridge_command(
+        "r1",
+        "wrapper; grep pattern file-0 file-1 file-2 file-3 file-4 file-5 "
+        "file-6 file-7 file-8 file-9 file-10 file-11 file-12 file-13",
+        [
+            _img(
+                101,
+                0,
+                "wrapper",
+                0,
+                _S,
+                terminal=True,
+                argv=("wrapper",),
+            ),
+            _img(
+                102,
+                0,
+                "grep",
+                10,
+                500,
+                terminal=True,
+                argv=("grep", "pattern", *[f"file-{i}" for i in range(14)]),
+                argv_capture_flags=1 << 16,
+            ),
+        ],
+        entry_pid=100,
+        fork_parent={101: 100, 102: 101},
+    )
+
+    assert not result.data_valid
+    assert result.observations == []
+    assert any(gap.kind == "unmatched_static_clause" for gap in result.invalid_reasons)
+
+
 def test_descendant_matching_another_static_clause_gets_independent_ownership() -> None:
     result = bridge_command(
         "r1",
