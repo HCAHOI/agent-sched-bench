@@ -1,0 +1,86 @@
+{
+  "all_pass": true,
+  "elapsed_s": 32.4,
+  "kernel": "5.15.0-185-generic",
+  "nproc": 8,
+  "proofs": {
+    "1_attach_and_density": {
+      "attributed_sample_count": 502,
+      "attribution_coverage": 1.0,
+      "clause_exec_seq": 0,
+      "clause_tgid": 3565008,
+      "coverage_gap_count": 0,
+      "cpu_relative_error": 0.0022,
+      "distinct_tids_attributed": 3,
+      "gap_examples": [],
+      "in_window_sample_count": 502,
+      "observed_quota_cores": 8.0,
+      "pass": true,
+      "reconstructed_cpu_s": 5.0158,
+      "reference_cgroup_cpu_s": 5.0047,
+      "wall_s": 2.537,
+      "window_count": 6,
+      "windowed_peak_cpu_cores": 2.0
+    },
+    "2_cpu_reconstruction": {
+      "cpu_forks": {
+        "cpu_relative_error": 0.006,
+        "reconstructed_cpu_s": 5.0359,
+        "reference_cgroup_cpu_s": 5.0059
+      },
+      "cpu_threads": {
+        "cpu_relative_error": 0.0022,
+        "reconstructed_cpu_s": 5.0158,
+        "reference_cgroup_cpu_s": 5.0047
+      },
+      "pass": true
+    },
+    "3_lineage_attribution": {
+      "cpu_forks": {
+        "attributed_sample_count": 507,
+        "attribution_coverage": 1.0,
+        "coverage_gap_count": 0,
+        "distinct_tids_attributed": 3,
+        "in_window_sample_count": 507
+      },
+      "cpu_threads": {
+        "attributed_sample_count": 502,
+        "attribution_coverage": 1.0,
+        "coverage_gap_count": 0,
+        "distinct_tids_attributed": 3,
+        "in_window_sample_count": 502
+      },
+      "pass": true
+    },
+    "4_rss_dedup_and_sum": {
+      "distinct_address_spaces_seen": 2,
+      "max_aligned_distinct_mm_count": 2,
+      "pass": true,
+      "peak_bin_per_mm_mb": {
+        "0xff4309f2de9f0440": 472.9,
+        "0xff4309f2de9f5500": 157.8
+      },
+      "sampled_peak_rss_mb": 630.7,
+      "threads_shared_mm_dedup": {
+        "0xff4309f2de9f0440": [
+          3565164,
+          3565166,
+          3565167
+        ]
+      }
+    },
+    "5_overhead_and_loss": {
+      "cpu_overhead_pct": -0.01,
+      "max_reserve_failures_under_load": 0,
+      "off_cgroup_cpu_s_mean": 4.005,
+      "off_wall_s_mean": 2.036,
+      "on_cgroup_cpu_s_mean": 4.005,
+      "on_wall_s_mean": 2.038,
+      "pass": true,
+      "reps": 3,
+      "wall_overhead_pct": 0.11
+    }
+  },
+  "sample_period_ns": 10000000,
+  "window_ns": 500000000
+}

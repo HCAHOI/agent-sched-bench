@@ -1,0 +1,219 @@
+{
+  "kernel": "5.15.0-185-generic",
+  "harness": "local-cgroup (frozen Stage-1b docker image unavailable)",
+  "reps_per_case": 2,
+  "elapsed_s": 29.1,
+  "all_pass": true,
+  "cases": {
+    "P": {
+      "pass": true,
+      "command": "/home/chiyu/workspace/agent-sched-bench/analysis/development/clause-telemetry-ebpf-stage2-20260725/workload cpu-threads 2 1.5 | /home/chiyu/workspace/agent-sched-bench/analysis/development/clause-telemetry-ebpf-stage2-20260725/workload cpu-threads 2 1.5",
+      "reps": [
+        {
+          "pass": true,
+          "detail": {
+            "eligible_burner_clauses": 2,
+            "per_clause_peak_cpu_cores": [
+              1.98,
+              1.99
+            ],
+            "cross_leak_gt3cores": false,
+            "attribution_coverage": [
+              1.0,
+              1.0
+            ]
+          },
+          "clauses": 3,
+          "coverage_gap_samples": 0,
+          "reserve_failures": 0,
+          "perf_sample_count": 597,
+          "wall_s": 1.587,
+          "cgroup_cpu_s": 6.009
+        },
+        {
+          "pass": true,
+          "detail": {
+            "eligible_burner_clauses": 2,
+            "per_clause_peak_cpu_cores": [
+              1.99,
+              1.98
+            ],
+            "cross_leak_gt3cores": false,
+            "attribution_coverage": [
+              1.0,
+              1.0
+            ]
+          },
+          "clauses": 3,
+          "coverage_gap_samples": 0,
+          "reserve_failures": 0,
+          "perf_sample_count": 595,
+          "wall_s": 1.546,
+          "cgroup_cpu_s": 6.008
+        }
+      ]
+    },
+    "W": {
+      "pass": true,
+      "command": "env nice -n 0 /home/chiyu/workspace/agent-sched-bench/analysis/development/clause-telemetry-ebpf-stage2-20260725/workload cpu-threads 1 1.3",
+      "reps": [
+        {
+          "pass": true,
+          "detail": {
+            "same_pid_clause_bins": [
+              "env",
+              "nice",
+              "workload"
+            ],
+            "terminal_peak_cpu_cores": 1.0,
+            "nonterminal_clauses_with_peak": []
+          },
+          "clauses": 4,
+          "coverage_gap_samples": 0,
+          "reserve_failures": 0,
+          "perf_sample_count": 131,
+          "wall_s": 1.326,
+          "cgroup_cpu_s": 1.307
+        },
+        {
+          "pass": true,
+          "detail": {
+            "same_pid_clause_bins": [
+              "env",
+              "nice",
+              "workload"
+            ],
+            "terminal_peak_cpu_cores": 1.0,
+            "nonterminal_clauses_with_peak": []
+          },
+          "clauses": 4,
+          "coverage_gap_samples": 0,
+          "reserve_failures": 0,
+          "perf_sample_count": 131,
+          "wall_s": 1.321,
+          "cgroup_cpu_s": 1.307
+        }
+      ]
+    },
+    "M": {
+      "pass": true,
+      "command": "python3 -c \"b=bytearray(200*1024*1024)\nfor i in range(0,len(b),4096): b[i]=1\nimport time; time.sleep(0.8)\"",
+      "reps": [
+        {
+          "pass": true,
+          "detail": {
+            "sampled_peak_rss_mb": 213.835776,
+            "live_oracle_peak_rss_mb": 209.5,
+            "relative_error": 0.021,
+            "idle_gap_frac_of_window": 0.911,
+            "boundary_rss_samples": 1,
+            "availability": "ok",
+            "hiwater_kept_separate": true
+          },
+          "clauses": 2,
+          "coverage_gap_samples": 0,
+          "reserve_failures": 0,
+          "perf_sample_count": 9,
+          "wall_s": 0.898,
+          "cgroup_cpu_s": 0.093
+        },
+        {
+          "pass": true,
+          "detail": {
+            "sampled_peak_rss_mb": 218.95168,
+            "live_oracle_peak_rss_mb": 209.8,
+            "relative_error": 0.044,
+            "idle_gap_frac_of_window": 0.893,
+            "boundary_rss_samples": 1,
+            "availability": "ok",
+            "hiwater_kept_separate": true
+          },
+          "clauses": 2,
+          "coverage_gap_samples": 0,
+          "reserve_failures": 0,
+          "perf_sample_count": 10,
+          "wall_s": 0.916,
+          "cgroup_cpu_s": 0.108
+        }
+      ]
+    },
+    "K": {
+      "pass": true,
+      "command": "timeout -s KILL 1.3 /home/chiyu/workspace/agent-sched-bench/analysis/development/clause-telemetry-ebpf-stage2-20260725/workload cpu-threads 1 5",
+      "reps": [
+        {
+          "pass": true,
+          "detail": {
+            "has_exit_boundary": true,
+            "exit_signal": 9,
+            "peak_cpu_cores": 1.01,
+            "availability": "ok",
+            "raw_cpu_ns_cumulative_ms": 1276.0
+          },
+          "clauses": 3,
+          "coverage_gap_samples": 0,
+          "reserve_failures": 0,
+          "perf_sample_count": 127,
+          "wall_s": 1.308,
+          "cgroup_cpu_s": 1.288
+        },
+        {
+          "pass": true,
+          "detail": {
+            "has_exit_boundary": true,
+            "exit_signal": 9,
+            "peak_cpu_cores": 1.0,
+            "availability": "ok",
+            "raw_cpu_ns_cumulative_ms": 1276.0
+          },
+          "clauses": 3,
+          "coverage_gap_samples": 0,
+          "reserve_failures": 0,
+          "perf_sample_count": 130,
+          "wall_s": 1.309,
+          "cgroup_cpu_s": 1.289
+        }
+      ]
+    },
+    "B": {
+      "pass": true,
+      "command": "( /home/chiyu/workspace/agent-sched-bench/analysis/development/clause-telemetry-ebpf-stage2-20260725/workload cpu-threads 1 1.3 & sleep 0.1 ); sleep 1.3",
+      "reps": [
+        {
+          "pass": true,
+          "detail": {
+            "background_burner_peak_cpu_cores": 0.99,
+            "quota_cores": 8.0,
+            "parent_sh_cpu_leak": false,
+            "attribution_coverage": [
+              1.0
+            ]
+          },
+          "clauses": 4,
+          "coverage_gap_samples": 0,
+          "reserve_failures": 0,
+          "perf_sample_count": 131,
+          "wall_s": 1.41,
+          "cgroup_cpu_s": 1.308
+        },
+        {
+          "pass": true,
+          "detail": {
+            "background_burner_peak_cpu_cores": 1.0,
+            "quota_cores": 8.0,
+            "parent_sh_cpu_leak": false,
+            "attribution_coverage": [
+              1.0
+            ]
+          },
+          "clauses": 4,
+          "coverage_gap_samples": 0,
+          "reserve_failures": 0,
+          "perf_sample_count": 130,
+          "wall_s": 1.41,
+          "cgroup_cpu_s": 1.308
+        }
+      ]
+    }
+  }
+}

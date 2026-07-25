@@ -1,0 +1,64 @@
+{
+  "command": "python3 -c 'import multiprocessing as mp, time\ndef work(_):\n    buf = bytearray(250*1024*1024)\n    for i in range(0, len(buf), 4096): buf[i] = 1\n    t = time.process_time()\n    while time.process_time() - t < 1.5: pass\nif __name__ == \"__main__\":\n    ps = [mp.Process(target=work, args=(i,)) for i in range(3)]\n    for p in ps: p.start()\n    for p in ps: p.join()\n    print(\"SMOKE_HEAVY_DONE\")'",
+  "image": "python:3.13-slim-bookworm",
+  "docker_exit_code": 0,
+  "gate_armed_after_launch_ms": 388.91,
+  "start_gate": "armed before release (attach race eliminated)",
+  "loss": {
+    "reserve_failures": 0,
+    "perf_sample_count": 506,
+    "coverage_gap_samples_total": 10,
+    "coverage_gap_samples_structural_entry_shell": 10,
+    "coverage_gap_samples_relevant": 0,
+    "relevant_gap_pids": []
+  },
+  "mapping": {
+    "static_clause_count": 1,
+    "mapped_observations": 1,
+    "coverage_gaps": [],
+    "unobserved_builtins": []
+  },
+  "bridge_metrics": [
+    {
+      "bin": "python3",
+      "argv": [
+        "python3",
+        "-c",
+        "import multiprocessing as mp, time\ndef work(_):\n    buf = bytearray(250*1024*1024)\n    for i in range(0, len(buf), 4096): buf[i] = 1\n    t = time.process_time()\n    while time.process_time() - t < 1.5: pass\nif __name__ == \"__main__\":\n    ps = [mp.Process(target=work, args=(i,)) for i in range(3)]\n    for p in ps: p.start()\n    for p in ps: p.join()\n    print(\"SMOKE_HEAVY_DONE\")"
+      ],
+      "latency_ms": 1890.9,
+      "peak_cpu_cores": 2.981888382,
+      "sampled_peak_rss_mb": 846.0451840000001,
+      "availability": {
+        "latency": "ok",
+        "cpu": "ok",
+        "memory": "ok"
+      },
+      "mapping_evidence": "tier3",
+      "owned_exec_images": [
+        [
+          3659003,
+          6
+        ]
+      ]
+    }
+  ],
+  "kb_command_flags": {
+    "latency_long_3500ms": {
+      "flag": false,
+      "note": "OR is sufficient but not complete: sequential short clauses can accumulate into a long command"
+    },
+    "latency_long_5000ms": {
+      "flag": false,
+      "note": "OR is sufficient but not complete: sequential short clauses can accumulate into a long command"
+    },
+    "cpu_heavy_2cores": {
+      "flag": true,
+      "note": "three-valued OR does not sum concurrent clauses: individually sub-threshold concurrent clauses can jointly cross the threshold (registered composer limitation, not a telemetry failure)"
+    },
+    "memory_heavy_500mb": {
+      "flag": true,
+      "note": "three-valued OR does not sum concurrent clauses: individually sub-threshold concurrent clauses can jointly cross the threshold (registered composer limitation, not a telemetry failure)"
+    }
+  }
+}

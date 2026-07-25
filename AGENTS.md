@@ -302,6 +302,18 @@ via novel, feasible, hardware-friendly methods. Evaluation-path code must be
 correct and usable at intended scale; exploratory code needs no product
 infrastructure.
 
+## Tool-Resource Objective Lock
+
+Before planning or executing work that changes tool-resource data, prediction,
+evaluation, or scheduler integration, read
+`analysis/development/tool-resource-canonical-objective.md`. Its objective,
+metric definitions, evidence boundary, and current-integration statement
+override conflicting older development plans and chat summaries. In
+particular: primary acceptance is three command-level dominant-type
+classifications measured by balanced accuracy; `q90` means q-error p90; and the
+composition candidate ORs per-clause flags per target. The current
+clause-integration status is stated there, not here — defer to that file.
+
 ## Environment
 
 Single entry point — `uv` with `.venv` at repo root, via

@@ -1,0 +1,605 @@
+"""Bridge Stage-2 exec-image telemetry to static mvdan-clause observations.
+
+The Stage-2 collector's ``(host_pid, exec_seq)`` object is a runtime *exec-image
+occurrence*, NOT a shell clause. One static mvdan clause may own a same-PID exec
+chain AND forked/execed descendants:
+
+    env nice -n 0 workload ...
+      mvdan:   one clause, headed by ``env``
+      runtime: same-PID exec chain env -> nice -> workload (+ descendants)
+
+This bridge parses the ORIGINAL command with :func:`parse_command_clauses`,
+maps runtime exec images to static clauses, and folds each static clause's owned
+exec images into a single :class:`~tool_resource.runtime_kb.ClauseObservation`
+keyed by the mvdan clause identity (``bin``, ordered ``argv``).
+
+Two correctness properties this module guarantees:
+
+**Time-aligned aggregation, never scalar max.** A static clause that owns
+concurrent execed descendants must not have its metrics computed as the max of
+per-image scalar peaks — that under-counts and can flip a heavy/light label.
+Each exec image exports compact time-aligned profiles:
+
+- ``cpu_windows``: ``(absolute_500ms_window_index, cpu_ns)`` contributions;
+- ``rss_bins``: ``(absolute_20ms_bin_index, mm_identity, rss_mb)`` samples.
+
+The bridge merges ALL owned images before reducing: for CPU it sums owned
+``cpu_ns`` within each common wall window, divides by the window's actual span,
+quota-clips, then takes the max window; for RSS it deduplicates identical ``mm``
+per common aligned bin, sums distinct live ``mm`` RSS, then takes the max bin.
+If a profile is missing/incompatible for an owned image, the target is returned
+``unavailable`` — never a scalar-max fallback. Per-image scalar peaks are kept
+only as diagnostics.
+
+**Evidence-prioritized, ambiguity-preserving mapping.** Runtime exec order is
+not semantic evidence of pipeline source order, so timestamps are never used to
+break ties. A staged matcher assigns (1) unique exact normalized-argv matches,
+then (2) unique wrapper-chain-subsequence / argv-prefix matches, then (3)
+bin-only matches that are unique on both sides. Remaining ties over genuinely
+distinct static identities become explicit ``ambiguous`` coverage gaps that do
+not update the KB; ties over *identical* static identities map interchangeably
+(the KB observation is the same either way).
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import Any, Mapping, Sequence
+
+from tool_resource.features import parse_command_clauses
+from tool_resource.runtime_kb import ClauseObservation
+
+# Kept in sync with the Stage-2 collector's windowing constants.
+_WINDOW_NS = 500_000_000
+_MIN_ELIGIBLE_SPAN_NS = 1_000_000_000  # resource_timeline: clause >= 1 s
+_MIN_WINDOW_SPAN_NS = 100_000_000
+
+_SHELL_BINS = frozenset({"sh", "dash", "bash", "ash", "zsh"})
+_NOEXEC_BUILTINS = frozenset(
+    {
+        "cd", "export", "unset", "set", "true", "false", ":", "alias", "umask",
+        "shift", "local", "read", "echo", "printf", "test", "[", "wait", "eval",
+        "source", ".", "pwd", "exit", "return", "break", "continue", "trap",
+    }
+)
+
+
+@dataclass(frozen=True)
+class ExecImageRecord:
+    """One runtime exec-image occurrence produced by the Stage-2 collector.
+
+    ``cpu_windows`` / ``rss_bins`` are the time-aligned profiles the bridge
+    merges; ``None`` means the profile is unavailable (forcing that target to be
+    reported unavailable rather than scalar-max'd). ``peak_cpu_cores`` /
+    ``sampled_peak_rss_mb`` are per-image scalars kept ONLY as diagnostics.
+    """
+
+    host_pid: int
+    exec_seq: int
+    t_exec_ns: int
+    t_end_ns: int
+    bin: str
+    argv: tuple[str, ...]
+    terminal: bool
+    cpu_windows: tuple[tuple[int, int], ...] | None  # (abs_window_idx, cpu_ns)
+    rss_bins: tuple[tuple[int, int, float], ...] | None  # (abs_bin, mm, rss_mb)
+    peak_cpu_cores: float | None = None  # diagnostic only
+    peak_cpu_reason: str = "ok"
+    sampled_peak_rss_mb: float | None = None  # diagnostic only
+    sampled_rss_reason: str = "ok"
+    cpu_ns_cumulative: int = 0
+    exit_signal: int | None = None
+    has_causal_end: bool = True  # real exit / next same-pid exec; else fail closed
+    provenance: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class MappingGap:
+    kind: str  # unmatched_exec_image | unmatched_static_clause | ambiguous
+    detail: str
+
+
+@dataclass(frozen=True)
+class BridgedClause:
+    observation: ClauseObservation
+    owned_pids: tuple[int, ...]
+    owned_exec_images: tuple[tuple[int, int], ...]
+    mapping_evidence: str
+    availability: dict[str, str]  # cpu/memory/latency -> "ok" | "unknown:<reason>"
+    provenance: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class BridgeResult:
+    bridged: list[BridgedClause]
+    coverage_gaps: list[MappingGap]
+    unobserved_builtins: list[str]
+    static_clause_count: int
+
+    @property
+    def observations(self) -> list[ClauseObservation]:
+        return [bc.observation for bc in self.bridged]
+
+
+# --------------------------------------------------------------------------
+# Time-aligned aggregation
+# --------------------------------------------------------------------------
+
+
+_MIN_RSS_SAMPLES = 2  # fail closed on insufficient merged RSS coverage
+
+
+def _merge_cpu(
+    owned: Sequence[ExecImageRecord], t_exec: int, t_end: int, quota: float | None
+) -> tuple[float | None, str]:
+    if any(i.cpu_windows is None for i in owned):
+        return None, "missing_cpu_profile"
+    # Quota must be present, finite, and positive; clipping is meaningless
+    # otherwise. No inf fallback.
+    if quota is None or not math.isfinite(quota) or quota <= 0.0:
+        return None, "missing_or_inconsistent_quota"
+    if (t_end - t_exec) < _MIN_ELIGIBLE_SPAN_NS:
+        return None, "clause_shorter_than_1s_ineligible_for_peak"
+    merged: dict[int, int] = {}
+    for img in owned:
+        for widx, cpu_ns in img.cpu_windows or ():
+            if not isinstance(widx, int) or not isinstance(cpu_ns, int) or cpu_ns < 0:
+                return None, "invalid_cpu_profile"
+            merged[widx] = merged.get(widx, 0) + cpu_ns
+    if not merged:
+        return None, "insufficient_cpu_samples"
+    peak: float | None = None
+    for widx, cpu_ns in merged.items():
+        win_start = widx * _WINDOW_NS
+        lo = max(win_start, t_exec)
+        hi = min(win_start + _WINDOW_NS, t_end)
+        span = hi - lo
+        if span < _MIN_WINDOW_SPAN_NS:
+            continue
+        rate = min(cpu_ns / span, quota)
+        peak = rate if peak is None else max(peak, rate)
+    if peak is None:  # every merged window was too short to time -> no 0/ok
+        return None, "no_eligible_merged_window"
+    if not math.isfinite(peak):
+        return None, "non_finite_cpu"
+    return peak, "ok"
+
+
+def _merge_rss(owned: Sequence[ExecImageRecord]) -> tuple[float | None, str]:
+    """Max over time of the summed RSS of concurrently-LIVE distinct mm.
+
+    Each mm's RSS is held between its samples over its observed lifetime
+    ``[min_bin, max_bin]``; at each aligned bin only mm whose lifetime spans that
+    bin contribute. This prevents summing mm whose lifetimes do not overlap
+    (sequential peaks in adjacent bins are never added into one figure).
+    """
+
+    if any(i.rss_bins is None for i in owned):
+        return None, "missing_rss_profile"
+    # mm -> {bin: rss_mb}
+    per_mm: dict[int, dict[int, float]] = {}
+    n_samples = 0
+    for img in owned:
+        for bidx, mm, rss_mb in img.rss_bins or ():
+            if (
+                not isinstance(bidx, int)
+                or not isinstance(mm, int)
+                or not math.isfinite(rss_mb)
+                or rss_mb < 0.0
+            ):
+                return None, "invalid_rss_profile"
+            slot = per_mm.setdefault(mm, {})
+            slot[bidx] = max(slot.get(bidx, 0.0), rss_mb)
+            n_samples += 1
+    if n_samples < _MIN_RSS_SAMPLES:
+        return None, "insufficient_rss_samples"
+    all_bins = sorted({b for slots in per_mm.values() for b in slots})
+    totals: dict[int, float] = dict.fromkeys(all_bins, 0.0)
+    for slots in per_mm.values():
+        sbins = sorted(slots)
+        lo, hi = sbins[0], sbins[-1]  # this mm's observed lifetime
+        held, j = 0.0, 0
+        for b in all_bins:
+            if b < lo or b > hi:
+                continue  # mm not alive at bin b -> not summed
+            while j < len(sbins) and sbins[j] <= b:
+                held = slots[sbins[j]]
+                j += 1
+            totals[b] += held
+    peak = max(totals.values())
+    if not math.isfinite(peak):
+        return None, "non_finite_rss"
+    return peak, "ok"
+
+
+# --------------------------------------------------------------------------
+# Evidence-prioritized staged matching
+# --------------------------------------------------------------------------
+
+
+def _norm(argv: Sequence[str]) -> tuple[str, ...]:
+    """Basename ONLY the executable head; preserve path-valued arguments verbatim.
+
+    ``/usr/bin/python /path/to/a.py`` -> ``("python", "/path/to/a.py")``. Basenaming
+    arguments too would merge distinct commands like ``cat a/log`` and ``cat b/log``.
+    """
+
+    if not argv:
+        return ()
+    return (argv[0].rsplit("/", 1)[-1], *argv[1:])
+
+
+def _is_subsequence(sub: Sequence[str], seq: Sequence[str]) -> bool:
+    it = iter(seq)
+    return all(any(s == w for w in it) for s in sub)
+
+
+def _evidence_tier(
+    static_argv: tuple[str, ...], static_bin: str, chain: Sequence[ExecImageRecord]
+) -> int | None:
+    """1=exact argv, 2=wrapper-subsequence/argv-prefix, 3=bin-only, None=no match."""
+
+    chain_bins = tuple(img.bin for img in chain)
+    terminal_argv = _norm(chain[-1].argv)
+    if terminal_argv == static_argv:
+        return 1
+    if len(chain_bins) >= 2 and _is_subsequence(chain_bins, static_argv):
+        return 2
+    if (
+        len(terminal_argv) >= 2
+        and len(terminal_argv) < len(static_argv)
+        and static_argv[: len(terminal_argv)] == terminal_argv
+    ):
+        return 2
+    if chain[0].bin == static_bin:
+        return 3
+    return None
+
+
+def _components(
+    statics: Sequence[int], chains: Sequence[int], tier: Mapping[tuple[int, int], int]
+) -> list[tuple[list[int], list[int]]]:
+    """Connected components of the static<->chain candidate bipartite graph."""
+
+    adj: dict[tuple[str, int], list[tuple[str, int]]] = {}
+    for si in statics:
+        adj.setdefault(("s", si), [])
+    for pid in chains:
+        adj.setdefault(("c", pid), [])
+    for (si, pid) in tier:
+        if si in statics and pid in chains:
+            adj[("s", si)].append(("c", pid))
+            adj[("c", pid)].append(("s", si))
+    seen: set[tuple[str, int]] = set()
+    comps: list[tuple[list[int], list[int]]] = []
+    for node in adj:
+        if node in seen:
+            continue
+        stack = [node]
+        seen.add(node)
+        cs: list[int] = []
+        cp: list[int] = []
+        while stack:
+            kind, ident = stack.pop()
+            (cs if kind == "s" else cp).append(ident)
+            for nb in adj[(kind, ident)]:
+                if nb not in seen:
+                    seen.add(nb)
+                    stack.append(nb)
+        if cs and cp:  # ignore isolated nodes (no candidates)
+            comps.append((cs, cp))
+    return comps
+
+
+def _assign(
+    statics: Mapping[int, tuple[str, tuple[str, ...]]],
+    chains: Mapping[int, list[ExecImageRecord]],
+) -> tuple[dict[int, int], dict[int, str], set[int]]:
+    """Return (static_idx -> chain_pid, evidence, ambiguous static indices)."""
+
+    tier: dict[tuple[int, int], int] = {}
+    for si, (sbin, sargv) in statics.items():
+        for pid, imgs in chains.items():
+            t = _evidence_tier(sargv, sbin, imgs)
+            if t is not None:
+                tier[(si, pid)] = t
+
+    assigned: dict[int, int] = {}
+    used: set[int] = set()
+    evidence: dict[int, str] = {}
+    for tv in (1, 2, 3):
+        changed = True
+        while changed:
+            changed = False
+            for si in statics:
+                if si in assigned:
+                    continue
+                opts = [
+                    pid
+                    for pid in chains
+                    if pid not in used and tier.get((si, pid)) == tv
+                ]
+                if len(opts) != 1:
+                    continue
+                pid = opts[0]
+                claimants = [
+                    sj
+                    for sj in statics
+                    if sj not in assigned and tier.get((sj, pid)) == tv
+                ]
+                if len(claimants) == 1:
+                    assigned[si] = pid
+                    used.add(pid)
+                    evidence[si] = f"tier{tv}"
+                    changed = True
+
+    ambiguous: set[int] = set()
+    rem_statics = [
+        si
+        for si in statics
+        if si not in assigned
+        and any(pid not in used and (si, pid) in tier for pid in chains)
+    ]
+    rem_chains = [pid for pid in chains if pid not in used]
+    for cs, cp in _components(rem_statics, rem_chains, tier):
+        identities = {statics[si] for si in cs}
+        if len(identities) == 1 and len(cs) <= len(cp):
+            for si, pid in zip(sorted(cs), sorted(cp), strict=False):
+                assigned[si] = pid
+                used.add(pid)
+                evidence[si] = "interchangeable_identical"
+        else:
+            ambiguous.update(cs)
+    return assigned, evidence, ambiguous
+
+
+# --------------------------------------------------------------------------
+# Public entry point
+# --------------------------------------------------------------------------
+
+
+def bridge_command(
+    repo: str,
+    command: str,
+    exec_images: Sequence[ExecImageRecord],
+    *,
+    entry_pid: int,
+    fork_parent: Mapping[int, int],
+    epoch_offset: float = 0.0,
+    loss_count: int = 0,
+) -> BridgeResult:
+    """Map exec images to static mvdan clauses and aggregate per clause.
+
+    Fails closed: a ``parse_failed`` command or a run with ``loss_count > 0``
+    (ring-buffer loss makes the event stream untrustworthy) yields NO usable KB
+    observations — the clauses become coverage gaps instead.
+    """
+
+    parsed = parse_command_clauses(command)
+    static = parsed["clauses"]
+
+    if parsed["parse_failed"] or loss_count > 0:
+        reason = "parse_failed" if parsed["parse_failed"] else "nonzero_loss"
+        return BridgeResult(
+            bridged=[],
+            coverage_gaps=[
+                MappingGap(reason, f"{reason}: run withheld from KB ({command!r})")
+            ],
+            unobserved_builtins=[],
+            static_clause_count=len(static),
+        )
+
+    chains: dict[int, list[ExecImageRecord]] = {}
+    for img in exec_images:
+        chains.setdefault(img.host_pid, []).append(img)
+    for chain in chains.values():
+        chain.sort(key=lambda r: r.exec_seq)
+
+    children: dict[int, list[int]] = {}
+    for child, parent in fork_parent.items():
+        children.setdefault(parent, []).append(child)
+
+    def is_shell(pid: int) -> bool:
+        return pid in chains and all(img.bin in _SHELL_BINS for img in chains[pid])
+
+    def nearest_nonstructural_ancestor(pid: int) -> int | None:
+        cur = fork_parent.get(pid)
+        while cur is not None and cur != entry_pid:
+            if cur in chains and not is_shell(cur):
+                return cur
+            cur = fork_parent.get(cur)
+        return None
+
+    first_level = {
+        pid: chains[pid]
+        for pid in chains
+        if not is_shell(pid) and nearest_nonstructural_ancestor(pid) is None
+    }
+    statics = {
+        si: (str(c["bin"]), _norm(c["argv"])) for si, c in enumerate(static)
+    }
+    assigned, evidence, ambiguous = _assign(statics, first_level)
+    mapped_roots = set(assigned.values())
+
+    bridged: list[BridgedClause] = []
+    gaps: list[MappingGap] = []
+    unobserved: list[str] = []
+    owned_all: set[int] = set()
+
+    for si, clause in enumerate(static):
+        cbin = str(clause["bin"])
+        if si in assigned:
+            owned_pids = _owned_pids(assigned[si], children, mapped_roots)
+            owned_images = [img for pid in owned_pids for img in chains.get(pid, [])]
+            owned_all.update(owned_pids)  # consumed either way (obs or fail-closed)
+            if any(not img.has_causal_end for img in owned_images):
+                gaps.append(
+                    MappingGap(
+                        "no_causal_end",
+                        f"clause {si} bin={cbin!r}: an owned exec image has no "
+                        "real exit/causal end; withheld from KB",
+                    )
+                )
+            else:
+                bridged.append(
+                    _aggregate(
+                        repo, clause, owned_pids, owned_images, evidence[si],
+                        epoch_offset,
+                    )
+                )
+        elif si in ambiguous:
+            gaps.append(
+                MappingGap(
+                    "ambiguous",
+                    f"clause {si} bin={cbin!r} argv={list(clause['argv'])} "
+                    "has multiple equally-valid runtime chains",
+                )
+            )
+        elif cbin in _NOEXEC_BUILTINS:
+            unobserved.append(cbin)
+        else:
+            gaps.append(
+                MappingGap(
+                    "unmatched_static_clause",
+                    f"clause {si} bin={cbin!r} argv={list(clause['argv'])}",
+                )
+            )
+
+    used_pids = set(assigned.values())
+    # A chain is "unmatched_exec_image" only if it had NO candidate static clause;
+    # a chain that matched but lost to ambiguity is already covered by the
+    # ambiguous static-clause gap and must not be double-reported.
+    chains_with_candidate = {
+        pid
+        for pid, imgs in first_level.items()
+        if any(
+            _evidence_tier(sargv, sbin, imgs) is not None
+            for sbin, sargv in statics.values()
+        )
+    }
+    for pid in first_level:
+        if (
+            pid not in used_pids
+            and pid not in owned_all
+            and pid not in chains_with_candidate
+        ):
+            gaps.append(
+                MappingGap(
+                    "unmatched_exec_image",
+                    f"first-level pid={pid} bin={chains[pid][0].bin!r} "
+                    "matched no static clause",
+                )
+            )
+
+    return BridgeResult(
+        bridged=bridged,
+        coverage_gaps=gaps,
+        unobserved_builtins=unobserved,
+        static_clause_count=len(static),
+    )
+
+
+def _owned_pids(
+    root_pid: int, children: Mapping[int, Sequence[int]], mapped_roots: set[int]
+) -> tuple[int, ...]:
+    owned = [root_pid]
+    frontier = [root_pid]
+    while frontier:
+        nxt: list[int] = []
+        for pid in frontier:
+            for child in children.get(pid, ()):
+                if child in mapped_roots and child != root_pid:
+                    continue  # child starts its own static clause
+                if child not in owned:
+                    owned.append(child)
+                    nxt.append(child)
+        frontier = nxt
+    return tuple(owned)
+
+
+def _aggregate(
+    repo: str,
+    clause: Mapping[str, Any],
+    owned_pids: tuple[int, ...],
+    owned_images: Sequence[ExecImageRecord],
+    evidence: str,
+    epoch_offset: float,
+) -> BridgedClause:
+    t_exec = min(img.t_exec_ns for img in owned_images)
+    t_end = max(img.t_end_ns for img in owned_images)
+    # Quota must be present and consistent across owned images (a single run's
+    # cgroup quota). Missing (<=0) or conflicting values -> CPU unavailable.
+    quotas = {
+        float(img.provenance["quota_cores"])
+        for img in owned_images
+        if isinstance(img.provenance.get("quota_cores"), (int, float))
+        and math.isfinite(img.provenance["quota_cores"])
+        and img.provenance["quota_cores"] > 0.0
+    }
+    quota = quotas.pop() if len(quotas) == 1 else None
+    peak_cpu, cpu_reason = _merge_cpu(owned_images, t_exec, t_end, quota)
+    peak_rss, rss_reason = _merge_rss(owned_images)
+    exit_signals = [i.exit_signal for i in owned_images if i.exit_signal]
+
+    obs = ClauseObservation(
+        repo=repo,
+        bin=str(clause["bin"]),
+        argv=tuple(clause["argv"]),
+        ts_start=epoch_offset + t_exec / 1e9,
+        ts_end=epoch_offset + t_end / 1e9,
+        latency_ms=(t_end - t_exec) / 1e6,
+        peak_cpu_cores=peak_cpu,
+        sampled_peak_rss_mb=peak_rss,
+        cpu_ns_cumulative=sum(i.cpu_ns_cumulative for i in owned_images),
+        in_loop=bool(clause.get("in_loop", False)),
+        in_pipe=bool(clause.get("in_pipe", False)),
+        in_subst=bool(clause.get("in_subst", False)),
+        pipeline_position=int(clause.get("pipeline_position", -1)),
+    )
+    availability = {
+        "latency": "ok",
+        "cpu": "ok" if peak_cpu is not None else f"unknown:{cpu_reason}",
+        "memory": "ok" if peak_rss is not None else f"unknown:{rss_reason}",
+    }
+    provenance = {
+        "mapping_evidence": evidence,
+        "owned_exec_image_count": len(owned_images),
+        "boundary_coverage": {
+            "has_exec": True,
+            "has_exit": any(i.terminal for i in owned_images),
+        },
+        "exit_signal": exit_signals[0] if exit_signals else None,
+        "exit_signals": exit_signals,
+        "merged_cpu_reason": cpu_reason,
+        "merged_rss_reason": rss_reason,
+        "per_image_diagnostics": [
+            {
+                "host_pid": i.host_pid,
+                "exec_seq": i.exec_seq,
+                "bin": i.bin,
+                "scalar_peak_cpu_cores": i.peak_cpu_cores,
+                "scalar_sampled_peak_rss_mb": i.sampled_peak_rss_mb,
+                "has_cpu_profile": i.cpu_windows is not None,
+                "has_rss_profile": i.rss_bins is not None,
+            }
+            for i in owned_images
+        ],
+    }
+    return BridgedClause(
+        observation=obs,
+        owned_pids=owned_pids,
+        owned_exec_images=tuple((i.host_pid, i.exec_seq) for i in owned_images),
+        mapping_evidence=evidence,
+        availability=availability,
+        provenance=provenance,
+    )
+
+
+__all__ = [
+    "BridgeResult",
+    "BridgedClause",
+    "ExecImageRecord",
+    "MappingGap",
+    "bridge_command",
+]
