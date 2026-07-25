@@ -199,11 +199,17 @@ async def _run_openclaw_replay_session(
             "tool_container_user": "unknown",
             "openclaw_host_pid": None,
             "telemetry_integrity_failed": (tool_resource_telemetry == "clause"),
+            "replay_execution": "incomplete",
+            "telemetry_quality": (
+                "unavailable" if tool_resource_telemetry == "clause" else "ok"
+            ),
+            "collection_validity": (
+                "invalid"
+                if tool_resource_telemetry == "clause"
+                else "not_requested"
+            ),
+            "telemetry_errors": ["worker status unavailable"],
         }
-    if tool_resource_telemetry == "clause" and (
-        worker_returncode != 0 or status.get("success") is not True
-    ):
-        status["telemetry_integrity_failed"] = True
 
     emitted_records: list[dict[str, Any]] = []
     replay_action_records: list[dict[str, Any]] = []
@@ -294,6 +300,21 @@ async def _run_openclaw_replay_session(
         "telemetry_integrity_failed": bool(
             status.get("telemetry_integrity_failed", False)
         ),
+        "replay_execution": status.get(
+            "replay_execution",
+            "completed" if status.get("success") else "failed",
+        ),
+        "telemetry_quality": status.get(
+            "telemetry_quality",
+            "unavailable" if tool_resource_telemetry == "clause" else "ok",
+        ),
+        "collection_validity": status.get(
+            "collection_validity",
+            "invalid"
+            if tool_resource_telemetry == "clause"
+            else "not_requested",
+        ),
+        "telemetry_errors": list(status.get("telemetry_errors") or []),
     }
     summary_seen = False
     for record in emitted_records:
@@ -326,9 +347,4 @@ async def _run_openclaw_replay_session(
         elapsed_s=float(status.get("elapsed_s") or 0.0),
         failed_action_count=failed_actions,
     )
-    if status.get("telemetry_integrity_failed") is True:
-        raise RuntimeError(
-            "clause telemetry integrity failure: "
-            f"{status.get('error') or 'unknown error'}"
-        )
     return task_stats

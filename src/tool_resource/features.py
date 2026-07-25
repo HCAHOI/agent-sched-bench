@@ -596,6 +596,79 @@ def _clause_from_adapter(
         raise MvdanClientError(f"mvdan adapter returned invalid byte span {raw_span}")
     start = byte_to_character[byte_start]
     end = byte_to_character[byte_end]
+    raw_words = raw_clause.get("words")
+    if not isinstance(raw_words, list):
+        raise MvdanClientError("mvdan adapter returned invalid word intents")
+
+    def intent_span(raw: object) -> tuple[int, int]:
+        if (
+            not isinstance(raw, list)
+            or len(raw) != 2
+            or not all(isinstance(offset, int) for offset in raw)
+            or raw[0] < 0
+            or raw[1] < raw[0]
+            or raw[1] >= len(byte_to_character)
+            or byte_to_character[raw[0]] < 0
+            or byte_to_character[raw[1]] < 0
+        ):
+            raise MvdanClientError("mvdan adapter returned invalid word span")
+        return byte_to_character[raw[0]], byte_to_character[raw[1]]
+
+    word_intents: list[dict[str, Any]] = []
+    for raw_word in raw_words:
+        if not isinstance(raw_word, dict) or not isinstance(
+            raw_word.get("components"), list
+        ):
+            raise MvdanClientError("mvdan adapter returned invalid word intent")
+        components: list[dict[str, Any]] = []
+        for raw_component in raw_word["components"]:
+            if (
+                not isinstance(raw_component, dict)
+                or raw_component.get("kind")
+                not in {
+                    "literal",
+                    "parameter",
+                    "command_substitution",
+                    "arithmetic_expansion",
+                    "process_substitution",
+                    "pathname_expansion",
+                    "unsupported",
+                }
+                or not isinstance(raw_component.get("source"), str)
+                or not isinstance(raw_component.get("quoted"), bool)
+                or not isinstance(raw_component.get("escaped"), bool)
+            ):
+                raise MvdanClientError(
+                    "mvdan adapter returned invalid word component"
+                )
+            components.append(
+                {
+                    "kind": raw_component["kind"],
+                    "source": raw_component["source"],
+                    "span": intent_span(raw_component.get("span")),
+                    "quoted": raw_component["quoted"],
+                    "escaped": raw_component["escaped"],
+                }
+            )
+        if (
+            not isinstance(raw_word.get("cooked"), str)
+            or not isinstance(raw_word.get("source"), str)
+            or not isinstance(raw_word.get("quoted"), bool)
+            or not isinstance(raw_word.get("escaped"), bool)
+        ):
+            raise MvdanClientError("mvdan adapter returned invalid word intent")
+        word_intents.append(
+            {
+                "cooked": raw_word["cooked"],
+                "source": raw_word["source"],
+                "span": intent_span(raw_word.get("span")),
+                "quoted": raw_word["quoted"],
+                "escaped": raw_word["escaped"],
+                "components": components,
+            }
+        )
+    if word_intents and [word["cooked"] for word in word_intents] != argv:
+        raise MvdanClientError("mvdan adapter word intents disagree with argv")
     return {
         "bin": str(raw_clause["bin"]),
         "argv": argv,
@@ -605,6 +678,7 @@ def _clause_from_adapter(
         "in_pipe": bool(raw_clause["in_pipe"]),
         "in_subst": bool(raw_clause["in_subst"]),
         "pipeline_position": int(raw_clause["pipeline_position"]),
+        "word_intents": word_intents,
     }
 
 

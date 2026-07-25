@@ -106,7 +106,7 @@ def test_argv_capture_flags_cover_truncation_cap_and_short_argv() -> None:
         "import subprocess;"
         "subprocess.run(['/bin/true','e'*511],check=True);"
         "subprocess.run(['/bin/true','x'*600],check=True);"
-        "subprocess.run(['/bin/true',*map(str,range(9))],check=True);"
+        "subprocess.run(['/bin/true',*map(str,range(16))],check=True);"
         "subprocess.run(['/bin/true','ok'],check=True)"
     )
     run = collect_case(
@@ -141,6 +141,7 @@ def test_argv_capture_flags_cover_truncation_cap_and_short_argv() -> None:
     assert truncated.argv_capture_flags == 1 << 1
     assert len(capped.argv) == C.MAX_ARGS
     assert capped.argv_capture_flags == 1 << C.MAX_ARGS
+    assert capped.exact_argc == C.MAX_ARGS + 1
     assert short.argv_capture_flags == 0
 
 
@@ -173,12 +174,16 @@ raise OSError(ctypes.get_errno())"""
     metrics, gaps = analyze(run)
     _assert_only_harness_root_pre_exec_gaps(run, gaps)
     assert run.loss_count == 0
-    assert next(
+    script_metric = next(
         metric for metric in metrics if metric.bin == "original-argv0"
-    ).argv == (
+    )
+    assert script_metric.argv == (
         "original-argv0",
         "cold-page-argument",
     )
+    assert script_metric.exact_argc == 2
+    assert script_metric.bprm_filename == script_metric.requested_executable_path
+    assert script_metric.bprm_interp == "/bin/sh"
 
 
 def test_normal_exec_exit_status_is_decoded_from_kernel_wait_status() -> None:

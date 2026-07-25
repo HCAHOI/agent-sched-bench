@@ -23,13 +23,31 @@ type request struct {
 type span [2]int
 
 type clause struct {
-	Bin              string   `json:"bin"`
-	Argv             []string `json:"argv"`
-	Span             span     `json:"span"`
-	InLoop           bool     `json:"in_loop"`
-	InPipe           bool     `json:"in_pipe"`
-	InSubst          bool     `json:"in_subst"`
-	PipelinePosition int      `json:"pipeline_position"`
+	Bin              string       `json:"bin"`
+	Argv             []string     `json:"argv"`
+	Words            []wordIntent `json:"words"`
+	Span             span         `json:"span"`
+	InLoop           bool         `json:"in_loop"`
+	InPipe           bool         `json:"in_pipe"`
+	InSubst          bool         `json:"in_subst"`
+	PipelinePosition int          `json:"pipeline_position"`
+}
+
+type wordComponent struct {
+	Kind    string `json:"kind"`
+	Source  string `json:"source"`
+	Span    span   `json:"span"`
+	Quoted  bool   `json:"quoted"`
+	Escaped bool   `json:"escaped"`
+}
+
+type wordIntent struct {
+	Cooked     string          `json:"cooked"`
+	Source     string          `json:"source"`
+	Span       span            `json:"span"`
+	Quoted     bool            `json:"quoted"`
+	Escaped    bool            `json:"escaped"`
+	Components []wordComponent `json:"components"`
 }
 
 type controlOperand struct {
@@ -138,6 +156,92 @@ func wordPartsValue(parts []syntax.WordPart, source string) string {
 		}
 	}
 	return result.String()
+}
+
+func hasUnescapedGlob(value string) bool {
+	escaped := false
+	for _, char := range value {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if char == '\\' {
+			escaped = true
+			continue
+		}
+		if strings.ContainsRune("*?[", char) {
+			return true
+		}
+	}
+	return false
+}
+
+func wordComponents(parts []syntax.WordPart, source string, quoted bool) []wordComponent {
+	components := []wordComponent{}
+	for _, part := range parts {
+		partSource := sourceSlice(source, part)
+		switch item := part.(type) {
+		case *syntax.DblQuoted:
+			components = append(components, wordComponents(item.Parts, source, true)...)
+			continue
+		case *syntax.SglQuoted:
+			components = append(components, wordComponent{
+				Kind: "literal", Source: partSource, Span: nodeSpan(part),
+				Quoted: true, Escaped: strings.Contains(partSource, "\\"),
+			})
+			continue
+		}
+		kind := "literal"
+		switch part.(type) {
+		case *syntax.ParamExp:
+			kind = "parameter"
+		case *syntax.CmdSubst:
+			kind = "command_substitution"
+		case *syntax.ArithmExp:
+			kind = "arithmetic_expansion"
+		case *syntax.ProcSubst:
+			kind = "process_substitution"
+		case *syntax.ExtGlob:
+			kind = "pathname_expansion"
+		case *syntax.Lit:
+			if !quoted && hasUnescapedGlob(partSource) {
+				kind = "pathname_expansion"
+			}
+		default:
+			kind = "unsupported"
+		}
+		components = append(components, wordComponent{
+			Kind: kind, Source: partSource, Span: nodeSpan(part),
+			Quoted: quoted, Escaped: strings.Contains(partSource, "\\"),
+		})
+	}
+	return components
+}
+
+func wordIntentFor(word *syntax.Word, source string) wordIntent {
+	wordSource := sourceSlice(source, word)
+	components := wordComponents(word.Parts, source, false)
+	quoted := false
+	for _, component := range components {
+		quoted = quoted || component.Quoted
+	}
+	return wordIntent{
+		Cooked: wordValue(word, source), Source: wordSource, Span: nodeSpan(word),
+		Quoted: quoted, Escaped: strings.Contains(wordSource, "\\"),
+		Components: components,
+	}
+}
+
+func commandWords(command syntax.Command, source string) []wordIntent {
+	call, ok := command.(*syntax.CallExpr)
+	if !ok {
+		return []wordIntent{}
+	}
+	words := make([]wordIntent, 0, len(call.Args))
+	for _, word := range call.Args {
+		words = append(words, wordIntentFor(word, source))
+	}
+	return words
 }
 
 func assignmentValue(assign *syntax.Assign, source string) string {
@@ -393,6 +497,7 @@ func analyze(input request) response {
 		out.Clauses = append(out.Clauses, clause{
 			Bin:              binaryName(argv[0]),
 			Argv:             argv,
+			Words:            commandWords(command, input.Command),
 			Span:             bounds,
 			InLoop:           loopContext(stack, bounds[0]),
 			InPipe:           inPipe,

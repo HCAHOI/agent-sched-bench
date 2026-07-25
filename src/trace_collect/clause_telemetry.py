@@ -50,7 +50,7 @@ SAMPLE_PERIOD_NS = 10_000_000  # ~10 ms CPU-time per perf callback
 WINDOW_NS = 500_000_000  # 500 ms wall label window (resource_timeline semantics)
 ALIGN_BIN_NS = 20_000_000  # 20 ms aligned bins for RSS summation
 SENTINEL = 2**64 - 1
-MAX_ARGS = 8
+MAX_ARGS = 16
 ARG_BYTES = 512
 ARG_FLAG_TRUNCATED = 1
 ARG_FLAG_ARGV_CAPPED = 2
@@ -69,9 +69,13 @@ TYPE_NAMES = {
     4: "fork",
     5: "perf",
     6: "failed_exec_attempt",
+    7: "exec_meta",
+    8: "bprm_meta",
+    9: "interp_meta",
 }
 
 BPF_PROGRAM = r"""
+#include <linux/binfmts.h>
 #include <linux/mm_types.h>
 #include <linux/sched.h>
 #include <linux/sched/signal.h>
@@ -83,7 +87,10 @@ BPF_PROGRAM = r"""
 #define TYPE_FORK 4
 #define TYPE_PERF 5
 #define TYPE_FAILED_EXEC_ATTEMPT 6
-#define MAX_ARGS 8
+#define TYPE_EXEC_META 7
+#define TYPE_BPRM_META 8
+#define TYPE_INTERP_META 9
+#define MAX_ARGS 16
 #define ARG_BYTES 512
 #define ARG_FLAG_TRUNCATED 1
 #define ARG_FLAG_ARGV_CAPPED 2
@@ -270,10 +277,35 @@ static void capture_argv(
     }
 }
 
+static void emit_kernel_exec_meta(
+    u32 type, u64 seq, const char *value, u32 argc, u64 pid_tgid
+) {
+    if (!value) return;
+    struct event_t *e = events.ringbuf_reserve(sizeof(*e));
+    if (!e) {
+        ringbuf_reserve_failed();
+        return;
+    }
+    __builtin_memset(e, 0, sizeof(*e));
+    e->timestamp_ns = bpf_ktime_get_ns();
+    e->cgroup_id = bpf_get_current_cgroup_id();
+    e->exec_seq = seq;
+    e->type = type;
+    e->host_pid = pid_tgid >> 32;
+    e->host_tid = (u32)pid_tgid;
+    e->exit_code = argc;
+    int size = bpf_probe_read_kernel_str(e->arg, sizeof(e->arg), value);
+    if (size < 0)
+        argv_read_failed();
+    else if (size == sizeof(e->arg))
+        e->arg_flags = ARG_FLAG_TRUNCATED;
+    events.ringbuf_submit(e, 0);
+}
+
 /* execve/execveat ENTRY: assign a new seq as PENDING without replacing the
  * current image. The saved vector is read after copy_strings() has faulted
  * valid cold pages; failed exec argv remains available on return. */
-static int capture_enter(const char *const *argv) {
+static int capture_enter(const char *filename, const char *const *argv) {
     u32 zero = 0;
     u32 *ready = sequence_ready.lookup(&zero);
     if (!ready || !*ready) return 0;
@@ -291,15 +323,34 @@ static int capture_enter(const char *const *argv) {
         .argv_ptr = (u64)argv,
     };
     pending_seq.update(&task_key, &pending);
+    struct event_t *e = events.ringbuf_reserve(sizeof(*e));
+    if (!e) {
+        ringbuf_reserve_failed();
+    } else {
+        __builtin_memset(e, 0, sizeof(*e));
+        e->timestamp_ns = bpf_ktime_get_ns();
+        e->cgroup_id = bpf_get_current_cgroup_id();
+        e->exec_seq = seq;
+        e->type = TYPE_EXEC_META;
+        e->host_pid = pid_tgid >> 32;
+        e->host_tid = tid;
+        int filename_size = bpf_probe_read_user_str(
+            e->arg, sizeof(e->arg), filename
+        );
+        if (filename_size < 0) argv_read_failed();
+        else if (filename_size == sizeof(e->arg))
+            e->arg_flags = ARG_FLAG_TRUNCATED;
+        events.ringbuf_submit(e, 0);
+    }
     return 0;
 }
 
 TRACEPOINT_PROBE(syscalls, sys_enter_execve) {
-    return capture_enter((const char *const *)args->argv);
+    return capture_enter(args->filename, (const char *const *)args->argv);
 }
 
 TRACEPOINT_PROBE(syscalls, sys_enter_execveat) {
-    return capture_enter((const char *const *)args->argv);
+    return capture_enter(args->filename, (const char *const *)args->argv);
 }
 
 /* copy_strings() has faulted the original argv pages before bprm_execve.
@@ -314,12 +365,43 @@ int capture_bprm_argv(struct pt_regs *ctx) {
     };
     struct pending_exec_t *pending = pending_seq.lookup(&task_key);
     if (!pending || pending->argv_captured) return 0;
+    struct linux_binprm *bprm =
+        (struct linux_binprm *)PT_REGS_PARM1(ctx);
+    const char *filename = 0;
+    const char *interp = 0;
+    int argc = 0;
+    bpf_probe_read_kernel(&filename, sizeof(filename), &bprm->filename);
+    bpf_probe_read_kernel(&interp, sizeof(interp), &bprm->interp);
+    bpf_probe_read_kernel(&argc, sizeof(argc), &bprm->argc);
+    emit_kernel_exec_meta(
+        TYPE_BPRM_META, pending->seq, filename, argc, pid_tgid
+    );
+    emit_kernel_exec_meta(
+        TYPE_INTERP_META, pending->seq, interp, argc, pid_tgid
+    );
     capture_argv(
         pending->seq,
         (const char *const *)pending->argv_ptr,
         pid_tgid
     );
     pending->argv_captured = 1;
+    return 0;
+}
+
+int capture_interp_change(struct pt_regs *ctx) {
+    if (!wanted()) return 0;
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 tid = pid_tgid;
+    struct task_key_t task_key = {
+        .tid = tid,
+        .task_ptr = (u64)bpf_get_current_task(),
+    };
+    struct pending_exec_t *pending = pending_seq.lookup(&task_key);
+    if (!pending) return 0;
+    const char *interp = (const char *)PT_REGS_PARM1(ctx);
+    emit_kernel_exec_meta(
+        TYPE_INTERP_META, pending->seq, interp, 0, pid_tgid
+    );
     return 0;
 }
 
@@ -766,6 +848,9 @@ def collect_case(command: str, tag: str, *, marker: str = "") -> RawRun:
     cgroup_id = cg.stat().st_ino
     bpf = BPF(text=BPF_PROGRAM)
     bpf.attach_kprobe(event="bprm_execve", fn_name="capture_bprm_argv")
+    bpf.attach_kprobe(
+        event="bprm_change_interp", fn_name="capture_interp_change"
+    )
     q = bpf["exec_sequences"]
     for seq in range(8192):
         q.push(ctypes.c_ulonglong(seq))
@@ -869,6 +954,12 @@ class Clause:
     t_end_ns: int
     bin: str
     argv: tuple[str, ...]
+    requested_executable_path: str | None
+    requested_executable_path_truncated: bool
+    bprm_filename: str | None
+    bprm_interp: str | None
+    bprm_evidence_truncated: bool
+    exact_argc: int | None
     lineage_parent_pid: int | None
     terminal: bool
     has_causal_end: bool  # real exit (terminal) or next same-pid exec (non-terminal)
@@ -887,7 +978,31 @@ def _clauses_and_lineage(
 
     argv_words: dict[tuple[int, int], dict[int, str]] = {}
     argv_capture_flags: dict[tuple[int, int], int] = {}
+    exact_argc: dict[tuple[int, int], int | None] = {}
+    requested_paths: dict[tuple[int, int], str] = {}
+    requested_path_truncated: set[tuple[int, int]] = set()
+    bprm_filenames: dict[tuple[int, int], str] = {}
+    bprm_interpreters: dict[tuple[int, int], str] = {}
+    bprm_truncated: set[tuple[int, int]] = set()
     for e in events:
+        if e["type"] == "exec_meta":
+            key = (e["host_pid"], e["exec_seq"])
+            requested_paths[key] = e.get("arg", "")
+            if int(e.get("arg_flags", 0)) & ARG_FLAG_TRUNCATED:
+                requested_path_truncated.add(key)
+        if e["type"] == "bprm_meta":
+            key = (e["host_pid"], e["exec_seq"])
+            bprm_filenames[key] = e.get("arg", "")
+            argc = int(e.get("exit_code") or 0)
+            if argc > 0:
+                exact_argc[key] = argc
+            if int(e.get("arg_flags", 0)) & ARG_FLAG_TRUNCATED:
+                bprm_truncated.add(key)
+        if e["type"] == "interp_meta":
+            key = (e["host_pid"], e["exec_seq"])
+            bprm_interpreters[key] = e.get("arg", "")
+            if int(e.get("arg_flags", 0)) & ARG_FLAG_TRUNCATED:
+                bprm_truncated.add(key)
         if e["type"] == "exec_arg":
             key = (e["host_pid"], e["exec_seq"])
             index = e["arg_index"]
@@ -945,6 +1060,18 @@ def _clauses_and_lineage(
                     t_end_ns=t_end,
                     bin=Path(argv[0]).name if argv else "",
                     argv=argv,
+                    requested_executable_path=requested_paths.get(
+                        (pid, e["exec_seq"])
+                    ),
+                    requested_executable_path_truncated=(
+                        (pid, e["exec_seq"]) in requested_path_truncated
+                    ),
+                    bprm_filename=bprm_filenames.get((pid, e["exec_seq"])),
+                    bprm_interp=bprm_interpreters.get((pid, e["exec_seq"])),
+                    bprm_evidence_truncated=(
+                        (pid, e["exec_seq"]) in bprm_truncated
+                    ),
+                    exact_argc=exact_argc.get((pid, e["exec_seq"]), len(argv)),
                     lineage_parent_pid=fork_parent.get(pid),
                     terminal=terminal,
                     has_causal_end=has_causal_end,
@@ -992,6 +1119,12 @@ class ClauseMetrics:
     exec_seq: int
     bin: str
     argv: tuple[str, ...]  # exec-image argv, evidence for the clause bridge
+    requested_executable_path: str | None
+    requested_executable_path_truncated: bool
+    bprm_filename: str | None
+    bprm_interp: str | None
+    bprm_evidence_truncated: bool
+    exact_argc: int | None
     lineage_parent_pid: int | None  # fork parent, for bridge lineage attribution
     terminal: bool
     has_causal_end: bool  # real exit or next same-pid exec; fail closed if False
@@ -1722,6 +1855,14 @@ def analyze(
                 exec_seq=c.exec_seq,
                 bin=c.bin,
                 argv=c.argv,
+                requested_executable_path=c.requested_executable_path,
+                requested_executable_path_truncated=(
+                    c.requested_executable_path_truncated
+                ),
+                bprm_filename=c.bprm_filename,
+                bprm_interp=c.bprm_interp,
+                bprm_evidence_truncated=c.bprm_evidence_truncated,
+                exact_argc=c.exact_argc,
                 lineage_parent_pid=c.lineage_parent_pid,
                 terminal=c.terminal,
                 has_causal_end=c.has_causal_end,
@@ -1782,9 +1923,6 @@ def analyze(
 
 class ClauseTelemetryIntegrityError(RuntimeError):
     """Stage-2 data cannot be used without hiding a coverage or lifecycle gap."""
-
-    fatal_replay_error = True
-    preserve_tool_result = True
 
     def __init__(
         self,
@@ -2003,7 +2141,7 @@ def _event_row(table: Any, data: int) -> dict[str, Any]:
             else 0
         ),
     }
-    if event.type == 1:
+    if event.type in {1, 7, 8, 9}:
         row["arg"] = bytes(event.arg).split(b"\0", 1)[0].decode("utf-8", "replace")
     return row
 
@@ -2051,6 +2189,20 @@ def _exec_image_record(metric: ClauseMetrics) -> Any:
         normal_exit_status=metric.normal_exit_status,
         has_causal_end=metric.has_causal_end,
         argv_capture_flags=metric.argv_capture_flags,
+        requested_executable_path=metric.requested_executable_path,
+        requested_executable_path_truncated=(
+            metric.requested_executable_path_truncated
+        ),
+        exact_argc=metric.exact_argc,
+        argv_capped=bool(metric.argv_capture_flags & (1 << MAX_ARGS)),
+        truncated_words=tuple(
+            index
+            for index in range(min(len(metric.argv), MAX_ARGS))
+            if metric.argv_capture_flags & (1 << index)
+        ),
+        bprm_filename=metric.bprm_filename,
+        bprm_interp=metric.bprm_interp,
+        bprm_evidence_truncated=metric.bprm_evidence_truncated,
         provenance=metric.provenance,
     )
 
@@ -2133,6 +2285,9 @@ class ClauseTelemetryCollector:
         self._poll_error: BaseException | None = None
         self._active: ToolCallToken | None = None
         self._closed = False
+        self.state = "active"
+        self._disabled_reason: str | None = None
+        self._first_disabled_call: str | None = None
         self._cleanup_status = "pending"
         self._integrity_errors: list[str] = []
         self.calls: list[dict[str, Any]] = []
@@ -2146,73 +2301,214 @@ class ClauseTelemetryCollector:
         self._source_exec_index = 0
 
         self._bpf = BPF(text=BPF_PROGRAM)
-        self._bpf.attach_kprobe(event="bprm_execve", fn_name="capture_bprm_argv")
-        queue = self._bpf["exec_sequences"]
-        for sequence in range(8192):
-            queue.push(ctypes.c_ulonglong(sequence))
-        self._bpf["sequence_ready"][ctypes.c_int(0)] = ctypes.c_uint(1)
-        self._bpf["target_cgroup"][ctypes.c_int(0)] = ctypes.c_ulonglong(self.cgroup_id)
-        self._table = self._bpf["events"]
-
-        def receive(_ctx: int, data: int, _size: int) -> int:
-            row = _event_row(self._table, data)
-            with self._events_lock:
-                self._events.append(row)
-            return 0
-
-        self._table.open_ring_buffer(receive)
-
-        def poll() -> None:
-            try:
-                while not self._stop_poll.is_set():
-                    self._bpf.ring_buffer_poll(timeout=10)
-            except BaseException as exc:
-                if not self._stop_poll.is_set():
-                    self._poll_error = exc
-
-        self._poller = threading.Thread(
-            target=poll,
-            name="clause-telemetry-ring-poller",
-            daemon=True,
-        )
-        self._poller.start()
-        self._bpf.attach_perf_event(
-            ev_type=PerfType.SOFTWARE,
-            ev_config=PerfSWConfig.CPU_CLOCK,
-            fn_name="on_cpu_clock",
-            sample_period=SAMPLE_PERIOD_NS,
-        )
-        self._perf_type = PerfType
-        self._perf_config = PerfSWConfig
-
-    def begin_tool_call(self, tool_call_id: str, command: str) -> ToolCallToken:
-        if self._closed:
-            raise ClauseTelemetryIntegrityError("collector is already closed")
-        if self._active is not None:
-            raise ClauseTelemetryIntegrityError(
-                f"overlapping exec tool calls: {self._active.tool_call_id}, "
-                f"{tool_call_id}"
+        try:
+            self._bpf.attach_kprobe(
+                event="bprm_execve", fn_name="capture_bprm_argv"
             )
-        if not tool_call_id:
-            raise ClauseTelemetryIntegrityError("exec tool call has no tool_call_id")
+            self._bpf.attach_kprobe(
+                event="bprm_change_interp", fn_name="capture_interp_change"
+            )
+            queue = self._bpf["exec_sequences"]
+            for sequence in range(8192):
+                queue.push(ctypes.c_ulonglong(sequence))
+            self._bpf["sequence_ready"][ctypes.c_int(0)] = ctypes.c_uint(1)
+            self._bpf["target_cgroup"][ctypes.c_int(0)] = ctypes.c_ulonglong(
+                self.cgroup_id
+            )
+            self._table = self._bpf["events"]
+
+            def receive(_ctx: int, data: int, _size: int) -> int:
+                row = _event_row(self._table, data)
+                with self._events_lock:
+                    self._events.append(row)
+                return 0
+
+            self._table.open_ring_buffer(receive)
+
+            def poll() -> None:
+                try:
+                    while not self._stop_poll.is_set():
+                        self._bpf.ring_buffer_poll(timeout=10)
+                except BaseException as exc:
+                    if not self._stop_poll.is_set():
+                        self._poll_error = exc
+
+            self._poller = threading.Thread(
+                target=poll,
+                name="clause-telemetry-ring-poller",
+                daemon=True,
+            )
+            self._poller.start()
+            self._bpf.attach_perf_event(
+                ev_type=PerfType.SOFTWARE,
+                ev_config=PerfSWConfig.CPU_CLOCK,
+                fn_name="on_cpu_clock",
+                sample_period=SAMPLE_PERIOD_NS,
+            )
+            self._perf_type = PerfType
+            self._perf_config = PerfSWConfig
+        except BaseException:
+            self._stop_poll.set()
+            poller = getattr(self, "_poller", None)
+            if poller is not None:
+                poller.join(timeout=2)
+            self._bpf.cleanup()
+            self._closed = True
+            self._cleanup_status = "ok"
+            raise
+
+    @classmethod
+    def unavailable(
+        cls,
+        *,
+        repo: str,
+        artifact_path: Path,
+        reason: str,
+        container_id: str = "",
+        source_actions: Sequence[Mapping[str, Any]] = (),
+    ) -> "ClauseTelemetryCollector":
+        """Return a disabled collector when setup cannot arm BPF."""
+
+        collector = object.__new__(cls)
+        collector.container_id = container_id
+        collector.cgroup = None
+        collector.cgroup_id = 0
+        collector.init_pid = 0
+        collector.quota_cores = 0.0
+        collector.repo = repo
+        collector.artifact_path = artifact_path
+        collector._epoch_offset_s = time.time() - time.monotonic()
+        collector._events = []
+        collector._events_lock = threading.Lock()
+        collector._stop_poll = threading.Event()
+        collector._poll_error = None
+        collector._active = None
+        collector._closed = False
+        collector.state = "disabled"
+        collector._disabled_reason = reason
+        collector._first_disabled_call = None
+        collector._cleanup_status = "not_started"
+        collector._integrity_errors = [reason]
+        collector.calls = []
+        collector._source_exec_actions = [
+            action
+            for action in source_actions
+            if action.get("action_type") == "tool_exec"
+            and isinstance(action.get("data"), Mapping)
+            and action["data"].get("tool_name") == "exec"
+        ]
+        collector._source_exec_index = 0
+        return collector
+
+    def _disable(self, reason: str, *, tool_call_id: str | None = None) -> None:
+        if self.state == "closed":
+            return
+        if self.state == "active":
+            self.state = "disabled"
+            self._disabled_reason = reason
+            self._first_disabled_call = tool_call_id
+        if reason not in self._integrity_errors:
+            self._integrity_errors.append(reason)
+
+    def _source_fields(self) -> tuple[str, str, str]:
         source_action = (
             self._source_exec_actions[self._source_exec_index]
             if self._source_exec_index < len(self._source_exec_actions)
             else None
         )
         self._source_exec_index += 1
-        source_tool_call_id, source_command, source_tool_result = _source_exec_fields(
-            source_action
+        return _source_exec_fields(source_action)
+
+    def _unavailable_call(
+        self,
+        token: ToolCallToken,
+        *,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        unavailable_reason = reason or self._disabled_reason or "collector_disabled"
+        summary = {
+            "version": 2,
+            "tool_call_id": token.tool_call_id,
+            "tool_trace_ref": token.tool_call_id,
+            "command": token.command,
+            "telemetry_quality": "unavailable",
+            "eligible_for_kb": False,
+            "invalid_reasons": [
+                {"kind": "collector_disabled", "detail": unavailable_reason}
+            ],
+            "mapping": {
+                "static_clause_count": 0,
+                "mappable_clause_count": 0,
+                "mapped_clause_count": 0,
+                "observation_clause_count": 0,
+                "no_runtime_exec_count": 0,
+                "coverage": 0.0,
+                "gaps": [],
+                "unobserved_builtins": [],
+            },
+            "clauses": [],
+            "no_runtime_exec": [],
+            "integrity": {
+                "status": "unavailable",
+                "errors": [f"unavailable:collector_disabled:{unavailable_reason}"],
+            },
+        }
+        self.calls.append(summary)
+        return summary
+
+    def begin_tool_call(self, tool_call_id: str, command: str) -> ToolCallToken:
+        source_tool_call_id, source_command, source_tool_result = self._source_fields()
+        if self.state == "active" and self._poll_error is not None:
+            self._disable(
+                "ring poller failed: "
+                f"{type(self._poll_error).__name__}: {self._poll_error}",
+                tool_call_id=tool_call_id,
+            )
+        if self._active is not None:
+            self._disable(
+                f"overlapping exec tool calls: {self._active.tool_call_id}, "
+                f"{tool_call_id}",
+                tool_call_id=tool_call_id,
+            )
+            self._unavailable_call(self._active, reason="exec delimiter desynchronized")
+            self._active = None
+        if not tool_call_id:
+            self._disable("exec tool call has no tool_call_id", tool_call_id=tool_call_id)
+        counters = dict.fromkeys(
+            (
+                "ringbuf_reserve_failures",
+                "perf_sample_count",
+                "argv_read_failures",
+                "argv_boundary_read_failures",
+            ),
+            0,
         )
+        if self.state == "active":
+            try:
+                counters = {
+                    "ringbuf_reserve_failures": _counter(
+                        self._bpf, "ringbuf_reserve_failures"
+                    ),
+                    "perf_sample_count": _counter(self._bpf, "perf_sample_count"),
+                    "argv_read_failures": _counter(self._bpf, "argv_read_failures"),
+                    "argv_boundary_read_failures": _counter(
+                        self._bpf, "argv_boundary_read_failures"
+                    ),
+                }
+            except BaseException as exc:
+                self._disable(
+                    f"collector counter read failed: {type(exc).__name__}: {exc}",
+                    tool_call_id=tool_call_id,
+                )
         token = ToolCallToken(
             tool_call_id=tool_call_id,
             command=command,
             started_ns=time.monotonic_ns(),
-            ringbuf_reserve_failures=_counter(self._bpf, "ringbuf_reserve_failures"),
-            perf_sample_count=_counter(self._bpf, "perf_sample_count"),
-            argv_read_failures=_counter(self._bpf, "argv_read_failures"),
-            argv_boundary_read_failures=_counter(
-                self._bpf, "argv_boundary_read_failures"
+            ringbuf_reserve_failures=int(counters["ringbuf_reserve_failures"]),
+            perf_sample_count=int(counters["perf_sample_count"]),
+            argv_read_failures=int(counters["argv_read_failures"]),
+            argv_boundary_read_failures=int(
+                counters["argv_boundary_read_failures"]
             ),
             source_tool_call_id=source_tool_call_id,
             source_command=source_command,
@@ -2228,28 +2524,46 @@ class ClauseTelemetryCollector:
         replay_response: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         if token is not self._active:
-            raise ClauseTelemetryIntegrityError(
-                f"exec delimiter mismatch for {token.tool_call_id}"
+            self._disable(
+                f"exec delimiter mismatch for {token.tool_call_id}",
+                tool_call_id=token.tool_call_id,
             )
+            return self._unavailable_call(token, reason="exec delimiter desynchronized")
         ended_ns = time.monotonic_ns()
         self._active = None
+        if self.state != "active":
+            return self._unavailable_call(token)
+        if self._poll_error is not None:
+            self._disable(
+                "ring poller failed: "
+                f"{type(self._poll_error).__name__}: {self._poll_error}",
+                tool_call_id=token.tool_call_id,
+            )
+            return self._unavailable_call(token)
         # The kernel timestamps events before ring delivery. Let the poller drain,
         # then slice on the captured end timestamp; command timing is unchanged.
-        time.sleep(0.03)
-        loss_counts = _loss_delta(self._bpf, token)
-        perf_samples = (
-            _counter(self._bpf, "perf_sample_count") - token.perf_sample_count
-        )
-        with self._events_lock:
-            events = sorted(
-                (
-                    event
-                    for event in self._events
-                    if token.started_ns <= event["ts_ns"] <= ended_ns
-                    and event["cgroup_id"] == self.cgroup_id
-                ),
-                key=lambda event: event["ts_ns"],
+        try:
+            time.sleep(0.03)
+            loss_counts = _loss_delta(self._bpf, token)
+            perf_samples = (
+                _counter(self._bpf, "perf_sample_count") - token.perf_sample_count
             )
+            with self._events_lock:
+                events = sorted(
+                    (
+                        event
+                        for event in self._events
+                        if token.started_ns <= event["ts_ns"] <= ended_ns
+                        and event["cgroup_id"] == self.cgroup_id
+                    ),
+                    key=lambda event: event["ts_ns"],
+                )
+        except BaseException as exc:
+            self._disable(
+                f"collector finish failed: {type(exc).__name__}: {exc}",
+                tool_call_id=token.tool_call_id,
+            )
+            return self._unavailable_call(token)
         replay_result = (
             str(replay_response.get("result") or "")
             if replay_response is not None
@@ -2324,21 +2638,30 @@ class ClauseTelemetryCollector:
                 f"{token.tool_call_id}: telemetry analysis failed: "
                 f"{type(exc).__name__}: {exc}"
             )
-            self._integrity_errors.append(message)
+            if isinstance(exc, ClauseTelemetryIntegrityError):
+                self._integrity_errors.append(message)
+            else:
+                self._disable(message, tool_call_id=token.tool_call_id)
             failed_call = {
-                "version": 1,
+                "version": 2,
                 "tool_call_id": token.tool_call_id,
+                "tool_trace_ref": token.tool_call_id,
                 "command": token.command,
+                "telemetry_quality": "invalid",
+                "eligible_for_kb": False,
+                "invalid_reasons": [
+                    {"kind": "analysis_failure", "detail": message}
+                ],
                 "integrity": {"status": "failed", "errors": [message]},
             }
             if isinstance(exc, ClauseTelemetryIntegrityError):
                 failed_call.update(exc.artifact_payload)
             self.calls.append(failed_call)
-            raise ClauseTelemetryIntegrityError(message) from exc
+            return failed_call
         self.calls.append(summary)
-        if violations:
-            self._integrity_errors.extend(violations)
-            raise ClauseTelemetryIntegrityError("; ".join(violations))
+        for violation in violations:
+            if violation not in self._integrity_errors:
+                self._integrity_errors.append(violation)
         return summary
 
     def record_safety_guard_blocked(
@@ -2354,10 +2677,19 @@ class ClauseTelemetryCollector:
         token = self.begin_tool_call(tool_call_id, command)
         ended_ns = time.monotonic_ns()
         self._active = None
-        loss_counts = _loss_delta(self._bpf, token)
-        perf_samples = (
-            _counter(self._bpf, "perf_sample_count") - token.perf_sample_count
-        )
+        if self.state != "active":
+            return self._unavailable_call(token)
+        try:
+            loss_counts = _loss_delta(self._bpf, token)
+            perf_samples = (
+                _counter(self._bpf, "perf_sample_count") - token.perf_sample_count
+            )
+        except BaseException as exc:
+            self._disable(
+                f"collector finish failed: {type(exc).__name__}: {exc}",
+                tool_call_id=tool_call_id,
+            )
+            return self._unavailable_call(token)
         evidence = SafetyGuardBlockEvidence(
             command=command,
             source_command=token.source_command,
@@ -2375,19 +2707,42 @@ class ClauseTelemetryCollector:
             "tool_result_exact": token.source_tool_result == replay_result,
             "short_circuit_eligible": False,
         }
-        summary, violations = self._summarize_call(
-            token=token,
-            ended_ns=ended_ns,
-            events=[],
-            loss_counts=loss_counts,
-            perf_samples=perf_samples,
-            control_flow_fidelity=fidelity,
-            safety_guard_blocked=evidence,
-        )
+        try:
+            summary, violations = self._summarize_call(
+                token=token,
+                ended_ns=ended_ns,
+                events=[],
+                loss_counts=loss_counts,
+                perf_samples=perf_samples,
+                control_flow_fidelity=fidelity,
+                safety_guard_blocked=evidence,
+            )
+        except Exception as exc:
+            message = (
+                f"{token.tool_call_id}: telemetry analysis failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            if isinstance(exc, ClauseTelemetryIntegrityError):
+                self._integrity_errors.append(message)
+            else:
+                self._disable(message, tool_call_id=token.tool_call_id)
+            summary = {
+                "version": 2,
+                "tool_call_id": token.tool_call_id,
+                "tool_trace_ref": token.tool_call_id,
+                "command": token.command,
+                "telemetry_quality": "invalid",
+                "eligible_for_kb": False,
+                "invalid_reasons": [
+                    {"kind": "analysis_failure", "detail": message}
+                ],
+                "integrity": {"status": "failed", "errors": [message]},
+            }
+            violations = [message]
         self.calls.append(summary)
-        if violations:
-            self._integrity_errors.extend(violations)
-            raise ClauseTelemetryIntegrityError("; ".join(violations))
+        for violation in violations:
+            if violation not in self._integrity_errors:
+                self._integrity_errors.append(violation)
         return summary
 
     def _summarize_call(
@@ -2534,10 +2889,11 @@ class ClauseTelemetryCollector:
                 "initial_exec_pending_pre_boundary_structural_setup",
             }
         ]
+        exec_image_records = [_exec_image_record(metric) for metric in metrics]
         bridge = bridge_command(
             self.repo,
             token.command,
-            [_exec_image_record(metric) for metric in metrics],
+            exec_image_records,
             failed_exec_attempts=[
                 attempt
                 for attempt in _failed_exec_attempt_records(events)
@@ -2553,6 +2909,7 @@ class ClauseTelemetryCollector:
             fork_parent=fork_parent,
             epoch_offset=self._epoch_offset_s,
             loss_count=loss,
+            attribution_gap_count=len(relevant_gaps),
             protocol_timeout=protocol_timeout,
         )
         mapping_gaps = [
@@ -2675,9 +3032,40 @@ class ClauseTelemetryCollector:
         mappable = bridge.static_clause_count - len(bridge.unobserved_builtins)
         mapped = len(bridge.bridged) + len(bridge.no_runtime_exec)
         summary = {
-            "version": 1,
+            "version": 2,
             "tool_call_id": token.tool_call_id,
+            "tool_trace_ref": token.tool_call_id,
             "command": token.command,
+            "static_word_intent": [
+                {
+                    "clause_index": index,
+                    "bin": clause["bin"],
+                    "argv": clause["argv"],
+                    "span": clause["span"],
+                    "word_intents": clause.get("word_intents", []),
+                }
+                for index, clause in enumerate(bridge.static_clauses)
+            ],
+            "runtime_invocations": [
+                {
+                    "host_pid": image.host_pid,
+                    "exec_seq": image.exec_seq,
+                    "requested_executable_path": image.requested_executable_path,
+                    "requested_executable_path_truncated": (
+                        image.requested_executable_path_truncated
+                    ),
+                    "argv": list(image.argv),
+                    "argc": image.exact_argc,
+                    "argv_capped": image.argv_capped,
+                    "truncated_words": list(image.truncated_words),
+                    "bprm_filename": image.bprm_filename,
+                    "bprm_interp": image.bprm_interp,
+                    "bprm_evidence_truncated": image.bprm_evidence_truncated,
+                }
+                for image in exec_image_records
+            ],
+            "transition_graph": bridge.transition_graph,
+            "candidate_rejections": bridge.candidate_rejections,
             "mapping": {
                 "static_clause_count": bridge.static_clause_count,
                 "mappable_clause_count": mappable,
@@ -2757,6 +3145,28 @@ class ClauseTelemetryCollector:
         if mapping_gaps:
             kinds = sorted({gap["kind"] for gap in mapping_gaps})
             violations.append(f"{token.tool_call_id}: mapping gaps={','.join(kinds)}")
+        invalid_reasons: list[dict[str, str]] = []
+        if loss:
+            invalid_reasons.append(
+                {"kind": "telemetry_loss", "detail": violations[0]}
+            )
+        if relevant_gaps:
+            invalid_reasons.append(
+                {
+                    "kind": "attribution_gap",
+                    "detail": (
+                        f"{token.tool_call_id}: relevant coverage "
+                        f"gaps={len(relevant_gaps)}"
+                    ),
+                }
+            )
+        invalid_reasons.extend(mapping_gaps)
+        summary["telemetry_quality"] = "invalid" if violations else "ok"
+        summary["eligible_for_kb"] = not violations and bridge.data_valid
+        summary["invalid_reasons"] = invalid_reasons
+        for clause in summary["clauses"]:
+            clause["telemetry_quality"] = summary["telemetry_quality"]
+            clause["eligible_for_kb"] = summary["eligible_for_kb"]
         summary["integrity"] = {
             "status": "failed" if violations else "ok",
             "errors": violations,
@@ -2764,23 +3174,36 @@ class ClauseTelemetryCollector:
         return summary, violations
 
     def add_integrity_error(self, message: str) -> None:
-        self._integrity_errors.append(message)
+        self._disable(message)
 
-    def finalize(self) -> None:
-        cleanup_error: BaseException | None = None
-        total_loss_counts = _loss_counts(self._bpf)
+    def finalize(self, *, replay_execution: str = "completed") -> None:
+        if self.state == "closed":
+            return
+        if replay_execution not in {"completed", "failed", "incomplete"}:
+            raise ValueError(f"invalid replay execution state {replay_execution!r}")
+        try:
+            total_loss_counts = (
+                _loss_counts(self._bpf)
+                if self.state == "active"
+                else dict.fromkeys(LOSS_COUNTER_NAMES, 0)
+            )
+        except BaseException as exc:
+            total_loss_counts = dict.fromkeys(LOSS_COUNTER_NAMES, 0)
+            self._disable(f"collector counter read failed: {type(exc).__name__}: {exc}")
         total_loss = sum(total_loss_counts.values())
         if self._active is not None:
-            self._integrity_errors.append(
-                f"unterminated exec delimiter: {self._active.tool_call_id}"
+            self._disable(
+                f"unterminated exec delimiter: {self._active.tool_call_id}",
+                tool_call_id=self._active.tool_call_id,
             )
+            self._unavailable_call(self._active, reason="unterminated exec delimiter")
             self._active = None
         try:
-            self._close_bpf()
+            if hasattr(self, "_bpf"):
+                self._close_bpf()
         except BaseException as exc:
-            cleanup_error = exc
             self._cleanup_status = "failed"
-            self._integrity_errors.append(
+            self._disable(
                 f"collector cleanup leak: {type(exc).__name__}: {exc}"
             )
         if total_loss:
@@ -2791,14 +3214,32 @@ class ClauseTelemetryCollector:
                 f"collector total telemetry loss={total_loss} ({causes})"
             )
         if self._poll_error is not None:
-            self._integrity_errors.append(
+            self._disable(
                 "ring poller failed: "
                 f"{type(self._poll_error).__name__}: {self._poll_error}"
             )
+        prior_state = self.state
+        valid_count = sum(
+            call.get("telemetry_quality") == "ok" for call in self.calls
+        )
+        invalid_count = sum(
+            call.get("telemetry_quality") == "invalid" for call in self.calls
+        )
+        unavailable_count = sum(
+            call.get("telemetry_quality") == "unavailable" for call in self.calls
+        )
+        collection_validity = (
+            "valid"
+            if not self._integrity_errors
+            and invalid_count == 0
+            and unavailable_count == 0
+            else "invalid"
+        )
+        self.artifact_path.parent.mkdir(parents=True, exist_ok=True)
         self.artifact_path.write_text(
             json.dumps(
                 {
-                    "version": 1,
+                    "version": 2,
                     "mode": "clause",
                     "container_id": self.container_id,
                     "cgroup_id": self.cgroup_id,
@@ -2810,6 +3251,26 @@ class ClauseTelemetryCollector:
                     },
                     "ring_loss_total": total_loss,
                     "cleanup": self._cleanup_status,
+                    "collector": {
+                        "state": "closed",
+                        "state_before_close": prior_state,
+                        "first_disabled_call": self._first_disabled_call,
+                        "disabled_reason": self._disabled_reason,
+                        "valid_call_count": valid_count,
+                        "invalid_call_count": invalid_count,
+                        "unavailable_call_count": unavailable_count,
+                    },
+                    "replay_execution": replay_execution,
+                    "telemetry_quality": (
+                        "ok"
+                        if collection_validity == "valid"
+                        else (
+                            "unavailable"
+                            if unavailable_count and not valid_count and not invalid_count
+                            else "invalid"
+                        )
+                    ),
+                    "collection_validity": collection_validity,
                     "integrity": {
                         "status": ("failed" if self._integrity_errors else "ok"),
                         "errors": self._integrity_errors,
@@ -2838,11 +3299,7 @@ class ClauseTelemetryCollector:
             + "\n",
             encoding="utf-8",
         )
-        if self._integrity_errors:
-            error = ClauseTelemetryIntegrityError("; ".join(self._integrity_errors))
-            if cleanup_error is not None:
-                raise error from cleanup_error
-            raise error
+        self.state = "closed"
 
     def _close_bpf(self) -> None:
         if self._closed:

@@ -14,6 +14,7 @@ _CLAUSE_KEYS = {
     "in_pipe",
     "in_subst",
     "pipeline_position",
+    "word_intents",
 }
 
 
@@ -267,6 +268,33 @@ def test_escaped_and_empty_command_heads_preserve_logical_words() -> None:
     assert escaped[2]["argv"] == ["echo", "a$b", r"a\qb", "\\雪"]
     assert empty[0]["bin"] == ""
     assert empty[0]["argv"] == ["", "arg"]
+
+
+def test_word_intents_distinguish_literal_and_runtime_expansion() -> None:
+    command = r"""printf '%s' '*.py' \*.txt *.md "$HOME" $USER $(date)"""
+    words = parse_command_clauses(command)["clauses"][0]["word_intents"]
+
+    assert [component["kind"] for component in words[2]["components"]] == [
+        "literal"
+    ]
+    assert words[2]["quoted"]
+    assert [component["kind"] for component in words[3]["components"]] == [
+        "literal"
+    ]
+    assert words[3]["escaped"]
+    assert [component["kind"] for component in words[4]["components"]] == [
+        "pathname_expansion"
+    ]
+    assert words[5]["components"][0] == {
+        "kind": "parameter",
+        "source": "$HOME",
+        "span": (32, 37),
+        "quoted": True,
+        "escaped": False,
+    }
+    assert words[6]["components"][0]["kind"] == "parameter"
+    assert words[6]["components"][0]["quoted"] is False
+    assert words[7]["components"][0]["kind"] == "command_substitution"
 
 
 def test_malformed_input_uses_shell_segment_fallback() -> None:

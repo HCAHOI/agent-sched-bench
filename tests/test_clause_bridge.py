@@ -66,6 +66,10 @@ def _img(
     disk_cancelled: int | None = 0,
     disk_io_reason: str = "ok",
     argv_capture_flags: int = 0,
+    requested_path_truncated: bool = False,
+    bprm_filename: str | None = None,
+    bprm_interp: str | None = None,
+    bprm_evidence_truncated: bool = False,
 ) -> ExecImageRecord:
     cpu_windows = (
         _cpu_windows(t_exec, t_end, cores) if cpu_profile == "auto" else cpu_profile
@@ -96,6 +100,20 @@ def _img(
         normal_exit_status=None if signal else status,
         has_causal_end=has_causal_end,
         argv_capture_flags=argv_capture_flags,
+        requested_executable_path=(
+            argv[0] if argv is not None else bin_
+        ),
+        requested_executable_path_truncated=requested_path_truncated,
+        exact_argc=len(argv if argv is not None else (bin_,)),
+        argv_capped=bool(argv_capture_flags & (1 << 16)),
+        truncated_words=tuple(
+            index
+            for index in range(16)
+            if argv_capture_flags & (1 << index)
+        ),
+        bprm_filename=bprm_filename,
+        bprm_interp=bprm_interp,
+        bprm_evidence_truncated=bprm_evidence_truncated,
         provenance={
             "quota_cores": quota,
             "disk_io": {
@@ -188,7 +206,16 @@ def test_W_exec_chain_becomes_one_clause_headed_by_env() -> None:
             1000,
             terminal=False,
             disk_read=10,
-            argv=("env", "nice", "-n", "0", "workload"),
+            argv=(
+                "env",
+                "nice",
+                "-n",
+                "0",
+                "workload",
+                "cpu-threads",
+                "1",
+                "1.3",
+            ),
         ),
         _img(
             101,
@@ -299,10 +326,13 @@ def test_explicit_shell_clause_owns_installer_descendants() -> None:
     bash_clause = result.bridged[0]
     assert bash_clause.owned_pids == (101, 102)
     assert bash_clause.owned_exec_images == ((101, 0), (102, 0))
-    assert bash_clause.provenance["mapping_evidence"] == "tier1"
+    assert (
+        bash_clause.provenance["mapping_evidence"]
+        == "initial_invocation_exact"
+    )
 
 
-def test_truncated_explicit_shell_owns_call_44_descendants() -> None:
+def test_truncated_explicit_shell_invalidates_call_44_observations() -> None:
     payload = "x" * 600
     command = f"bash -c '{payload}' 2>&1 | tail -20"
     images = [
@@ -347,18 +377,10 @@ def test_truncated_explicit_shell_owns_call_44_descendants() -> None:
         fork_parent={100: 99, 101: 100, 102: 101, 103: 101, 104: 100},
     )
 
-    assert result.coverage_gaps == []
-    assert [item.mapping_evidence for item in result.bridged] == [
-        "tier1_truncated_prefix",
-        "tier1",
-    ]
-    bash_clause = result.bridged[0]
-    assert bash_clause.owned_pids == (101, 102, 103)
-    assert bash_clause.owned_exec_images == (
-        (101, 0),
-        (102, 0),
-        (103, 0),
-        (103, 1),
+    assert result.observations == []
+    assert not result.data_valid
+    assert any(
+        gap.kind == "runtime_argv_incomplete" for gap in result.coverage_gaps
     )
 
 
@@ -385,7 +407,9 @@ def test_shared_truncated_prefix_is_ambiguous() -> None:
     )
 
     assert result.observations == []
-    assert [gap.kind for gap in result.coverage_gaps] == ["ambiguous", "ambiguous"]
+    assert any(
+        gap.kind == "runtime_argv_incomplete" for gap in result.coverage_gaps
+    )
 
 
 def test_unflagged_shell_prefix_stays_unmatched() -> None:
@@ -412,6 +436,351 @@ def test_unflagged_shell_prefix_stays_unmatched() -> None:
     assert [gap.kind for gap in result.coverage_gaps] == ["unmatched_static_clause"]
 
 
+@pytest.mark.parametrize("pattern", ["'*.py'", r"\*.py"])
+def test_quoted_and_escaped_globs_match_literal_runtime_word(pattern: str) -> None:
+    result = bridge_command(
+        "r1",
+        f"printf %s {pattern}",
+        [
+            _img(
+                101,
+                0,
+                "printf",
+                0,
+                _S,
+                terminal=True,
+                argv=("printf", "%s", "*.py"),
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert result.data_valid
+    assert len(result.observations) == 1
+
+
+@pytest.mark.parametrize(
+    "runtime_words",
+    [
+        ("one.py",),
+        ("one.py", "two.py", "three.py"),
+    ],
+)
+def test_unquoted_glob_has_one_unique_full_alignment(
+    runtime_words: tuple[str, ...],
+) -> None:
+    result = bridge_command(
+        "r1",
+        "printf %s *.py done",
+        [
+            _img(
+                101,
+                0,
+                "printf",
+                0,
+                _S,
+                terminal=True,
+                argv=("printf", "%s", *runtime_words, "done"),
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert result.data_valid
+    assert result.bridged[0].mapping_evidence == (
+        "initial_invocation_unique_expansion"
+    )
+
+
+def test_unquoted_glob_zero_words_is_not_assumed_without_nullglob_evidence() -> None:
+    result = bridge_command(
+        "r1",
+        "printf %s *.py done",
+        [
+            _img(
+                101,
+                0,
+                "printf",
+                0,
+                _S,
+                terminal=True,
+                argv=("printf", "%s", "done"),
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert result.observations == []
+    assert any(
+        rejection["reason"] == "no_full_argv_alignment"
+        for rejection in result.candidate_rejections
+    )
+
+
+def test_multiple_globs_require_a_unique_segmentation() -> None:
+    unique = bridge_command(
+        "r1",
+        "printf %s *.py *.txt",
+        [
+            _img(
+                101,
+                0,
+                "printf",
+                0,
+                _S,
+                terminal=True,
+                argv=("printf", "%s", "a.py", "b.txt"),
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+    ambiguous = bridge_command(
+        "r1",
+        "printf %s *.* *.*",
+        [
+            _img(
+                101,
+                0,
+                "printf",
+                0,
+                _S,
+                terminal=True,
+                argv=("printf", "%s", "a.py", "b.txt", "c.md"),
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert unique.data_valid
+    assert ambiguous.observations == []
+    assert any(
+        rejection["reason"] == "ambiguous_expansion_alignment"
+        for rejection in ambiguous.candidate_rejections
+    )
+
+
+@pytest.mark.parametrize("word", ["'$VALUE'", '"$VALUE"', "$VALUE"])
+def test_parameter_expansion_is_withheld_without_value_boundary_evidence(
+    word: str,
+) -> None:
+    result = bridge_command(
+        "r1",
+        f"printf %s {word}",
+        [
+            _img(
+                101,
+                0,
+                "printf",
+                0,
+                _S,
+                terminal=True,
+                argv=(
+                    "printf",
+                    "%s",
+                    "$VALUE" if word == "'$VALUE'" else "expanded",
+                ),
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    if word == "'$VALUE'":
+        assert result.data_valid
+    else:
+        assert result.observations == []
+        assert any(
+            rejection["reason"] == "unsupported_dynamic_expansion"
+            for rejection in result.candidate_rejections
+        )
+
+
+def test_sixteen_complete_words_map_but_seventeenth_capped_word_does_not() -> None:
+    complete = tuple(["cmd", *[str(index) for index in range(15)]])
+    capped = tuple(["cmd", *[str(index) for index in range(16)]])
+    valid = bridge_command(
+        "r1",
+        " ".join(complete),
+        [_img(101, 0, "cmd", 0, _S, terminal=True, argv=complete)],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+    invalid = bridge_command(
+        "r1",
+        " ".join(capped),
+        [
+            _img(
+                101,
+                0,
+                "cmd",
+                0,
+                _S,
+                terminal=True,
+                argv=capped[:16],
+                argv_capture_flags=1 << 16,
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert valid.data_valid
+    assert invalid.observations == []
+    assert any(
+        gap.kind == "runtime_argv_incomplete" for gap in invalid.invalid_reasons
+    )
+
+
+def test_shebang_transition_is_owned_after_initial_script_invocation() -> None:
+    result = bridge_command(
+        "r1",
+        "./script.py arg",
+        [
+            _img(
+                101,
+                0,
+                "script.py",
+                0,
+                _S,
+                terminal=True,
+                argv=("./script.py", "arg"),
+                bprm_filename="./script.py",
+                bprm_interp="/usr/bin/python3",
+            ),
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert result.data_valid
+    assert result.bridged[0].owned_exec_images == ((101, 0),)
+    assert result.transition_graph == [
+        {
+            "kind": "interpreter",
+            "exec_image": [101, 0],
+            "from": "./script.py",
+            "to": "/usr/bin/python3",
+        },
+        {"kind": "fork", "parent_pid": 100, "child_pid": 101},
+    ]
+
+
+def test_eleven_word_glob_expansion_has_one_complete_alignment() -> None:
+    expanded = tuple(f"pkg-{index}.whl" for index in range(11))
+    result = bridge_command(
+        "r1",
+        "install prefix *.whl suffix",
+        [
+            _img(
+                101,
+                0,
+                "install",
+                0,
+                _S,
+                terminal=True,
+                argv=("install", "prefix", *expanded, "suffix"),
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert result.data_valid
+    assert result.bridged[0].mapping_evidence == (
+        "initial_invocation_unique_expansion"
+    )
+
+
+def test_nine_word_console_script_owns_interpreter_and_descendant() -> None:
+    initial = (
+        "pip3",
+        "install",
+        "--no-cache-dir",
+        "-r",
+        "requirements.txt",
+        "--target",
+        "/tmp/site",
+        "--quiet",
+        "--disable-pip-version-check",
+    )
+    result = bridge_command(
+        "r1",
+        " ".join(initial),
+        [
+            _img(
+                101,
+                0,
+                "pip3",
+                0,
+                10,
+                terminal=False,
+                argv=initial,
+            ),
+            _img(
+                101,
+                1,
+                "python3",
+                10,
+                _S,
+                terminal=True,
+                argv=("/usr/bin/python3", "/usr/bin/pip3", *initial[1:]),
+            ),
+            _img(
+                102,
+                0,
+                "gcc",
+                20,
+                500,
+                terminal=True,
+                argv=("gcc", "-c", "extension.c"),
+            ),
+        ],
+        entry_pid=100,
+        fork_parent={101: 100, 102: 101},
+    )
+
+    assert result.data_valid
+    assert result.bridged[0].owned_exec_images == ((101, 0), (101, 1), (102, 0))
+    assert result.bridged[0].mapping_evidence == "initial_invocation_exact"
+
+
+def test_descendant_matching_another_static_clause_gets_independent_ownership() -> None:
+    result = bridge_command(
+        "r1",
+        "wrapper run; child task",
+        [
+            _img(
+                101,
+                0,
+                "wrapper",
+                0,
+                _S,
+                terminal=True,
+                argv=("wrapper", "run"),
+            ),
+            _img(
+                102,
+                0,
+                "child",
+                10,
+                500,
+                terminal=True,
+                argv=("child", "task"),
+            ),
+        ],
+        entry_pid=100,
+        fork_parent={101: 100, 102: 101},
+    )
+
+    assert result.data_valid
+    assert [clause.owned_pids for clause in result.bridged] == [(101,), (102,)]
+
+
 def test_capped_argv_cannot_map_even_with_one_static_candidate() -> None:
     result = bridge_command(
         "r1",
@@ -425,7 +794,7 @@ def test_capped_argv_cannot_map_even_with_one_static_candidate() -> None:
                 _S,
                 terminal=True,
                 argv=("bash", "a", "b", "c", "d", "e", "f", "g"),
-                argv_capture_flags=1 << 8,
+                argv_capture_flags=1 << 16,
             )
         ],
         entry_pid=100,
@@ -433,7 +802,45 @@ def test_capped_argv_cannot_map_even_with_one_static_candidate() -> None:
     )
 
     assert result.observations == []
-    assert [gap.kind for gap in result.coverage_gaps] == ["unmatched_static_clause"]
+    assert {gap.kind for gap in result.coverage_gaps} == {
+        "unmatched_static_clause",
+        "runtime_argv_incomplete",
+    }
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"requested_path_truncated": True},
+        {"bprm_evidence_truncated": True},
+    ],
+)
+def test_truncated_exec_metadata_withholds_bare_head(
+    metadata: dict[str, bool],
+) -> None:
+    result = bridge_command(
+        "r1",
+        "cmd arg",
+        [
+            _img(
+                101,
+                0,
+                "cmd",
+                0,
+                _S,
+                terminal=True,
+                argv=("cmd", "arg"),
+                **metadata,
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert result.observations == []
+    assert any(
+        gap.kind == "runtime_argv_incomplete" for gap in result.invalid_reasons
+    )
 
 
 def test_capped_argv_cannot_disambiguate_unseen_argument() -> None:
@@ -449,7 +856,7 @@ def test_capped_argv_cannot_disambiguate_unseen_argument() -> None:
                 _S,
                 terminal=True,
                 argv=("bash", "a", "b", "c", "d", "e", "f", "g"),
-                argv_capture_flags=1 << 8,
+                argv_capture_flags=1 << 16,
             )
         ],
         entry_pid=100,
@@ -457,10 +864,10 @@ def test_capped_argv_cannot_disambiguate_unseen_argument() -> None:
     )
 
     assert result.observations == []
-    assert [gap.kind for gap in result.coverage_gaps] == [
+    assert {gap.kind for gap in result.coverage_gaps} == {
         "unmatched_static_clause",
-        "unmatched_static_clause",
-    ]
+        "runtime_argv_incomplete",
+    }
 
 
 def test_protocol_timeout_killed_owned_child_excludes_root_clause_from_kb() -> None:
@@ -632,16 +1039,8 @@ def test_P_pipeline_two_separate_clauses_no_cross_leak() -> None:
     result = bridge_command(
         "r1", cmd, images, entry_pid=100, fork_parent={101: 100, 102: 100}
     )
-    assert len(result.bridged) == 2
-    peaks = sorted(o.peak_cpu_cores for o in result.observations)
-    assert peaks == pytest.approx([2.0, 2.0], abs=0.05)  # no 4.0 cross-leak
-
-    kb = ClauseResourceKB.fit_public([_fit("workload", cpu=0.5)])
-    for o in result.observations:
-        kb.observe_completed_clause(o)
-    cpu = kb.predict_command("r1", cmd, 100.0).targets[CPU_HEAVY_TARGET]
-    assert cpu.flag is False  # composer does not sum concurrent clauses
-    assert "does not sum concurrent" in cpu.note
+    assert result.observations == []
+    assert {gap.kind for gap in result.coverage_gaps} == {"ambiguous"}
 
 
 def test_M_memory_flag_from_sampled_peak_rss_not_hiwater() -> None:
@@ -655,7 +1054,7 @@ def test_M_memory_flag_from_sampled_peak_rss_not_hiwater() -> None:
             terminal=True,
             cores=None,
             rss_mb=600.0,
-            argv=("python3", "-c", "x"),
+            argv=("python3", "-c", "x=1"),
         ),
     ]
     result = bridge_command(
@@ -711,7 +1110,16 @@ def test_K_killed_descendant_preserves_peak_and_signal() -> None:
             1400 * _MS,
             terminal=True,
             cores=None,
-            argv=("timeout", "-s", "KILL", "1.3", "workload"),
+            argv=(
+                "timeout",
+                "-s",
+                "KILL",
+                "1.3",
+                "workload",
+                "cpu-threads",
+                "1",
+                "5",
+            ),
         ),
         _img(
             102,
@@ -1546,10 +1954,28 @@ def test_outer_control_resolves_the_fixed_image_smoke_pipeline() -> None:
 def test_shell_control_mapping_ambiguity_stays_fatal() -> None:
     result = bridge_command(
         "r1",
-        "left x && left y && right",
+        "left x && left x && right",
         [
-            _img(101, 0, "left", 0, 10, terminal=True, status=1),
-            _img(102, 0, "left", 0, 10, terminal=True, status=1),
+            _img(
+                101,
+                0,
+                "left",
+                0,
+                10,
+                terminal=True,
+                status=1,
+                argv=("left", "x"),
+            ),
+            _img(
+                102,
+                0,
+                "left",
+                0,
+                10,
+                terminal=True,
+                status=1,
+                argv=("left", "x"),
+            ),
         ],
         allow_control_short_circuit=True,
         entry_pid=100,
@@ -1642,7 +2068,15 @@ def test_concurrent_descendants_rss_sums_distinct_mm() -> None:
     span_end = 1200 * _MS
     images = [
         _img(
-            101, 0, "runner", 0, span_end, terminal=True, cores=0.1, rss_profile=()
+            101,
+            0,
+            "runner",
+            0,
+            span_end,
+            terminal=True,
+            cores=0.1,
+            rss_profile=(),
+            argv=("runner", "two"),
         ),  # wrapper trivial rss
         _img(
             102, 0, "worker", 0, span_end, terminal=True, cores=0.1, rss_mb=300.0, mm=1
@@ -1862,12 +2296,13 @@ def test_genuinely_ambiguous_pair_yields_gaps_and_no_observations() -> None:
         fork_parent={201: 100, 202: 100},
     )
     assert result.observations == []
-    assert {g.kind for g in result.coverage_gaps} == {"ambiguous"}
-    assert len(result.coverage_gaps) == 2
+    assert {g.kind for g in result.coverage_gaps} == {
+        "unmatched_static_clause",
+        "unmatched_exec_image",
+    }
 
 
-def test_identical_repeated_clauses_map_interchangeably() -> None:
-    # identical static identities may map to either chain; both become observations
+def test_pipeline_position_makes_repeated_clauses_nonexchangeable() -> None:
     images = [
         _img(201, 0, "make", 0, 1200 * _MS, terminal=True, cores=2.5, argv=("make",)),
         _img(202, 0, "make", 10, 1200 * _MS, terminal=True, cores=2.5, argv=("make",)),
@@ -1879,12 +2314,8 @@ def test_identical_repeated_clauses_map_interchangeably() -> None:
         entry_pid=100,
         fork_parent={201: 100, 202: 100},
     )
-    assert len(result.bridged) == 2
-    assert not result.coverage_gaps
-    assert all(o.bin == "make" for o in result.observations)
-    assert all(
-        bc.mapping_evidence == "interchangeable_identical" for bc in result.bridged
-    )
+    assert result.observations == []
+    assert {gap.kind for gap in result.coverage_gaps} == {"ambiguous"}
 
 
 # --------------------------------------------------------------------------
@@ -2079,10 +2510,12 @@ def test_C1_path_valued_arguments_are_not_basenamed() -> None:
         t_exec_ns=0,
         t_end_ns=1200 * _MS,
         bin="cat",
-        argv=("/bin/cat", "a/log"),
+        argv=("cat", "a/log"),
         terminal=True,
         cpu_windows=_cpu_windows(0, 1200 * _MS, 1.0),
         rss_bins=_rss_bins(0, 1200 * _MS, 10.0, 201),
+        requested_executable_path="cat",
+        exact_argc=2,
         provenance={"quota_cores": 8.0},
     )
     b = ExecImageRecord(
@@ -2091,10 +2524,12 @@ def test_C1_path_valued_arguments_are_not_basenamed() -> None:
         t_exec_ns=0,
         t_end_ns=1200 * _MS,
         bin="cat",
-        argv=("/bin/cat", "b/log"),
+        argv=("cat", "b/log"),
         terminal=True,
         cpu_windows=_cpu_windows(0, 1200 * _MS, 3.0),
         rss_bins=_rss_bins(0, 1200 * _MS, 10.0, 202),
+        requested_executable_path="cat",
+        exact_argc=2,
         provenance={"quota_cores": 8.0},
     )
     r = bridge_command(
@@ -2105,7 +2540,7 @@ def test_C1_path_valued_arguments_are_not_basenamed() -> None:
         fork_parent={201: 100, 202: 100},
     )
     by_argv = {o.argv: o for o in r.observations}
-    # head basenamed to "cat"; path arguments preserved and used to disambiguate
+    # Runtime argv0 stays exact; path arguments remain distinct.
     assert ("cat", "a/log") in by_argv and ("cat", "b/log") in by_argv
     assert by_argv[("cat", "a/log")].peak_cpu_cores == pytest.approx(1.0, abs=0.1)
     assert by_argv[("cat", "b/log")].peak_cpu_cores == pytest.approx(3.0, abs=0.1)

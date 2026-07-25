@@ -262,10 +262,21 @@ class ContainerExecTool(_ContainerTool):
             None,
         )
         if token is not None:
-            self._clause_telemetry.finish_tool_call(
-                token,
-                replay_response=response,
+            try:
+                self._clause_telemetry.finish_tool_call(
+                    token,
+                    replay_response=response,
+                )
+            except BaseException as exc:
+                self._record_telemetry_failure("finish", exc)
+
+    def _record_telemetry_failure(self, phase: str, exc: BaseException) -> None:
+        try:
+            self._clause_telemetry.add_integrity_error(
+                f"telemetry {phase} failed: {type(exc).__name__}: {exc}"
             )
+        except BaseException:
+            pass
 
     @property
     def clause_telemetry_enabled(self) -> bool:
@@ -302,21 +313,27 @@ class ContainerExecTool(_ContainerTool):
         if guard_error:
             replay_result = guard_error + TOOL_ERROR_HINT
             if self._clause_telemetry is not None:
-                self._clause_telemetry.record_safety_guard_blocked(
-                    self._tool_call_id or "",
-                    command,
-                    replay_result,
-                )
+                try:
+                    self._clause_telemetry.record_safety_guard_blocked(
+                        self._tool_call_id or "",
+                        command,
+                        replay_result,
+                    )
+                except BaseException as exc:
+                    self._record_telemetry_failure("safety_guard", exc)
             return replay_result
         effective_timeout = min(int(timeout or self.timeout), self._MAX_TIMEOUT)
         effective_command = command
         if workdir != self.workspace:
             effective_command = f"cd {shlex.quote(workdir)} && {command}"
         if self._clause_telemetry is not None:
-            self._pending_clause_token = self._clause_telemetry.begin_tool_call(
-                self._tool_call_id or "",
-                command,
-            )
+            try:
+                self._pending_clause_token = self._clause_telemetry.begin_tool_call(
+                    self._tool_call_id or "",
+                    command,
+                )
+            except BaseException as exc:
+                self._record_telemetry_failure("begin", exc)
         response = await self._request(
             "exec",
             {"command": effective_command, "timeout": effective_timeout},

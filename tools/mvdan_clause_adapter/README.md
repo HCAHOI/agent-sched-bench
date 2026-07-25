@@ -29,3 +29,7 @@ Clause policy:
   are executable clauses.
 - A heredoc clause span covers its command header through the last redirect
   delimiter, excluding every heredoc body.
+- Each cooked `argv` word also carries its source span, quote/escape state, and
+  literal, parameter, command-substitution, arithmetic, process-substitution,
+  or pathname-expansion components. The cooked `argv` remains the prediction
+  and Runtime KB identity.

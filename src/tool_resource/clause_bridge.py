@@ -31,20 +31,19 @@ If a profile is missing/incompatible for an owned image, the target is returned
 ``unavailable`` — never a scalar-max fallback. Per-image scalar peaks are kept
 only as diagnostics.
 
-**Evidence-prioritized, ambiguity-preserving mapping.** Runtime exec order is
-not semantic evidence of pipeline source order, so timestamps are never used to
-break ties. A staged matcher assigns (1) unique exact normalized-argv matches,
-then (2) unique wrapper-chain-subsequence / argv-prefix matches, then (3)
-bin-only matches that are unique on both sides. Remaining ties over genuinely
-distinct static identities become explicit ``ambiguous`` coverage gaps that do
-not update the KB; ties over *identical* static identities map interchangeably
-(the KB observation is the same either way).
+**Full-proof, ambiguity-preserving mapping.** Only a runtime chain's initial
+invocation may match a static clause. Its executable and complete argv must
+align uniquely with the static word intents; later same-PID execs and forked
+descendants are ownership transitions. Runtime order, argv prefixes, wrapper
+subsequences, and bin-only identity never break ties. Any incomplete or
+ambiguous proof withholds every observation from that tool call.
 """
 
 from __future__ import annotations
 
 import math
 import re
+from fnmatch import fnmatchcase
 from dataclasses import dataclass, field, replace
 from typing import Any, Mapping, Sequence
 
@@ -55,8 +54,7 @@ from tool_resource.runtime_kb import ClauseObservation
 _WINDOW_NS = 500_000_000
 _MIN_ELIGIBLE_SPAN_NS = 1_000_000_000  # resource_timeline: clause >= 1 s
 _MIN_WINDOW_SPAN_NS = 100_000_000
-_MAX_CAPTURED_ARGS = 8
-_ARGV_CAPPED_FLAG = 1 << _MAX_CAPTURED_ARGS
+_MAX_CAPTURED_ARGS = 16
 
 _SHELL_BINS = frozenset({"sh", "dash", "bash", "ash", "zsh"})
 _SHELL_LOOKUP_DIAGNOSTIC = re.compile(
@@ -134,6 +132,14 @@ class ExecImageRecord:
     normal_exit_status: int | None = None
     has_causal_end: bool = True  # real exit / next same-pid exec; else fail closed
     argv_capture_flags: int = 0
+    requested_executable_path: str | None = None
+    requested_executable_path_truncated: bool = False
+    exact_argc: int | None = None
+    argv_capped: bool = False
+    truncated_words: tuple[int, ...] = ()
+    bprm_filename: str | None = None
+    bprm_interp: str | None = None
+    bprm_evidence_truncated: bool = False
     provenance: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -226,9 +232,16 @@ class BridgeResult:
     coverage_gaps: list[MappingGap]
     unobserved_builtins: list[str]
     static_clause_count: int
+    data_valid: bool
+    invalid_reasons: list[MappingGap]
+    transition_graph: list[dict[str, Any]] = field(default_factory=list)
+    candidate_rejections: list[dict[str, Any]] = field(default_factory=list)
+    static_clauses: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def observations(self) -> list[ClauseObservation]:
+        if not self.data_valid:
+            return []
         return [
             bc.observation
             for bc in self.bridged
@@ -358,18 +371,6 @@ def _merge_disk_io(
 # --------------------------------------------------------------------------
 # Evidence-prioritized staged matching
 # --------------------------------------------------------------------------
-
-
-def _norm(argv: Sequence[str]) -> tuple[str, ...]:
-    """Basename ONLY the executable head; preserve path-valued arguments verbatim.
-
-    ``/usr/bin/python /path/to/a.py`` -> ``("python", "/path/to/a.py")``. Basenaming
-    arguments too would merge distinct commands like ``cat a/log`` and ``cat b/log``.
-    """
-
-    if not argv:
-        return ()
-    return (argv[0].rsplit("/", 1)[-1], *argv[1:])
 
 
 def parse_shell_lookup_diagnostic(line: str) -> str | None:
@@ -584,55 +585,124 @@ def _resolve_control_short_circuits(
     return resolved, gaps
 
 
-def _is_subsequence(sub: Sequence[str], seq: Sequence[str]) -> bool:
-    it = iter(seq)
-    return all(any(s == w for w in it) for s in sub)
+def _pathname_match(value: str, pattern: str) -> bool:
+    """Shell `*` and `?` do not cross `/` without a recursive-glob option."""
+
+    if "**" in pattern:
+        return False
+    value_parts = value.split("/")
+    pattern_parts = pattern.split("/")
+    return len(value_parts) == len(pattern_parts) and all(
+        (not value_part.startswith(".") or pattern_part.startswith("."))
+        and fnmatchcase(value_part, pattern_part)
+        for value_part, pattern_part in zip(value_parts, pattern_parts, strict=True)
+    )
 
 
-def _evidence_tier(
-    static_argv: tuple[str, ...], static_bin: str, chain: Sequence[ExecImageRecord]
-) -> int | None:
-    """1=exact, 2=truncated prefix, 3=wrapper/prefix, 4=bin, None=no match."""
+def _alignment_evidence(
+    clause: Mapping[str, Any],
+    initial: ExecImageRecord,
+) -> tuple[str | None, str]:
+    """Prove one full static-word to initial-runtime-argv alignment."""
 
-    chain_bins = tuple(img.bin for img in chain)
-    terminal_argv = _norm(chain[-1].argv)
-    terminal_flags = chain[-1].argv_capture_flags
-    argv_capped = any(img.argv_capture_flags & _ARGV_CAPPED_FLAG for img in chain)
-    if argv_capped:
-        return None
-    if terminal_flags == 0 and terminal_argv == static_argv:
-        return 1
-    valid_word_flags = (1 << len(terminal_argv)) - 1
-    truncated_flags = terminal_flags & valid_word_flags
     if (
-        truncated_flags
-        and terminal_flags == truncated_flags
-        and len(terminal_argv) == len(static_argv)
-        and all(
-            static_word.startswith(runtime_word)
-            if truncated_flags & (1 << index)
-            else runtime_word == static_word
-            for index, (runtime_word, static_word) in enumerate(
-                zip(terminal_argv, static_argv, strict=True)
-            )
+        initial.argv_capture_flags
+        or initial.argv_capped
+        or initial.truncated_words
+        or initial.requested_executable_path_truncated
+        or initial.bprm_evidence_truncated
+    ):
+        return None, "runtime_argv_incomplete"
+    runtime = tuple(initial.argv)
+    static = tuple(str(word) for word in clause["argv"])
+    if not runtime or not static:
+        return None, "empty_argv"
+    if runtime[0] != static[0]:
+        return None, "executable_head_mismatch"
+    if "/" in static[0] and initial.requested_executable_path != static[0]:
+        return None, "requested_executable_path_mismatch"
+
+    intents = clause.get("word_intents")
+    if not isinstance(intents, list) or len(intents) != len(static):
+        return (
+            ("initial_invocation_exact", "ok")
+            if runtime == static
+            else (None, "word_intent_unavailable")
         )
-    ):
-        return 2
-    if len(chain_bins) >= 2 and _is_subsequence(chain_bins, static_argv):
-        return 3
-    if (
-        len(terminal_argv) >= 2
-        and len(terminal_argv) < len(static_argv)
-        and static_argv[: len(terminal_argv)] == terminal_argv
-    ):
-        return 3
-    if chain[0].bin == static_bin:
-        return 4
-    return None
+    for intent in intents:
+        components = intent.get("components")
+        if not isinstance(components, list):
+            return None, "word_intent_unavailable"
+        kinds = {component.get("kind") for component in components}
+        if kinds - {"literal", "pathname_expansion"}:
+            return None, "unsupported_dynamic_expansion"
+        if any(
+            component.get("kind") == "pathname_expansion"
+            and (component.get("quoted") or component.get("escaped"))
+            for component in components
+        ):
+            return None, "invalid_quoted_pathname_expansion"
+
+    alignments: list[tuple[tuple[int, int], ...]] = []
+
+    def align(
+        static_index: int,
+        runtime_index: int,
+        spans: tuple[tuple[int, int], ...],
+    ) -> None:
+        if len(alignments) > 1:
+            return
+        if static_index == len(intents):
+            if runtime_index == len(runtime):
+                alignments.append(spans)
+            return
+        intent = intents[static_index]
+        components = intent["components"]
+        is_glob = any(
+            component["kind"] == "pathname_expansion"
+            for component in components
+        )
+        if not is_glob:
+            if (
+                runtime_index < len(runtime)
+                and runtime[runtime_index] == intent["cooked"]
+            ):
+                align(
+                    static_index + 1,
+                    runtime_index + 1,
+                    (*spans, (runtime_index, runtime_index + 1)),
+                )
+            return
+        pattern = str(intent["cooked"])
+        for end in range(runtime_index + 1, len(runtime) + 1):
+            if all(_pathname_match(word, pattern) for word in runtime[runtime_index:end]):
+                align(
+                    static_index + 1,
+                    end,
+                    (*spans, (runtime_index, end)),
+                )
+
+    align(0, 0, ())
+    if len(alignments) != 1:
+        return (
+            None,
+            "ambiguous_expansion_alignment"
+            if alignments
+            else "no_full_argv_alignment",
+        )
+    expanded = any(end - start != 1 for start, end in alignments[0])
+    return (
+        "initial_invocation_unique_expansion"
+        if expanded or runtime != static
+        else "initial_invocation_exact",
+        "ok",
+    )
 
 
 def _components(
-    statics: Sequence[int], chains: Sequence[int], tier: Mapping[tuple[int, int], int]
+    statics: Sequence[int],
+    chains: Sequence[int],
+    tier: Mapping[tuple[int, int], object],
 ) -> list[tuple[list[int], list[int]]]:
     """Connected components of the static<->chain candidate bipartite graph."""
 
@@ -667,71 +737,88 @@ def _components(
 
 
 def _assign(
-    statics: Mapping[int, tuple[str, tuple[str, ...]]],
+    statics: Mapping[int, Mapping[str, Any]],
     chains: Mapping[int, list[ExecImageRecord]],
-) -> tuple[dict[int, int], dict[int, str], set[int]]:
+) -> tuple[
+    dict[int, int],
+    dict[int, str],
+    set[int],
+    list[dict[str, Any]],
+]:
     """Return (static_idx -> chain_pid, evidence, ambiguous static indices)."""
 
-    tier: dict[tuple[int, int], int] = {}
-    for si, (sbin, sargv) in statics.items():
+    candidates: dict[tuple[int, int], str] = {}
+    rejections: list[dict[str, Any]] = []
+    for si, clause in statics.items():
         for pid, imgs in chains.items():
-            t = _evidence_tier(sargv, sbin, imgs)
-            if t is not None:
-                tier[(si, pid)] = t
+            label, reason = _alignment_evidence(clause, imgs[0])
+            if label is not None:
+                candidates[(si, pid)] = label
+            else:
+                rejections.append(
+                    {
+                        "static_clause_index": si,
+                        "runtime_root_pid": pid,
+                        "reason": reason,
+                    }
+                )
 
     assigned: dict[int, int] = {}
     used: set[int] = set()
     evidence: dict[int, str] = {}
-    evidence_labels = {
-        1: "tier1",
-        2: "tier1_truncated_prefix",
-        3: "tier2",
-        4: "tier3",
-    }
-    for tv in (1, 2, 3, 4):
-        changed = True
-        while changed:
-            changed = False
-            for si in statics:
-                if si in assigned:
-                    continue
-                opts = [
-                    pid
-                    for pid in chains
-                    if pid not in used and tier.get((si, pid)) == tv
-                ]
-                if len(opts) != 1:
-                    continue
-                pid = opts[0]
-                claimants = [
-                    sj
-                    for sj in statics
-                    if sj not in assigned and tier.get((sj, pid)) == tv
-                ]
-                if len(claimants) == 1:
-                    assigned[si] = pid
-                    used.add(pid)
-                    evidence[si] = evidence_labels[tv]
-                    changed = True
+    changed = True
+    while changed:
+        changed = False
+        for si in statics:
+            if si in assigned:
+                continue
+            opts = [
+                pid
+                for pid in chains
+                if pid not in used and (si, pid) in candidates
+            ]
+            if len(opts) != 1:
+                continue
+            pid = opts[0]
+            claimants = [
+                sj
+                for sj in statics
+                if sj not in assigned and (sj, pid) in candidates
+            ]
+            if len(claimants) == 1:
+                assigned[si] = pid
+                used.add(pid)
+                evidence[si] = candidates[(si, pid)]
+                changed = True
 
     ambiguous: set[int] = set()
     rem_statics = [
         si
         for si in statics
         if si not in assigned
-        and any(pid not in used and (si, pid) in tier for pid in chains)
+        and any(pid not in used and (si, pid) in candidates for pid in chains)
     ]
     rem_chains = [pid for pid in chains if pid not in used]
-    for cs, cp in _components(rem_statics, rem_chains, tier):
-        identities = {statics[si] for si in cs}
-        if len(identities) == 1 and len(cs) <= len(cp):
+    for cs, cp in _components(rem_statics, rem_chains, candidates):
+        identities = {
+            (
+                tuple(statics[si]["argv"]),
+                bool(statics[si].get("in_loop")),
+                bool(statics[si].get("in_pipe")),
+                bool(statics[si].get("in_subst")),
+                int(statics[si].get("pipeline_position", -1)),
+                tuple(statics[si].get("span", ())),
+            )
+            for si in cs
+        }
+        if len(identities) == 1 and len(cs) == len(cp):
             for si, pid in zip(sorted(cs), sorted(cp), strict=False):
                 assigned[si] = pid
                 used.add(pid)
                 evidence[si] = "interchangeable_identical"
         else:
             ambiguous.update(cs)
-    return assigned, evidence, ambiguous
+    return assigned, evidence, ambiguous, rejections
 
 
 # --------------------------------------------------------------------------
@@ -752,6 +839,7 @@ def bridge_command(
     fork_parent: Mapping[int, int],
     epoch_offset: float = 0.0,
     loss_count: int = 0,
+    attribution_gap_count: int = 0,
     protocol_timeout: bool = False,
 ) -> BridgeResult:
     """Map exec images to static mvdan clauses and aggregate per clause.
@@ -774,6 +862,11 @@ def bridge_command(
             ],
             unobserved_builtins=[],
             static_clause_count=len(static),
+            data_valid=False,
+            invalid_reasons=[
+                MappingGap(reason, f"{reason}: run withheld from KB ({command!r})")
+            ],
+            static_clauses=[dict(clause) for clause in static],
         )
 
     chains: dict[int, list[ExecImageRecord]] = {}
@@ -786,7 +879,11 @@ def bridge_command(
     for child, parent in fork_parent.items():
         children.setdefault(parent, []).append(child)
 
-    statics = {si: (str(c["bin"]), _norm(c["argv"])) for si, c in enumerate(static)}
+    statics = {si: c for si, c in enumerate(static)}
+    static_identities = {
+        si: (str(c["bin"]), tuple(str(word) for word in c["argv"]))
+        for si, c in statics.items()
+    }
 
     def is_shell(pid: int) -> bool:
         if pid not in chains or not all(img.bin in _SHELL_BINS for img in chains[pid]):
@@ -796,8 +893,8 @@ def bridge_command(
         # intentionally insufficient here: the outer ``sh -c <command>`` often
         # shares the same bin and must remain structural.
         return not any(
-            _evidence_tier(static_argv, static_bin, chains[pid]) in {1, 2, 3}
-            for static_bin, static_argv in statics.values()
+            _alignment_evidence(clause, chains[pid][0])[0] is not None
+            for clause in statics.values()
         )
 
     def nearest_nonstructural_ancestor(pid: int) -> int | None:
@@ -808,22 +905,27 @@ def bridge_command(
             cur = fork_parent.get(cur)
         return None
 
-    first_level = {
+    top_level = {
         pid: chains[pid]
         for pid in chains
         if not is_shell(pid) and nearest_nonstructural_ancestor(pid) is None
     }
-    assigned, evidence, ambiguous = _assign(statics, first_level)
+    candidate_chains = {
+        pid: chain for pid, chain in chains.items() if not is_shell(pid)
+    }
+    assigned, evidence, ambiguous, candidate_rejections = _assign(
+        statics, candidate_chains
+    )
     mapped_roots = set(assigned.values())
     failed_by_identity: dict[tuple[str, tuple[str, ...]], list[FailedExecAttempt]] = {}
     for attempt in failed_exec_attempts:
-        normalized = _norm(attempt.argv)
+        normalized = tuple(attempt.argv)
         if normalized and attempt.argv_capture_flags == 0:
-            failed_by_identity.setdefault((normalized[0], normalized), []).append(
-                attempt
-            )
+            failed_by_identity.setdefault(
+                (normalized[0].rsplit("/", 1)[-1], normalized), []
+            ).append(attempt)
     failed_static_candidates: dict[tuple[str, tuple[str, ...]], list[int]] = {}
-    for si, identity in statics.items():
+    for si, identity in static_identities.items():
         if (
             si not in assigned
             and si not in ambiguous
@@ -988,13 +1090,13 @@ def bridge_command(
     # ambiguous static-clause gap and must not be double-reported.
     chains_with_candidate = {
         pid
-        for pid, imgs in first_level.items()
+        for pid, imgs in candidate_chains.items()
         if any(
-            _evidence_tier(sargv, sbin, imgs) is not None
-            for sbin, sargv in statics.values()
+            _alignment_evidence(clause, imgs[0])[0] is not None
+            for clause in statics.values()
         )
     }
-    for pid in first_level:
+    for pid in top_level:
         if (
             pid not in used_pids
             and pid not in owned_all
@@ -1008,12 +1110,67 @@ def bridge_command(
                 )
             )
 
+    incomplete_capture_gaps = [
+        MappingGap(
+            "runtime_argv_incomplete",
+            f"pid={image.host_pid} exec_seq={image.exec_seq} has capped or "
+            "truncated argv",
+        )
+        for image in exec_images
+        if image.argv_capture_flags
+        or image.argv_capped
+        or image.truncated_words
+        or image.requested_executable_path_truncated
+        or image.bprm_evidence_truncated
+    ]
+    gaps.extend(incomplete_capture_gaps)
+    transition_graph = [
+        {
+            "kind": "same_pid_exec",
+            "from": [chain[index - 1].host_pid, chain[index - 1].exec_seq],
+            "to": [image.host_pid, image.exec_seq],
+        }
+        for chain in chains.values()
+        for index, image in enumerate(chain)
+        if index
+    ]
+    transition_graph.extend(
+        {
+            "kind": "interpreter",
+            "exec_image": [image.host_pid, image.exec_seq],
+            "from": image.bprm_filename,
+            "to": image.bprm_interp,
+        }
+        for image in exec_images
+        if image.bprm_filename
+        and image.bprm_interp
+        and image.bprm_filename != image.bprm_interp
+    )
+    transition_graph.extend(
+        {
+            "kind": "fork",
+            "parent_pid": parent,
+            "child_pid": child,
+        }
+        for child, parent in fork_parent.items()
+    )
+    attribution_reasons = [
+        MappingGap(
+            "attribution_gap",
+            f"runtime attribution has {attribution_gap_count} relevant gap(s)",
+        )
+    ] if attribution_gap_count else []
     return BridgeResult(
         bridged=bridged,
         no_runtime_exec=no_runtime_exec,
         coverage_gaps=gaps,
         unobserved_builtins=unobserved,
         static_clause_count=len(static),
+        data_valid=not gaps and not attribution_reasons,
+        invalid_reasons=[*gaps, *attribution_reasons],
+        transition_graph=transition_graph,
+        candidate_rejections=candidate_rejections,
+        static_clauses=[dict(clause) for clause in static],
     )
 
 
@@ -1108,6 +1265,13 @@ def _aggregate(
                 "host_pid": i.host_pid,
                 "exec_seq": i.exec_seq,
                 "bin": i.bin,
+                "requested_executable_path": i.requested_executable_path,
+                "argv": list(i.argv),
+                "argc": i.exact_argc,
+                "argv_capped": i.argv_capped,
+                "truncated_words": list(i.truncated_words),
+                "bprm_filename": i.bprm_filename,
+                "bprm_interp": i.bprm_interp,
                 "normal_exit_status": i.normal_exit_status,
                 "exit_signal": i.exit_signal,
                 "scalar_peak_cpu_cores": i.peak_cpu_cores,

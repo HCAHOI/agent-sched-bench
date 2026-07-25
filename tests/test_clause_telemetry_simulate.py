@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 from threading import Lock
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -16,6 +17,9 @@ from agents.openclaw.tools.container import ContainerExecTool
 from agents.openclaw.tools.registry import ToolRegistry
 from llm_call.provider_base import LLMProvider, LLMResponse, ToolCallRequest
 from trace_collect.clause_telemetry import (
+    ARG_FLAG_ARGV_CAPPED,
+    ARG_FLAG_TRUNCATED,
+    MAX_ARGS,
     ClauseTelemetryCollector,
     ClauseTelemetryIntegrityError,
     LOSS_COUNTER_NAMES,
@@ -24,7 +28,7 @@ from trace_collect.clause_telemetry import (
     shell_command_lookup_failure_evidence,
     validate_clause_telemetry_runtime,
 )
-from trace_collect.cli import parse_simulate_args
+from trace_collect.cli import _run_simulate, parse_simulate_args
 from trace_collect.openclaw_host_runtime import _attach_clause_telemetry
 
 
@@ -80,13 +84,33 @@ def _collector_without_bpf() -> ClauseTelemetryCollector:
     collector.quota_cores = 4.0
     collector.repo = "repo"
     collector._epoch_offset_s = 1_000.0
+    collector.state = "active"
+    collector._disabled_reason = None
+    collector._first_disabled_call = None
+    collector._poll_error = None
+    return collector
+
+
+def _active_collector() -> ClauseTelemetryCollector:
+    collector = _collector_without_bpf()
+    collector.container_id = "container"
+    collector._bpf = object()
+    collector._events_lock = Lock()
+    collector._events = _clean_events()
+    collector._active = None
+    collector._closed = False
+    collector._cleanup_status = "not_started"
+    collector._integrity_errors = []
+    collector.calls = []
+    collector._source_exec_actions = []
+    collector._source_exec_index = 0
     return collector
 
 
 def _clean_events() -> list[dict[str, Any]]:
     return [
         _event("fork", 110, 50, child=100),
-        _event("exec_arg", 120, 100, seq=0, arg_index=0, arg="/bin/echo"),
+        _event("exec_arg", 120, 100, seq=0, arg_index=0, arg="echo"),
         _event("exec_arg", 121, 100, seq=0, arg_index=1, arg="hi"),
         _event(
             "exec_boundary",
@@ -224,6 +248,59 @@ def test_cli_defaults_to_command_and_accepts_clause() -> None:
     assert clause.tool_resource_telemetry == "clause"
 
 
+def test_formal_clause_sweep_finishes_before_nonzero_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seen: list[int] = []
+
+    async def fake_simulate(**kwargs: Any) -> Path:
+        concurrency = int(kwargs["concurrency"])
+        seen.append(concurrency)
+        trace = tmp_path / f"run-{concurrency}.jsonl"
+        trace.write_text(
+            json.dumps(
+                {
+                    "type": "summary",
+                    "collection_validity": (
+                        "invalid" if concurrency == 1 else "valid"
+                    ),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        trace.with_name(f"{trace.stem}.throughput_summary.json").write_text(
+            json.dumps({"concurrency": concurrency, "run_id": str(concurrency)})
+            + "\n",
+            encoding="utf-8",
+        )
+        return trace
+
+    monkeypatch.setattr("trace_collect.simulator.simulate", fake_simulate)
+    args = parse_simulate_args(
+        [
+            "--mode",
+            "cloud_model",
+            "--manifest",
+            "manifest.yaml",
+            "--output-dir",
+            str(tmp_path),
+            "--concurrency",
+            "1,2",
+            "--tool-resource-telemetry",
+            "clause",
+        ]
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        _run_simulate(args)
+
+    assert raised.value.code == 1
+    assert seen == [1, 2]
+    assert (tmp_path / "throughput_sweep.jsonl").exists()
+
+
 def test_clause_runtime_rejects_configuration_before_bcc(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -246,6 +323,50 @@ def test_clause_runtime_rejects_configuration_before_bcc(
             concurrency=2,
             workers=2,
         )
+
+
+def test_collector_attach_failure_cleans_partial_bpf(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeBPF:
+        instance: "FakeBPF | None" = None
+
+        def __init__(self, *, text: str) -> None:
+            assert text
+            self.cleaned = False
+            FakeBPF.instance = self
+
+        def attach_kprobe(self, **_kwargs: Any) -> None:
+            raise RuntimeError("attach rejected")
+
+        def cleanup(self) -> None:
+            self.cleaned = True
+
+    monkeypatch.setitem(
+        sys.modules,
+        "bcc",
+        SimpleNamespace(BPF=FakeBPF, PerfSWConfig=object(), PerfType=object()),
+    )
+    monkeypatch.setattr(
+        "trace_collect.clause_telemetry._container_cgroup",
+        lambda *_args: (tmp_path, 1),
+    )
+    monkeypatch.setattr(
+        "trace_collect.clause_telemetry.observed_quota_cores",
+        lambda _path: 1.0,
+    )
+
+    with pytest.raises(RuntimeError, match="attach rejected"):
+        ClauseTelemetryCollector(
+            container_id="container",
+            container_executable="docker",
+            repo="repo",
+            artifact_path=tmp_path / "clause.json",
+        )
+
+    assert FakeBPF.instance is not None
+    assert FakeBPF.instance.cleaned
 
 
 def test_summary_preserves_structural_gap_and_target_availability() -> None:
@@ -336,6 +457,199 @@ def test_every_telemetry_loss_cause_fails_closed(cause: str) -> None:
     assert any("telemetry loss=1" in violation for violation in violations)
 
 
+def test_capped_runtime_invocation_persists_exact_argc_and_zero_observations() -> None:
+    argv = ("/bin/cmd", *[str(index) for index in range(16)])
+    events = [
+        _event("fork", 110, 50, child=100),
+        _event("exec_meta", 115, 100, seq=0, arg="/bin/cmd"),
+        _event("bprm_meta", 116, 100, seq=0, arg="/bin/cmd", exit_code=len(argv)),
+        _event("interp_meta", 117, 100, seq=0, arg="/bin/cmd", exit_code=len(argv)),
+        *[
+            _event("exec_arg", 120 + index, 100, seq=0, arg_index=index, arg=word)
+            for index, word in enumerate(argv[:MAX_ARGS])
+        ],
+        _event(
+            "exec_arg",
+            140,
+            100,
+            seq=0,
+            arg_index=MAX_ARGS,
+            arg_flags=ARG_FLAG_ARGV_CAPPED,
+            exit_code=len(argv),
+        ),
+        _event("exec_boundary", 150, 100, seq=0, parent=50),
+        _event("exit_boundary", 220, 100, seq=0, parent=50),
+    ]
+    collector = _collector_without_bpf()
+
+    summary, violations = collector._summarize_call(
+        token=ToolCallToken("capped", " ".join(argv), 100, 0, 0),
+        ended_ns=230,
+        events=events,
+        loss_counts={},
+        perf_samples=0,
+    )
+
+    assert len(violations) == 1
+    assert "runtime_argv_incomplete" in violations[0]
+    assert summary["mapping"]["observation_clause_count"] == 0
+    assert summary["clauses"] == []
+    assert summary["runtime_invocations"][0] == {
+        "host_pid": 100,
+        "exec_seq": 0,
+        "requested_executable_path": "/bin/cmd",
+        "requested_executable_path_truncated": False,
+        "argv": list(argv[:MAX_ARGS]),
+        "argc": len(argv),
+        "argv_capped": True,
+        "truncated_words": [],
+        "bprm_filename": "/bin/cmd",
+        "bprm_interp": "/bin/cmd",
+        "bprm_evidence_truncated": False,
+    }
+
+
+def test_truncated_requested_path_invalidates_bare_head_mapping() -> None:
+    events = [
+        _event(
+            "exec_meta",
+            119,
+            100,
+            seq=0,
+            arg="/very/long/path",
+            arg_flags=ARG_FLAG_TRUNCATED,
+        ),
+        *_clean_events(),
+    ]
+    collector = _collector_without_bpf()
+
+    summary, violations = collector._summarize_call(
+        token=ToolCallToken("path-truncated", "echo hi", 100, 0, 0),
+        ended_ns=230,
+        events=events,
+        loss_counts={},
+        perf_samples=2,
+    )
+
+    assert len(violations) == 1
+    assert "runtime_argv_incomplete" in violations[0]
+    assert summary["mapping"]["observation_clause_count"] == 0
+    assert summary["runtime_invocations"][0][
+        "requested_executable_path_truncated"
+    ]
+
+
+def test_mapping_failure_does_not_disable_later_valid_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    collector = _active_collector()
+    monkeypatch.setattr("trace_collect.clause_telemetry._counter", lambda *_: 0)
+    monkeypatch.setattr("trace_collect.clause_telemetry.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "trace_collect.clause_telemetry.time.monotonic_ns", lambda: 230
+    )
+
+    bad = ToolCallToken("bad", "missing arg", 100, 0, 0)
+    collector._active = bad
+    first = collector.finish_tool_call(bad, replay_response={"returncode": 0})
+    good = ToolCallToken("good", "echo hi", 100, 0, 0)
+    collector._active = good
+    second = collector.finish_tool_call(good, replay_response={"returncode": 0})
+
+    assert first["telemetry_quality"] == "invalid"
+    assert first["clauses"] == []
+    assert second["telemetry_quality"] == "ok"
+    assert second["eligible_for_kb"]
+    assert collector.state == "active"
+
+
+def test_internal_analysis_failure_disables_later_collection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    collector = _active_collector()
+    monkeypatch.setattr("trace_collect.clause_telemetry._counter", lambda *_: 0)
+    monkeypatch.setattr("trace_collect.clause_telemetry.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "trace_collect.clause_telemetry.time.monotonic_ns", lambda: 230
+    )
+
+    def fail_analysis(**_kwargs: Any) -> tuple[dict[str, Any], list[str]]:
+        raise RuntimeError("analyzer state corrupt")
+
+    monkeypatch.setattr(collector, "_summarize_call", fail_analysis)
+    token = ToolCallToken("broken", "echo hi", 100, 0, 0)
+    collector._active = token
+    failed = collector.finish_tool_call(token, replay_response={"returncode": 0})
+    next_token = collector.begin_tool_call("next", "echo again")
+    following = collector.finish_tool_call(
+        next_token, replay_response={"returncode": 0}
+    )
+
+    assert failed["telemetry_quality"] == "invalid"
+    assert collector.state == "disabled"
+    assert collector._first_disabled_call == "broken"
+    assert following["telemetry_quality"] == "unavailable"
+
+
+def test_per_call_loss_does_not_disable_later_valid_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    collector = _active_collector()
+    loss_deltas = iter(
+        [
+            {
+                "ringbuf_reserve_failures": 1,
+                "argv_read_failures": 0,
+                "argv_boundary_read_failures": 0,
+            },
+            dict.fromkeys(LOSS_COUNTER_NAMES, 0),
+        ]
+    )
+    monkeypatch.setattr(
+        "trace_collect.clause_telemetry._loss_delta",
+        lambda *_: next(loss_deltas),
+    )
+    monkeypatch.setattr("trace_collect.clause_telemetry._counter", lambda *_: 0)
+    monkeypatch.setattr("trace_collect.clause_telemetry.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "trace_collect.clause_telemetry.time.monotonic_ns", lambda: 230
+    )
+
+    first_token = ToolCallToken("loss", "echo hi", 100, 0, 0)
+    collector._active = first_token
+    first = collector.finish_tool_call(
+        first_token, replay_response={"returncode": 0}
+    )
+    second_token = ToolCallToken("recovered", "echo hi", 100, 0, 0)
+    collector._active = second_token
+    second = collector.finish_tool_call(
+        second_token, replay_response={"returncode": 0}
+    )
+
+    assert first["telemetry_quality"] == "invalid"
+    assert first["mapping"]["observation_clause_count"] == 0
+    assert second["telemetry_quality"] == "ok"
+    assert collector.state == "active"
+
+
+def test_poller_failure_disables_session_and_marks_following_calls_unavailable() -> None:
+    collector = _active_collector()
+    collector._poll_error = RuntimeError("poll stopped")
+
+    first_token = collector.begin_tool_call("first", "echo hi")
+    first = collector.finish_tool_call(first_token, replay_response={"returncode": 0})
+    second_token = collector.begin_tool_call("second", "echo again")
+    second = collector.finish_tool_call(
+        second_token, replay_response={"returncode": 0}
+    )
+
+    assert collector.state == "disabled"
+    assert collector._first_disabled_call == "first"
+    assert first["telemetry_quality"] == "unavailable"
+    assert second["telemetry_quality"] == "unavailable"
+    assert second["invalid_reasons"][0]["kind"] == "collector_disabled"
+
+
 @pytest.mark.parametrize(
     "marker",
     ["[timeout]", "[resource_timeout]", "[resource_stall_timeout]"],
@@ -351,7 +665,7 @@ def test_protocol_timeout_artifact_keeps_metrics_without_new_schema_fields() -> 
     collector = _collector_without_bpf()
     events = [
         _event("fork", 1, 50, child=100),
-        _event("exec_arg", 10_000_000, 100, seq=0, arg="/bin/slow"),
+        _event("exec_arg", 10_000_000, 100, seq=0, arg="slow"),
         _event(
             "exec_boundary",
             20_000_000,
@@ -497,10 +811,12 @@ def test_disconnected_command_trees_persist_provenance_in_failed_call(
     monkeypatch.setattr("trace_collect.clause_telemetry._counter", lambda *_: 0)
     monkeypatch.setattr("trace_collect.clause_telemetry.time.sleep", lambda *_: None)
 
-    with pytest.raises(ClauseTelemetryIntegrityError, match="disconnected"):
-        collector.finish_tool_call(token, replay_response={"returncode": 0})
+    summary = collector.finish_tool_call(token, replay_response={"returncode": 0})
 
-    tree = collector.calls[0]["provenance"]["command_tree"]
+    assert summary["telemetry_quality"] == "invalid"
+    assert not summary["eligible_for_kb"]
+    assert collector.state == "active"
+    tree = summary["provenance"]["command_tree"]
     assert tree["status"] == "failed"
     assert tree["reason"] == "disconnected_command_trees"
     assert tree["root_pids"] == [20, 21]
@@ -568,7 +884,7 @@ def test_command_tree_rejects_ambiguous_ancestry_above_active_exec() -> None:
     }
 
 
-def test_short_circuit_source_replay_disagreement_stays_fatal(
+def test_short_circuit_source_replay_disagreement_invalidates_only_telemetry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     collector = _collector_without_bpf()
@@ -591,15 +907,14 @@ def test_short_circuit_source_replay_disagreement_stays_fatal(
     monkeypatch.setattr("trace_collect.clause_telemetry._counter", lambda *_: 0)
     monkeypatch.setattr("trace_collect.clause_telemetry.time.sleep", lambda *_: None)
 
-    with pytest.raises(ClauseTelemetryIntegrityError, match="mapping gaps"):
-        collector.finish_tool_call(
-            token,
-            replay_response={
-                "ok": True,
-                "result": "replay failure",
-                "returncode": 1,
-            },
-        )
+    collector.finish_tool_call(
+        token,
+        replay_response={
+            "ok": True,
+            "result": "replay failure",
+            "returncode": 1,
+        },
+    )
 
     call = collector.calls[0]
     assert call["no_runtime_exec"] == []
@@ -642,6 +957,8 @@ def test_relevant_gap_fails_integrity() -> None:
     ]
     assert violations == ["call-2: relevant coverage gaps=1"]
     assert summary["integrity"]["status"] == "failed"
+    assert summary["mapping"]["observation_clause_count"] == 0
+    assert not summary["eligible_for_kb"]
 
 
 def test_entry_parent_thread_gap_is_structural() -> None:
@@ -1224,6 +1541,155 @@ def test_exec_delimiter_uses_tool_call_id_and_original_command() -> None:
     assert collector.finished == 1
 
 
+def test_unavailable_collector_preserves_tool_output_and_exit_code(
+    tmp_path: Path,
+) -> None:
+    class Agent:
+        async def execute(
+            self,
+            _request: dict[str, Any],
+            *,
+            timeout_s: float | None,
+        ) -> dict[str, Any]:
+            assert timeout_s == 10.0
+            return {"ok": False, "result": "original stderr", "returncode": 7}
+
+    collector = ClauseTelemetryCollector.unavailable(
+        repo="repo",
+        artifact_path=tmp_path / "clause.json",
+        reason="attach failed",
+    )
+    tool = ContainerExecTool(
+        Agent(),  # type: ignore[arg-type]
+        timeout=10,
+        workspace="/testbed",
+        clause_telemetry=collector,
+    )
+    tool.set_tool_call_context("call-1", {"command": "false"})
+
+    result = asyncio.run(tool.execute("false"))
+    tool.finish_clause_telemetry()
+
+    assert result == "Error: original stderr\n\nExit code: 7"
+    assert collector.calls[0]["telemetry_quality"] == "unavailable"
+
+
+def test_concurrent_tools_isolate_one_telemetry_failure() -> None:
+    class Agent:
+        def __init__(self, result: str) -> None:
+            self.result = result
+
+        async def execute(
+            self,
+            _request: dict[str, Any],
+            *,
+            timeout_s: float | None,
+        ) -> dict[str, Any]:
+            return {"ok": True, "result": self.result, "returncode": 0}
+
+    class BrokenCollector:
+        def begin_tool_call(self, *_args: Any) -> object:
+            raise RuntimeError("attach stream failed")
+
+        def add_integrity_error(self, _message: str) -> None:
+            return None
+
+    class HealthyCollector:
+        def __init__(self) -> None:
+            self.finished = False
+
+        def begin_tool_call(self, *_args: Any) -> object:
+            return object()
+
+        def finish_tool_call(
+            self,
+            _token: object,
+            *,
+            replay_response: dict[str, Any] | None = None,
+        ) -> None:
+            assert replay_response is not None
+            self.finished = True
+
+    healthy = HealthyCollector()
+    broken_tool = ContainerExecTool(
+        Agent("broken-stream workload"),  # type: ignore[arg-type]
+        timeout=10,
+        workspace="/testbed",
+        clause_telemetry=BrokenCollector(),
+    )
+    healthy_tool = ContainerExecTool(
+        Agent("healthy-stream workload"),  # type: ignore[arg-type]
+        timeout=10,
+        workspace="/testbed",
+        clause_telemetry=healthy,
+    )
+    broken_tool.set_tool_call_context("broken", {"command": "echo broken"})
+    healthy_tool.set_tool_call_context("healthy", {"command": "echo healthy"})
+
+    async def run_both() -> tuple[str, str]:
+        first, second = await asyncio.gather(
+            broken_tool.execute("echo broken"),
+            healthy_tool.execute("echo healthy"),
+        )
+        broken_tool.finish_clause_telemetry()
+        healthy_tool.finish_clause_telemetry()
+        return first, second
+
+    assert asyncio.run(run_both()) == (
+        "broken-stream workload\n\nExit code: 0",
+        "healthy-stream workload\n\nExit code: 0",
+    )
+    assert healthy.finished
+
+
+def test_v2_artifact_records_disabled_session_and_replay_state(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "clause.json"
+    collector = ClauseTelemetryCollector.unavailable(
+        repo="repo",
+        artifact_path=path,
+        reason="collector attach failed",
+    )
+    token = collector.begin_tool_call("call-1", "echo hi")
+    collector.finish_tool_call(token, replay_response={"returncode": 0})
+    collector.finalize(replay_execution="failed")
+
+    artifact = json.loads(path.read_text(encoding="utf-8"))
+    assert artifact["version"] == 2
+    assert artifact["replay_execution"] == "failed"
+    assert artifact["telemetry_quality"] == "unavailable"
+    assert artifact["collection_validity"] == "invalid"
+    assert artifact["collector"] == {
+        "state": "closed",
+        "state_before_close": "disabled",
+        "first_disabled_call": None,
+        "disabled_reason": "collector attach failed",
+        "valid_call_count": 0,
+        "invalid_call_count": 0,
+        "unavailable_call_count": 1,
+    }
+
+
+def test_finalize_records_disable_state_after_health_check(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    collector = _active_collector()
+    collector.artifact_path = tmp_path / "clause.json"
+    monkeypatch.setattr(
+        "trace_collect.clause_telemetry._loss_counts",
+        lambda _bpf: (_ for _ in ()).throw(RuntimeError("counter failed")),
+    )
+    monkeypatch.setattr(collector, "_close_bpf", lambda: None)
+
+    collector.finalize()
+
+    artifact = json.loads(collector.artifact_path.read_text(encoding="utf-8"))
+    assert artifact["collector"]["state_before_close"] == "disabled"
+    assert "counter failed" in artifact["collector"]["disabled_reason"]
+
+
 def test_attached_summary_is_keyed_by_tool_call_id(tmp_path: Path) -> None:
     trace = tmp_path / "trace.jsonl"
     trace.write_text(
@@ -1265,6 +1731,42 @@ def test_attached_summary_is_keyed_by_tool_call_id(tmp_path: Path) -> None:
         "available": True,
         "matches": True,
     }
+
+
+def test_attachment_replace_failure_preserves_authoritative_trace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "trace.jsonl"
+    original = (
+        json.dumps(
+            {
+                "type": "action",
+                "action_type": "tool_exec",
+                "data": {
+                    "tool_name": "exec",
+                    "tool_call_id": "tc-1",
+                    "tool_args": {"command": "echo hi"},
+                },
+            }
+        )
+        + "\n"
+    )
+    trace.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(
+        "trace_collect.openclaw_host_runtime.os.replace",
+        lambda *_args: (_ for _ in ()).throw(OSError("replace failed")),
+    )
+
+    with pytest.raises(OSError, match="replace failed"):
+        _attach_clause_telemetry(
+            trace,
+            [{"tool_call_id": "tc-1", "command": "echo hi"}],
+            [],
+        )
+
+    assert trace.read_text(encoding="utf-8") == original
+    assert list(tmp_path.glob(".trace.jsonl.*")) == []
 
 
 def test_duplicate_tool_call_ids_fail_attachment(tmp_path: Path) -> None:
@@ -1327,7 +1829,7 @@ def test_attachment_rejects_command_mismatch(tmp_path: Path) -> None:
     assert "clause_telemetry" not in json.loads(trace.read_text())["data"]
 
 
-def test_integrity_error_is_fatal_when_tool_errors_are_recoverable(
+def test_integrity_error_does_not_replace_recoverable_tool_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Tool:
@@ -1363,7 +1865,7 @@ def test_integrity_error_is_fatal_when_tool_errors_are_recoverable(
         )
     )
     assert result[0] == "/bin/sh: 1: python: not found\n\n\nExit code: 127"
-    assert isinstance(result[2], ClauseTelemetryIntegrityError)
+    assert result[2] is None
 
 
 def test_integrity_finalization_preserves_tool_result_for_trace_hook() -> None:
@@ -1442,7 +1944,7 @@ def test_integrity_finalization_preserves_tool_result_for_trace_hook() -> None:
             )
         )
     )
-    assert result.stop_reason == "tool_error"
+    assert result.stop_reason == "max_iterations"
     assert hook.tool_rows[0]["content"] == (
         "/bin/sh: 1: python: not found\n\n\nExit code: 127"
     )

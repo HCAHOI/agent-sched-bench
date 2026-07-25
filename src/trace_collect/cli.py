@@ -464,6 +464,23 @@ def _append_throughput_sweep_record(sweep_path: Path, trace_file: Path) -> None:
         fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
 
 
+def _clause_collection_invalid(trace_file: Path) -> bool:
+    try:
+        records = [
+            json.loads(line)
+            for line in trace_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    except (OSError, json.JSONDecodeError):
+        return True
+    states = [
+        record.get("collection_validity")
+        for record in records
+        if record.get("type") == "summary" and "collection_validity" in record
+    ]
+    return not states or any(state != "valid" for state in states)
+
+
 def _run_simulate(args: argparse.Namespace) -> None:
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -503,6 +520,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
     sweep_path = Path(args.output_dir) / "throughput_sweep.jsonl"
     if len(concurrency_values) > 1 and sweep_path.exists():
         sweep_path.unlink()
+    invalid_clause_runs: list[Path] = []
     for concurrency in concurrency_values:
         try:
             trace_file = asyncio.run(
@@ -512,10 +530,22 @@ def _run_simulate(args: argparse.Namespace) -> None:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
         print(f"Simulate trace written to: {trace_file}")
+        if (
+            args.tool_resource_telemetry == "clause"
+            and _clause_collection_invalid(trace_file)
+        ):
+            invalid_clause_runs.append(trace_file)
         if len(concurrency_values) > 1:
             _append_throughput_sweep_record(sweep_path, trace_file)
     if len(concurrency_values) > 1:
         print(f"Throughput sweep written to: {sweep_path}")
+    if invalid_clause_runs:
+        print(
+            "ERROR: formal clause collection invalid after all workloads completed: "
+            + ", ".join(str(path) for path in invalid_clause_runs),
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":

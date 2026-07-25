@@ -655,7 +655,6 @@ class AgentRunner:
 
         resource_recorder: ResourceTimelineRecorder | None = None
         resource_timeline: dict[str, Any] | None = None
-        telemetry_failure: BaseException | None = None
         try:
             set_call_context = getattr(tool, "set_tool_call_context", None)
             if callable(set_call_context):
@@ -683,18 +682,14 @@ class AgentRunner:
                 try:
                     finish_clause_telemetry()
                 except BaseException as exc:
-                    if getattr(exc, "fatal_replay_error", False):
-                        telemetry_failure = exc
-                    else:
-                        raise
+                    logger.warning(
+                        "Clause telemetry finish failed after tool result: {}", exc
+                    )
             resource_timeline = resource_recorder.to_trace_dict()
         except asyncio.CancelledError:
             raise
         except BaseException as caught:
             failure = caught
-            telemetry_failure = (
-                caught if getattr(caught, "fatal_replay_error", False) else None
-            )
             finish_clause_telemetry = getattr(tool, "finish_clause_telemetry", None)
             if getattr(tool, "clause_telemetry_enabled", False) and callable(
                 finish_clause_telemetry
@@ -704,10 +699,10 @@ class AgentRunner:
                 try:
                     finish_clause_telemetry()
                 except BaseException as telemetry_exc:
-                    if getattr(telemetry_exc, "fatal_replay_error", False):
-                        telemetry_failure = telemetry_exc
-                    else:
-                        failure = telemetry_exc
+                    logger.warning(
+                        "Clause telemetry finish failed after tool error: {}",
+                        telemetry_exc,
+                    )
             if resource_recorder is not None:
                 resource_timeline = resource_recorder.to_trace_dict()
             event = {
@@ -715,11 +710,7 @@ class AgentRunner:
                 "status": "error",
                 "detail": str(failure),
             }
-            error = (
-                telemetry_failure or failure
-                if spec.fail_on_tool_error or telemetry_failure is not None
-                else None
-            )
+            error = failure if spec.fail_on_tool_error else None
             return finish(
                 f"Error: {type(failure).__name__}: {failure}",
                 event,
@@ -733,9 +724,7 @@ class AgentRunner:
                 "status": "error",
                 "detail": result.replace("\n", " ").strip()[:120],
             }
-            error = telemetry_failure or (
-                RuntimeError(result) if spec.fail_on_tool_error else None
-            )
+            error = RuntimeError(result) if spec.fail_on_tool_error else None
             if not result.endswith(TOOL_ERROR_HINT):
                 result += TOOL_ERROR_HINT
             return finish(result, event, error, resource_timeline)
@@ -749,7 +738,7 @@ class AgentRunner:
         return finish(
             result,
             {"name": tool_call.name, "status": "ok", "detail": detail},
-            telemetry_failure,
+            None,
             resource_timeline,
         )
 
