@@ -757,8 +757,8 @@ def bridge_command(
     """Map exec images to static mvdan clauses and aggregate per clause.
 
     Fails closed: a ``parse_failed`` command or a run with ``loss_count > 0``
-    (ring-buffer loss makes the event stream untrustworthy) yields NO usable KB
-    observations — the clauses become coverage gaps instead.
+    (any collector loss makes the event stream untrustworthy) yields NO usable
+    KB observations — the clauses become coverage gaps instead.
     """
 
     parsed = parse_command_clauses(command)

@@ -65,7 +65,7 @@ def test_parallel_collectors_isolate_cgroups_and_report_task_io(
     writes: dict[str, int] = {}
     for tag, blocks, run in runs:
         assert run.status == 0
-        assert run.reserve_failures == 0
+        assert run.loss_count == 0
         assert {event["cgroup_id"] for event in run.events} == {run.cgroup_id}
         metrics, gaps = analyze(run)
         _assert_only_harness_root_pre_exec_gaps(run, gaps)
@@ -86,7 +86,7 @@ def test_failed_execve_emits_pending_argv_and_errno() -> None:
         "'",
         "failed_execve",
     )
-    assert run.reserve_failures == 0
+    assert run.loss_count == 0
     attempts = _failed_exec_attempt_records(run.events)
     assert len(attempts) == 1
     assert attempts[0].exec_seq >= 0
@@ -114,7 +114,7 @@ def test_argv_capture_flags_cover_truncation_cap_and_short_argv() -> None:
         "argv_capture_flags",
     )
 
-    assert run.reserve_failures == 0
+    assert run.loss_count == 0
     metrics, gaps = analyze(run)
     _assert_only_harness_root_pre_exec_gaps(run, gaps)
     true_metrics = [metric for metric in metrics if metric.bin == "true"]
@@ -142,6 +142,43 @@ def test_argv_capture_flags_cover_truncation_cap_and_short_argv() -> None:
     assert len(capped.argv) == C.MAX_ARGS
     assert capped.argv_capture_flags == 1 << C.MAX_ARGS
     assert short.argv_capture_flags == 0
+
+
+def test_successful_exec_captures_cold_original_argv_before_script_rewrite() -> None:
+    payload = """import ctypes,mmap,tempfile
+script=tempfile.NamedTemporaryFile(delete=False)
+script.write(b'#!/bin/sh\\nrm -- "$0"\\nexit 0\\n')
+script.flush()
+script.close()
+__import__("os").chmod(script.name,0o755)
+f=tempfile.TemporaryFile()
+f.write(b"cold-page-argument\\0")
+f.truncate(mmap.PAGESIZE)
+f.flush()
+m=mmap.mmap(f.fileno(),mmap.PAGESIZE,access=mmap.ACCESS_COPY)
+address=ctypes.addressof(ctypes.c_char.from_buffer(m))
+m.madvise(mmap.MADV_DONTNEED)
+argv=(ctypes.c_char_p*3)()
+argv[0]=b"original-argv0"
+argv[1]=ctypes.c_char_p(address)
+envp=(ctypes.c_char_p*1)()
+libc=ctypes.CDLL(None,use_errno=True)
+libc.execve(script.name.encode(),argv,envp)
+raise OSError(ctypes.get_errno())"""
+    run = collect_case(
+        f"{shlex.quote(sys.executable)} -c {shlex.quote(payload)}",
+        "page_cold_argv",
+    )
+
+    metrics, gaps = analyze(run)
+    _assert_only_harness_root_pre_exec_gaps(run, gaps)
+    assert run.loss_count == 0
+    assert next(
+        metric for metric in metrics if metric.bin == "original-argv0"
+    ).argv == (
+        "original-argv0",
+        "cold-page-argument",
+    )
 
 
 def test_normal_exec_exit_status_is_decoded_from_kernel_wait_status() -> None:
@@ -173,7 +210,7 @@ def test_terminal_scheduler_sample_keeps_identity_but_not_metrics(
         and event["ts_ns"] >= clause.t_end_ns
     ]
 
-    assert run.reserve_failures == 0
+    assert run.loss_count == 0
     assert terminal_samples
     metrics, gaps = analyze(run)
     _assert_only_harness_root_pre_exec_gaps(run, gaps)
@@ -192,8 +229,39 @@ def test_process_free_bounds_lifecycle_maps() -> None:
         "process_free_cleanup",
     )
 
-    assert run.reserve_failures == 0
+    assert run.loss_count == 0
     assert run.lifecycle_map_entries == {"current_seq": 0, "pending_seq": 0}
+
+
+def test_parallel_exec_burst_exceeds_ring_capacity_without_loss() -> None:
+    exec_count = 2048
+    run = collect_case(
+        f"seq 1 {exec_count} | xargs -P64 -I{{}} /bin/true",
+        "parallel_exec_burst",
+    )
+    true_execs = {
+        (event["host_pid"], event["exec_seq"])
+        for event in run.events
+        if event["type"] == "exec_arg"
+        and event["arg_index"] == 0
+        and event["arg"] == "/bin/true"
+    }
+    true_boundaries = sum(
+        event["type"] == "exec_boundary"
+        and (event["host_pid"], event["exec_seq"]) in true_execs
+        for event in run.events
+    )
+
+    assert run.status == 0
+    assert run.loss_counts == {
+        "ringbuf_reserve_failures": 0,
+        "argv_read_failures": 0,
+        "argv_boundary_read_failures": 0,
+    }
+    assert true_boundaries == exec_count
+    # A 632-byte event plus the 8-byte ring header gives the 4 MiB production
+    # ring room for 6,553 records; this run requires active draining.
+    assert len(run.events) > 8_000
 
 
 def test_fork_reinitializes_child_slot_before_first_exec(
@@ -229,7 +297,7 @@ def test_fork_reinitializes_child_slot_before_first_exec(
         and child_fork["ts_ns"] <= event["ts_ns"] < child_exec["ts_ns"]
     ]
 
-    assert run.reserve_failures == 0
+    assert run.loss_count == 0
     assert pre_exec_samples
     assert {event["exec_seq"] for event in pre_exec_samples} == {C.SENTINEL}
     assert child_exec["exec_seq"] != C.SENTINEL

@@ -56,6 +56,11 @@ ARG_FLAG_TRUNCATED = 1
 ARG_FLAG_ARGV_CAPPED = 2
 PAGE = os.sysconf("SC_PAGE_SIZE")
 _NPROC = os.cpu_count() or 1
+LOSS_COUNTER_NAMES = (
+    "ringbuf_reserve_failures",
+    "argv_read_failures",
+    "argv_boundary_read_failures",
+)
 
 TYPE_NAMES = {
     1: "exec_arg",
@@ -108,7 +113,9 @@ struct event_t {
 
 BPF_RINGBUF_OUTPUT(events, 1024);
 BPF_ARRAY(target_cgroup, u64, 1);
-BPF_ARRAY(reserve_failures, u64, 1);
+BPF_ARRAY(ringbuf_reserve_failures, u64, 1);
+BPF_ARRAY(argv_read_failures, u64, 1);
+BPF_ARRAY(argv_boundary_read_failures, u64, 1);
 BPF_ARRAY(perf_sample_count, u64, 1);
 BPF_QUEUE(exec_sequences, u64, 65536);
 BPF_ARRAY(sequence_ready, u32, 1);
@@ -117,8 +124,13 @@ struct task_key_t {
     u32 pad;
     u64 task_ptr;
 };
+struct pending_exec_t {
+    u64 seq;
+    u64 argv_ptr;
+    u64 argv_captured;
+};
 BPF_HASH(current_seq, struct task_key_t, u64);
-BPF_HASH(pending_seq, struct task_key_t, u64);
+BPF_HASH(pending_seq, struct task_key_t, struct pending_exec_t);
 
 static int wanted(void) {
     u32 zero = 0;
@@ -126,10 +138,23 @@ static int wanted(void) {
     return t && *t && *t == bpf_get_current_cgroup_id();
 }
 
-static void lost(void) {
+static void lost(u64 *counter) {
+    if (counter) __sync_fetch_and_add(counter, 1);
+}
+
+static void ringbuf_reserve_failed(void) {
     u32 z = 0;
-    u64 *c = reserve_failures.lookup(&z);
-    if (c) __sync_fetch_and_add(c, 1);
+    lost(ringbuf_reserve_failures.lookup(&z));
+}
+
+static void argv_read_failed(void) {
+    u32 z = 0;
+    lost(argv_read_failures.lookup(&z));
+}
+
+static void argv_boundary_read_failed(void) {
+    u32 z = 0;
+    lost(argv_boundary_read_failures.lookup(&z));
 }
 
 static u32 parent_tgid(void) {
@@ -179,33 +204,23 @@ static void fill_counters(struct event_t *e, struct task_struct *task) {
     );
 }
 
-/* execve/execveat ENTRY: assign a new seq as PENDING (do NOT overwrite
- * current_seq yet, so samples between enter and a successful exec stay on the
- * OLD image), and capture argv tagged with that pending seq. Shared by both
- * execve and execveat so execveat transitions are not silently dropped. */
-static int capture_enter(const char *const *argv) {
-    u32 zero = 0;
-    u32 *ready = sequence_ready.lookup(&zero);
-    if (!ready || !*ready) return 0;
-    if (!wanted()) return 0;
-    u64 seq = 0;
-    if (exec_sequences.pop(&seq)) return 0;
-    u64 pid_tgid = bpf_get_current_pid_tgid();
+static void capture_argv(
+    u64 seq, const char *const *argv, u64 pid_tgid
+) {
     u32 tid = pid_tgid;
-    struct task_key_t task_key = {
-        .tid = tid,
-        .task_ptr = (u64)bpf_get_current_task(),
-    };
-    pending_seq.update(&task_key, &seq);
     u32 captured_args = 0;
     #pragma unroll
     for (int i = 0; i < MAX_ARGS; i++) {
         const char *a = 0;
-        bpf_probe_read_user(&a, sizeof(a), &argv[i]);
+        int pointer_read = bpf_probe_read_user(&a, sizeof(a), &argv[i]);
+        if (pointer_read < 0) {
+            argv_read_failed();
+            break;
+        }
         if (!a) break;
         captured_args++;
         struct event_t *e = events.ringbuf_reserve(sizeof(*e));
-        if (!e) { lost(); continue; }
+        if (!e) { ringbuf_reserve_failed(); continue; }
         __builtin_memset(e, 0, sizeof(*e));
         e->timestamp_ns = bpf_ktime_get_ns();
         e->cgroup_id = bpf_get_current_cgroup_id();
@@ -216,26 +231,30 @@ static int capture_enter(const char *const *argv) {
         e->arg_index = i;
         int arg_size = bpf_probe_read_user_str(e->arg, sizeof(e->arg), a);
         if (arg_size < 0) {
-            lost();
+            argv_read_failed();
         } else if (arg_size == sizeof(e->arg)) {
             char source_last = 0;
             int last_read = bpf_probe_read_user(
                 &source_last, sizeof(source_last), a + sizeof(e->arg) - 1
             );
             if (last_read < 0)
-                lost();
+                argv_boundary_read_failed();
             else if (source_last != '\0')
                 e->arg_flags = ARG_FLAG_TRUNCATED;
         }
         events.ringbuf_submit(e, 0);
     }
     const char *extra = 0;
-    if (captured_args == MAX_ARGS)
-        bpf_probe_read_user(&extra, sizeof(extra), &argv[MAX_ARGS]);
+    if (captured_args == MAX_ARGS) {
+        int pointer_read = bpf_probe_read_user(
+            &extra, sizeof(extra), &argv[MAX_ARGS]
+        );
+        if (pointer_read < 0) argv_read_failed();
+    }
     if (extra) {
         struct event_t *e = events.ringbuf_reserve(sizeof(*e));
         if (!e) {
-            lost();
+            ringbuf_reserve_failed();
         } else {
             __builtin_memset(e, 0, sizeof(*e));
             e->timestamp_ns = bpf_ktime_get_ns();
@@ -249,6 +268,29 @@ static int capture_enter(const char *const *argv) {
             events.ringbuf_submit(e, 0);
         }
     }
+}
+
+/* execve/execveat ENTRY: assign a new seq as PENDING without replacing the
+ * current image. The saved vector is read after copy_strings() has faulted
+ * valid cold pages; failed exec argv remains available on return. */
+static int capture_enter(const char *const *argv) {
+    u32 zero = 0;
+    u32 *ready = sequence_ready.lookup(&zero);
+    if (!ready || !*ready) return 0;
+    if (!wanted()) return 0;
+    u64 seq = 0;
+    if (exec_sequences.pop(&seq)) return 0;
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 tid = pid_tgid;
+    struct task_key_t task_key = {
+        .tid = tid,
+        .task_ptr = (u64)bpf_get_current_task(),
+    };
+    struct pending_exec_t pending = {
+        .seq = seq,
+        .argv_ptr = (u64)argv,
+    };
+    pending_seq.update(&task_key, &pending);
     return 0;
 }
 
@@ -260,11 +302,9 @@ TRACEPOINT_PROBE(syscalls, sys_enter_execveat) {
     return capture_enter((const char *const *)args->argv);
 }
 
-/* execve RETURN: only fires meaningfully on FAILURE (success does not return to
- * the old image). A failed exec must abandon its pending seq — the old image
- * keeps running under current_seq. Success is handled by sched_process_exec. */
-static int on_exec_return(long ret) {
-    if (ret >= 0) return 0;
+/* copy_strings() has faulted the original argv pages before bprm_execve.
+ * Capture here, before a script interpreter can rewrite the final argv. */
+int capture_bprm_argv(struct pt_regs *ctx) {
     if (!wanted()) return 0;
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 tid = pid_tgid;
@@ -272,21 +312,59 @@ static int on_exec_return(long ret) {
         .tid = tid,
         .task_ptr = (u64)bpf_get_current_task(),
     };
-    u64 *pending = pending_seq.lookup(&task_key);
+    struct pending_exec_t *pending = pending_seq.lookup(&task_key);
+    if (!pending || pending->argv_captured) return 0;
+    capture_argv(
+        pending->seq,
+        (const char *const *)pending->argv_ptr,
+        pid_tgid
+    );
+    pending->argv_captured = 1;
+    return 0;
+}
+
+/* execve RETURN: promote a successful image or close a failed attempt. */
+static int on_exec_return(long ret) {
+    if (!wanted()) return 0;
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 tid = pid_tgid;
+    struct task_key_t task_key = {
+        .tid = tid,
+        .task_ptr = (u64)bpf_get_current_task(),
+    };
+    struct pending_exec_t *pending = pending_seq.lookup(&task_key);
     if (pending) {
+        if (!pending->argv_captured && ret < 0) {
+            capture_argv(
+                pending->seq,
+                (const char *const *)pending->argv_ptr,
+                pid_tgid
+            );
+        } else if (!pending->argv_captured) {
+            argv_read_failed();
+        }
+        if (ret >= 0) {
+            current_seq.update(&task_key, &pending->seq);
+        }
         struct event_t *e = events.ringbuf_reserve(sizeof(*e));
         if (!e) {
-            lost();
+            ringbuf_reserve_failed();
         } else {
             __builtin_memset(e, 0, sizeof(*e));
             e->timestamp_ns = bpf_ktime_get_ns();
             e->cgroup_id = bpf_get_current_cgroup_id();
-            e->exec_seq = *pending;
-            e->type = TYPE_FAILED_EXEC_ATTEMPT;
+            e->exec_seq = pending->seq;
+            e->type = ret < 0 ? TYPE_FAILED_EXEC_ATTEMPT : TYPE_EXEC_BOUNDARY;
             e->host_pid = pid_tgid >> 32;
             e->host_tid = tid;
             e->parent_host_pid = parent_tgid();
-            e->exit_code = (u32)(-ret);  /* positive errno */
+            if (ret < 0) {
+                e->exit_code = (u32)(-ret);  /* positive errno */
+            } else {
+                fill_counters(
+                    e, (struct task_struct *)bpf_get_current_task()
+                );
+            }
             events.ringbuf_submit(e, 0);
         }
     }
@@ -296,42 +374,6 @@ static int on_exec_return(long ret) {
 
 TRACEPOINT_PROBE(syscalls, sys_exit_execve) { return on_exec_return(args->ret); }
 TRACEPOINT_PROBE(syscalls, sys_exit_execveat) { return on_exec_return(args->ret); }
-
-/* Successful exec: promote pending -> current, then emit the boundary with the
- * NEW image's seq. Without a pending seq (missing enter) keep the prior. */
-TRACEPOINT_PROBE(sched, sched_process_exec) {
-    if (!wanted()) return 0;
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u32 tid = pid_tgid;
-    u64 new_seq = ~0ULL;
-    struct task_key_t task_key = {
-        .tid = tid,
-        .task_ptr = (u64)bpf_get_current_task(),
-    };
-    u64 *pending = pending_seq.lookup(&task_key);
-    if (pending) {
-        new_seq = *pending;
-        current_seq.update(&task_key, &new_seq);
-        pending_seq.delete(&task_key);
-    } else {
-        u64 *cur = current_seq.lookup(&task_key);
-        if (cur) new_seq = *cur;
-    }
-    struct event_t *e = events.ringbuf_reserve(sizeof(*e));
-    if (!e) { lost(); return 0; }
-    __builtin_memset(e, 0, sizeof(*e));
-    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-    fill_counters(e, task);
-    e->timestamp_ns = bpf_ktime_get_ns();
-    e->cgroup_id = bpf_get_current_cgroup_id();
-    e->exec_seq = new_seq;
-    e->type = TYPE_EXEC_BOUNDARY;
-    e->host_pid = pid_tgid >> 32;
-    e->host_tid = tid;
-    e->parent_host_pid = parent_tgid();
-    events.ringbuf_submit(e, 0);
-    return 0;
-}
 
 /* Fork lineage must be TGID-consistent with every other event (which key on
  * tgid = pid_tgid>>32). The tracepoint's parent_pid/child_pid are TIDs; using
@@ -351,7 +393,7 @@ RAW_TRACEPOINT_PROBE(sched_process_fork) {
     current_seq.delete(&child_key);
     pending_seq.delete(&child_key);
     struct event_t *e = events.ringbuf_reserve(sizeof(*e));
-    if (!e) { lost(); return 0; }
+    if (!e) { ringbuf_reserve_failed(); return 0; }
     __builtin_memset(e, 0, sizeof(*e));
     e->timestamp_ns = bpf_ktime_get_ns();
     e->cgroup_id = bpf_get_current_cgroup_id();
@@ -384,7 +426,7 @@ TRACEPOINT_PROBE(sched, sched_process_exit) {
     };
     u64 *seq = current_seq.lookup(&task_key);
     struct event_t *e = events.ringbuf_reserve(sizeof(*e));
-    if (!e) { lost(); return 0; }
+    if (!e) { ringbuf_reserve_failed(); return 0; }
     __builtin_memset(e, 0, sizeof(*e));
     fill_counters(e, task);
     e->timestamp_ns = bpf_ktime_get_ns();
@@ -429,7 +471,7 @@ int on_cpu_clock(struct bpf_perf_event_data *ctx) {
     };
     u64 *seq = current_seq.lookup(&task_key);
     struct event_t *e = events.ringbuf_reserve(sizeof(*e));
-    if (!e) { lost(); return 0; }
+    if (!e) { ringbuf_reserve_failed(); return 0; }
     __builtin_memset(e, 0, sizeof(*e));
     fill_counters(e, task);
     e->timestamp_ns = bpf_ktime_get_ns();
@@ -511,13 +553,31 @@ class RawRun:
     status: int
     wall_ns: int
     usage_usec: int
-    reserve_failures: int
+    ringbuf_reserve_failures: int
     perf_sample_count: int
     oracle_peak_rss_kb: int
     oracle_samples: int
     marker: bool
     events: list[dict[str, Any]] = field(default_factory=list)
     lifecycle_map_entries: dict[str, int] = field(default_factory=dict)
+    argv_read_failures: int = 0
+    argv_boundary_read_failures: int = 0
+
+    @property
+    def loss_count(self) -> int:
+        return (
+            self.ringbuf_reserve_failures
+            + self.argv_read_failures
+            + self.argv_boundary_read_failures
+        )
+
+    @property
+    def loss_counts(self) -> dict[str, int]:
+        return {
+            "ringbuf_reserve_failures": self.ringbuf_reserve_failures,
+            "argv_read_failures": self.argv_read_failures,
+            "argv_boundary_read_failures": self.argv_boundary_read_failures,
+        }
 
 
 @dataclass(frozen=True)
@@ -525,8 +585,10 @@ class ToolCallToken:
     tool_call_id: str
     command: str
     started_ns: int
-    reserve_failures: int
+    ringbuf_reserve_failures: int
     perf_sample_count: int
+    argv_read_failures: int = 0
+    argv_boundary_read_failures: int = 0
     source_tool_call_id: str = ""
     source_command: str = ""
     source_tool_result: str = ""
@@ -703,6 +765,7 @@ def collect_case(command: str, tag: str, *, marker: str = "") -> RawRun:
     cg = _new_cgroup(tag)
     cgroup_id = cg.stat().st_ino
     bpf = BPF(text=BPF_PROGRAM)
+    bpf.attach_kprobe(event="bprm_execve", fn_name="capture_bprm_argv")
     q = bpf["exec_sequences"]
     for seq in range(8192):
         q.push(ctypes.c_ulonglong(seq))
@@ -714,35 +777,7 @@ def collect_case(command: str, tag: str, *, marker: str = "") -> RawRun:
     table = bpf["events"]
 
     def receive(_ctx: int, data: int, _size: int) -> int:
-        e = table.event(data)
-        row = {
-            "type": TYPE_NAMES[int(e.type)],
-            "ts_ns": int(e.timestamp_ns),
-            "cgroup_id": int(e.cgroup_id),
-            "exec_seq": int(e.exec_seq),
-            "cpu_ns": int(e.cpu_ns),
-            "rss_pages": int(e.rss_pages),
-            "mm_ptr": int(e.mm_ptr),
-            "hiwater_pages": int(e.hiwater_pages),
-            "io_read_bytes": int(e.io_read_bytes),
-            "io_write_bytes": int(e.io_write_bytes),
-            "io_cancelled_write_bytes": int(e.io_cancelled_write_bytes),
-            "host_pid": int(e.host_pid),
-            "host_tid": int(e.host_tid),
-            "parent_host_pid": int(e.parent_host_pid),
-            "child_host_pid": int(e.child_host_pid),
-            "child_host_tid": int(e.child_host_tid),
-            "arg_index": int(e.arg_index),
-            "arg_flags": int(e.arg_flags),
-            "exit_code": int(e.exit_code),
-            "errno": (
-                int(e.exit_code)
-                if TYPE_NAMES[int(e.type)] == "failed_exec_attempt"
-                else 0
-            ),
-        }
-        if e.type == 1:
-            row["arg"] = bytes(e.arg).split(b"\0", 1)[0].decode("utf-8", "replace")
+        row = _event_row(table, data)
         with lock:
             events.append(row)
         return 0
@@ -791,7 +826,7 @@ def collect_case(command: str, tag: str, *, marker: str = "") -> RawRun:
     except Exception:
         pass
     usage_delta = _read_usage_usec(cg) - usage_before
-    reserve_failures = bpf["reserve_failures"][ctypes.c_int(0)].value
+    loss_counts = _loss_counts(bpf)
     perf_count = bpf["perf_sample_count"][ctypes.c_int(0)].value
     lifecycle_map_entries = {
         name: sum(1 for _ in bpf[name].items())
@@ -809,13 +844,15 @@ def collect_case(command: str, tag: str, *, marker: str = "") -> RawRun:
         status=status,
         wall_ns=wall_ns,
         usage_usec=usage_delta,
-        reserve_failures=reserve_failures,
+        ringbuf_reserve_failures=loss_counts["ringbuf_reserve_failures"],
         perf_sample_count=perf_count,
         oracle_peak_rss_kb=oracle.peak_sum_kb,
         oracle_samples=oracle.samples,
         marker=marker.encode() in out if marker else True,
         events=[e for e in ordered if e["cgroup_id"] == cgroup_id],
         lifecycle_map_entries=lifecycle_map_entries,
+        argv_read_failures=loss_counts["argv_read_failures"],
+        argv_boundary_read_failures=loss_counts["argv_boundary_read_failures"],
     )
 
 
@@ -1024,7 +1061,7 @@ def _attribute(
         lineage_id = tid if tid != pid else pid
         # The collector can arm after the initial command process was forked.
         # A CPU-clock sample may then land after sys_enter_execve captured one
-        # pending argv but before sched_process_exec promotes that same seq.
+        # pending argv but before sys_exit_execve promotes that same seq.
         # It belongs to neither the not-yet-successful image nor an observable
         # fork ancestor. Preserve it as structural setup only with a unique,
         # same-TID successful boundary that strictly closes the pending window.
@@ -1720,7 +1757,8 @@ def analyze(
                         "has_exec": True,
                         "has_exit": has_exit,
                     },
-                    "reserve_failures": run.reserve_failures,
+                    "reserve_failures": run.loss_count,
+                    "loss_counts": run.loss_counts,
                     "quota_cores": run.quota_cores,
                     "cpu": cpu_prov,
                     "rss": rss_prov,
@@ -1974,6 +2012,19 @@ def _counter(bpf: Any, name: str) -> int:
     return int(bpf[name][ctypes.c_int(0)].value)
 
 
+def _loss_counts(bpf: Any) -> dict[str, int]:
+    return {name: _counter(bpf, name) for name in LOSS_COUNTER_NAMES}
+
+
+def _loss_delta(bpf: Any, token: ToolCallToken) -> dict[str, int]:
+    before = {
+        "ringbuf_reserve_failures": token.ringbuf_reserve_failures,
+        "argv_read_failures": token.argv_read_failures,
+        "argv_boundary_read_failures": token.argv_boundary_read_failures,
+    }
+    return {name: _counter(bpf, name) - before[name] for name in LOSS_COUNTER_NAMES}
+
+
 def _exec_image_record(metric: ClauseMetrics) -> Any:
     from tool_resource.clause_bridge import ExecImageRecord
 
@@ -2095,6 +2146,7 @@ class ClauseTelemetryCollector:
         self._source_exec_index = 0
 
         self._bpf = BPF(text=BPF_PROGRAM)
+        self._bpf.attach_kprobe(event="bprm_execve", fn_name="capture_bprm_argv")
         queue = self._bpf["exec_sequences"]
         for sequence in range(8192):
             queue.push(ctypes.c_ulonglong(sequence))
@@ -2156,8 +2208,12 @@ class ClauseTelemetryCollector:
             tool_call_id=tool_call_id,
             command=command,
             started_ns=time.monotonic_ns(),
-            reserve_failures=_counter(self._bpf, "reserve_failures"),
+            ringbuf_reserve_failures=_counter(self._bpf, "ringbuf_reserve_failures"),
             perf_sample_count=_counter(self._bpf, "perf_sample_count"),
+            argv_read_failures=_counter(self._bpf, "argv_read_failures"),
+            argv_boundary_read_failures=_counter(
+                self._bpf, "argv_boundary_read_failures"
+            ),
             source_tool_call_id=source_tool_call_id,
             source_command=source_command,
             source_tool_result=source_tool_result,
@@ -2180,7 +2236,7 @@ class ClauseTelemetryCollector:
         # The kernel timestamps events before ring delivery. Let the poller drain,
         # then slice on the captured end timestamp; command timing is unchanged.
         time.sleep(0.03)
-        loss = _counter(self._bpf, "reserve_failures") - token.reserve_failures
+        loss_counts = _loss_delta(self._bpf, token)
         perf_samples = (
             _counter(self._bpf, "perf_sample_count") - token.perf_sample_count
         )
@@ -2257,7 +2313,7 @@ class ClauseTelemetryCollector:
                 token=token,
                 ended_ns=ended_ns,
                 events=events,
-                loss=loss,
+                loss_counts=loss_counts,
                 perf_samples=perf_samples,
                 command_lookup_failure=lookup_failure,
                 control_flow_fidelity=control_flow_fidelity,
@@ -2298,7 +2354,7 @@ class ClauseTelemetryCollector:
         token = self.begin_tool_call(tool_call_id, command)
         ended_ns = time.monotonic_ns()
         self._active = None
-        loss = _counter(self._bpf, "reserve_failures") - token.reserve_failures
+        loss_counts = _loss_delta(self._bpf, token)
         perf_samples = (
             _counter(self._bpf, "perf_sample_count") - token.perf_sample_count
         )
@@ -2323,7 +2379,7 @@ class ClauseTelemetryCollector:
             token=token,
             ended_ns=ended_ns,
             events=[],
-            loss=loss,
+            loss_counts=loss_counts,
             perf_samples=perf_samples,
             control_flow_fidelity=fidelity,
             safety_guard_blocked=evidence,
@@ -2340,7 +2396,7 @@ class ClauseTelemetryCollector:
         token: ToolCallToken,
         ended_ns: int,
         events: list[dict[str, Any]],
-        loss: int,
+        loss_counts: Mapping[str, int],
         perf_samples: int,
         command_lookup_failure: ShellCommandLookupFailure | None = None,
         control_flow_fidelity: Mapping[str, Any] | None = None,
@@ -2349,18 +2405,26 @@ class ClauseTelemetryCollector:
     ) -> tuple[dict[str, Any], list[str]]:
         from tool_resource.clause_bridge import bridge_command
 
+        normalized_loss_counts = {
+            name: int(loss_counts.get(name, 0)) for name in LOSS_COUNTER_NAMES
+        }
+        loss = sum(normalized_loss_counts.values())
         run = RawRun(
             cgroup_id=self.cgroup_id,
             quota_cores=self.quota_cores,
             status=0,
             wall_ns=ended_ns - token.started_ns,
             usage_usec=0,
-            reserve_failures=loss,
+            ringbuf_reserve_failures=normalized_loss_counts["ringbuf_reserve_failures"],
             perf_sample_count=perf_samples,
             oracle_peak_rss_kb=0,
             oracle_samples=0,
             marker=True,
             events=events,
+            argv_read_failures=normalized_loss_counts["argv_read_failures"],
+            argv_boundary_read_failures=normalized_loss_counts[
+                "argv_boundary_read_failures"
+            ],
         )
         fork_records: dict[int, list[dict[str, Any]]] = {}
         for event in events:
@@ -2637,6 +2701,11 @@ class ClauseTelemetryCollector:
                     "events": structural_gaps,
                 },
             },
+            "telemetry_loss": {
+                **normalized_loss_counts,
+                "total": loss,
+                "perf_sample_count": perf_samples,
+            },
             "ring_loss": {
                 "reserve_failures": loss,
                 "perf_sample_count": perf_samples,
@@ -2675,7 +2744,12 @@ class ClauseTelemetryCollector:
         }
         violations: list[str] = []
         if loss:
-            violations.append(f"{token.tool_call_id}: ring-buffer loss={loss}")
+            causes = ",".join(
+                f"{name}={count}"
+                for name, count in normalized_loss_counts.items()
+                if count
+            )
+            violations.append(f"{token.tool_call_id}: telemetry loss={loss} ({causes})")
         if relevant_gaps:
             violations.append(
                 f"{token.tool_call_id}: relevant coverage gaps={len(relevant_gaps)}"
@@ -2694,7 +2768,8 @@ class ClauseTelemetryCollector:
 
     def finalize(self) -> None:
         cleanup_error: BaseException | None = None
-        total_loss = _counter(self._bpf, "reserve_failures")
+        total_loss_counts = _loss_counts(self._bpf)
+        total_loss = sum(total_loss_counts.values())
         if self._active is not None:
             self._integrity_errors.append(
                 f"unterminated exec delimiter: {self._active.tool_call_id}"
@@ -2709,8 +2784,11 @@ class ClauseTelemetryCollector:
                 f"collector cleanup leak: {type(exc).__name__}: {exc}"
             )
         if total_loss:
+            causes = ",".join(
+                f"{name}={count}" for name, count in total_loss_counts.items() if count
+            )
             self._integrity_errors.append(
-                f"collector total ring-buffer loss={total_loss}"
+                f"collector total telemetry loss={total_loss} ({causes})"
             )
         if self._poll_error is not None:
             self._integrity_errors.append(
@@ -2726,6 +2804,10 @@ class ClauseTelemetryCollector:
                     "cgroup_id": self.cgroup_id,
                     "quota_cores": self.quota_cores,
                     "calls": self.calls,
+                    "telemetry_loss_total": {
+                        **total_loss_counts,
+                        "total": total_loss,
+                    },
                     "ring_loss_total": total_loss,
                     "cleanup": self._cleanup_status,
                     "integrity": {

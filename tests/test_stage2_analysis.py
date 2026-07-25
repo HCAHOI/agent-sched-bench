@@ -35,7 +35,11 @@ def test_bpf_lifecycle_keeps_identity_until_free_and_clears_new_child() -> None:
     assert "current_seq.delete(&task_key)" in free_probe
     assert "pending_seq.delete(&task_key)" in free_probe
     assert "BPF_HASH(current_seq, struct task_key_t, u64)" in C.BPF_PROGRAM
-    assert "BPF_HASH(pending_seq, struct task_key_t, u64)" in C.BPF_PROGRAM
+    assert "u64 argv_ptr;" in C.BPF_PROGRAM
+    assert (
+        "BPF_HASH(pending_seq, struct task_key_t, struct pending_exec_t)"
+        in C.BPF_PROGRAM
+    )
 
 
 def _ev(type_, ts, pid, *, tid=None, seq=C.SENTINEL, cpu_ns=0, rss=0, mm=0,

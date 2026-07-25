@@ -18,6 +18,7 @@ from llm_call.provider_base import LLMProvider, LLMResponse, ToolCallRequest
 from trace_collect.clause_telemetry import (
     ClauseTelemetryCollector,
     ClauseTelemetryIntegrityError,
+    LOSS_COUNTER_NAMES,
     ToolCallToken,
     _is_protocol_timeout,
     shell_command_lookup_failure_evidence,
@@ -253,7 +254,7 @@ def test_summary_preserves_structural_gap_and_target_availability() -> None:
         token=ToolCallToken("call-1", "echo hi", 100, 0, 0),
         ended_ns=230,
         events=_clean_events(),
-        loss=0,
+        loss_counts={},
         perf_samples=2,
     )
     assert violations == []
@@ -277,7 +278,17 @@ def test_summary_preserves_structural_gap_and_target_availability() -> None:
     assert summary["target_availability"]["cpu"]["reasons"] == {
         "unknown:clause_shorter_than_1s_ineligible_for_peak": 1
     }
-    assert summary["ring_loss"]["reserve_failures"] == 0
+    assert summary["telemetry_loss"] == {
+        "ringbuf_reserve_failures": 0,
+        "argv_read_failures": 0,
+        "argv_boundary_read_failures": 0,
+        "total": 0,
+        "perf_sample_count": 2,
+    }
+    assert summary["ring_loss"] == {
+        "reserve_failures": 0,
+        "perf_sample_count": 2,
+    }
     assert summary["clauses"][0]["disk_io"] == {
         "read_bytes_total": 0,
         "write_bytes_total": 0,
@@ -304,6 +315,25 @@ def test_summary_preserves_structural_gap_and_target_availability() -> None:
             }
         ],
     }
+
+
+@pytest.mark.parametrize("cause", LOSS_COUNTER_NAMES)
+def test_every_telemetry_loss_cause_fails_closed(cause: str) -> None:
+    collector = _collector_without_bpf()
+    summary, violations = collector._summarize_call(
+        token=ToolCallToken("call-loss", "echo hi", 100, 0, 0),
+        ended_ns=230,
+        events=_clean_events(),
+        loss_counts={cause: 1},
+        perf_samples=2,
+    )
+
+    assert summary["integrity"]["status"] == "failed"
+    assert summary["telemetry_loss"][cause] == 1
+    assert summary["telemetry_loss"]["total"] == 1
+    assert summary["ring_loss"]["reserve_failures"] == 1
+    assert summary["clauses"] == []
+    assert any("telemetry loss=1" in violation for violation in violations)
 
 
 @pytest.mark.parametrize(
@@ -368,7 +398,7 @@ def test_protocol_timeout_artifact_keeps_metrics_without_new_schema_fields() -> 
         token=ToolCallToken("call-timeout", "slow", 0, 0, 0),
         ended_ns=1_300_000_000,
         events=events,
-        loss=0,
+        loss_counts={},
         perf_samples=2,
         protocol_timeout=True,
     )
@@ -409,7 +439,7 @@ def test_fork_only_processes_collapse_to_nearest_transitive_exec_ancestor() -> N
         token=ToolCallToken("call-apt", "apt-get update", 100, 0, 0),
         ended_ns=250,
         events=_apt_fork_chain_events(),
-        loss=0,
+        loss_counts={},
         perf_samples=0,
     )
 
@@ -508,7 +538,7 @@ def test_command_tree_rejects_ambiguous_ancestry_above_active_exec() -> None:
             token=ToolCallToken("call-ambiguous", "true", 100, 0, 0),
             ended_ns=200,
             events=events,
-            loss=0,
+            loss_counts={},
             perf_samples=0,
         )
 
@@ -593,7 +623,7 @@ def test_relevant_gap_fails_integrity() -> None:
         token=ToolCallToken("call-2", "echo hi", 100, 0, 0),
         ended_ns=230,
         events=events,
-        loss=0,
+        loss_counts={},
         perf_samples=3,
     )
     assert summary["coverage_gaps"]["relevant"]["count"] == 1
@@ -632,7 +662,7 @@ def test_entry_parent_thread_gap_is_structural() -> None:
         token=ToolCallToken("call-parent-thread", "echo hi", 100, 0, 0),
         ended_ns=230,
         events=events,
-        loss=0,
+        loss_counts={},
         perf_samples=3,
     )
     assert violations == []
@@ -660,7 +690,7 @@ def test_entry_fork_pre_exec_gap_is_structural_with_payload() -> None:
         token=ToolCallToken("call-entry-fork", "echo hi", 100, 0, 0),
         ended_ns=230,
         events=events,
-        loss=0,
+        loss_counts={},
         perf_samples=3,
     )
 
@@ -702,7 +732,7 @@ def test_repeated_fork_generation_gap_keeps_command_relation_evidence() -> None:
         token=ToolCallToken("call-reused-pid", "echo hi", 100, 0, 0),
         ended_ns=230,
         events=events,
-        loss=0,
+        loss_counts={},
         perf_samples=3,
     )
 
@@ -746,7 +776,7 @@ def test_failed_exec_is_target_unavailable_without_mapping_gap() -> None:
         ),
         ended_ns=230,
         events=_failed_exec_events(),
-        loss=0,
+        loss_counts={},
         perf_samples=0,
     )
     assert violations == []
@@ -785,7 +815,7 @@ def test_unmatched_static_without_failed_exec_evidence_remains_fatal() -> None:
         ),
         ended_ns=230,
         events=events,
-        loss=0,
+        loss_counts={},
         perf_samples=0,
     )
     assert summary["no_runtime_exec"] == []
@@ -818,7 +848,7 @@ def test_direct_command_not_found_is_separate_target_unavailable_evidence() -> N
         token=ToolCallToken("replay-1", command, 100, 0, 0),
         ended_ns=230,
         events=events,
-        loss=0,
+        loss_counts={},
         perf_samples=0,
         command_lookup_failure=evidence,
     )
@@ -1040,7 +1070,7 @@ def test_unrelated_failed_exec_evidence_does_not_resolve_static_clause() -> None
         ),
         ended_ns=230,
         events=events,
-        loss=0,
+        loss_counts={},
         perf_samples=0,
     )
     assert summary["no_runtime_exec"] == []
