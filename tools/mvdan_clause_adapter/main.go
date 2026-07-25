@@ -12,7 +12,10 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-const parserName = "mvdan.cc/sh/v3"
+const (
+	parserName             = "mvdan.cc/sh/v3"
+	adapterProtocolVersion = 1
+)
 
 type request struct {
 	ID      int64  `json:"id"`
@@ -72,10 +75,16 @@ type parserInfo struct {
 	Version string `json:"version"`
 }
 
+type protocolInfo struct {
+	Version      int      `json:"version"`
+	Capabilities []string `json:"capabilities"`
+}
+
 type response struct {
 	ID           int64         `json:"id"`
 	OK           bool          `json:"ok"`
 	Parser       parserInfo    `json:"parser"`
+	Protocol     protocolInfo  `json:"protocol"`
 	Clauses      []clause      `json:"clauses"`
 	ControlEdges []controlEdge `json:"control_edges"`
 	Error        *string       `json:"error"`
@@ -449,6 +458,10 @@ func analyze(input request) response {
 		Parser: parserInfo{
 			Name:    parserName,
 			Version: parserVersion(),
+		},
+		Protocol: protocolInfo{
+			Version:      adapterProtocolVersion,
+			Capabilities: []string{"word_intents"},
 		},
 		Clauses:      []clause{},
 		ControlEdges: []controlEdge{},

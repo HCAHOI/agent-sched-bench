@@ -15,6 +15,8 @@ from typing import Any
 
 PARSER_NAME = "mvdan.cc/sh/v3"
 PARSER_VERSION = "v3.13.1"
+ADAPTER_PROTOCOL_VERSION = 1
+REQUIRED_CAPABILITIES = frozenset({"word_intents"})
 _BUILD_SCRIPT = "scripts/setup/build_mvdan_adapter.sh"
 _MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 
@@ -28,8 +30,15 @@ class _RetryableProcessError(MvdanClientError):
 
 
 def default_binary_path() -> Path:
-    cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    return cache / "agent-sched-bench" / f"mvdan-clause-adapter-{PARSER_VERSION}"
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    return (
+        cache
+        / "agent-sched-bench"
+        / (
+            f"mvdan-clause-adapter-protocol-{ADAPTER_PROTOCOL_VERSION}"
+            f"-mvdan-{PARSER_VERSION}"
+        )
+    )
 
 
 class MvdanClient:
@@ -94,13 +103,18 @@ class MvdanClient:
                 f"mvdan adapter is missing at {self.binary_path}; "
                 f"run {_BUILD_SCRIPT} from the repository root"
             )
-        self._process = subprocess.Popen(
-            [str(self.binary_path)],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=0,
-        )
+        try:
+            self._process = subprocess.Popen(
+                [str(self.binary_path)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0,
+            )
+        except OSError as error:
+            raise MvdanClientError(
+                f"failed to launch mvdan adapter at {self.binary_path}: {error}"
+            ) from error
         self._stdout_buffer = b""
         self.start_count += 1
         try:
@@ -113,7 +127,28 @@ class MvdanClient:
         if parser != expected:
             self._stop()
             raise MvdanClientError(
-                f"mvdan adapter version mismatch: expected {expected}, got {parser}"
+                f"mvdan parser version mismatch: expected {expected}, got {parser}"
+            )
+        protocol = response.get("protocol")
+        version = protocol.get("version") if isinstance(protocol, dict) else None
+        capabilities = (
+            protocol.get("capabilities") if isinstance(protocol, dict) else None
+        )
+        if version != ADAPTER_PROTOCOL_VERSION or not isinstance(
+            capabilities, list
+        ):
+            self._stop()
+            raise MvdanClientError(
+                "mvdan adapter protocol mismatch: expected version "
+                f"{ADAPTER_PROTOCOL_VERSION} with capabilities "
+                f"{sorted(REQUIRED_CAPABILITIES)}, got {protocol}"
+            )
+        missing = REQUIRED_CAPABILITIES.difference(capabilities)
+        if missing:
+            self._stop()
+            raise MvdanClientError(
+                "mvdan adapter lacks required capabilities: "
+                f"{sorted(missing)}; advertised {capabilities}"
             )
 
     def _exchange(self, operation: str, command: str) -> dict[str, Any]:
@@ -193,6 +228,26 @@ class MvdanClient:
                 stream.close()
 
 
+def ensure_compatible_adapter() -> Path:
+    """Validate the exact runtime cache, rebuilding it atomically if stale."""
+
+    binary_path = default_binary_path()
+    try:
+        with MvdanClient(binary_path):
+            return binary_path
+    except MvdanClientError:
+        repo_root = Path(__file__).resolve().parents[2]
+        build_script = repo_root / _BUILD_SCRIPT
+        try:
+            subprocess.run([str(build_script)], cwd=repo_root, check=True)
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise MvdanClientError(
+                f"failed to build compatible mvdan adapter with {build_script}"
+            ) from error
+        with MvdanClient(binary_path):
+            return binary_path
+
+
 _default_client: MvdanClient | None = None
 _default_client_lock = threading.Lock()
 
@@ -214,10 +269,13 @@ atexit.register(_close_default_client)
 
 
 __all__ = [
+    "ADAPTER_PROTOCOL_VERSION",
     "MvdanClient",
     "MvdanClientError",
     "PARSER_NAME",
     "PARSER_VERSION",
+    "REQUIRED_CAPABILITIES",
     "default_binary_path",
+    "ensure_compatible_adapter",
     "get_client",
 ]

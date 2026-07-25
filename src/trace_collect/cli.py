@@ -494,6 +494,17 @@ def _run_simulate(args: argparse.Namespace) -> None:
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
+    if args.tool_resource_telemetry == "clause":
+        from tool_resource.mvdan_client import (
+            MvdanClientError,
+            ensure_compatible_adapter,
+        )
+
+        try:
+            ensure_compatible_adapter()
+        except MvdanClientError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
     simulate_kwargs = {
         "manifest": Path(args.manifest),
         "task_source": Path(args.task_source) if args.task_source else None,

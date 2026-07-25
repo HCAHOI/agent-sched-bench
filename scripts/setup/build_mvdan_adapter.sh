@@ -3,12 +3,13 @@ set -eu
 
 go_version=1.26.1
 parser_version=v3.13.1
+adapter_protocol_version=1
 archive_sha256=031f088e5d955bab8657ede27ad4e3bc5b7c1ba281f05f245bcc304f327c987a
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cache_root=${XDG_CACHE_HOME:-"${HOME}/.cache"}/agent-sched-bench
 toolchain_dir=$cache_root/go-toolchain-$go_version
-binary=$cache_root/mvdan-clause-adapter-$parser_version
+binary=$cache_root/mvdan-clause-adapter-protocol-$adapter_protocol_version-mvdan-$parser_version
 go_bin=
 
 if command -v go >/dev/null 2>&1 &&

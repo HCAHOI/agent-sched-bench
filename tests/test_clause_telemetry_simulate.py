@@ -253,6 +253,10 @@ def test_formal_clause_sweep_finishes_before_nonzero_exit(
     tmp_path: Path,
 ) -> None:
     seen: list[int] = []
+    monkeypatch.setattr(
+        "tool_resource.mvdan_client.ensure_compatible_adapter",
+        lambda: tmp_path / "adapter",
+    )
 
     async def fake_simulate(**kwargs: Any) -> Path:
         concurrency = int(kwargs["concurrency"])
@@ -299,6 +303,47 @@ def test_formal_clause_sweep_finishes_before_nonzero_exit(
     assert raised.value.code == 1
     assert seen == [1, 2]
     assert (tmp_path / "throughput_sweep.jsonl").exists()
+
+
+def test_formal_clause_preflight_fails_before_workload_or_output_change(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from tool_resource.mvdan_client import MvdanClientError
+
+    called = False
+
+    async def fake_simulate(**_kwargs: Any) -> Path:
+        nonlocal called
+        called = True
+        return tmp_path / "unexpected.jsonl"
+
+    monkeypatch.setattr("trace_collect.simulator.simulate", fake_simulate)
+    monkeypatch.setattr(
+        "tool_resource.mvdan_client.ensure_compatible_adapter",
+        lambda: (_ for _ in ()).throw(MvdanClientError("stale schema")),
+    )
+    sweep_path = tmp_path / "throughput_sweep.jsonl"
+    sweep_path.write_text("preserved\n", encoding="utf-8")
+    args = parse_simulate_args(
+        [
+            "--manifest",
+            "manifest.yaml",
+            "--output-dir",
+            str(tmp_path),
+            "--concurrency",
+            "1,2",
+            "--tool-resource-telemetry",
+            "clause",
+        ]
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        _run_simulate(args)
+
+    assert raised.value.code == 1
+    assert not called
+    assert sweep_path.read_text(encoding="utf-8") == "preserved\n"
 
 
 def test_clause_runtime_rejects_configuration_before_bcc(

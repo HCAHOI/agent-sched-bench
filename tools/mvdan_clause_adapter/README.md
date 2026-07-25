@@ -14,9 +14,12 @@ scripts/setup/build_mvdan_adapter.sh
 The script uses exactly Go 1.26.1. If that version is not on `PATH`, it
 downloads the official Linux amd64 archive into
 `${XDG_CACHE_HOME:-$HOME/.cache}/agent-sched-bench/go-toolchain-1.26.1`.
-The adapter binary is
-`${XDG_CACHE_HOME:-$HOME/.cache}/agent-sched-bench/mvdan-clause-adapter-v3.13.1`.
-No toolchain or binary is written into the checkout.
+The protocol-1 adapter binary is
+`${XDG_CACHE_HOME:-$HOME/.cache}/agent-sched-bench/mvdan-clause-adapter-protocol-1-mvdan-v3.13.1`.
+The formal clause launcher validates its protocol, required capabilities, and
+parser version before task setup, and atomically rebuilds a missing or stale
+cache entry with the pinned script. No toolchain or binary is written into the
+checkout.
 
 Clause policy:
 
