@@ -14,6 +14,7 @@ _CLAUSE_KEYS = {
     "in_pipe",
     "in_subst",
     "pipeline_position",
+    "structural_context",
     "word_intents",
 }
 
@@ -122,6 +123,33 @@ def test_nested_pipeline_and_command_substitution_context() -> None:
     assert by_bin["wc"]["in_subst"]
     assert by_bin["wc"]["pipeline_position"] == 1
     assert by_bin["tail"]["pipeline_position"] == 1
+
+
+def test_structural_context_distinguishes_consumers() -> None:
+    clauses = parse_command_clauses(
+        "if probe; then probe; fi; produce | head; produce |& head; probe & probe"
+    )["clauses"]
+
+    assert clauses[0]["structural_context"] == ["if:condition"]
+    assert clauses[1]["structural_context"] == ["if:then"]
+    assert clauses[2]["structural_context"] == ["binary:|:lhs"]
+    assert clauses[3]["structural_context"] == ["binary:|:rhs"]
+    assert clauses[4]["structural_context"] == ["binary:|&:lhs"]
+    assert clauses[5]["structural_context"] == ["binary:|&:rhs"]
+    assert clauses[6]["structural_context"] == ["stmt:background"]
+    assert clauses[7]["structural_context"] == []
+
+
+def test_structural_context_marks_time_and_coprocess() -> None:
+    clauses = parse_command_clauses("time probe; time -p probe; coproc probe")[
+        "clauses"
+    ]
+
+    assert [clause["structural_context"] for clause in clauses] == [
+        ["time"],
+        ["time-posix"],
+        ["coprocess"],
+    ]
 
 
 def test_control_edges_preserve_mvdan_short_circuit_tree() -> None:

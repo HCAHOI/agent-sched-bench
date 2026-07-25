@@ -12,6 +12,7 @@ from tool_resource.mvdan_client import (
     MvdanClient,
     MvdanClientError,
     PARSER_VERSION,
+    REQUIRED_CAPABILITIES,
     default_binary_path,
     ensure_compatible_adapter,
 )
@@ -21,11 +22,15 @@ def _write_fake_adapter(
     path: Path,
     *,
     advertise_protocol: bool,
+    capabilities: list[str] | None = None,
     parse_marker: Path | None = None,
 ) -> None:
+    advertised_capabilities = (
+        sorted(REQUIRED_CAPABILITIES) if capabilities is None else capabilities
+    )
     protocol = (
         f'"protocol": {{"version": {ADAPTER_PROTOCOL_VERSION}, '
-        '"capabilities": ["word_intents"]},'
+        f'"capabilities": {advertised_capabilities!r}}},'
         if advertise_protocol
         else ""
     )
@@ -129,6 +134,33 @@ def test_old_schema_with_same_parser_is_rejected_before_parse(
     )
 
     with pytest.raises(MvdanClientError, match="protocol mismatch"):
+        MvdanClient(adapter).parse("echo must-not-run")
+
+    assert not parse_marker.exists()
+
+
+@pytest.mark.parametrize(
+    ("capabilities", "missing"),
+    (
+        (["word_intents"], "structural_context"),
+        (["structural_context"], "word_intents"),
+    ),
+)
+def test_missing_required_capability_is_rejected_before_parse(
+    tmp_path: Path,
+    capabilities: list[str],
+    missing: str,
+) -> None:
+    parse_marker = tmp_path / "parse-called"
+    adapter = tmp_path / "old-capabilities"
+    _write_fake_adapter(
+        adapter,
+        advertise_protocol=True,
+        capabilities=capabilities,
+        parse_marker=parse_marker,
+    )
+
+    with pytest.raises(MvdanClientError, match=missing):
         MvdanClient(adapter).parse("echo must-not-run")
 
     assert not parse_marker.exists()

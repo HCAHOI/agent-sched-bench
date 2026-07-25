@@ -3042,6 +3042,7 @@ class ClauseTelemetryCollector:
                     "bin": clause["bin"],
                     "argv": clause["argv"],
                     "span": clause["span"],
+                    "structural_context": clause.get("structural_context", []),
                     "word_intents": clause.get("word_intents", []),
                 }
                 for index, clause in enumerate(bridge.static_clauses)

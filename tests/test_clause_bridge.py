@@ -2399,6 +2399,124 @@ def test_pipeline_position_makes_repeated_clauses_nonexchangeable() -> None:
     assert {gap.kind for gap in result.coverage_gaps} == {"ambiguous"}
 
 
+def test_identical_pipeline_consumers_are_exchangeable() -> None:
+    images = []
+    for offset, (pattern, kind) in enumerate(
+        (("pip*", "f"), ("setuptools*", "d"), ("pytest*", "f"))
+    ):
+        images.extend(
+            (
+                _img(
+                    201 + 2 * offset,
+                    0,
+                    "find",
+                    offset,
+                    1200 * _MS,
+                    terminal=True,
+                    argv=("find", "/", "-name", pattern, "-type", kind),
+                ),
+                _img(
+                    202 + 2 * offset,
+                    0,
+                    "head",
+                    offset,
+                    1200 * _MS,
+                    terminal=True,
+                    argv=("head", "-10"),
+                ),
+            )
+        )
+    result = bridge_command(
+        "r1",
+        'find / -name "pip*" -type f 2>/dev/null | head -10; '
+        'find / -name "setuptools*" -type d 2>/dev/null | head -10; '
+        'find / -name "pytest*" -type f 2>/dev/null | head -10',
+        images,
+        entry_pid=100,
+        fork_parent={pid: 100 for pid in range(201, 207)},
+    )
+    heads = [clause for clause in result.bridged if clause.observation.bin == "head"]
+    assert result.data_valid
+    assert len(heads) == 3
+    assert {clause.mapping_evidence for clause in heads} == {
+        "interchangeable_identical"
+    }
+    assert len(result.observations) == 6
+
+
+def test_different_control_consumers_prevent_exchange() -> None:
+    images = [
+        _img(201, 0, "probe", 0, 1200 * _MS, terminal=True, argv=("probe",)),
+        _img(202, 0, "fallback", 0, 1200 * _MS, terminal=True, argv=("fallback",)),
+        _img(203, 0, "probe", 10, 1200 * _MS, terminal=True, argv=("probe",)),
+        _img(204, 0, "next", 10, 1200 * _MS, terminal=True, argv=("next",)),
+    ]
+    result = bridge_command(
+        "r1",
+        "probe || fallback; probe && next",
+        images,
+        entry_pid=100,
+        fork_parent={pid: 100 for pid in range(201, 205)},
+    )
+    assert not result.data_valid
+    assert result.observations == []
+    assert {gap.kind for gap in result.coverage_gaps} == {"ambiguous"}
+
+
+def test_different_word_intents_prevent_exchange() -> None:
+    images = [
+        _img(201, 0, "probe", 0, 1200 * _MS, terminal=True, argv=("probe",)),
+        _img(202, 0, "probe", 10, 1200 * _MS, terminal=True, argv=("probe",)),
+    ]
+    result = bridge_command(
+        "r1",
+        '"probe"; probe',
+        images,
+        entry_pid=100,
+        fork_parent={201: 100, 202: 100},
+    )
+    assert not result.data_valid
+    assert result.observations == []
+    assert {gap.kind for gap in result.coverage_gaps} == {"ambiguous"}
+
+
+@pytest.mark.parametrize(
+    "command",
+    (
+        "if probe; then probe; fi",
+        "probe & probe",
+        "produce | head -10; produce |& head -10",
+        "time probe; probe",
+        "time -p probe; probe",
+        "coproc probe; probe",
+    ),
+)
+def test_unproven_structural_context_prevents_exchange(command: str) -> None:
+    bin_ = "head" if "head" in command else "probe"
+    argv = (bin_, "-10") if bin_ == "head" else (bin_,)
+    images = [
+        _img(201, 0, bin_, 0, 1200 * _MS, terminal=True, argv=argv),
+        _img(202, 0, bin_, 10, 1200 * _MS, terminal=True, argv=argv),
+    ]
+    if bin_ == "head":
+        images.extend(
+            (
+                _img(203, 0, "produce", 0, 1200 * _MS, terminal=True),
+                _img(204, 0, "produce", 10, 1200 * _MS, terminal=True),
+            )
+        )
+    result = bridge_command(
+        "r1",
+        command,
+        images,
+        entry_pid=100,
+        fork_parent={image.host_pid: 100 for image in images},
+    )
+    assert not result.data_valid
+    assert result.observations == []
+    assert {gap.kind for gap in result.coverage_gaps} == {"ambiguous"}
+
+
 # --------------------------------------------------------------------------
 # Coverage-gap behavior
 # --------------------------------------------------------------------------

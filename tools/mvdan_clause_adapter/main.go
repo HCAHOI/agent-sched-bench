@@ -14,7 +14,7 @@ import (
 
 const (
 	parserName             = "mvdan.cc/sh/v3"
-	adapterProtocolVersion = 1
+	adapterProtocolVersion = 3
 )
 
 type request struct {
@@ -26,14 +26,15 @@ type request struct {
 type span [2]int
 
 type clause struct {
-	Bin              string       `json:"bin"`
-	Argv             []string     `json:"argv"`
-	Words            []wordIntent `json:"words"`
-	Span             span         `json:"span"`
-	InLoop           bool         `json:"in_loop"`
-	InPipe           bool         `json:"in_pipe"`
-	InSubst          bool         `json:"in_subst"`
-	PipelinePosition int          `json:"pipeline_position"`
+	Bin               string       `json:"bin"`
+	Argv              []string     `json:"argv"`
+	Words             []wordIntent `json:"words"`
+	Span              span         `json:"span"`
+	InLoop            bool         `json:"in_loop"`
+	InPipe            bool         `json:"in_pipe"`
+	InSubst           bool         `json:"in_subst"`
+	PipelinePosition  int          `json:"pipeline_position"`
+	StructuralContext []string     `json:"structural_context"`
 }
 
 type wordComponent struct {
@@ -419,6 +420,83 @@ func substitutionContext(stack []syntax.Node) bool {
 	return false
 }
 
+func containsOffset(node syntax.Node, offset int) bool {
+	bounds := nodeSpan(node)
+	return bounds[0] <= offset && offset < bounds[1]
+}
+
+func structuralContext(stack []syntax.Node, offset int) []string {
+	context := []string{}
+	for _, node := range stack {
+		switch item := node.(type) {
+		case *syntax.Stmt:
+			if item.Negated {
+				context = append(context, "stmt:negated")
+			}
+			if item.Background {
+				context = append(context, "stmt:background")
+			}
+			if item.Coprocess {
+				context = append(context, "stmt:coprocess")
+			}
+			if item.Disown {
+				context = append(context, "stmt:disown")
+			}
+		case *syntax.BinaryCmd:
+			side := "rhs"
+			if containsOffset(item.X, offset) {
+				side = "lhs"
+			}
+			context = append(context, "binary:"+item.Op.String()+":"+side)
+		case *syntax.IfClause:
+			role := "else"
+			if inStatementList(offset, item.Cond) {
+				role = "condition"
+			} else if inStatementList(offset, item.Then) {
+				role = "then"
+			}
+			context = append(context, "if:"+role)
+		case *syntax.WhileClause:
+			role := "body"
+			if inStatementList(offset, item.Cond) {
+				role = "condition"
+			}
+			kind := "while"
+			if item.Until {
+				kind = "until"
+			}
+			context = append(context, kind+":"+role)
+		case *syntax.ForClause:
+			kind := "for"
+			if item.Select {
+				kind = "select"
+			}
+			context = append(context, kind+":body")
+		case *syntax.CaseItem:
+			context = append(context, "case-item:"+item.Op.String())
+		case *syntax.CmdSubst:
+			context = append(context, "command-substitution")
+		case *syntax.ProcSubst:
+			context = append(context, "process-substitution:"+item.Op.String())
+		case *syntax.Subshell:
+			context = append(context, "subshell")
+		case *syntax.Block:
+			context = append(context, "block")
+		case *syntax.FuncDecl:
+			context = append(context, "function")
+		case *syntax.TimeClause:
+			kind := "time"
+			if item.PosixFormat {
+				kind = "time-posix"
+			}
+			context = append(context, kind)
+		case *syntax.CoprocClause:
+			context = append(context, "coprocess")
+		}
+	}
+	return context
+}
+
 func binaryName(head string) string {
 	if separator := strings.LastIndexByte(head, '/'); separator >= 0 {
 		return head[separator+1:]
@@ -461,7 +539,7 @@ func analyze(input request) response {
 		},
 		Protocol: protocolInfo{
 			Version:      adapterProtocolVersion,
-			Capabilities: []string{"word_intents"},
+			Capabilities: []string{"structural_context", "word_intents"},
 		},
 		Clauses:      []clause{},
 		ControlEdges: []controlEdge{},
@@ -508,14 +586,15 @@ func analyze(input request) response {
 		inPipe, position := pipelinePosition(stack, bounds[0])
 		clauseByStatement[stmt] = len(out.Clauses)
 		out.Clauses = append(out.Clauses, clause{
-			Bin:              binaryName(argv[0]),
-			Argv:             argv,
-			Words:            commandWords(command, input.Command),
-			Span:             bounds,
-			InLoop:           loopContext(stack, bounds[0]),
-			InPipe:           inPipe,
-			InSubst:          substitutionContext(stack),
-			PipelinePosition: position,
+			Bin:               binaryName(argv[0]),
+			Argv:              argv,
+			Words:             commandWords(command, input.Command),
+			Span:              bounds,
+			InLoop:            loopContext(stack, bounds[0]),
+			InPipe:            inPipe,
+			InSubst:           substitutionContext(stack),
+			PipelinePosition:  position,
+			StructuralContext: structuralContext(stack, bounds[0]),
 		})
 		return true
 	})

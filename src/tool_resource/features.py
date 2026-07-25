@@ -599,6 +599,11 @@ def _clause_from_adapter(
     raw_words = raw_clause.get("words")
     if not isinstance(raw_words, list):
         raise MvdanClientError("mvdan adapter returned invalid word intents")
+    structural_context = raw_clause.get("structural_context")
+    if not isinstance(structural_context, list) or not all(
+        isinstance(item, str) for item in structural_context
+    ):
+        raise MvdanClientError("mvdan adapter returned invalid structural context")
 
     def intent_span(raw: object) -> tuple[int, int]:
         if (
@@ -678,6 +683,7 @@ def _clause_from_adapter(
         "in_pipe": bool(raw_clause["in_pipe"]),
         "in_subst": bool(raw_clause["in_subst"]),
         "pipeline_position": int(raw_clause["pipeline_position"]),
+        "structural_context": structural_context,
         "word_intents": word_intents,
     }
 

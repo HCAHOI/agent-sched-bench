@@ -740,9 +740,121 @@ def _components(
     return comps
 
 
+def _static_exchange_identity(clause: Mapping[str, Any]) -> tuple[object, ...]:
+    intents = clause.get("word_intents")
+    word_identity = (
+        tuple(
+            (
+                intent.get("cooked"),
+                intent.get("source"),
+                bool(intent.get("quoted")),
+                bool(intent.get("escaped")),
+                tuple(
+                    (
+                        component.get("kind"),
+                        component.get("source"),
+                        bool(component.get("quoted")),
+                        bool(component.get("escaped")),
+                    )
+                    for component in intent.get("components", ())
+                ),
+            )
+            for intent in intents
+        )
+        if isinstance(intents, list)
+        else ()
+    )
+    return (
+        tuple(clause["argv"]),
+        str(clause.get("original", "")),
+        bool(clause.get("in_loop")),
+        bool(clause.get("in_pipe")),
+        bool(clause.get("in_subst")),
+        int(clause.get("pipeline_position", -1)),
+        tuple(clause.get("structural_context", ())),
+        word_identity,
+    )
+
+
+def _exchange_context_supported(clause: Mapping[str, Any]) -> bool:
+    contexts = clause.get("structural_context")
+    if not isinstance(contexts, list):
+        return False
+    for context in contexts:
+        parts = str(context).split(":")
+        if len(parts) != 3 or parts[0] != "binary":
+            return False
+        operator, side = parts[1:]
+        if operator in {"&&", "||"}:
+            continue
+        if operator in {"|", "|&"} and side == "rhs":
+            continue
+        return False
+    return True
+
+
+def _control_consumer_identity(
+    clause_index: int,
+    statics: Mapping[int, Mapping[str, Any]],
+    edges: Sequence[Mapping[str, Any]],
+) -> tuple[object, ...]:
+    edge_by_id = {int(edge["id"]): edge for edge in edges}
+    referenced = {
+        int(operand["index"])
+        for edge in edges
+        for operand in (edge["lhs"], edge["rhs"])
+        if operand["kind"] == "edge"
+    }
+
+    def operand_identity(operand: Mapping[str, Any]) -> tuple[object, ...]:
+        if operand["kind"] == "edge":
+            value = edge_identity(edge_by_id[int(operand["index"])])
+        elif operand["kind"] == "clause":
+            index = int(operand["index"])
+            value = (
+                ("target",)
+                if index == clause_index
+                else ("clause", _static_exchange_identity(statics[index]))
+            )
+        else:
+            value = tuple(
+                ("target",)
+                if int(index) == clause_index
+                else ("clause", _static_exchange_identity(statics[int(index)]))
+                for index in operand["clause_indices"]
+            )
+        return (
+            str(operand["kind"]),
+            bool(operand["negated"]),
+            bool(operand["contains_pipeline"]),
+            bool(operand["contains_subshell"]),
+            value,
+        )
+
+    def edge_identity(edge: Mapping[str, Any]) -> tuple[object, ...]:
+        return (
+            str(edge["operator"]),
+            operand_identity(edge["lhs"]),
+            operand_identity(edge["rhs"]),
+        )
+
+    return tuple(
+        edge_identity(edge)
+        for edge in edges
+        if int(edge["id"]) not in referenced
+        and clause_index
+        in {
+            int(index)
+            for operand in (edge["lhs"], edge["rhs"])
+            for index in operand["clause_indices"]
+        }
+    )
+
+
 def _assign(
     statics: Mapping[int, Mapping[str, Any]],
     chains: Mapping[int, list[ExecImageRecord]],
+    control_edges: Sequence[Mapping[str, Any]],
 ) -> tuple[
     dict[int, int],
     dict[int, str],
@@ -806,16 +918,18 @@ def _assign(
     for cs, cp in _components(rem_statics, rem_chains, candidates):
         identities = {
             (
-                tuple(statics[si]["argv"]),
-                bool(statics[si].get("in_loop")),
-                bool(statics[si].get("in_pipe")),
-                bool(statics[si].get("in_subst")),
-                int(statics[si].get("pipeline_position", -1)),
-                tuple(statics[si].get("span", ())),
+                _static_exchange_identity(statics[si]),
+                _control_consumer_identity(si, statics, control_edges),
             )
             for si in cs
         }
-        if len(identities) == 1 and len(cs) == len(cp):
+        if (
+            len(identities) == 1
+            and len(cs) == len(cp)
+            and all(_exchange_context_supported(statics[si]) for si in cs)
+        ):
+            # Pairing is serialization only: semantic exchangeability, not PID
+            # or runtime order, is the proof that every pairing is equivalent.
             for si, pid in zip(sorted(cs), sorted(cp), strict=False):
                 assigned[si] = pid
                 used.add(pid)
@@ -918,7 +1032,7 @@ def bridge_command(
         pid: chain for pid, chain in chains.items() if not is_shell(pid)
     }
     assigned, evidence, ambiguous, candidate_rejections = _assign(
-        statics, candidate_chains
+        statics, candidate_chains, parsed["control_edges"]
     )
     mapped_roots = set(assigned.values())
     failed_by_identity: dict[tuple[str, tuple[str, ...]], list[FailedExecAttempt]] = {}

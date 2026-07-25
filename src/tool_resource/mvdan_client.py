@@ -15,8 +15,8 @@ from typing import Any
 
 PARSER_NAME = "mvdan.cc/sh/v3"
 PARSER_VERSION = "v3.13.1"
-ADAPTER_PROTOCOL_VERSION = 1
-REQUIRED_CAPABILITIES = frozenset({"word_intents"})
+ADAPTER_PROTOCOL_VERSION = 3
+REQUIRED_CAPABILITIES = frozenset({"structural_context", "word_intents"})
 _BUILD_SCRIPT = "scripts/setup/build_mvdan_adapter.sh"
 _MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 

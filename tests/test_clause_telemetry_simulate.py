@@ -528,7 +528,7 @@ def test_capped_runtime_invocation_persists_exact_argc_and_zero_observations() -
     collector = _collector_without_bpf()
 
     summary, violations = collector._summarize_call(
-        token=ToolCallToken("capped", " ".join(argv), 100, 0, 0),
+        token=ToolCallToken("capped", "time " + " ".join(argv), 100, 0, 0),
         ended_ns=230,
         events=events,
         loss_counts={},
@@ -539,6 +539,7 @@ def test_capped_runtime_invocation_persists_exact_argc_and_zero_observations() -
     assert "runtime_argv_incomplete" in violations[0]
     assert summary["mapping"]["observation_clause_count"] == 0
     assert summary["clauses"] == []
+    assert summary["static_word_intent"][0]["structural_context"] == ["time"]
     assert summary["runtime_invocations"][0] == {
         "host_pid": 100,
         "exec_seq": 0,

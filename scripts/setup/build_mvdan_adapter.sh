@@ -3,7 +3,7 @@ set -eu
 
 go_version=1.26.1
 parser_version=v3.13.1
-adapter_protocol_version=1
+adapter_protocol_version=3
 archive_sha256=031f088e5d955bab8657ede27ad4e3bc5b7c1ba281f05f245bcc304f327c987a
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
