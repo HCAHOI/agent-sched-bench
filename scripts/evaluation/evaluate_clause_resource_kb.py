@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
@@ -41,6 +42,7 @@ class ProxyCall:
     command: str
     clauses: tuple[Mapping[str, Any], ...]
     mapping_evidence: str
+    segment_times_ms: tuple[tuple[float, float], ...]
 
 
 @dataclass(frozen=True)
@@ -76,14 +78,16 @@ def _load_proxy_calls(
                 parse_failures += 1
             clauses = tuple(parsed["clauses"])
             key = (sample.agent_id, sample.iteration, sample.action_id)
+            mapping_evidence, segment_times_ms = _segment_evidence(
+                clauses, action_data[key].get("segment_timeline")
+            )
             calls.append(
                 ProxyCall(
                     sample=sample,
                     command=command,
                     clauses=clauses,
-                    mapping_evidence=_mapping_evidence(
-                        clauses, action_data[key].get("segment_timeline")
-                    ),
+                    mapping_evidence=mapping_evidence,
+                    segment_times_ms=segment_times_ms,
                 )
             )
     return calls, task_ids, parse_failures
@@ -116,53 +120,76 @@ def _action_data_by_key(
     return output
 
 
-def _mapping_evidence(
+def _segment_evidence(
     clauses: Sequence[Mapping[str, Any]], timeline: Any
-) -> str:
+) -> tuple[str, tuple[tuple[float, float], ...]]:
     if not isinstance(timeline, Mapping):
-        return "missing"
+        return "missing", ()
     segments = timeline.get("segments")
     if not isinstance(segments, list):
-        return "malformed"
+        return "malformed", ()
     runtime_bins: list[str] = []
+    times: list[tuple[float, float]] = []
     for segment in segments:
         if not isinstance(segment, Mapping) or not isinstance(
             segment.get("command_text"), str
         ):
-            return "malformed"
+            return "malformed", ()
+        start = segment.get("t_start_ms")
+        end = segment.get("t_end_ms")
+        if (
+            not isinstance(start, (int, float))
+            or not isinstance(end, (int, float))
+            or not math.isfinite(start)
+            or not math.isfinite(end)
+            or start < 0.0
+            or end < start
+        ):
+            return "invalid_timing", ()
         parsed = parse_command_clauses(segment["command_text"])
         if parsed["parse_failed"] or len(parsed["clauses"]) != 1:
-            return "segment_parse_mismatch"
+            return "segment_parse_mismatch", ()
         runtime_bins.append(str(parsed["clauses"][0]["bin"]))
+        times.append((float(start), float(end)))
     static_bins = [str(clause["bin"]) for clause in clauses]
     if len(runtime_bins) != len(static_bins):
-        return "count_mismatch"
-    return "bin_exact" if runtime_bins == static_bins else "bin_mismatch"
+        return "count_mismatch", ()
+    if runtime_bins != static_bins:
+        return "bin_mismatch", ()
+    return "bin_exact", tuple(times)
 
 
-def _proxy_observation(call: ProxyCall, repo: str) -> ClauseObservation | None:
+def _proxy_observations(call: ProxyCall, repo: str) -> list[ClauseObservation]:
     if (
-        len(call.clauses) != 1
-        or call.mapping_evidence != "bin_exact"
+        call.mapping_evidence != "bin_exact"
         or call.sample.censored
     ):
-        return None
-    clause = call.clauses[0]
+        return []
     sample = call.sample
-    return ClauseObservation(
-        repo=repo,
-        bin=str(clause["bin"]),
-        argv=tuple(clause["argv"]),
-        ts_start=sample.tool_ts_start,
-        ts_end=sample.tool_ts_end,
-        latency_ms=(sample.tool_ts_end - sample.tool_ts_start) * 1000.0,
-        peak_cpu_cores=(
-            sample.peak_cpu_cores if sample.peak_cpu_cores_eligible else None
-        ),
-        sampled_peak_rss_mb=(
-            sample.peak_memory_mb if sample.peak_memory_mb_eligible else None
-        ),
-    )
+    single = len(call.clauses) == 1
+    return [
+        ClauseObservation(
+            repo=repo,
+            bin=str(clause["bin"]),
+            argv=tuple(clause["argv"]),
+            ts_start=sample.tool_ts_start + start_ms / 1000.0,
+            ts_end=sample.tool_ts_start + end_ms / 1000.0,
+            latency_ms=end_ms - start_ms,
+            peak_cpu_cores=(
+                sample.peak_cpu_cores
+                if single and sample.peak_cpu_cores_eligible
+                else None
+            ),
+            sampled_peak_rss_mb=(
+                sample.peak_memory_mb
+                if single and sample.peak_memory_mb_eligible
+                else None
+            ),
+        )
+        for clause, (start_ms, end_ms) in zip(
+            call.clauses, call.segment_times_ms, strict=True
+        )
+    ]
 
 
 def _validate_partition(
@@ -265,8 +292,7 @@ def _score(
                     mapping_evidence=call.mapping_evidence,
                 )
             )
-        observation = _proxy_observation(call, repo)
-        if observation is not None:
+        for observation in _proxy_observations(call, repo):
             kb.observe_completed_clause(observation)
     return rows
 
@@ -332,7 +358,7 @@ def evaluate(
     fit_observations = [
         observation
         for call in fit_calls
-        if (observation := _proxy_observation(call, "public")) is not None
+        for observation in _proxy_observations(call, "public")
     ]
     kb = ClauseResourceKB.fit_public(fit_observations)
     rows = _score(kb, eval_calls)
@@ -395,7 +421,10 @@ def main() -> None:
             "frozen per-clause three-valued OR"
         ),
         "proxy_adapter": {
-            "latency_ms": "legacy replay command envelope on exact single-clause rows",
+            "latency_ms": (
+                "legacy bash-xtrace segment timing on exact bin-aligned rows; "
+                "not Stage-2 clause wall telemetry"
+            ),
             "peak_cpu_cores": (
                 "legacy cgroup peak; fit replay is pacct-on and approximately "
                 "3% inflated, not Stage-2 per-clause peak_cpu_cores"

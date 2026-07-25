@@ -101,10 +101,11 @@ composer limitation, surfaced on the prediction, not silently patched.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
 import heapq
 import math
-from typing import Any, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
 from tool_resource.features import parse_command_clauses
 from tool_resource.metrics import ecdf_quantile

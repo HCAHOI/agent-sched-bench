@@ -10,8 +10,8 @@ from tool_resource.runtime_kb import (
     ClauseFlagPrediction,
     ClauseObservation,
     ClauseResourceKB,
+    _aggregate_or,
 )
-from tool_resource.runtime_kb import _aggregate_or
 
 
 def _flag(value: bool | None) -> ClauseFlagPrediction:
