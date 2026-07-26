@@ -1,4 +1,8 @@
-"""Runtime asymmetric two-layer tool resource knowledge base.
+"""Runtime asymmetric two-layer tool resource knowledge bases.
+
+``RuntimeToolResourceKB`` is retained for historical continuous-resource
+diagnostics and snapshot compatibility. The current canonical API is the
+latency-bucket path on ``ClauseResourceKB`` described below.
 
 Public and repo layers intentionally use different key granularity because
 they encode different environment assumptions:
@@ -32,7 +36,7 @@ label is never attributed to every contained binary. Shell builtins such as
 enclosing tool-call observation. No tool-specific option semantics are
 implemented; argument order is preserved as-is.
 
-Target semantics (matching the established label definitions):
+Historical call-level target semantics:
 
 - ``latency_ms``: observed call latency, skipped for censored calls;
 - ``peak_cpu_cores``: eligible peak CPU cores;
@@ -52,60 +56,33 @@ public evidence; arbitration alternatives (shrinkage, calibration) remain
 development candidates and are not implemented here.
 
 --------------------------------------------------------------------------
-Clause dominant-type classifier (``ClauseResourceKB``)
---------------------------------------------------------------------------
+Clause latency bucket predictor (``ClauseResourceKB``)
+------------------------------------------------------
 
-The canonical objective (`analysis/development/tool-resource-canonical-objective.md`)
-wants three command-level binary labels predicted before execution and
-composed from mvdan clauses:
-
-    shell tool call
-      -> mvdan clauses / binary identities (`tool_resource.features`)
-      -> per-clause flags from public bin priors + causal repo refinement
-      -> command flag per target = OR over its clause flags
+The current canonical stage predicts latency buckets with explicit boundaries.
+The KB reuses mvdan clause identity, frozen public priors, and causal repo
+refinement. It deliberately does not compose compound-command buckets:
+categorical bucket IDs cannot be ORed, and sequential versus pipeline timing
+requires a separate physical contract.
 
 ``ClauseObservation`` is one *static mvdan clause* (identity = ``bin`` + ordered
 ``argv``), aggregated by ``tool_resource.clause_bridge`` from the Stage-2 eBPF
 windowed sampler (`analysis/development/clause-telemetry-ebpf-stage2-*`). A
 static clause may own a same-PID exec chain and descendants
 (``env -> nice -> workload`` is ONE clause headed by ``env``); the bridge folds
-all owned exec images into a single observation carrying three per-clause
-MEASURED metrics (each ``None`` when its coverage is insufficient) plus a raw
-``cpu_ns_cumulative`` that is never a flag source.
-
-Per-clause labels at the fixed operating points:
-
-- **latency long** (``> 3500 ms`` and ``> 5000 ms``): from the clause wall
-  interval ``latency_ms``.
-- **CPU heavy** (``> 2 cores``): from eligible ``peak_cpu_cores`` — the Stage-2
-  windowed peak CPU rate, NEVER ``cpu_ns/wall_ns``. Unknown when the clause had
-  insufficient CPU-sample coverage.
-- **memory heavy** (``> 500 MB``): from eligible ``sampled_peak_rss_mb`` — the
-  Stage-2 max aligned distinct-mm RSS sum, NEVER lifetime hiwater or average
-  memory. Unknown when RSS coverage is insufficient.
-
-Flag rule: the registered strict-``>`` threshold with a ``>= 0.5`` exceedance
-vote over the selected node's observations. Backoff for clause identity
-(``bin``, ``argv``) in repo R: repo exact clause -> repo shorter bin-qualified
-argv prefixes (depth 4..2) -> repo bin -> public bin -> public global. Prefix
-keys are nested under ``bin``, so ``bin`` is queried only after every
-more-specific prefix. Public holds only bin and global nodes (coarse
-cold-start); exact/prefix nodes are repo-only, mirroring the secondary
-conditional-p90 layer's asymmetry.
-
-Command aggregation is the frozen per-target THREE-VALUED OR of clause flags:
-any True -> True; otherwise any Unknown -> Unknown; otherwise False. It never
-sums concurrent clause CPU/RSS — two ~2-core clauses each flag False at strict
-``> 2`` while the command is concurrently heavy; that is the registered
-composer limitation, surfaced on the prediction, not silently patched.
+all owned exec images into a single observation carrying latency plus canonical
+Stage-2 CPU/RSS measurements for the later bucket stages. The current latency
+API reads only ``latency_ms``. Backoff for clause identity is repo exact clause
+-> repo argv prefixes -> repo bin -> public bin -> public global.
 """
 
 from __future__ import annotations
 
 import heapq
 import math
+from bisect import bisect_right
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from tool_resource.features import parse_command_clauses
@@ -305,9 +282,7 @@ class RuntimeToolResourceKB:
             )
         self._last_query_ts = query.ts_start
         self._absorb_completed(query.ts_start)
-        return {
-            target: self._predict_target(query, target) for target in TARGETS
-        }
+        return {target: self._predict_target(query, target) for target in TARGETS}
 
     def _absorb_completed(self, ts_start: float) -> None:
         # Strictly-completed contract: ts_end < ts_start. Same-start,
@@ -348,9 +323,7 @@ class RuntimeToolResourceKB:
                 return values, scope, kind, tuple(path)
         raise ValueError(f"no public global node for target {target!r}")
 
-    def _predict_target(
-        self, query: ToolCallQuery, target: str
-    ) -> TargetPrediction:
+    def _predict_target(self, query: ToolCallQuery, target: str) -> TargetPrediction:
         if target == "peak_memory_mb" and query.ambient_before_mb is None:
             return TargetPrediction(
                 target=target,
@@ -387,19 +360,15 @@ class RuntimeToolResourceKB:
             "quantile": _CONDITIONAL_P90_QUANTILE,
             "max_prefix_depth": _MAX_PREFIX_DEPTH,
             "public": {
-                target: _nodes_to_json(nodes)
-                for target, nodes in self._public.items()
+                target: _nodes_to_json(nodes) for target, nodes in self._public.items()
             },
             "repo": {
                 repo: {
-                    target: _nodes_to_json(nodes)
-                    for target, nodes in targets.items()
+                    target: _nodes_to_json(nodes) for target, nodes in targets.items()
                 }
                 for repo, targets in self._repo.items()
             },
-            "pending": [
-                asdict(call) for _, _, call in sorted(self._pending)
-            ],
+            "pending": [asdict(call) for _, _, call in sorted(self._pending)],
             "last_query_ts": self._last_query_ts,
         }
 
@@ -457,48 +426,22 @@ def _nodes_from_json(
 
 
 # ==========================================================================
-# Clause dominant-type classifier
+# Clause latency bucket predictor
 # ==========================================================================
 
-_CLAUSE_SCHEMA = "runtime_clause_resource_kb_v3"
+_CLAUSE_SCHEMA = "runtime_clause_resource_kb_v4"
 _CLAUSE_MAX_DEPTH = 4  # frozen ordered argv-prefix depth budget
-_DEFAULT_EXCLUDE_LEADING_CD = True
 _DELIM = "\x00"  # argv tokens may contain spaces; NUL cannot collide
 
 # Aggregated Stage-2 clause-observation value sources. Each is a per-clause
 # MEASURED metric (see ``tool_resource.clause_bridge``), not an eBPF exit field:
-#   latency_ms          -- clause wall interval (frozen 3500/5000 ms points);
+#   latency_ms          -- clause wall interval;
 #   peak_cpu_cores       -- windowed peak CPU cores (never cpu_ns/wall_ns);
 #   sampled_peak_rss_mb  -- max aligned distinct-mm RSS (never lifetime hiwater).
 _LATENCY_MS = "latency_ms"
 _PEAK_CPU_CORES = "peak_cpu_cores"
 _SAMPLED_PEAK_RSS_MB = "sampled_peak_rss_mb"
 _CLAUSE_SOURCES = (_LATENCY_MS, _PEAK_CPU_CORES, _SAMPLED_PEAK_RSS_MB)
-
-# Fixed operating points (canonical objective). Strict `>` thresholds.
-CPU_HEAVY_TARGET = "cpu_heavy_2cores"
-MEMORY_HEAVY_TARGET = "memory_heavy_500mb"
-FLAG_TARGETS: dict[str, tuple[str, float]] = {
-    "latency_long_3500ms": (_LATENCY_MS, 3500.0),
-    "latency_long_5000ms": (_LATENCY_MS, 5000.0),
-    CPU_HEAVY_TARGET: (_PEAK_CPU_CORES, 2.0),
-    MEMORY_HEAVY_TARGET: (_SAMPLED_PEAK_RSS_MB, 500.0),
-}
-CLASSIFIER_TARGETS = tuple(FLAG_TARGETS)
-
-# Command composition is a per-target THREE-VALUED OR over clause flags:
-#   any True -> True; else any Unknown(None) -> Unknown(None); else False.
-# It never sums concurrent clause CPU/RSS — that limitation is surfaced, not
-# silently corrected (see _aggregate_or).
-_CONCURRENT_SUM_CAVEAT = (
-    "three-valued OR does not sum concurrent clauses: individually "
-    "sub-threshold concurrent clauses can jointly cross the threshold "
-    "(registered composer limitation, not a telemetry failure)"
-)
-_SEQUENTIAL_LATENCY_CAVEAT = (
-    "OR is sufficient but not complete: sequential short clauses can "
-    "accumulate into a long command"
-)
 
 
 @dataclass(frozen=True)
@@ -509,15 +452,15 @@ class ClauseObservation:
     exec-image occurrence. A single static clause may own an exec chain
     (``env -> nice -> workload``) and descendants; the bridge
     (``tool_resource.clause_bridge``) aggregates all owned exec images into one
-    observation. The three flag sources are per-clause MEASURED metrics, each
-    ``None`` when its target-specific coverage was insufficient (unknown):
+    observation. The three fields are per-clause MEASURED metrics, each
+    ``None`` when its target-specific coverage was insufficient:
 
     - ``latency_ms``      -- clause wall interval;
     - ``peak_cpu_cores``  -- windowed peak CPU cores over the owned lineage;
     - ``sampled_peak_rss_mb`` -- max aligned distinct-mm RSS over the lineage.
 
-    ``cpu_ns_cumulative`` is preserved as a separate raw field and is NEVER a
-    flag source. ``ts_start``/``ts_end`` are wall-clock seconds for the causal
+    ``cpu_ns_cumulative`` is preserved as a separate raw field.
+    ``ts_start``/``ts_end`` are wall-clock seconds for the causal
     contract.
     """
 
@@ -545,39 +488,57 @@ class ClauseObservation:
 
 
 @dataclass(frozen=True)
-class ClauseFlagPrediction:
-    """One target's flag for one clause, with provenance."""
+class LatencyBuckets:
+    """Explicit positive boundaries for right-open latency buckets."""
 
-    target: str
-    flag: bool | None
-    threshold: float | None
-    source: str | None
-    scope: str | None
-    key_kind: str | None
+    edges_ms: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        if not self.edges_ms:
+            raise ValueError("at least one latency bucket edge is required")
+        previous = 0.0
+        for edge in self.edges_ms:
+            if not math.isfinite(edge) or edge <= previous:
+                raise ValueError(
+                    "latency bucket edges must be finite, positive, and "
+                    "strictly increasing"
+                )
+            previous = edge
+
+    @property
+    def bucket_count(self) -> int:
+        return len(self.edges_ms) + 1
+
+    def bucket_id(self, latency_ms: float) -> int:
+        """Return i for [b_i, b_{i+1}); the final bucket extends to +inf."""
+
+        if not math.isfinite(latency_ms) or latency_ms < 0.0:
+            raise ValueError("latency_ms must be finite and non-negative")
+        return bisect_right(self.edges_ms, latency_ms)
+
+
+@dataclass(frozen=True)
+class ClauseLatencyBucketPrediction:
+    """Empirical latency-bucket prediction for one clause."""
+
+    bucket_id: int
+    probability_by_bucket: tuple[float, ...]
+    scope: str
+    key_kind: str
     evidence_count: int
     fallback_path: tuple[str, ...]
-    note: str | None = None
 
 
 @dataclass(frozen=True)
-class CommandFlagPrediction:
-    """Command-level OR of clause flags for one target."""
-
-    target: str
-    flag: bool | None
-    clause_flags: tuple[ClauseFlagPrediction, ...]
-    note: str | None = None
-
-
-@dataclass(frozen=True)
-class CommandPrediction:
-    """Per-target command predictions for a parsed shell command."""
+class CommandLatencyBucketPrediction:
+    """Command result; compound commands remain explicitly uncomposed."""
 
     repo: str
     command: str
     parse_failed: bool
     clause_bins: tuple[str, ...]
-    targets: dict[str, CommandFlagPrediction] = field(default_factory=dict)
+    prediction: ClauseLatencyBucketPrediction | None
+    unavailable_reason: str | None = None
 
 
 def _clause_value(obs: ClauseObservation, source: str) -> float | None:
@@ -621,26 +582,15 @@ def _clause_public_keys(bin_: str) -> list[NodeKey]:
     return [("bin", bin_), ("global", "")]
 
 
-def _exceedance_ge_half(values: Sequence[float], threshold: float) -> bool:
-    """Registered rule: strict `>` threshold, `>= 0.5` exceedance vote."""
-
-    if not values:
-        raise ValueError("exceedance requires non-empty values")
-    return sum(value > threshold for value in values) / len(values) >= 0.5
-
-
 class ClauseResourceKB:
-    """Clause-level dominant-type classifier with the asymmetric KB structure.
+    """Causal clause history with a current-stage latency-bucket API.
 
     Public bin priors are frozen after construction; repo clause/prefix nodes
     accumulate causally (strict ``ts_end < query ts_start``) under the same
     monotonic-query guard as :class:`RuntimeToolResourceKB`.
     """
 
-    def __init__(
-        self, *, exclude_leading_cd: bool = _DEFAULT_EXCLUDE_LEADING_CD
-    ) -> None:
-        self.exclude_leading_cd = exclude_leading_cd
+    def __init__(self) -> None:
         self._public: dict[str, dict[NodeKey, tuple[float, ...]]] = {
             source: {} for source in _CLAUSE_SOURCES
         }
@@ -653,8 +603,6 @@ class ClauseResourceKB:
     def fit_public(
         cls,
         observations: Iterable[ClauseObservation],
-        *,
-        exclude_leading_cd: bool = _DEFAULT_EXCLUDE_LEADING_CD,
     ) -> ClauseResourceKB:
         """Fit frozen public bin/global priors from historical clauses."""
 
@@ -671,7 +619,7 @@ class ClauseResourceKB:
                     acc[source].setdefault(key, []).append(value)
         if not acc[_LATENCY_MS].get(("global", "")):
             raise ValueError("fit corpus has no clause latency (wall_ns) evidence")
-        kb = cls(exclude_leading_cd=exclude_leading_cd)
+        kb = cls()
         kb._public = {
             source: {key: tuple(values) for key, values in nodes.items()}
             for source, nodes in acc.items()
@@ -716,91 +664,89 @@ class ClauseResourceKB:
                 return values, "public", key[0], tuple(path)
         return None
 
-    def predict_clause(
-        self, repo: str, bin_: str, argv: Sequence[str]
-    ) -> dict[str, ClauseFlagPrediction]:
-        """Per-target flags for one clause; a target with no evidence is unknown.
+    def predict_clause_latency_bucket(
+        self,
+        repo: str,
+        bin_: str,
+        argv: Sequence[str],
+        buckets: LatencyBuckets,
+    ) -> ClauseLatencyBucketPrediction:
+        """Predict the modal empirical latency bucket for one clause."""
 
-        CPU-heavy uses eligible ``peak_cpu_cores > 2`` and memory-heavy uses
-        eligible ``sampled_peak_rss_mb > 500`` — both target-specific, so a
-        clause with no such evidence yields ``flag=None`` (unknown) for that
-        target only, never a fabricated value.
-        """
+        selected = self._select(repo, _LATENCY_MS, bin_, argv)
+        if selected is None:
+            raise ValueError("no public global clause latency node")
+        values, scope, kind, path = selected
+        counts = [0] * buckets.bucket_count
+        for value in values:
+            counts[buckets.bucket_id(value)] += 1
+        predicted = max(range(buckets.bucket_count), key=lambda i: (counts[i], -i))
+        return ClauseLatencyBucketPrediction(
+            bucket_id=predicted,
+            probability_by_bucket=tuple(count / len(values) for count in counts),
+            scope=scope,
+            key_kind=kind,
+            evidence_count=len(values),
+            fallback_path=path,
+        )
 
-        out: dict[str, ClauseFlagPrediction] = {}
-        for target, (source, threshold) in FLAG_TARGETS.items():
-            selected = self._select(repo, source, bin_, argv)
-            if selected is None:
-                out[target] = ClauseFlagPrediction(
-                    target=target,
-                    flag=None,
-                    threshold=threshold,
-                    source=source,
-                    scope=None,
-                    key_kind=None,
-                    evidence_count=0,
-                    fallback_path=(),
-                    note=f"no {source} evidence in public or repo layer (unknown)",
-                )
-                continue
-            values, scope, kind, fpath = selected
-            out[target] = ClauseFlagPrediction(
-                target=target,
-                flag=_exceedance_ge_half(values, threshold),
-                threshold=threshold,
-                source=source,
-                scope=scope,
-                key_kind=kind,
-                evidence_count=len(values),
-                fallback_path=fpath,
-            )
-        return out
-
-    def predict_command_from_clauses(
+    def predict_command_latency_bucket_from_clauses(
         self,
         repo: str,
         clauses: Sequence[Mapping[str, Any]],
         ts_start: float,
+        buckets: LatencyBuckets,
         *,
         command: str = "",
         parse_failed: bool = False,
-    ) -> CommandPrediction:
-        """Advance causal state, then OR clause flags into command-level flags."""
+    ) -> CommandLatencyBucketPrediction:
+        """Predict only a parsed single clause; never compose bucket IDs."""
 
         self._advance(ts_start)
         effective = list(clauses)
-        if self.exclude_leading_cd:
-            while len(effective) > 1 and str(effective[0]["bin"]) == "cd":
-                effective.pop(0)
-        per_clause = [
-            self.predict_clause(repo, str(c["bin"]), tuple(c["argv"])) for c in effective
-        ]
-        targets: dict[str, CommandFlagPrediction] = {}
-        for target in CLASSIFIER_TARGETS:
-            clause_flags = tuple(pc[target] for pc in per_clause)
-            targets[target] = _aggregate_or(target, clause_flags)
-        return CommandPrediction(
+        clause_bins = tuple(str(c["bin"]) for c in effective)
+        reason = None
+        prediction = None
+        if parse_failed:
+            reason = "parse_failed"
+        elif len(effective) != 1:
+            reason = "compound_command_uncomposed"
+        else:
+            clause = effective[0]
+            prediction = self.predict_clause_latency_bucket(
+                repo,
+                str(clause["bin"]),
+                tuple(clause["argv"]),
+                buckets,
+            )
+        return CommandLatencyBucketPrediction(
             repo=repo,
             command=command,
             parse_failed=parse_failed,
-            clause_bins=tuple(str(c["bin"]) for c in effective),
-            targets=targets,
+            clause_bins=clause_bins,
+            prediction=prediction,
+            unavailable_reason=reason,
         )
 
-    def predict_command(
-        self, repo: str, command: str, ts_start: float
-    ) -> CommandPrediction:
-        """Parse ``command`` with mvdan then predict command-level flags.
+    def predict_command_latency_bucket(
+        self,
+        repo: str,
+        command: str,
+        ts_start: float,
+        buckets: LatencyBuckets,
+    ) -> CommandLatencyBucketPrediction:
+        """Parse a command and predict its bucket when composition is unnecessary.
 
         Enforces the monotonic-query guard and releases causally-prior repo
-        clauses before predicting, exactly like the legacy call-level query.
+        clauses before predicting.
         """
 
         parsed = parse_command_clauses(command)
-        return self.predict_command_from_clauses(
+        return self.predict_command_latency_bucket_from_clauses(
             repo,
             parsed["clauses"],
             ts_start,
+            buckets,
             command=command,
             parse_failed=bool(parsed["parse_failed"]),
         )
@@ -821,15 +767,12 @@ class ClauseResourceKB:
         return {
             "schema": _CLAUSE_SCHEMA,
             "max_prefix_depth": _CLAUSE_MAX_DEPTH,
-            "exclude_leading_cd": self.exclude_leading_cd,
             "public": {
-                source: _nodes_to_json(nodes)
-                for source, nodes in self._public.items()
+                source: _nodes_to_json(nodes) for source, nodes in self._public.items()
             },
             "repo": {
                 repo: {
-                    source: _nodes_to_json(nodes)
-                    for source, nodes in sources.items()
+                    source: _nodes_to_json(nodes) for source, nodes in sources.items()
                 }
                 for repo, sources in self._repo.items()
             },
@@ -845,10 +788,7 @@ class ClauseResourceKB:
             raise ValueError(f"unsupported clause schema {obj.get('schema')!r}")
         if obj.get("max_prefix_depth") != _CLAUSE_MAX_DEPTH:
             raise ValueError("snapshot prefix depth differs from module depth")
-        exclude_leading_cd = obj.get("exclude_leading_cd")
-        if not isinstance(exclude_leading_cd, bool):
-            raise TypeError("snapshot exclude_leading_cd must be boolean")
-        kb = cls(exclude_leading_cd=exclude_leading_cd)
+        kb = cls()
         kb._public = {
             source: {
                 key: tuple(values)
@@ -869,55 +809,22 @@ class ClauseResourceKB:
             for repo, sources in obj.get("repo", {}).items()
         }
         for row in obj.get("pending", []):
-            kb.observe_completed_clause(ClauseObservation(**{
-                **row, "argv": tuple(row["argv"])
-            }))
+            kb.observe_completed_clause(
+                ClauseObservation(**{**row, "argv": tuple(row["argv"])})
+            )
         last_query_ts = obj.get("last_query_ts")
         kb._last_query_ts = None if last_query_ts is None else float(last_query_ts)
         return kb
 
 
-def _aggregate_or(
-    target: str, clause_flags: Sequence[ClauseFlagPrediction]
-) -> CommandFlagPrediction:
-    """Frozen per-target three-valued OR over clause flags.
-
-    any True -> True; otherwise any Unknown(None) -> Unknown(None); otherwise
-    False (an empty clause set is False, the OR identity). Never sums
-    concurrent clause CPU/RSS — that limitation is surfaced in the note.
-    """
-
-    flags = [cf.flag for cf in clause_flags]
-    if any(f is True for f in flags):
-        result: bool | None = True
-    elif any(f is None for f in flags):
-        result = None
-    else:
-        result = False
-
-    if not clause_flags:
-        note = "no executable clauses parsed; three-valued OR over empty set is False"
-    elif target.startswith("latency_long"):
-        note = _SEQUENTIAL_LATENCY_CAVEAT
-    else:  # cpu-heavy / memory-heavy
-        note = _CONCURRENT_SUM_CAVEAT
-    return CommandFlagPrediction(
-        target=target, flag=result, clause_flags=tuple(clause_flags), note=note
-    )
-
-
 __all__ = [
-    "CLASSIFIER_TARGETS",
-    "CPU_HEAVY_TARGET",
-    "FLAG_TARGETS",
-    "MEMORY_HEAVY_TARGET",
     "TARGETS",
-    "ClauseFlagPrediction",
+    "ClauseLatencyBucketPrediction",
     "ClauseObservation",
     "ClauseResourceKB",
-    "CommandFlagPrediction",
-    "CommandPrediction",
+    "CommandLatencyBucketPrediction",
     "CompletedCall",
+    "LatencyBuckets",
     "RuntimeToolResourceKB",
     "TargetPrediction",
     "ToolCallQuery",
