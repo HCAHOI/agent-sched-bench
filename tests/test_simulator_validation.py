@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -619,6 +620,188 @@ def test_openclaw_replay_provider_rejects_ttft_tpot_with_replay_speed() -> None:
         )
 
 
+def test_openclaw_replay_stops_before_unrecorded_final_tool_call() -> None:
+    from trace_collect.openclaw_host_runtime import (
+        OpenClawReplayProvider,
+        _replay_execution_completed,
+        replay_action_failure_counts,
+    )
+
+    source_action = {
+        "type": "action",
+        "action_type": "llm_call",
+        "data": {
+            "raw_response": {
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "pending",
+                                    "function": {
+                                        "name": "exec",
+                                        "arguments": '{"command":"true"}',
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ]
+            }
+        },
+    }
+    provider = OpenClawReplayProvider(
+        llm_actions=[source_action],
+        replay_speed=1.0,
+        timing_mode="source_scaled",
+        stop_before_final_tool_calls=True,
+    )
+    response = asyncio.run(provider.chat([]))
+    replay_action = {"type": "action", "action_type": "llm_call", "data": {}}
+    counts = replay_action_failure_counts([source_action], [replay_action])
+
+    assert response.finish_reason == "error"
+    assert response.tool_calls == []
+    assert provider.source_terminal_boundary_reached
+    assert _replay_execution_completed(
+        action_counts=counts,
+        expected_actions=1,
+        stop_reason="error",
+        error=response.content,
+        source_terminal_reason="trace_ended_before_tools",
+        source_terminal_boundary_reached=True,
+        provider_request_sequence_matches=True,
+    )
+
+
+def test_openclaw_replay_does_not_retry_recorded_transient_error() -> None:
+    from trace_collect.openclaw_host_runtime import OpenClawReplayProvider
+
+    provider = OpenClawReplayProvider(
+        llm_actions=[
+            {
+                "action_type": "llm_call",
+                "data": {
+                    "raw_response": {
+                        "choices": [
+                            {
+                                "finish_reason": "error",
+                                "message": {"content": "504 Gateway Timeout"},
+                            }
+                        ]
+                    }
+                },
+            }
+        ],
+        replay_speed=1.0,
+        timing_mode="source_scaled",
+    )
+
+    response = asyncio.run(
+        provider.chat_with_retry(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,AA=="},
+                        }
+                    ],
+                }
+            ]
+        )
+    )
+
+    assert response.content == "504 Gateway Timeout"
+    assert response.finish_reason == "error"
+    assert provider._index == 1
+    assert provider.request_sequence_matches
+
+
+def test_openclaw_replay_rejects_provider_error_before_source_response() -> None:
+    from trace_collect.openclaw_host_runtime import OpenClawReplayProvider
+
+    provider = OpenClawReplayProvider(
+        llm_actions=[
+            {
+                "action_type": "llm_call",
+                "data": {
+                    "completion_tokens": "invalid",
+                    "raw_response": {
+                        "choices": [
+                            {
+                                "finish_reason": "error",
+                                "message": {"content": "recorded error"},
+                            }
+                        ]
+                    },
+                },
+            }
+        ],
+        replay_speed=1.0,
+        timing_mode="ttft_tpot",
+        llm_ttft_ms=1.0,
+        llm_tpot_ms=1.0,
+    )
+
+    response = asyncio.run(provider.chat_with_retry([]))
+
+    assert response.finish_reason == "error"
+    assert not provider.request_sequence_matches
+
+
+def test_failed_source_terminal_reason_comes_from_trace_shape() -> None:
+    from trace_collect.simulate_openclaw import _source_terminal_reason
+
+    def loaded(
+        last: dict[str, object],
+        *,
+        n_iterations: int,
+        max_iterations: int = 100,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            summary={"success": False, "n_iterations": n_iterations},
+            metadata={"max_iterations": max_iterations},
+            actions=[last],
+        )
+
+    def llm(finish_reason: str, *, tool_calls: bool = False) -> dict[str, object]:
+        return {
+            "action_type": "llm_call",
+            "data": {
+                "raw_response": {
+                    "choices": [
+                        {
+                            "finish_reason": finish_reason,
+                            "message": {
+                                "tool_calls": [{"id": "pending"}] if tool_calls else []
+                            },
+                        }
+                    ]
+                }
+            },
+        }
+
+    assert _source_terminal_reason(
+        loaded(llm("error"), n_iterations=11)
+    ) == "llm_error"
+    assert _source_terminal_reason(
+        loaded({"action_type": "tool_exec"}, n_iterations=100)
+    ) == "max_iterations"
+    assert _source_terminal_reason(
+        loaded(llm("tool_calls", tool_calls=True), n_iterations=13)
+    ) == "trace_ended_before_tools"
+    assert _source_terminal_reason(
+        loaded(llm("tool_calls", tool_calls=True), n_iterations=100)
+    ) == "trace_ended_before_tools"
+    assert _source_terminal_reason(
+        loaded({"action_type": "tool_exec"}, n_iterations=13)
+    ) == "trace_ended_after_tools"
+
+
 def test_llm_replay_duration_rejects_invalid_completion_tokens() -> None:
     from trace_collect.openclaw_host_runtime import llm_replay_duration_s
 
@@ -710,6 +893,33 @@ def test_replay_failure_counts_align_expected_failures_by_order() -> None:
     assert counts.source_failed_actions == 1
     assert counts.replay_failed_actions == 2
     assert counts.unexpected_replay_failed_actions == 1
+    assert counts.action_sequence_matches
+
+
+def test_replay_failure_counts_rejects_extra_actions() -> None:
+    from trace_collect.openclaw_host_runtime import replay_action_failure_counts
+
+    source = [{"type": "action", "action_type": "llm_call", "data": {}}]
+    replay = [
+        {"type": "action", "action_type": "llm_call", "data": {}},
+        {"type": "action", "action_type": "tool_exec", "data": {"tool_name": "exec"}},
+    ]
+
+    counts = replay_action_failure_counts(source, replay)
+    wrong_tool = replay_action_failure_counts(
+        [{"type": "action", "action_type": "tool_exec", "data": {"tool_name": "exec"}}],
+        [
+            {
+                "type": "action",
+                "action_type": "tool_exec",
+                "data": {"tool_name": "read_file"},
+            }
+        ],
+    )
+
+    assert counts.emitted_actions == 2
+    assert not counts.action_sequence_matches
+    assert not wrong_tool.action_sequence_matches
 
 
 
@@ -1019,9 +1229,10 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
         Path(request["status_path"]).write_text(
             json.dumps(
                 {
-                    "success": False,
-                    "stop_reason": "error",
-                    "error": "worker died",
+                    "success": True,
+                    "stop_reason": "completed",
+                    "error": None,
+                    "replay_execution": "completed",
                     "elapsed_s": 0.5,
                     "sleep_records": [],
                     "agent_execution_environment": "host",
@@ -1031,6 +1242,27 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
                     "tool_container_user_id": "0",
                     "tool_container_workdir": "/testbed",
                     "openclaw_host_pid": 98765,
+                    "telemetry_integrity_failed": False,
+                    "telemetry_quality": "ok",
+                    "collection_validity": "valid",
+                    "telemetry_errors": [],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        Path(request["output_trace"]).write_text(
+            "".join(json.dumps(action) + "\n" for action in request["source_actions"]),
+            encoding="utf-8",
+        )
+        Path(request["clause_telemetry_path"]).write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "replay_execution": "completed",
+                    "telemetry_quality": "ok",
+                    "collection_validity": "valid",
+                    "integrity": {"status": "ok", "errors": []},
                 }
             )
             + "\n",
@@ -1044,6 +1276,7 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
         "trace_collect.simulate_openclaw._run_openclaw_worker_process",
         fake_worker_process,
     )
+    monkeypatch.setenv("OPENCLAW_TOOL_RESOURCE_TELEMETRY", "clause")
     trace_logger = TraceLogger(tmp_path / "replay-output", "replay")
     try:
         stats = asyncio.run(
@@ -1064,13 +1297,24 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
     ]
     summary = next(record for record in records if record["type"] == "summary")
     assert stats.success is False
-    assert stats.failed_action_count == 2
+    assert stats.failed_action_count == 1
     assert summary["success"] is False
-    assert summary["failed_actions"] == 2
+    assert summary["failed_actions"] == 1
     assert summary["task_instance_id"] == "fc_openclaw_failed_replay"
     assert summary["source_action_agent_id"] == "cli:oc-failed"
     assert summary["worker_returncode"] == 7
-    assert summary["worker_error"] == "worker died"
+    assert summary["worker_error"] is None
+    assert summary["replay_execution"] == "failed"
+    assert summary["collection_validity"] == "invalid"
+    assert summary["telemetry_integrity_failed"] is True
+    sidecar = json.loads(
+        (prepared.task_output_dir / "clause_telemetry.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert sidecar["replay_execution"] == "failed"
+    assert sidecar["collection_validity"] == "invalid"
+    assert sidecar["integrity"]["status"] == "failed"
     assert summary["agent_execution_environment"] == "host"
     assert summary["tool_execution_environment"] == "task_container"
     assert summary["tool_container_id"] == "cid-openclaw-failed-replay"

@@ -3281,11 +3281,20 @@ class ClauseTelemetryCollector:
         unavailable_count = sum(
             call.get("telemetry_quality") == "unavailable" for call in self.calls
         )
-        collection_validity = (
-            "valid"
+        telemetry_quality = (
+            "ok"
             if not self._integrity_errors
             and invalid_count == 0
             and unavailable_count == 0
+            else (
+                "unavailable"
+                if unavailable_count and not valid_count and not invalid_count
+                else "invalid"
+            )
+        )
+        collection_validity = (
+            "valid"
+            if replay_execution == "completed" and telemetry_quality == "ok"
             else "invalid"
         )
         self.artifact_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3314,15 +3323,7 @@ class ClauseTelemetryCollector:
                         "unavailable_call_count": unavailable_count,
                     },
                     "replay_execution": replay_execution,
-                    "telemetry_quality": (
-                        "ok"
-                        if collection_validity == "valid"
-                        else (
-                            "unavailable"
-                            if unavailable_count and not valid_count and not invalid_count
-                            else "invalid"
-                        )
-                    ),
+                    "telemetry_quality": telemetry_quality,
                     "collection_validity": collection_validity,
                     "integrity": {
                         "status": ("failed" if self._integrity_errors else "ok"),

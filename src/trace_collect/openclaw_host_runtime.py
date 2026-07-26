@@ -49,6 +49,7 @@ class ReplayActionFailureCounts:
     source_failed_actions: int
     replay_failed_actions: int
     unexpected_replay_failed_actions: int
+    action_sequence_matches: bool
 
 
 def _tool_name(record: dict[str, Any]) -> str | None:
@@ -76,9 +77,7 @@ def _action_matches_source(
         return False
     replay_tool = _tool_name(replay_record)
     source_tool = _tool_name(source_action)
-    if replay_tool is not None and source_tool is not None:
-        return replay_tool == source_tool
-    return True
+    return replay_tool == source_tool
 
 
 def _action_failed(record: dict[str, Any]) -> bool:
@@ -104,6 +103,7 @@ def replay_action_failure_counts(
     emitted_actions = 0
     replay_failed_actions = 0
     unexpected_replay_failed_actions = 0
+    action_sequence_matches = True
     for record in replay_records:
         if record.get("type") != "action":
             continue
@@ -113,6 +113,10 @@ def replay_action_failure_counts(
             else None
         )
         emitted_actions += 1
+        if source_action is None or not _action_matches_source(
+            record, source_action
+        ):
+            action_sequence_matches = False
         if not _action_failed(record):
             continue
         replay_failed_actions += 1
@@ -128,7 +132,39 @@ def replay_action_failure_counts(
         source_failed_actions=source_failed_actions,
         replay_failed_actions=replay_failed_actions,
         unexpected_replay_failed_actions=unexpected_replay_failed_actions,
+        action_sequence_matches=(
+            action_sequence_matches
+            and emitted_actions == len(source_replay_actions)
+        ),
     )
+
+
+def _replay_execution_completed(
+    *,
+    action_counts: ReplayActionFailureCounts,
+    expected_actions: int,
+    stop_reason: str,
+    error: str | None,
+    source_terminal_reason: str,
+    source_terminal_boundary_reached: bool,
+    provider_request_sequence_matches: bool,
+) -> bool:
+    if (
+        action_counts.emitted_actions != expected_actions
+        or not action_counts.action_sequence_matches
+        or action_counts.unexpected_replay_failed_actions
+        or not provider_request_sequence_matches
+    ):
+        return False
+    if source_terminal_reason == "completed":
+        return stop_reason == "completed" and error is None
+    if source_terminal_reason == "llm_error":
+        return stop_reason == "error"
+    if source_terminal_reason in {"max_iterations", "trace_ended_after_tools"}:
+        return stop_reason == "max_iterations"
+    if source_terminal_reason == "trace_ended_before_tools":
+        return source_terminal_boundary_reached and stop_reason == "error"
+    return False
 
 
 def validate_llm_replay_timing(
@@ -209,6 +245,7 @@ class OpenClawReplayProvider(LLMProvider):
         llm_ttft_ms: float | None = None,
         llm_tpot_ms: float | None = None,
         model: str = "replay-openclaw",
+        stop_before_final_tool_calls: bool = False,
     ) -> None:
         super().__init__(api_key=None, api_base=None)
         validate_llm_replay_timing(
@@ -224,11 +261,33 @@ class OpenClawReplayProvider(LLMProvider):
         self._llm_tpot_ms = llm_tpot_ms
         self._model = model
         self._index = 0
+        self._stop_before_final_tool_calls = stop_before_final_tool_calls
+        self.source_terminal_boundary_reached = False
+        self.unexpected_request_count = 0
+        self._replayed_action_count = 0
         self.sleep_records: list[ReplaySleepRecord] = []
         self.generation = GenerationSettings()
 
     def get_default_model(self) -> str:
         return self._model
+
+    @classmethod
+    def _is_transient_error(cls, content: str | None) -> bool:
+        return False
+
+    @staticmethod
+    def _strip_image_content(
+        messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]] | None:
+        return None
+
+    @property
+    def request_sequence_matches(self) -> bool:
+        return (
+            self._index == len(self._llm_actions)
+            and self._replayed_action_count == len(self._llm_actions)
+            and self.unexpected_request_count == 0
+        )
 
     async def chat(
         self,
@@ -250,6 +309,7 @@ class OpenClawReplayProvider(LLMProvider):
             tool_choice,
         )
         if self._index >= len(self._llm_actions):
+            self.unexpected_request_count += 1
             return LLMResponse(
                 content="Replay trace exhausted before OpenClaw produced a final response.",
                 finish_reason="error",
@@ -281,6 +341,17 @@ class OpenClawReplayProvider(LLMProvider):
         finish_reason = self._finish_reason(
             raw_response, default="tool_calls" if tool_calls else "stop"
         )
+        source_finish_reason = finish_reason
+        if (
+            self._stop_before_final_tool_calls
+            and self._index == len(self._llm_actions)
+            and tool_calls
+        ):
+            self.source_terminal_boundary_reached = True
+            tool_calls = []
+            finish_reason = "error"
+            if not content:
+                content = "Source trace ended before its final tool call executed."
         extra: dict[str, Any] = {
             "llm_call_time_ms": round((wall_end - wall_start) * 1000, 3),
             "llm_latency_ms": round((wall_end - wall_start) * 1000, 3),
@@ -290,9 +361,16 @@ class OpenClawReplayProvider(LLMProvider):
             "replay_speed": self._replay_speed,
             **timing_fields,
         }
+        if self.source_terminal_boundary_reached:
+            extra.update(
+                {
+                    "replay_failure_kind": "source_trace_terminal_boundary",
+                    "source_finish_reason": source_finish_reason,
+                }
+            )
         if sleep_record is not None:
             extra["replay_sleep"] = sleep_record.to_dict()
-        return LLMResponse(
+        response = LLMResponse(
             content=content,
             tool_calls=tool_calls,
             finish_reason=finish_reason,
@@ -304,6 +382,8 @@ class OpenClawReplayProvider(LLMProvider):
             ),
             extra=extra,
         )
+        self._replayed_action_count += 1
+        return response
 
     def _duration_s(
         self,
@@ -798,6 +878,9 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
     container_pythonpath = request.get("container_pythonpath")
     if container_pythonpath is not None:
         container_pythonpath = str(container_pythonpath)
+    source_terminal_reason = str(
+        request.get("source_terminal_reason") or "completed"
+    )
 
     agent = ContainerAgent(
         container_id,
@@ -911,6 +994,9 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             llm_ttft_ms=llm_timing.get("ttft_ms"),
             llm_tpot_ms=llm_timing.get("tpot_ms"),
             model=str(request.get("source_model") or "replay-openclaw"),
+            stop_before_final_tool_calls=(
+                source_terminal_reason == "trace_ended_before_tools"
+            ),
         )
         runner = SessionRunner(
             provider,
@@ -954,22 +1040,25 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             runtime_label=runtime_label,
         )
         _update_trace_metadata(output_trace, metadata_extra)
-        finalize_clause_telemetry(
-            "completed"
-            if result.stop_reason == "completed" and result.error is None
-            else "failed"
-        )
         sleep_records = [record.to_dict() for record in provider.sleep_records]
         action_counts = _worker_trace_action_counts(output_trace, source_actions)
         expected_actions = int(request.get("expected_action_count") or 0)
         missing_actions = max(0, expected_actions - action_counts.emitted_actions)
         failed_actions = action_counts.unexpected_replay_failed_actions
-        success = (
-            result.stop_reason == "completed"
-            and result.error is None
-            and failed_actions == 0
-            and missing_actions == 0
+        success = _replay_execution_completed(
+            action_counts=action_counts,
+            expected_actions=expected_actions,
+            stop_reason=result.stop_reason,
+            error=result.error,
+            source_terminal_reason=source_terminal_reason,
+            source_terminal_boundary_reached=(
+                provider.source_terminal_boundary_reached
+            ),
+            provider_request_sequence_matches=(
+                provider.request_sequence_matches
+            ),
         )
+        finalize_clause_telemetry("completed" if success else "failed")
         telemetry_run_status["replay_execution"] = (
             "completed" if success else "failed"
         )
@@ -990,6 +1079,12 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             ),
             "expected_actions": expected_actions,
             "missing_source_action_count": missing_actions,
+            "action_sequence_matches": action_counts.action_sequence_matches,
+            "source_success": request.get("source_success"),
+            "source_terminal_reason": source_terminal_reason,
+            "provider_request_sequence_matches": (
+                provider.request_sequence_matches
+            ),
             "telemetry_integrity_failed": (
                 telemetry_run_status["collection_validity"] == "invalid"
             ),

@@ -5,6 +5,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 from harness.trace_logger import TraceLogger
@@ -28,6 +29,80 @@ def _append_replay_record(trace_logger: TraceLogger, record: dict[str, Any]) -> 
     handle = getattr(trace_logger, "_handle")
     handle.write(json.dumps(record, ensure_ascii=False) + "\n")
     handle.flush()
+
+
+def _source_terminal_reason(loaded: LoadedTraceSession) -> str:
+    summary = loaded.summary or {}
+    if summary.get("success") is not False:
+        return "completed"
+    replayable = [
+        action
+        for action in loaded.actions
+        if action.get("action_type") in {"llm_call", "tool_exec"}
+    ]
+    if not replayable:
+        return "unsupported"
+    last = replayable[-1]
+    raw_response = (last.get("data") or {}).get("raw_response") or {}
+    choices = raw_response.get("choices") or []
+    choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+    finish_reason = choice.get("finish_reason")
+    message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+    if last.get("action_type") == "llm_call":
+        if finish_reason == "tool_calls" or message.get("tool_calls"):
+            return "trace_ended_before_tools"
+        if finish_reason == "error":
+            return "llm_error"
+
+    n_iterations = summary.get("n_iterations")
+    max_iterations = (loaded.metadata or {}).get("max_iterations")
+    if (
+        isinstance(n_iterations, int)
+        and isinstance(max_iterations, int)
+        and n_iterations >= max_iterations
+    ):
+        return "max_iterations"
+    if last.get("action_type") == "tool_exec":
+        return "trace_ended_after_tools"
+    return "completed"
+
+
+def _downgrade_clause_sidecar(
+    path: Path,
+    *,
+    replay_execution: str,
+    reason: str,
+) -> str | None:
+    temporary_path: Path | None = None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("version") != 2:
+            raise ValueError("expected clause telemetry artifact v2")
+        payload["replay_execution"] = replay_execution
+        payload["collection_validity"] = "invalid"
+        integrity = payload.setdefault("integrity", {})
+        integrity["status"] = "failed"
+        errors = integrity.setdefault("errors", [])
+        if reason not in errors:
+            errors.append(reason)
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            json.dump(payload, temporary, ensure_ascii=False, indent=2, sort_keys=True)
+            temporary.write("\n")
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+    except BaseException as exc:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        return f"clause telemetry downgrade failed: {type(exc).__name__}: {exc}"
+    return None
 
 
 def _openclaw_worker_timeout_s(
@@ -163,6 +238,8 @@ async def _run_openclaw_replay_session(
         "run_instance_id": loaded.run_instance_id,
         "manifest_index": loaded.manifest_index,
         "source_model": _source_model(loaded),
+        "source_success": (loaded.summary or {}).get("success"),
+        "source_terminal_reason": _source_terminal_reason(loaded),
         "expected_action_count": sum(
             1
             for action in loaded.actions
@@ -240,8 +317,48 @@ async def _run_openclaw_replay_session(
     expected_actions = int(request["expected_action_count"])
     missing_actions = max(0, expected_actions - action_counts.emitted_actions)
     failed_actions = action_counts.unexpected_replay_failed_actions + missing_actions
-    if worker_returncode != 0 or status.get("success") is not True:
+    if (
+        not action_counts.action_sequence_matches
+        or worker_returncode != 0
+        or status.get("success") is not True
+    ):
         failed_actions = max(1, failed_actions)
+    replay_execution = status.get(
+        "replay_execution",
+        "completed" if status.get("success") else "failed",
+    )
+    if failed_actions and replay_execution == "completed":
+        replay_execution = "failed"
+    telemetry_integrity_failed = bool(
+        status.get("telemetry_integrity_failed", False)
+    )
+    telemetry_quality = status.get(
+        "telemetry_quality",
+        "unavailable" if tool_resource_telemetry == "clause" else "ok",
+    )
+    collection_validity = status.get(
+        "collection_validity",
+        "invalid" if tool_resource_telemetry == "clause" else "not_requested",
+    )
+    telemetry_errors = list(status.get("telemetry_errors") or [])
+    if failed_actions and tool_resource_telemetry == "clause":
+        reason = (
+            "parent detected replay failure after worker: "
+            f"returncode={worker_returncode}, "
+            f"action_sequence_matches={action_counts.action_sequence_matches}, "
+            f"status_success={status.get('success')!r}"
+        )
+        downgrade_error = _downgrade_clause_sidecar(
+            clause_telemetry_path,
+            replay_execution=replay_execution,
+            reason=reason,
+        )
+        telemetry_integrity_failed = True
+        collection_validity = "invalid"
+        telemetry_errors.append(downgrade_error or reason)
+    task_success = (
+        failed_actions == 0 and (loaded.summary or {}).get("success") is not False
+    )
 
     sleep_drifts = [
         SleepDrift(
@@ -266,6 +383,8 @@ async def _run_openclaw_replay_session(
         ),
         "expected_actions": expected_actions,
         "missing_source_action_count": missing_actions,
+        "action_sequence_matches": action_counts.action_sequence_matches,
+        "source_terminal_reason": request["source_terminal_reason"],
         "worker_returncode": worker_returncode,
         "worker_stop_reason": status.get("stop_reason"),
         "worker_error": status.get("error"),
@@ -297,24 +416,11 @@ async def _run_openclaw_replay_session(
         "clause_telemetry_path": (
             str(clause_telemetry_path) if tool_resource_telemetry == "clause" else None
         ),
-        "telemetry_integrity_failed": bool(
-            status.get("telemetry_integrity_failed", False)
-        ),
-        "replay_execution": status.get(
-            "replay_execution",
-            "completed" if status.get("success") else "failed",
-        ),
-        "telemetry_quality": status.get(
-            "telemetry_quality",
-            "unavailable" if tool_resource_telemetry == "clause" else "ok",
-        ),
-        "collection_validity": status.get(
-            "collection_validity",
-            "invalid"
-            if tool_resource_telemetry == "clause"
-            else "not_requested",
-        ),
-        "telemetry_errors": list(status.get("telemetry_errors") or []),
+        "telemetry_integrity_failed": telemetry_integrity_failed,
+        "replay_execution": replay_execution,
+        "telemetry_quality": telemetry_quality,
+        "collection_validity": collection_validity,
+        "telemetry_errors": telemetry_errors,
     }
     summary_seen = False
     for record in emitted_records:
@@ -323,7 +429,7 @@ async def _run_openclaw_replay_session(
             record.update(
                 _make_trace_summary(
                     loaded=loaded,
-                    success=failed_actions == 0,
+                    success=task_success,
                     elapsed_s=float(status.get("elapsed_s") or 0.0),
                     source_model=_source_model(loaded),
                     extra=summary_extra,
@@ -335,7 +441,7 @@ async def _run_openclaw_replay_session(
             loaded.agent_id,
             _make_trace_summary(
                 loaded=loaded,
-                success=failed_actions == 0,
+                success=task_success,
                 elapsed_s=float(status.get("elapsed_s") or 0.0),
                 source_model=_source_model(loaded),
                 extra=summary_extra,
@@ -343,7 +449,7 @@ async def _run_openclaw_replay_session(
         )
     task_stats = _make_task_stats(
         loaded=loaded,
-        success=failed_actions == 0,
+        success=task_success,
         elapsed_s=float(status.get("elapsed_s") or 0.0),
         failed_action_count=failed_actions,
     )

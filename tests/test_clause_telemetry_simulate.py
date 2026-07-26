@@ -1790,6 +1790,30 @@ def test_v2_artifact_records_disabled_session_and_replay_state(
     }
 
 
+def test_replay_failure_invalidates_collection_without_corrupting_telemetry_quality(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    collector = _active_collector()
+    collector.artifact_path = tmp_path / "clause.json"
+    monkeypatch.setattr(
+        "trace_collect.clause_telemetry._loss_counts",
+        lambda _bpf: {
+            "ringbuf_reserve_failures": 0,
+            "argv_read_failures": 0,
+            "argv_boundary_read_failures": 0,
+        },
+    )
+    monkeypatch.setattr(collector, "_close_bpf", lambda: None)
+
+    collector.finalize(replay_execution="failed")
+
+    artifact = json.loads(collector.artifact_path.read_text(encoding="utf-8"))
+    assert artifact["replay_execution"] == "failed"
+    assert artifact["telemetry_quality"] == "ok"
+    assert artifact["collection_validity"] == "invalid"
+
+
 def test_finalize_records_disable_state_after_health_check(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
