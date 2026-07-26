@@ -85,6 +85,23 @@ cannot support canonical resource claims. SWE-100/fresh-277 are
 development-exposed; the untouched Terminal-Bench confirmation attempts must
 remain untouched.
 
+## Runtime architecture lock
+
+The canonical runtime architecture is specified in
+[`tool-resource-service-architecture.md`](tool-resource-service-architecture.md).
+It defines two independently deployed modules with fixed privilege boundaries:
+
+- privileged `telemetryd` owns cgroup resolution, eBPF lifecycle, attribution,
+  loss/cleanup checks, and finalized normalized observations;
+- unprivileged `resource-agentd` owns parser/canonicalization, prediction, KB
+  persistence, snapshot pinning, causal update, and telemetry orchestration.
+
+These are modules, not permission modes. Trace clients connect only to
+`resource-agentd`; raw eBPF events never leave `telemetryd`. After migration,
+per-worker privileged auto-start, in-process KB ownership, direct telemetry
+observer APIs, and compatibility aliases are deleted unless a current caller is
+proved to require them.
+
 ## Task contract
 
 Every task that changes tool-resource data, prediction, evaluation, or
