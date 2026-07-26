@@ -1,79 +1,26 @@
-"""Runtime asymmetric two-layer tool resource knowledge bases.
-
-``RuntimeToolResourceKB`` is retained for historical continuous-resource
-diagnostics and snapshot compatibility. The current canonical API is the
-latency-bucket path on ``ClauseResourceKB`` described below.
+"""Causal clause latency bucket knowledge base.
 
 Public and repo layers intentionally use different key granularity because
 they encode different environment assumptions:
 
 - **Public layer** (frozen after fitting): heterogeneous repositories, so it
-  holds only coarse cold-start knowledge — per-binary/head, per outer tool
-  name, and global nodes. It never contains exact-command or command-prefix
-  nodes; parameter semantics do not transfer across environments.
+  holds only coarse per-binary and global cold-start knowledge.
 - **Repo layer** (accumulated causally online): same workspace, recurring
-  command templates, so it may key by exact normalized command and ordered
-  command prefixes before backing off to the local binary/head.
+  command templates, so it may key by exact clause and ordered argument
+  prefixes before backing off to the local binary.
 
 Backoff order for a query in repo R (hard repo-first, deepest non-empty node
-wins — the evaluated baseline policy):
+wins):
 
-1. repo exact normalized command
-2. repo ordered command prefix, deepest to shallowest (max depth 4, the
-   frozen depth budget shared with the evaluated lattice)
-3. repo binary/head
-4. public binary/head
-5. public outer tool name (also the honest landing spot for compound
-   commands with no single head, untokenizable commands, and non-shell
-   tools)
-6. public global
+1. repo exact clause
+2. repo ordered argument prefix, deepest to shallowest
+3. repo binary
+4. public binary
+5. public global
 
-Binary/head identity is the generic basenamed command head from
-``tool_time.command``. A compound shell call (``make && pytest``) has no
-single honest head, so it feeds and matches no binary node — its full-call
-label is never attributed to every contained binary. Shell builtins such as
-``cd`` are represented by their parsed head; their label remains the
-enclosing tool-call observation. No tool-specific option semantics are
-implemented; argument order is preserved as-is.
-
-Historical call-level target semantics:
-
-- ``latency_ms``: observed call latency, skipped for censored calls;
-- ``peak_cpu_cores``: eligible peak CPU cores;
-- ``peak_memory_mb``: stored as an eligible residual relative to the
-  deployment-legal ``ambient_before_mb`` anchor; a prediction adds the
-  query's *current* ambient memory to the residual quantile. Queries
-  without an ambient anchor get no memory prediction.
-
-Causality: ``observe_completed_call`` buffers observations; an observation
-enters repo state only when a later query's ``ts_start`` strictly exceeds
-its ``ts_end`` (the evaluated prequential contract). Running, overlapping,
-same-start, and future calls never leak into a prediction.
-
-Known limitations (documented, unresolved by design in this phase): under
-the hard repo-first baseline a repo node with a single sample overrides
-public evidence; arbitration alternatives (shrinkage, calibration) remain
-development candidates and are not implemented here.
-
---------------------------------------------------------------------------
-Clause latency bucket predictor (``ClauseResourceKB``)
-------------------------------------------------------
-
-The current canonical stage predicts latency buckets with explicit boundaries.
-The KB reuses mvdan clause identity, frozen public priors, and causal repo
-refinement. It deliberately does not compose compound-command buckets:
-categorical bucket IDs cannot be ORed, and sequential versus pipeline timing
-requires a separate physical contract.
-
-``ClauseObservation`` is one *static mvdan clause* (identity = ``bin`` + ordered
-``argv``), aggregated by ``tool_resource.clause_bridge`` from the Stage-2 eBPF
-windowed sampler (`analysis/development/clause-telemetry-ebpf-stage2-*`). A
-static clause may own a same-PID exec chain and descendants
-(``env -> nice -> workload`` is ONE clause headed by ``env``); the bridge folds
-all owned exec images into a single observation carrying latency plus canonical
-Stage-2 CPU/RSS measurements for the later bucket stages. The current latency
-API reads only ``latency_ms``. Backoff for clause identity is repo exact clause
--> repo argv prefixes -> repo bin -> public bin -> public global.
+Only observations completed strictly before a query become visible. Compound
+command bucket IDs remain uncomposed because sequential and pipeline clauses
+have different physical timing semantics.
 """
 
 from __future__ import annotations
@@ -86,330 +33,8 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from tool_resource.features import parse_command_clauses
-from tool_resource.metrics import ecdf_quantile
-from tool_time.command import shell_command_heads, shell_command_prefix_tokens
 
-TARGETS = ("latency_ms", "peak_cpu_cores", "peak_memory_mb")
-_CONDITIONAL_P90_QUANTILE = 0.9
-_MAX_PREFIX_DEPTH = 4  # frozen depth budget, same as the evaluated lattice
-_SCHEMA = "runtime_tool_resource_kb_v1"
-
-# (kind, key) — kind is what provenance exposes; key stays internal.
 NodeKey = tuple[str, str]
-
-
-@dataclass(frozen=True)
-class CompletedCall:
-    """Deployment-legal record of one finished tool call."""
-
-    repo: str
-    tool_name: str
-    command: str | None
-    ts_start: float
-    ts_end: float
-    censored: bool = False
-    peak_cpu_cores: float | None = None
-    peak_cpu_cores_eligible: bool = False
-    peak_memory_mb: float | None = None
-    peak_memory_mb_eligible: bool = False
-    ambient_before_mb: float | None = None
-
-    def __post_init__(self) -> None:
-        if not (math.isfinite(self.ts_start) and math.isfinite(self.ts_end)):
-            raise ValueError("ts_start and ts_end must be finite")
-        if self.ts_end < self.ts_start:
-            raise ValueError(f"ts_end {self.ts_end} precedes ts_start {self.ts_start}")
-
-    @classmethod
-    def from_resource_sample(cls, sample: Any, repo: str) -> CompletedCall:
-        """Adapt a ``ResourceCallSample``-shaped row (duck-typed)."""
-
-        tool_args = sample.tool_args or {}
-        command = tool_args.get("command")
-        return cls(
-            repo=repo,
-            tool_name=sample.tool_name,
-            command=command if isinstance(command, str) else None,
-            ts_start=sample.tool_ts_start,
-            ts_end=sample.tool_ts_end,
-            censored=sample.censored,
-            peak_cpu_cores=sample.peak_cpu_cores,
-            peak_cpu_cores_eligible=sample.peak_cpu_cores_eligible,
-            peak_memory_mb=sample.peak_memory_mb,
-            peak_memory_mb_eligible=sample.peak_memory_mb_eligible,
-            ambient_before_mb=sample.ambient_before_mb,
-        )
-
-
-@dataclass(frozen=True)
-class ToolCallQuery:
-    """Pre-call query: repo identity, outer tool call, and current context."""
-
-    repo: str
-    tool_name: str
-    command: str | None
-    ts_start: float
-    ambient_before_mb: float | None = None
-
-
-@dataclass(frozen=True)
-class TargetPrediction:
-    """Secondary conditional-p90 estimate plus provenance for one target."""
-
-    target: str
-    conditional_p90: float | None
-    scope: str | None
-    key_kind: str | None
-    evidence_count: int
-    fallback_path: tuple[str, ...]
-    note: str | None = None
-
-
-def _target_values(call: CompletedCall) -> dict[str, float]:
-    """Eligible per-target values; an ineligible target is skipped alone."""
-
-    values: dict[str, float] = {}
-    if not call.censored:
-        values["latency_ms"] = (call.ts_end - call.ts_start) * 1000.0
-    if call.peak_cpu_cores_eligible and call.peak_cpu_cores is not None:
-        values["peak_cpu_cores"] = float(call.peak_cpu_cores)
-    if (
-        call.peak_memory_mb_eligible
-        and call.peak_memory_mb is not None
-        and call.ambient_before_mb is not None
-    ):
-        residual = float(call.peak_memory_mb) - float(call.ambient_before_mb)
-        if not math.isfinite(residual):
-            raise ValueError("memory residual must be finite")
-        values["peak_memory_mb"] = residual
-    return values
-
-
-def _single_head(command: str | None) -> str | None:
-    if not isinstance(command, str) or not command.strip():
-        return None
-    heads = shell_command_heads(command)
-    return heads[0] if len(heads) == 1 else None
-
-
-def _repo_keys(command: str | None) -> list[NodeKey]:
-    """Repo-layer node keys, deepest first: exact, prefixes, binary head."""
-
-    if not isinstance(command, str) or not command.strip():
-        return []
-    tokens = shell_command_prefix_tokens(command)
-    if not tokens:
-        return []
-    keys: list[NodeKey] = [("exact_command", " ".join(tokens))]
-    depth = min(len(tokens), _MAX_PREFIX_DEPTH)
-    for length in range(depth, 0, -1):
-        keys.append((f"command_prefix_depth_{length}", " ".join(tokens[:length])))
-    head = _single_head(command)
-    if head is not None:
-        keys.append(("binary_head", head))
-    return keys
-
-
-def _public_keys(tool_name: str, command: str | None) -> list[NodeKey]:
-    """Public-layer node keys: binary head (if honest), tool name, global."""
-
-    keys: list[NodeKey] = []
-    head = _single_head(command)
-    if head is not None:
-        keys.append(("binary_head", head))
-    keys.append(("tool_name", tool_name))
-    keys.append(("global", ""))
-    return keys
-
-
-class RuntimeToolResourceKB:
-    """Frozen public layer plus causally accumulated per-repo nodes.
-
-    Construct via :meth:`fit_public` or :meth:`from_json_obj`; the public
-    layer is immutable afterwards and online observations touch only repo
-    and pending state.
-    """
-
-    def __init__(self) -> None:
-        self._public: dict[str, dict[NodeKey, tuple[float, ...]]] = {
-            target: {} for target in TARGETS
-        }
-        self._repo: dict[str, dict[str, dict[NodeKey, list[float]]]] = {}
-        self._pending: list[tuple[float, int, CompletedCall]] = []
-        self._pending_seq = 0
-        # Queries must be monotonic: absorbing pending calls is irreversible,
-        # so a backdated query would see repo state from its future.
-        self._last_query_ts: float | None = None
-
-    @classmethod
-    def fit_public(cls, calls: Iterable[CompletedCall]) -> RuntimeToolResourceKB:
-        """Fit the frozen public layer from historical completed calls."""
-
-        accumulator: dict[str, dict[NodeKey, list[float]]] = {
-            target: {} for target in TARGETS
-        }
-        for call in calls:
-            keys = _public_keys(call.tool_name, call.command)
-            for target, value in _target_values(call).items():
-                for key in keys:
-                    accumulator[target].setdefault(key, []).append(value)
-        missing = [
-            target for target in TARGETS if not accumulator[target].get(("global", ""))
-        ]
-        if missing:
-            raise ValueError(f"fit corpus has no eligible labels for {missing}")
-        kb = cls()
-        kb._public = {
-            target: {key: tuple(values) for key, values in nodes.items()}
-            for target, nodes in accumulator.items()
-        }
-        return kb
-
-    def observe_completed_call(self, call: CompletedCall) -> None:
-        """Buffer a finished call; it becomes visible only once causally prior."""
-
-        heapq.heappush(self._pending, (call.ts_end, self._pending_seq, call))
-        self._pending_seq += 1
-
-    def query(self, query: ToolCallQuery) -> dict[str, TargetPrediction]:
-        """Predict secondary conditional p90 before ``query.ts_start``."""
-
-        if self._last_query_ts is not None and query.ts_start < self._last_query_ts:
-            raise ValueError(
-                f"backdated query at ts_start {query.ts_start} after a query at "
-                f"{self._last_query_ts}: repo state already absorbed observations "
-                "completed before the later time"
-            )
-        self._last_query_ts = query.ts_start
-        self._absorb_completed(query.ts_start)
-        return {target: self._predict_target(query, target) for target in TARGETS}
-
-    def _absorb_completed(self, ts_start: float) -> None:
-        # Strictly-completed contract: ts_end < ts_start. Same-start,
-        # overlapping, running, and future observations stay pending.
-        while self._pending and self._pending[0][0] < ts_start:
-            _, _, call = heapq.heappop(self._pending)
-            repo_targets = self._repo.setdefault(
-                call.repo, {target: {} for target in TARGETS}
-            )
-            keys = _repo_keys(call.command)
-            for target, value in _target_values(call).items():
-                for key in keys:
-                    repo_targets[target].setdefault(key, []).append(value)
-
-    def _levels(
-        self, repo: str, target: str, tool_name: str, command: str | None
-    ) -> Iterator[tuple[str, NodeKey, Sequence[float]]]:
-        repo_nodes = self._repo.get(repo, {}).get(target, {})
-        for key in _repo_keys(command):
-            yield "repo", key, repo_nodes.get(key, ())
-        public_nodes = self._public[target]
-        for key in _public_keys(tool_name, command):
-            yield "public", key, public_nodes.get(key, ())
-
-    def _select(
-        self, repo: str, target: str, tool_name: str, command: str | None
-    ) -> tuple[Sequence[float], str, str, tuple[str, ...]]:
-        """Baseline arbitration: first (deepest) non-empty node wins outright.
-
-        This is the single selection point; alternative arbitration policies
-        (shrinkage, calibration) would replace this method, not the storage.
-        """
-
-        path: list[str] = []
-        for scope, (kind, _), values in self._levels(repo, target, tool_name, command):
-            path.append(f"{scope}:{kind}")
-            if values:
-                return values, scope, kind, tuple(path)
-        raise ValueError(f"no public global node for target {target!r}")
-
-    def _predict_target(self, query: ToolCallQuery, target: str) -> TargetPrediction:
-        if target == "peak_memory_mb" and query.ambient_before_mb is None:
-            return TargetPrediction(
-                target=target,
-                conditional_p90=None,
-                scope=None,
-                key_kind=None,
-                evidence_count=0,
-                fallback_path=(),
-                note="memory prediction requires ambient_before_mb anchor",
-            )
-        values, scope, kind, path = self._select(
-            query.repo, target, query.tool_name, query.command
-        )
-        conditional_p90 = ecdf_quantile(values, _CONDITIONAL_P90_QUANTILE)
-        note = None
-        if target == "peak_memory_mb":
-            conditional_p90 += float(query.ambient_before_mb)
-            note = "residual quantile plus query ambient_before_mb"
-        return TargetPrediction(
-            target=target,
-            conditional_p90=conditional_p90,
-            scope=scope,
-            key_kind=kind,
-            evidence_count=len(values),
-            fallback_path=path,
-            note=note,
-        )
-
-    def to_json_obj(self) -> dict[str, Any]:
-        """JSON-serializable snapshot of public, repo, and pending state."""
-
-        return {
-            "schema": _SCHEMA,
-            "quantile": _CONDITIONAL_P90_QUANTILE,
-            "max_prefix_depth": _MAX_PREFIX_DEPTH,
-            "public": {
-                target: _nodes_to_json(nodes) for target, nodes in self._public.items()
-            },
-            "repo": {
-                repo: {
-                    target: _nodes_to_json(nodes) for target, nodes in targets.items()
-                }
-                for repo, targets in self._repo.items()
-            },
-            "pending": [asdict(call) for _, _, call in sorted(self._pending)],
-            "last_query_ts": self._last_query_ts,
-        }
-
-    @classmethod
-    def from_json_obj(cls, obj: Mapping[str, Any]) -> RuntimeToolResourceKB:
-        """Restore a snapshot produced by :meth:`to_json_obj`."""
-
-        if obj.get("schema") != _SCHEMA:
-            raise ValueError(f"unsupported schema {obj.get('schema')!r}")
-        if obj.get("quantile") != _CONDITIONAL_P90_QUANTILE:
-            raise ValueError("snapshot quantile differs from module quantile")
-        if obj.get("max_prefix_depth") != _MAX_PREFIX_DEPTH:
-            raise ValueError("snapshot prefix depth differs from module depth")
-        kb = cls()
-        kb._public = {
-            target: {
-                key: tuple(values)
-                for key, values in _nodes_from_json(obj["public"][target])
-            }
-            for target in TARGETS
-        }
-        missing = [
-            target for target in TARGETS if not kb._public[target].get(("global", ""))
-        ]
-        if missing:
-            raise ValueError(f"snapshot has no public global node for {missing}")
-        kb._repo = {
-            repo: {
-                target: {
-                    key: list(values)
-                    for key, values in _nodes_from_json(targets.get(target, []))
-                }
-                for target in TARGETS
-            }
-            for repo, targets in obj.get("repo", {}).items()
-        }
-        for row in obj.get("pending", []):
-            kb.observe_completed_call(CompletedCall(**row))
-        last_query_ts = obj.get("last_query_ts")
-        kb._last_query_ts = None if last_query_ts is None else float(last_query_ts)
-        return kb
 
 
 def _nodes_to_json(
@@ -433,7 +58,7 @@ _CLAUSE_SCHEMA = "runtime_clause_resource_kb_v4"
 _CLAUSE_MAX_DEPTH = 4  # frozen ordered argv-prefix depth budget
 _DELIM = "\x00"  # argv tokens may contain spaces; NUL cannot collide
 
-# Aggregated Stage-2 clause-observation value sources. Each is a per-clause
+# Aggregated clause-observation value sources. Each is a per-clause
 # MEASURED metric (see ``tool_resource.clause_bridge``), not an eBPF exit field:
 #   latency_ms          -- clause wall interval;
 #   peak_cpu_cores       -- windowed peak CPU cores (never cpu_ns/wall_ns);
@@ -446,7 +71,7 @@ _CLAUSE_SOURCES = (_LATENCY_MS, _PEAK_CPU_CORES, _SAMPLED_PEAK_RSS_MB)
 
 @dataclass(frozen=True)
 class ClauseObservation:
-    """One completed *static mvdan clause*, aggregated from Stage-2 telemetry.
+    """One completed *static mvdan clause*, aggregated from clause telemetry.
 
     Identity is the mvdan clause (``bin``, ordered ``argv``) — NOT a runtime
     exec-image occurrence. A single static clause may own an exec chain
@@ -583,11 +208,10 @@ def _clause_public_keys(bin_: str) -> list[NodeKey]:
 
 
 class ClauseResourceKB:
-    """Causal clause history with a current-stage latency-bucket API.
+    """Causal clause history with a latency-bucket API.
 
     Public bin priors are frozen after construction; repo clause/prefix nodes
-    accumulate causally (strict ``ts_end < query ts_start``) under the same
-    monotonic-query guard as :class:`RuntimeToolResourceKB`.
+    accumulate causally under a monotonic-query guard.
     """
 
     def __init__(self) -> None:
@@ -820,14 +444,9 @@ class ClauseResourceKB:
 
 
 __all__ = [
-    "TARGETS",
     "ClauseLatencyBucketPrediction",
     "ClauseObservation",
     "ClauseResourceKB",
     "CommandLatencyBucketPrediction",
-    "CompletedCall",
     "LatencyBuckets",
-    "RuntimeToolResourceKB",
-    "TargetPrediction",
-    "ToolCallQuery",
 ]

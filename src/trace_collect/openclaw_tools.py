@@ -8,7 +8,10 @@ import logging
 import textwrap
 from typing import Any
 
-from trace_collect.resource_timeline import valid_resource_timeline
+from trace_collect.resource_timeline import (
+    RESOURCE_TIMELINE_SCHEMA_VERSION,
+    valid_resource_timeline,
+)
 from trace_collect.runtime.task_container import _CONTAINER_PYTHON_CANDIDATES
 
 logger = logging.getLogger(__name__)
@@ -201,7 +204,10 @@ def _nonnegative_float(value, default=0.0):
 
 
 def _resource_source_samples(timeline):
-    if not isinstance(timeline, dict) or timeline.get("version") != 1:
+    if (
+        not isinstance(timeline, dict)
+        or timeline.get("version") != __RESOURCE_TIMELINE_SCHEMA_VERSION__
+    ):
         return []
     raw_samples = timeline.get("samples")
     if not isinstance(raw_samples, list):
@@ -726,7 +732,10 @@ for line in sys.stdin:
         resp = {"ok": False, "result": f"Error: agent dispatch failed: {e}"}
     sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n")
     sys.stdout.flush()
-""").strip()
+""").replace(
+    "__RESOURCE_TIMELINE_SCHEMA_VERSION__",
+    str(RESOURCE_TIMELINE_SCHEMA_VERSION),
+).strip()
 
 
 # Idempotent tools safe to retry after agent restart.

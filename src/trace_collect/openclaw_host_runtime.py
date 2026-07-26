@@ -20,6 +20,7 @@ from llm_call.provider_base import (
     LLMResponse,
     ToolCallRequest,
 )
+from tool_resource.artifact_schema import CLAUSE_TELEMETRY_SCHEMA_VERSION
 from trace_collect.openclaw_tools import ContainerAgent
 
 
@@ -902,8 +903,11 @@ def _mark_clause_telemetry_unavailable(path: Path, message: str) -> str | None:
     temporary_path: Path | None = None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        if payload.get("version") != 2:
-            raise ValueError("expected clause telemetry artifact v2")
+        if payload.get("version") != CLAUSE_TELEMETRY_SCHEMA_VERSION:
+            raise ValueError(
+                "expected clause telemetry artifact schema "
+                f"{CLAUSE_TELEMETRY_SCHEMA_VERSION}"
+            )
         payload["cleanup"] = "failed"
         payload["telemetry_quality"] = "unavailable"
         payload["formal_completeness"] = "unavailable"

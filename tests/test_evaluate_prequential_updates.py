@@ -1,20 +1,21 @@
 from __future__ import annotations
-import json
 
-from pathlib import Path
+import json
 import subprocess
 import tempfile
+from pathlib import Path
 
 from scripts.evaluation.evaluate_prequential_updates import (
     _PAIR_FIELDS,
     _SOURCE_SNAPSHOT_AT_IMPORT,
-    _ZstdJsonlWriter,
-    _cleanup_partial_outputs,
+    PREQUENTIAL_ARTIFACT_SCHEMA_VERSION,
     _aggregate_fold_run,
+    _cleanup_partial_outputs,
     _fold_task_sets,
     _load_config,
     _merge_cost_arm_outputs,
     _paired_point_estimates,
+    _ZstdJsonlWriter,
     build_parser,
 )
 
@@ -27,7 +28,7 @@ def test_task_only_prequential_config_loads() -> None:
     assert config["task_order_seed"] == 0
     assert "order_sensitivity" not in config
     assert config["score_kv_costs_ms"] == [3500, 5000]
-    assert config["schema_version"] == 4
+    assert config["schema_version"] == PREQUENTIAL_ARTIFACT_SCHEMA_VERSION
     assert config["outer_folds"] == 5
     assert config["arms"] == [
         "frozen_100",

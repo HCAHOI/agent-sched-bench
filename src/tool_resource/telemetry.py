@@ -1,7 +1,7 @@
-"""Stage-2 clause telemetry: honest per-clause peak_cpu_cores + sampled_peak_rss.
+"""Clause telemetry collector runtime and finalized artifact analysis.
 
-Extends the Stage-1b lifecycle collector (exec/fork/exit/hiwater) with the
-perf CPU-clock sampler validated by the accepted spike, and reconstructs, per
+Combines exec/fork/exit lifecycle collection with a perf CPU-clock sampler and
+reconstructs, per
 clause = (host_pid, exec_seq):
 
 - ``peak_cpu_cores``: cumulative per-TID CPU deltas of the clause's own threads
@@ -20,9 +20,8 @@ reason when their target-specific coverage is insufficient. ``wall_ns`` and
 cumulative ``cpu_ns`` are preserved as separate raw observations.
 
 Non-perturbing: samples emit in-kernel only for tasks in the target cgroup.
-Runs a workload in a fresh cgroup-v2 scope (the host's frozen Stage-1b docker
-image is unavailable, so — like the spike — a local cgroup is used; container
-teardown semantics remain a Stage-1b concern). Root required.
+The local collector path runs a workload in a fresh cgroup-v2 scope. Root is
+required.
 """
 
 from __future__ import annotations
@@ -38,6 +37,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
+
+from tool_resource.artifact_schema import (
+    CLAUSE_TELEMETRY_COLLECTOR,
+    CLAUSE_TELEMETRY_SCHEMA_VERSION,
+    CLAUSE_TELEMETRY_STATUS_MODEL,
+)
 
 if TYPE_CHECKING:
     from tool_resource.clause_bridge import ShellCommandLookupFailure
@@ -837,7 +842,7 @@ def _source_exec_fields(
 
 
 def _new_cgroup(tag: str) -> Path:
-    cg = Path(f"/sys/fs/cgroup/clause_stage2_{os.getpid()}_{tag}")
+    cg = Path(f"/sys/fs/cgroup/clause_telemetry_{os.getpid()}_{tag}")
     cg.mkdir(exist_ok=False)
     return cg
 
@@ -1986,7 +1991,7 @@ def analyze(
 
 
 class ClauseTelemetryIntegrityError(RuntimeError):
-    """Stage-2 data cannot be used without hiding a coverage or lifecycle gap."""
+    """Telemetry cannot be used without hiding a coverage or lifecycle gap."""
 
     def __init__(
         self,
@@ -2479,7 +2484,7 @@ class ClauseTelemetryCollector:
     ) -> dict[str, Any]:
         unavailable_reason = reason or self._disabled_reason or "collector_disabled"
         summary = {
-            "version": 2,
+            "version": CLAUSE_TELEMETRY_SCHEMA_VERSION,
             "tool_call_id": token.tool_call_id,
             "tool_trace_ref": token.tool_call_id,
             "command": token.command,
@@ -2695,7 +2700,7 @@ class ClauseTelemetryCollector:
             else:
                 self._disable(message, tool_call_id=token.tool_call_id)
             failed_call = {
-                "version": 2,
+                "version": CLAUSE_TELEMETRY_SCHEMA_VERSION,
                 "tool_call_id": token.tool_call_id,
                 "tool_trace_ref": token.tool_call_id,
                 "command": token.command,
@@ -2779,7 +2784,7 @@ class ClauseTelemetryCollector:
             else:
                 self._disable(message, tool_call_id=token.tool_call_id)
             summary = {
-                "version": 2,
+                "version": CLAUSE_TELEMETRY_SCHEMA_VERSION,
                 "tool_call_id": token.tool_call_id,
                 "tool_trace_ref": token.tool_call_id,
                 "command": token.command,
@@ -3090,7 +3095,7 @@ class ClauseTelemetryCollector:
         mappable = bridge.static_clause_count - len(bridge.unobserved_builtins)
         mapped = len(bridge.bridged) + len(bridge.no_runtime_exec)
         summary = {
-            "version": 2,
+            "version": CLAUSE_TELEMETRY_SCHEMA_VERSION,
             "tool_call_id": token.tool_call_id,
             "tool_trace_ref": token.tool_call_id,
             "command": token.command,
@@ -3160,7 +3165,7 @@ class ClauseTelemetryCollector:
             "clauses": clauses,
             "no_runtime_exec": no_runtime_exec,
             "provenance": {
-                "collector": "stage2_ebpf",
+                "collector": CLAUSE_TELEMETRY_COLLECTOR,
                 "repo": self.repo,
                 "container_cgroup_id": self.cgroup_id,
                 "quota_cores": self.quota_cores,
@@ -3321,9 +3326,9 @@ class ClauseTelemetryCollector:
         self.artifact_path.write_text(
             json.dumps(
                 {
-                    "version": 2,
+                    "version": CLAUSE_TELEMETRY_SCHEMA_VERSION,
                     "mode": "clause",
-                    "status_model": "call_granular_v1",
+                    "status_model": CLAUSE_TELEMETRY_STATUS_MODEL,
                     "container_id": self.container_id,
                     "cgroup_id": self.cgroup_id,
                     "quota_cores": self.quota_cores,
@@ -3364,7 +3369,7 @@ class ClauseTelemetryCollector:
                         "errors": collector_errors,
                     },
                     "provenance": {
-                        "collector": "stage2_ebpf",
+                        "collector": CLAUSE_TELEMETRY_COLLECTOR,
                         "repo": self.repo,
                         "page_size_bytes": PAGE,
                         "cadence_ns": SAMPLE_PERIOD_NS,

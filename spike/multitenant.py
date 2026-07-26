@@ -14,27 +14,27 @@ from dataclasses import dataclass
 from pathlib import Path
 from random import Random
 from typing import Any, Sequence
+
+from spike.trigger_table import TriggerTable, lookup_trigger
 from tool_time.command import (
     command_prefix_keys,
     make_row_command_prefix_keys,
     shell_command_heads,
 )
-
-from trace_collect.tool_latency_dataset import discover_trace_files
+from tool_time.prerestore import prerestore_start_ms
 from tool_time.prior import (
     LatencyPrior,
     build_latency_prior,
     latency_prior_hierarchy,
 )
+from trace_collect.tool_latency_dataset import discover_trace_files
 from trace_collect.trace_data import TraceData
-
-from spike.trigger_table import TriggerTable, lookup_trigger
-from tool_time.prerestore import prerestore_start_ms
 
 _CONTINUUM_HISTORY_THRESHOLD = 100  # Continuum §4.2, arXiv:2511.02230v6.
 _THUNDERAGENT_BUFFER_TOKENS = 100  # backend/state.py at reference commit below.
 _THUNDERAGENT_REFERENCE_COMMIT = "7ddc8610270e56d3b109eed8796b3a4360fc67c9"
 _POLICY_NAMES = frozenset({"deadline", "ours", "continuum", "thunderagent"})
+PREFILL_COST_SCHEMA_VERSION = 1
 
 
 def validate_serving_cell(corpus_role: str, policy: str) -> None:
@@ -79,6 +79,8 @@ def load_prefill_cost_profile(
 ) -> PrefillCostProfile:
     """Load a measured Continuum prefill profile, failing on config mismatch."""
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if payload.get("schema_version") != PREFILL_COST_SCHEMA_VERSION:
+        raise ValueError(f"{path}: unsupported prefill cost schema")
     if payload.get("measurement") != "prefill_recompute_cost":
         raise ValueError(f"{path}: not a prefill_recompute_cost profile")
     if payload.get("model") != expected_model:

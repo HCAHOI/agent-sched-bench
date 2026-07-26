@@ -9,14 +9,18 @@ import pytest
 
 from harness.container_image_prep import normalize_image_reference
 from trace_collect.cli import _run_simulate, parse_simulate_args
+from trace_collect.resource_timeline import RESOURCE_TIMELINE_SCHEMA_VERSION
 from trace_collect.simulate_manifest import _parse_trace_session_file
-from trace_collect.simulate_outputs import _make_trace_action, _replay_agent_id_for_action
+from trace_collect.simulate_outputs import (
+    _make_trace_action,
+    _replay_agent_id_for_action,
+)
 from trace_collect.simulate_types import (
     LLMTimingConfig,
-    PreparedTraceSession,
     LoadedTraceSession,
-    SimulateError,
+    PreparedTraceSession,
     ReplayTaskStats,
+    SimulateError,
     WorkerTraceInput,
 )
 from trace_collect.simulate_utils import _resolve_prep_concurrency
@@ -30,7 +34,6 @@ from trace_collect.simulator import (
     _source_exec_timeout_s,
     simulate,
 )
-
 
 
 def _write_trace(
@@ -848,7 +851,7 @@ def test_simulate_preserves_source_resource_timeline_as_metadata(tmp_path: Path)
     trace_path = tmp_path / "trace.jsonl"
     task_source = tmp_path / "tasks.json"
     resource_timeline = {
-        "version": 1,
+        "version": RESOURCE_TIMELINE_SCHEMA_VERSION,
         "source": "cgroup_cpu_proc_net",
         "scope": "openclaw_exec_tool_interval",
         "samples": [
@@ -906,7 +909,7 @@ def test_simulate_uses_resource_integrated_policy_for_container_exec(
     trace_path = tmp_path / "trace.jsonl"
     task_source = tmp_path / "tasks.json"
     resource_timeline = {
-        "version": 1,
+        "version": RESOURCE_TIMELINE_SCHEMA_VERSION,
         "source": "cgroup_cpu_proc_net",
         "scope": "openclaw_exec_tool_interval",
         "samples": [{"offset_s": 0.5, "dt_s": 0.5, "cpu_core_s": 1.0}],
@@ -970,7 +973,7 @@ def test_simulate_keeps_wall_policy_for_commands_resource_timeline(
     trace_path = tmp_path / "trace.jsonl"
     task_source = tmp_path / "tasks.json"
     resource_timeline = {
-        "version": 1,
+        "version": RESOURCE_TIMELINE_SCHEMA_VERSION,
         "samples": [{"offset_s": 0.5, "dt_s": 0.5, "cpu_core_s": 1.0}],
     }
     _write_trace(
@@ -1024,7 +1027,10 @@ def test_simulate_ignores_invalid_resource_timeline_for_timeout_policy(
 ) -> None:
     trace_path = tmp_path / "trace.jsonl"
     task_source = tmp_path / "tasks.json"
-    invalid_timeline = {"version": 1, "samples": [{"dt_s": 0.0, "cpu_core_s": 1.0}]}
+    invalid_timeline = {
+        "version": RESOURCE_TIMELINE_SCHEMA_VERSION,
+        "samples": [{"dt_s": 0.0, "cpu_core_s": 1.0}],
+    }
     _write_trace(
         trace_path,
         agent_id="task-a",

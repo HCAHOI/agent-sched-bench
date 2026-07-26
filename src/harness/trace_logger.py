@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from agents.base import TraceAction
+from trace_collect.trace_data import CURRENT_TRACE_FORMAT_VERSION
 
 
 def build_run_id(
@@ -46,7 +47,7 @@ class TraceLogger:
         entry = {
             "type": "trace_metadata",
             "scaffold": scaffold,
-            "trace_format_version": 5,
+            "trace_format_version": CURRENT_TRACE_FORMAT_VERSION,
             "execution_environment": execution_environment,
             **kwargs,
         }

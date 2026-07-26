@@ -28,6 +28,7 @@ from agents.openclaw._session_runner import (
     TraceCollectorHook,
     _resolve_run_outcome,
 )
+from trace_collect.resource_timeline import RESOURCE_TIMELINE_SCHEMA_VERSION
 
 
 class _StubResponse:
@@ -207,7 +208,7 @@ async def _drive_emits_tool_resource_timeline(tmp_path: Path) -> None:
         _StubContext(iteration=0, messages=msgs_after_llm, tool_calls=[stub_tc])
     )
     resource_timeline = {
-        "version": 1,
+        "version": RESOURCE_TIMELINE_SCHEMA_VERSION,
         "source": "cgroup_cpu_proc_net",
         "scope": "openclaw_exec_tool_interval",
         "samples": [

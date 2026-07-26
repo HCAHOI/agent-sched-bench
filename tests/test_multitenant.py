@@ -14,6 +14,7 @@ from scripts.serving.measure_prefill_cost import build_parser as build_prefill_p
 from scripts.serving.run_w5_multitenant import main as run_w5_main
 from scripts.serving.run_w5_multitenant import validate_matrix_inputs
 from spike.multitenant import (
+    PREFILL_COST_SCHEMA_VERSION,
     ContinuumProfile,
     ToolSpan,
     TraceProgram,
@@ -22,8 +23,8 @@ from spike.multitenant import (
     build_prerestore_profile,
     build_retention_plan,
     continuum_ttl_ms,
-    load_trace_programs,
     load_prefill_cost_profile,
+    load_trace_programs,
 )
 from spike.run_multitenant import (
     _load_config,
@@ -326,8 +327,8 @@ def test_connector_refreshes_continuum_priority_from_live_retention() -> None:
 
 
 def test_connector_orders_thunder_paused_resumes_by_single_backend_bfd() -> None:
-    from spike.vllm_connector.gpu import SelectiveOffloadConnector
     from spike.vllm_connector.core import SavedKVRegistry
+    from spike.vllm_connector.gpu import SelectiveOffloadConnector
 
     connector = object.__new__(SelectiveOffloadConnector)
     connector._block_size = 10
@@ -604,6 +605,7 @@ def test_prefill_profile_prices_current_context(tmp_path: Path) -> None:
     path.write_text(
         json.dumps(
             {
+                "schema_version": PREFILL_COST_SCHEMA_VERSION,
                 "measurement": "prefill_recompute_cost",
                 "model": "model",
                 "kv_cache_dtype": "auto",

@@ -41,7 +41,7 @@ class TerminalBenchBenchmark(Benchmark):
     def validate_scaffold_support(self, scaffold: str) -> None:
         if scaffold not in self.SUPPORTED_SCAFFOLDS:
             raise NotImplementedError(
-                "terminal-bench phase 1 supports scaffold='openclaw' only"
+                "terminal-bench currently supports scaffold='openclaw' only"
             )
 
     def runtime_mode_for(self, scaffold: str) -> str:

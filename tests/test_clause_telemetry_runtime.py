@@ -9,13 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from trace_collect import clause_telemetry as C
-from trace_collect.clause_telemetry import (
+from tool_resource import telemetry as C
+from tool_resource.telemetry import (
     _failed_exec_attempt_records,
     analyze,
     collect_case,
 )
-
 
 pytestmark = pytest.mark.skipif(
     os.geteuid() != 0 or importlib.util.find_spec("bcc") is None,

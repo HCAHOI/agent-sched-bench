@@ -5,15 +5,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from collections import deque
 import datetime as dt
 import json
 import os
-import statistics
 import platform
+import statistics
 import subprocess
 import time
 import zlib
+from collections import deque
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -24,14 +24,16 @@ from spike.multitenant import (
     build_continuum_profile,
     build_prerestore_profile,
     build_retention_plan,
-    load_trace_programs,
     load_prefill_cost_profile,
+    load_trace_programs,
     policy_provenance,
     validate_serving_cell,
 )
 from spike.trigger_table import load_trigger_table
 from spike.vllm_connector import OffloadControl, percentile
 from spike.vllm_connector.core import continuum_priority
+
+MULTITENANT_RESULT_SCHEMA_VERSION = 1
 
 
 def _git_sha() -> str:
@@ -695,7 +697,7 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
     import vllm
 
     result = {
-        "schema_version": 1,
+        "schema_version": MULTITENANT_RESULT_SCHEMA_VERSION,
         "status": "complete",
         "generated": dt.datetime.now().isoformat(timespec="seconds"),
         "git_sha": _git_sha(),

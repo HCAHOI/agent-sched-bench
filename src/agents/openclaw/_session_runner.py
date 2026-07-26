@@ -12,13 +12,13 @@ from typing import Any
 
 from loguru import logger
 
+from agents.base import TraceAction
 from agents.openclaw._hook import AgentHook, AgentHookContext
 from agents.openclaw._loop import AgentLoop
-from agents.openclaw.config.schema import ExecToolConfig
 from agents.openclaw.bus.events import InboundMessage
 from agents.openclaw.bus.queue import MessageBus
+from agents.openclaw.config.schema import ExecToolConfig
 from agents.openclaw.eval.collector import ResultCollector
-from agents.base import TraceAction
 from agents.openclaw.eval.types import (
     LLM,
     MCP,
@@ -27,9 +27,10 @@ from agents.openclaw.eval.types import (
     EvalTraceEvent,
     EvalTraceSummary,
 )
-from llm_call.provider_base import LLMProvider
 from agents.openclaw.session.manager import SessionManager
+from llm_call.provider_base import LLMProvider
 from trace_collect.latency_metrics import summarize_llm_latencies
+from trace_collect.trace_data import CURRENT_TRACE_FORMAT_VERSION
 
 
 def _trace_has_llm_error(trace_file: Path | None) -> bool:
@@ -791,7 +792,7 @@ class SessionRunner:
         metadata = {
             "type": "trace_metadata",
             "scaffold": "openclaw",
-            "trace_format_version": 5,
+            "trace_format_version": CURRENT_TRACE_FORMAT_VERSION,
             "mode": "collect",
             "model": self.model,
             "instance_id": iid,

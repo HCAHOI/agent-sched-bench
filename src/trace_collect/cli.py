@@ -310,7 +310,7 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         default="command",
         help=(
             "Per-tool resource telemetry: off disables new command envelopes, "
-            "command preserves resource_timeline, and clause adds Stage-2 eBPF "
+            "command preserves resource_timeline, and clause adds eBPF "
             "clause observations. Clause mode requires root/BCC, Docker, "
             "and workers=1."
         ),

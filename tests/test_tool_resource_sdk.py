@@ -7,6 +7,9 @@ from typing import Any
 import pytest
 
 from tool_resource import (
+    CLAUSE_TELEMETRY_COLLECTOR,
+    CLAUSE_TELEMETRY_SCHEMA_VERSION,
+    CLAUSE_TELEMETRY_STATUS_MODEL,
     DockerExecutionContext,
     LatencyBuckets,
     SidecarUnavailableError,
@@ -36,7 +39,7 @@ def _clause(*, timestamps: bool) -> dict[str, Any]:
 
 def _call(tool_call_id: str, *, timestamps: bool) -> dict[str, Any]:
     return {
-        "version": 2,
+        "version": CLAUSE_TELEMETRY_SCHEMA_VERSION,
         "tool_call_id": tool_call_id,
         "command": "echo hi",
         "telemetry_quality": "ok",
@@ -92,9 +95,9 @@ def _write_artifact(
     path.write_text(
         json.dumps(
             {
-                "version": 2,
+                "version": CLAUSE_TELEMETRY_SCHEMA_VERSION,
                 "mode": "clause",
-                "status_model": "call_granular_v1",
+                "status_model": CLAUSE_TELEMETRY_STATUS_MODEL,
                 "container_id": container_id,
                 "calls": calls,
                 "telemetry_loss_total": {"total": 0},
@@ -120,7 +123,10 @@ def _write_artifact(
                         [] if collector_healthy else ["fixture collector failure"]
                     ),
                 },
-                "provenance": {"repo": repo},
+                "provenance": {
+                    "collector": CLAUSE_TELEMETRY_COLLECTOR,
+                    "repo": repo,
+                },
             }
         ),
         encoding="utf-8",
@@ -392,6 +398,24 @@ def test_telemetry_failure_preserves_actual_result_and_does_not_update_kb(
 def test_cold_start_rejects_invalid_trace(tmp_path: Path) -> None:
     path = tmp_path / "invalid.json"
     _write_artifact(path, [_call("cold-1", timestamps=False)], cleanup="failed")
+
+    with pytest.raises(ValueError, match="no valid cold-start telemetry artifacts"):
+        ToolResourceSDK.from_traces(path, LatencyBuckets((100.0,)))
+
+
+@pytest.mark.parametrize("identifier", ["collector", "status_model"])
+def test_cold_start_rejects_noncanonical_identifiers(
+    tmp_path: Path,
+    identifier: str,
+) -> None:
+    path = tmp_path / "noncanonical.json"
+    _write_artifact(path, [_call("cold-1", timestamps=False)])
+    artifact = json.loads(path.read_text(encoding="utf-8"))
+    if identifier == "collector":
+        artifact["provenance"]["collector"] = "obsolete_collector"
+    else:
+        artifact["status_model"] = "obsolete_status_model"
+    path.write_text(json.dumps(artifact), encoding="utf-8")
 
     with pytest.raises(ValueError, match="no valid cold-start telemetry artifacts"):
         ToolResourceSDK.from_traces(path, LatencyBuckets((100.0,)))

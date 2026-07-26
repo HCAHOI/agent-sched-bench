@@ -6,11 +6,11 @@ from pathlib import Path
 import pytest
 
 from trace_collect.tool_latency_dataset import (
+    TOOL_LATENCY_CORPUS_SCHEMA_VERSION,
     load_tool_latency_corpus,
     read_tool_latency_corpus_manifest,
     require_explicit_trace_task_ids,
 )
-
 
 _FIXED_COSTS_MS = [float(cost) for cost in range(500, 5_001, 500)]
 
@@ -81,7 +81,7 @@ def _write_manifest(tmp_path: Path, task_ids: list[str]) -> Path:
     trace_root = tmp_path / "traces"
     trace_root.mkdir(exist_ok=True)
     payload = {
-        "schema_version": 1,
+        "schema_version": TOOL_LATENCY_CORPUS_SCHEMA_VERSION,
         "collection_id": "corpus",
         "trace_root": str(trace_root),
         "task_ids": task_ids,

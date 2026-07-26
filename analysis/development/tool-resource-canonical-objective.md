@@ -5,12 +5,12 @@ stale three-binary-label, 3500/5000 ms balanced-accuracy, and boolean clause-OR
 objective. Historical artifacts remain evidence about what was run; they are
 not instructions for current optimization.
 
-## Final predictor family and current stage
+## Final predictor family and current scope
 
 The final predictor family is **log-spaced bucket prediction** for command
 latency, peak CPU, and peak memory.
 
-The current stage implements and evaluates **latency buckets only** while the
+The current scope implements and evaluates **latency buckets only** while the
 new canonical resource-telemetry run finishes. CPU and memory buckets are
 intentionally deferred, not removed from the final objective. Do not derive
 current CPU or memory bucket claims from legacy `pacct`, cgroup peaks, or
@@ -54,10 +54,10 @@ only causally available history. Bucket IDs are categorical interval labels:
 they cannot be ORed, added, maximized, or otherwise composed as if they were
 independent boolean flags.
 
-Parser, clause identity, causal KB lookup, Stage-2 bridge, mapping evidence,
+Parser, clause identity, causal KB lookup, clause bridge, mapping evidence,
 and telemetry-integrity work remain useful. Clause-level latency history may
 serve as auxiliary evidence. A compound-command bucket composer is not part of
-this stage: sequential clauses may accumulate while pipeline members overlap,
+this scope: sequential clauses may accumulate while pipeline members overlap,
 so any future composer requires its own explicit physical contract and
 evaluation.
 
@@ -67,7 +67,7 @@ evaluation contract.
 
 ## Telemetry and evidence boundary
 
-Canonical Stage-2 telemetry remains the source for the eventual latency, CPU,
+Canonical clause telemetry remains the source for the eventual latency, CPU,
 and memory bucket family. Preserve its collector, bridge, attribution,
 availability, mapping, loss, and cleanup gates. Do not interrupt or modify an
 active telemetry run or its artifacts.
@@ -92,7 +92,7 @@ scheduler integration must include this lock:
 
 ```text
 Final family = log-spaced latency/CPU/memory buckets.
-Current stage = latency buckets only; CPU/memory buckets are deferred.
+Current scope = latency buckets only; CPU/memory buckets are deferred.
 Intervals = [b_i, b_{i+1}), final bucket [b_k, +inf).
 Numeric latency boundaries have no default and must be frozen before claims.
 Bucket IDs are not composed with boolean OR.

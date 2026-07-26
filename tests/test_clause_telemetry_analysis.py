@@ -1,4 +1,4 @@
-"""Regressions for the Stage-2 collector's pure analysis (bcc-free import)."""
+"""Regressions for the collector's pure analysis (BCC-free import)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from trace_collect import clause_telemetry as C
+from tool_resource import telemetry as C
 
 _W = C.WINDOW_NS
 

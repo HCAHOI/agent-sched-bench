@@ -12,6 +12,11 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
+from tool_resource.artifact_schema import (
+    CLAUSE_TELEMETRY_COLLECTOR,
+    CLAUSE_TELEMETRY_SCHEMA_VERSION,
+    CLAUSE_TELEMETRY_STATUS_MODEL,
+)
 from tool_resource.runtime_kb import (
     ClauseObservation,
     ClauseResourceKB,
@@ -59,7 +64,7 @@ class CommandObservationToken:
 
 
 class DockerCommandObserver:
-    """Fail-isolated client for a privileged Stage-2 sidecar session."""
+    """Fail-isolated client for a privileged collector sidecar session."""
 
     def __init__(
         self,
@@ -274,7 +279,7 @@ class DockerCommandObserver:
         message: str,
     ) -> dict[str, Any]:
         summary = {
-            "version": 2,
+            "version": CLAUSE_TELEMETRY_SCHEMA_VERSION,
             "tool_call_id": token.tool_call_id,
             "tool_trace_ref": token.tool_call_id,
             "command": token.command,
@@ -318,7 +323,7 @@ class CommandResult:
 
 @dataclass(frozen=True)
 class ColdStartReport:
-    """Accepted and rejected Stage-2 inputs used to initialize the SDK."""
+    """Accepted and rejected telemetry inputs used to initialize the SDK."""
 
     artifacts_seen: int
     artifacts_accepted: int
@@ -362,7 +367,7 @@ class ToolResourceSDK:
         transport_factory: Callable[[DockerExecutionContext], SidecarTransport]
         | None = None,
     ) -> ToolResourceSDK:
-        """Fit frozen public knowledge from valid Stage-2 telemetry artifacts."""
+        """Fit frozen public knowledge from valid clause telemetry artifacts."""
 
         paths = (
             [Path(trace_paths)]
@@ -585,8 +590,14 @@ def _read_artifact(path: Path) -> dict[str, Any]:
         artifact = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"cannot read telemetry artifact {path}: {exc}") from exc
-    if not isinstance(artifact, dict) or artifact.get("version") != 2:
-        raise ValueError(f"{path}: expected Stage-2 telemetry artifact version 2")
+    if (
+        not isinstance(artifact, dict)
+        or artifact.get("version") != CLAUSE_TELEMETRY_SCHEMA_VERSION
+    ):
+        raise ValueError(
+            f"{path}: expected clause telemetry artifact schema "
+            f"{CLAUSE_TELEMETRY_SCHEMA_VERSION}"
+        )
     return artifact
 
 
@@ -609,46 +620,32 @@ def _validate_artifact(
     ):
         raise ValueError(f"{path}: calls must be a list of mappings")
     status_model = artifact.get("status_model")
-    if status_model == "call_granular_v1":
-        if artifact.get("telemetry_quality") != "ok":
-            raise ValueError(f"{path}: collector telemetry is unavailable")
-        if artifact.get("collection_validity") != "valid":
-            raise ValueError(f"{path}: collection is not valid")
-        if artifact.get("formal_completeness") not in {"complete", "partial"}:
-            raise ValueError(f"{path}: formal completeness is unavailable")
-        integrity = artifact.get("integrity")
-        if not isinstance(integrity, Mapping) or integrity.get("status") != "ok":
-            raise ValueError(f"{path}: collector integrity is not ok")
-    elif status_model is not None:
+    if status_model != CLAUSE_TELEMETRY_STATUS_MODEL:
         raise ValueError(f"{path}: unsupported status model {status_model!r}")
-    elif not _legacy_collector_healthy(artifact):
-        raise ValueError(f"{path}: legacy collector health is not usable")
+    if artifact.get("telemetry_quality") != "ok":
+        raise ValueError(f"{path}: collector telemetry is unavailable")
+    if artifact.get("collection_validity") != "valid":
+        raise ValueError(f"{path}: collection is not valid")
+    if artifact.get("formal_completeness") not in {"complete", "partial"}:
+        raise ValueError(f"{path}: formal completeness is unavailable")
+    integrity = artifact.get("integrity")
+    if not isinstance(integrity, Mapping) or integrity.get("status") != "ok":
+        raise ValueError(f"{path}: collector integrity is not ok")
     if (
         expected_container_id is not None
         and artifact.get("container_id") != expected_container_id
     ):
         raise ValueError(f"{path}: container identity does not match the request")
     provenance = artifact.get("provenance")
+    if (
+        not isinstance(provenance, Mapping)
+        or provenance.get("collector") != CLAUSE_TELEMETRY_COLLECTOR
+    ):
+        raise ValueError(f"{path}: collector identity is not canonical")
     if expected_repo is not None and (
         not isinstance(provenance, Mapping) or provenance.get("repo") != expected_repo
     ):
         raise ValueError(f"{path}: repository identity does not match the request")
-
-
-def _legacy_collector_healthy(artifact: Mapping[str, Any]) -> bool:
-    collector = artifact.get("collector")
-    loss = artifact.get("telemetry_loss_total")
-    return (
-        artifact.get("telemetry_quality") in {"ok", "invalid"}
-        and artifact.get("cleanup") == "ok"
-        and isinstance(collector, Mapping)
-        and collector.get("state_before_close") == "active"
-        and collector.get("unavailable_call_count") == 0
-        and isinstance(loss, Mapping)
-        and loss.get("total") == 0
-    )
-
-
 def _observations_from_call(
     repo: str,
     call: Mapping[str, Any],

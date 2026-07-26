@@ -11,16 +11,16 @@ from __future__ import annotations
 
 import argparse
 import atexit
-from concurrent.futures import ProcessPoolExecutor
-from collections import defaultdict
 import datetime as dt
 import json
 import math
-from pathlib import Path
 import os
 import platform
 import subprocess
 import sys
+from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
@@ -28,6 +28,7 @@ import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SOURCE_GLOBS = ("src/**/*.py", "scripts/**/*.py")
+PREQUENTIAL_ARTIFACT_SCHEMA_VERSION = 4
 
 
 def _source_snapshot_records() -> Iterable[dict[str, Any]]:
@@ -54,22 +55,22 @@ def _source_snapshot_records() -> Iterable[dict[str, Any]]:
 _SOURCE_SNAPSHOT_AT_IMPORT = tuple(_source_snapshot_records())
 sys.path.insert(0, str(_REPO_ROOT))
 
-from trace_collect.tool_gap_extractor import discover_trace_files  # noqa: E402
+from tool_time.offline_evaluation import (  # noqa: E402
+    evaluate_offline_probe_clock,
+)
 from tool_time.policy import (  # noqa: E402
     trigger_policy_utility_ms,
 )
+from tool_time.prequential import (  # noqa: E402
+    benchmark_profile_updates,
+    evaluate_prequential_updates,
+)
+from trace_collect.tool_gap_extractor import discover_trace_files  # noqa: E402
 from trace_collect.tool_latency_dataset import (  # noqa: E402
     ToolLatencySample,
     extract_many_tool_latency_samples,
     read_tool_latency_corpus_manifest,
     require_explicit_trace_task_ids,
-)
-from tool_time.offline_evaluation import (  # noqa: E402
-    evaluate_offline_probe_clock,
-)
-from tool_time.prequential import (  # noqa: E402
-    benchmark_profile_updates,
-    evaluate_prequential_updates,
 )
 
 _DYNAMIC_ARMS = ("task",)
@@ -298,7 +299,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             [
                 {
                     "record_type": "run_metadata",
-                    "schema_version": 4,
+                    "schema_version": PREQUENTIAL_ARTIFACT_SCHEMA_VERSION,
                     "status": "development_only_exploratory",
                     "certificate": False,
                     "run_started": run_started,
@@ -372,7 +373,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         ],
     ]
     payload = {
-        "schema_version": 4,
+        "schema_version": PREQUENTIAL_ARTIFACT_SCHEMA_VERSION,
         "protocol": {
             "date": config["protocol_date"],
             "status": config["status"],
@@ -794,7 +795,7 @@ def _finalize_fold(
             [
                 {
                     "record_type": "fold_metadata",
-                    "schema_version": 4,
+                    "schema_version": PREQUENTIAL_ARTIFACT_SCHEMA_VERSION,
                     "outer_fold": outer_fold,
                     "fold_count": _OUTER_FOLDS,
                     "status": "development_only_exploratory",
@@ -1005,7 +1006,10 @@ def _load_config(path: Path) -> dict[str, Any]:
             f"missing={sorted(required - set(payload))}, "
             f"unexpected={sorted(set(payload) - required)}"
         )
-    if type(payload["schema_version"]) is not int or payload["schema_version"] != 4:
+    if (
+        type(payload["schema_version"]) is not int
+        or payload["schema_version"] != PREQUENTIAL_ARTIFACT_SCHEMA_VERSION
+    ):
         raise ValueError("unsupported experiment config schema")
     if payload["protocol_date"] != "2026-07-21":
         raise ValueError("protocol_date must be 2026-07-21")

@@ -1,4 +1,4 @@
-"""Privileged Stage-2 collector sidecar over a Unix-domain socket."""
+"""Privileged clause telemetry sidecar over a Unix-domain socket."""
 
 from __future__ import annotations
 

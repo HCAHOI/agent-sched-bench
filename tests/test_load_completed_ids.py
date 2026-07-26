@@ -8,13 +8,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from trace_collect.collector import load_completed_ids, next_attempt_number  # noqa: E402
+from trace_collect.attempt_layout import SCHEMA_VERSION  # noqa: E402
+from trace_collect.collector import (  # noqa: E402
+    load_completed_ids,
+    next_attempt_number,
+)
 
 
 def _write_manifest(path: Path, *, status: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps({"schema_version": 1, "status": status}), encoding="utf-8"
+        json.dumps({"schema_version": SCHEMA_VERSION, "status": status}),
+        encoding="utf-8",
     )
 
 

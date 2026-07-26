@@ -1,6 +1,6 @@
 # Tool-resource SDK
 
-`tool_resource` is a local command library: cold-start it from valid Stage-2
+`tool_resource` is a local command library: cold-start it from valid clause
 telemetry traces, then let it parse, query, predict, observe, and update around
 Docker-owned execution. `ToolResourceSDK` is unprivileged. A separate local
 sidecar owns the eBPF collector and exposes finalized data over a bounded,

@@ -20,6 +20,8 @@ from pathlib import Path
 
 import yaml
 
+from trace_collect.simulate_manifest import SIMULATE_MANIFEST_SCHEMA_VERSION
+
 
 def main() -> None:
     if len(sys.argv) != 2:
@@ -67,7 +69,7 @@ def main() -> None:
     # Write manifest
     manifest_path = run_dir / "simulate_manifest.yaml"
     manifest = {
-        "version": 1,
+        "version": SIMULATE_MANIFEST_SCHEMA_VERSION,
         "defaults": {"task_source": str(tasks_path)},
         "traces": trace_paths,
     }

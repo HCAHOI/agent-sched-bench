@@ -9,6 +9,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 from harness.trace_logger import TraceLogger
+from tool_resource.artifact_schema import CLAUSE_TELEMETRY_SCHEMA_VERSION
 from trace_collect.openclaw_host_runtime import replay_action_failure_counts
 from trace_collect.simulate_outputs import _make_task_stats, _make_trace_summary
 from trace_collect.simulate_types import (
@@ -75,8 +76,11 @@ def _record_clause_replay_execution(
     temporary_path: Path | None = None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        if payload.get("version") != 2:
-            raise ValueError("expected clause telemetry artifact v2")
+        if payload.get("version") != CLAUSE_TELEMETRY_SCHEMA_VERSION:
+            raise ValueError(
+                "expected clause telemetry artifact schema "
+                f"{CLAUSE_TELEMETRY_SCHEMA_VERSION}"
+            )
         payload["replay_execution"] = replay_execution
         with NamedTemporaryFile(
             "w",

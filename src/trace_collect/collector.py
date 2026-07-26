@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor
 import asyncio
 import json
 import logging
@@ -10,12 +9,11 @@ import os
 import shutil
 import tempfile
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-
-from llm_call import UnifiedProvider
 
 from harness.container_image_prep import (
     drop_cached_fixed_image,
@@ -24,6 +22,7 @@ from harness.container_image_prep import (
     prune_dangling_images,
     remove_image,
 )
+from llm_call import UnifiedProvider
 from trace_collect.attempt_pipeline import (
     AttemptContext,
     AttemptResult,
@@ -39,7 +38,10 @@ from trace_collect.runtime.task_container import (
     resolve_task_container_exec_config,
     run_task_container_agent,  # noqa: F401 - kept for regression-test monkeypatches
 )
-from trace_collect.trace_data import trace_summary_totals
+from trace_collect.trace_data import (
+    CURRENT_TRACE_FORMAT_VERSION,
+    trace_summary_totals,
+)
 
 if TYPE_CHECKING:
     from agents.benchmarks.base import Benchmark
@@ -898,7 +900,7 @@ def _normalize_openclaw_trace(
     if runtime_proof:
         merged["runtime_proof"] = runtime_proof
     merged["type"] = "trace_metadata"
-    merged["trace_format_version"] = 5
+    merged["trace_format_version"] = CURRENT_TRACE_FORMAT_VERSION
     merged["execution_environment"] = execution_environment
     if mcp_config_label is not None:
         _set_run_config(merged, "mcp_config", mcp_config_label)

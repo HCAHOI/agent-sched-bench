@@ -7,7 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from trace_collect.simulator import simulate, SimulateError
+from tool_resource import (
+    CLAUSE_TELEMETRY_SCHEMA_VERSION,
+    CLAUSE_TELEMETRY_STATUS_MODEL,
+)
+from trace_collect.simulator import SimulateError, simulate
 
 
 def _write_manifest(path: Path, entries: list[str | dict[str, object]]) -> Path:
@@ -1265,8 +1269,8 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
         Path(request["clause_telemetry_path"]).write_text(
             json.dumps(
                 {
-                    "version": 2,
-                    "status_model": "call_granular_v1",
+                    "version": CLAUSE_TELEMETRY_SCHEMA_VERSION,
+                    "status_model": CLAUSE_TELEMETRY_STATUS_MODEL,
                     "replay_execution": "completed",
                     "telemetry_quality": "ok",
                     "formal_completeness": "partial",

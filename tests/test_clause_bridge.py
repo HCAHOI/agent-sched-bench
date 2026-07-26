@@ -1,4 +1,4 @@
-"""Bridge tests: real mvdan parsing + synthetic Stage-2 exec-image records."""
+"""Bridge tests: real mvdan parsing plus synthetic collector records."""
 
 from __future__ import annotations
 

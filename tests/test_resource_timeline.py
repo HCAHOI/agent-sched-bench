@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from trace_collect.resource_timeline import (
+    RESOURCE_TIMELINE_SCHEMA_VERSION,
     ResourceReading,
     read_cgroup_cpu_quota_cores,
     read_cgroup_cpu_usage_s,
@@ -76,10 +77,13 @@ def test_resource_delta_serializes_cpu_and_network() -> None:
 
 def test_valid_resource_timeline_requires_positive_dt_and_signal() -> None:
     valid = {
-        "version": 1,
+        "version": RESOURCE_TIMELINE_SCHEMA_VERSION,
         "samples": [{"dt_s": 0.5, "cpu_core_s": 0.0, "net_rx_bytes": 10}],
     }
-    invalid = {"version": 1, "samples": [{"dt_s": 0.0, "cpu_core_s": 1.0}]}
+    invalid = {
+        "version": RESOURCE_TIMELINE_SCHEMA_VERSION,
+        "samples": [{"dt_s": 0.0, "cpu_core_s": 1.0}],
+    }
 
     assert valid_resource_timeline(valid) == valid
     assert valid_resource_timeline(invalid) is None

@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from tool_resource import CLAUSE_TELEMETRY_SCHEMA_VERSION
 from tool_resource.sidecar_protocol import (
     PROTOCOL_VERSION,
     SidecarProtocolError,
@@ -58,7 +59,7 @@ class _Collector:
         self.artifact_path.write_text(
             json.dumps(
                 {
-                    "version": 2,
+                    "version": CLAUSE_TELEMETRY_SCHEMA_VERSION,
                     "container_id": self.container_id,
                     "calls": self.calls,
                     "replay_execution": replay_execution,

@@ -1,6 +1,6 @@
-"""Bridge Stage-2 exec-image telemetry to static mvdan-clause observations.
+"""Bridge collector exec-image telemetry to static mvdan-clause observations.
 
-The Stage-2 collector's ``(host_pid, exec_seq)`` object is a runtime *exec-image
+The collector's ``(host_pid, exec_seq)`` object is a runtime *exec-image
 occurrence*, NOT a shell clause. One static mvdan clause may own a same-PID exec
 chain AND forked/execed descendants:
 
@@ -43,14 +43,14 @@ from __future__ import annotations
 
 import math
 import re
-from fnmatch import fnmatchcase
 from dataclasses import dataclass, field, replace
+from fnmatch import fnmatchcase
 from typing import Any, Mapping, Sequence
 
 from tool_resource.features import parse_command_clauses
 from tool_resource.runtime_kb import ClauseObservation
 
-# Kept in sync with the Stage-2 collector's windowing constants.
+# Kept in sync with the collector runtime's windowing constants.
 _WINDOW_NS = 500_000_000
 _MIN_ELIGIBLE_SPAN_NS = 1_000_000_000  # resource_timeline: clause >= 1 s
 _MIN_WINDOW_SPAN_NS = 100_000_000
@@ -102,7 +102,7 @@ _DIALECT_DEPENDENT_BUILTINS = frozenset({"source"})
 
 @dataclass(frozen=True)
 class ExecImageRecord:
-    """One runtime exec-image occurrence produced by the Stage-2 collector.
+    """One runtime exec-image occurrence produced by clause telemetry.
 
     ``cpu_windows`` / ``rss_bins`` are the time-aligned profiles the bridge
     merges; ``None`` means the profile is unavailable (forcing that target to be

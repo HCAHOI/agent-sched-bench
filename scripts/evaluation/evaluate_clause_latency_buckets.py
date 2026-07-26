@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Diagnose clause-KB latency buckets on development-exposed legacy traces.
+"""Diagnose clause-KB latency buckets on development-exposed proxy traces.
 
 Numeric bucket edges are required explicitly. This proxy is not canonical
-Stage-2 evidence and cannot produce a claim-bearing result.
+clause telemetry and cannot produce a claim-bearing result.
 """
 
 from __future__ import annotations
@@ -322,7 +322,7 @@ def evaluate(
     rows = _score(ClauseResourceKB.fit_public(observations), eval_calls, buckets)
     return (
         {
-            "status": "development_diagnostic_legacy_proxy_not_canonical_stage2",
+            "status": "development_diagnostic_proxy_not_canonical_telemetry",
             "claim_bearing": False,
             "objective": "latency_bucket_prediction",
             "bucket_edges_ms": list(buckets.edges_ms),

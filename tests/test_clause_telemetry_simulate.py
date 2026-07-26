@@ -16,14 +16,15 @@ from agents.openclaw.tools.base import Tool
 from agents.openclaw.tools.container import ContainerExecTool
 from agents.openclaw.tools.registry import ToolRegistry
 from llm_call.provider_base import LLMProvider, LLMResponse, ToolCallRequest
-from trace_collect.clause_telemetry import (
+from tool_resource import CLAUSE_TELEMETRY_SCHEMA_VERSION
+from tool_resource.telemetry import (
     ARG_FLAG_ARGV_CAPPED,
     ARG_FLAG_CONTINUED,
     ARG_FLAG_TRUNCATED,
+    LOSS_COUNTER_NAMES,
     MAX_ARGS,
     ClauseTelemetryCollector,
     ClauseTelemetryIntegrityError,
-    LOSS_COUNTER_NAMES,
     ToolCallToken,
     _captured_argv,
     _is_protocol_timeout,
@@ -217,7 +218,7 @@ def test_sidecar_cleanup_failure_downgrades_status_and_artifact(
     artifact_path.write_text(
         json.dumps(
             {
-                "version": 2,
+                "version": CLAUSE_TELEMETRY_SCHEMA_VERSION,
                 "cleanup": "ok",
                 "telemetry_quality": "ok",
                 "formal_completeness": "complete",
@@ -458,7 +459,7 @@ def test_formal_clause_preflight_fails_before_workload_or_output_change(
 def test_clause_runtime_rejects_configuration_before_bcc(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("trace_collect.clause_telemetry.os.geteuid", lambda: 0)
+    monkeypatch.setattr("tool_resource.telemetry.os.geteuid", lambda: 0)
     with pytest.raises(ValueError, match="container docker"):
         validate_clause_telemetry_runtime(
             container_executable="podman",
@@ -503,11 +504,11 @@ def test_collector_attach_failure_cleans_partial_bpf(
         SimpleNamespace(BPF=FakeBPF, PerfSWConfig=object(), PerfType=object()),
     )
     monkeypatch.setattr(
-        "trace_collect.clause_telemetry._container_cgroup",
+        "tool_resource.telemetry._container_cgroup",
         lambda *_args: (tmp_path, 1),
     )
     monkeypatch.setattr(
-        "trace_collect.clause_telemetry.observed_quota_cores",
+        "tool_resource.telemetry.observed_quota_cores",
         lambda _path: 1.0,
     )
 
@@ -768,10 +769,10 @@ def test_mapping_failure_does_not_disable_later_valid_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     collector = _active_collector()
-    monkeypatch.setattr("trace_collect.clause_telemetry._counter", lambda *_: 0)
-    monkeypatch.setattr("trace_collect.clause_telemetry.time.sleep", lambda *_: None)
+    monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
+    monkeypatch.setattr("tool_resource.telemetry.time.sleep", lambda *_: None)
     monkeypatch.setattr(
-        "trace_collect.clause_telemetry.time.monotonic_ns", lambda: 230
+        "tool_resource.telemetry.time.monotonic_ns", lambda: 230
     )
 
     bad = ToolCallToken("bad", "missing arg", 100, 0, 0)
@@ -792,10 +793,10 @@ def test_internal_analysis_failure_disables_later_collection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     collector = _active_collector()
-    monkeypatch.setattr("trace_collect.clause_telemetry._counter", lambda *_: 0)
-    monkeypatch.setattr("trace_collect.clause_telemetry.time.sleep", lambda *_: None)
+    monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
+    monkeypatch.setattr("tool_resource.telemetry.time.sleep", lambda *_: None)
     monkeypatch.setattr(
-        "trace_collect.clause_telemetry.time.monotonic_ns", lambda: 230
+        "tool_resource.telemetry.time.monotonic_ns", lambda: 230
     )
 
     def fail_analysis(**_kwargs: Any) -> tuple[dict[str, Any], list[str]]:
@@ -831,13 +832,13 @@ def test_per_call_loss_does_not_disable_later_valid_call(
         ]
     )
     monkeypatch.setattr(
-        "trace_collect.clause_telemetry._loss_delta",
+        "tool_resource.telemetry._loss_delta",
         lambda *_: next(loss_deltas),
     )
-    monkeypatch.setattr("trace_collect.clause_telemetry._counter", lambda *_: 0)
-    monkeypatch.setattr("trace_collect.clause_telemetry.time.sleep", lambda *_: None)
+    monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
+    monkeypatch.setattr("tool_resource.telemetry.time.sleep", lambda *_: None)
     monkeypatch.setattr(
-        "trace_collect.clause_telemetry.time.monotonic_ns", lambda: 230
+        "tool_resource.telemetry.time.monotonic_ns", lambda: 230
     )
 
     first_token = ToolCallToken("loss", "echo hi", 100, 0, 0)
@@ -1033,8 +1034,8 @@ def test_disconnected_command_trees_persist_provenance_in_failed_call(
     collector._events = events
     collector.calls = []
     collector._integrity_errors = []
-    monkeypatch.setattr("trace_collect.clause_telemetry._counter", lambda *_: 0)
-    monkeypatch.setattr("trace_collect.clause_telemetry.time.sleep", lambda *_: None)
+    monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
+    monkeypatch.setattr("tool_resource.telemetry.time.sleep", lambda *_: None)
 
     summary = collector.finish_tool_call(token, replay_response={"returncode": 0})
 
@@ -1129,8 +1130,8 @@ def test_short_circuit_source_replay_disagreement_invalidates_only_telemetry(
     collector._events = _control_events(1)
     collector.calls = []
     collector._integrity_errors = []
-    monkeypatch.setattr("trace_collect.clause_telemetry._counter", lambda *_: 0)
-    monkeypatch.setattr("trace_collect.clause_telemetry.time.sleep", lambda *_: None)
+    monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
+    monkeypatch.setattr("tool_resource.telemetry.time.sleep", lambda *_: None)
 
     collector.finish_tool_call(
         token,
@@ -1645,7 +1646,7 @@ def test_guard_blocked_exec_is_explicit_no_runtime_and_advances_source(
         }
     ]
     collector._source_exec_index = 0
-    monkeypatch.setattr("trace_collect.clause_telemetry._counter", lambda *_: 0)
+    monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
 
     summary = collector.record_safety_guard_blocked(
         "replay-guard",
@@ -1867,7 +1868,7 @@ def test_concurrent_tools_isolate_one_telemetry_failure() -> None:
     assert healthy.finished
 
 
-def test_v2_artifact_records_disabled_session_and_replay_state(
+def test_artifact_records_disabled_session_and_replay_state(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "clause.json"
@@ -1881,7 +1882,7 @@ def test_v2_artifact_records_disabled_session_and_replay_state(
     collector.finalize(replay_execution="failed")
 
     artifact = json.loads(path.read_text(encoding="utf-8"))
-    assert artifact["version"] == 2
+    assert artifact["version"] == CLAUSE_TELEMETRY_SCHEMA_VERSION
     assert artifact["replay_execution"] == "failed"
     assert artifact["telemetry_quality"] == "unavailable"
     assert artifact["collection_validity"] == "invalid"
@@ -1907,7 +1908,7 @@ def test_replay_failure_is_separate_from_healthy_telemetry(
     collector = _active_collector()
     collector.artifact_path = tmp_path / "clause.json"
     monkeypatch.setattr(
-        "trace_collect.clause_telemetry._loss_counts",
+        "tool_resource.telemetry._loss_counts",
         lambda _bpf: {
             "ringbuf_reserve_failures": 0,
             "argv_read_failures": 0,
@@ -1950,7 +1951,7 @@ def test_finalize_marks_mapping_gaps_partial_without_discarding_valid_calls(
     ]
     collector._integrity_errors = [mapping_error]
     monkeypatch.setattr(
-        "trace_collect.clause_telemetry._loss_counts",
+        "tool_resource.telemetry._loss_counts",
         lambda _bpf: {
             "ringbuf_reserve_failures": 0,
             "argv_read_failures": 0,
@@ -1986,7 +1987,7 @@ def test_finalize_records_disable_state_after_health_check(
     collector = _active_collector()
     collector.artifact_path = tmp_path / "clause.json"
     monkeypatch.setattr(
-        "trace_collect.clause_telemetry._loss_counts",
+        "tool_resource.telemetry._loss_counts",
         lambda _bpf: (_ for _ in ()).throw(RuntimeError("counter failed")),
     )
     monkeypatch.setattr(collector, "_close_bpf", lambda: None)

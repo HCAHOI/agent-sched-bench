@@ -52,7 +52,7 @@ def _make_rebench_row(
     """Build a synthetic SWE-rebench row matching the real HF schema shape.
 
     FAIL_TO_PASS / PASS_TO_PASS are native lists (matching the real dataset,
-    confirmed by Phase 0 HF load verification).
+    confirmed by the initial HF load verification).
     """
     return {
         "instance_id": instance_id,

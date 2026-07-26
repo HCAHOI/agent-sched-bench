@@ -7,8 +7,8 @@ import json
 import logging
 import math
 import os
-import signal
 import shutil
+import signal
 import subprocess
 import threading
 from collections.abc import Callable
@@ -21,6 +21,7 @@ from trace_collect.attempt_pipeline import (
     AttemptResult,
     mcp_config_label,
 )
+from trace_collect.trace_data import CURRENT_TRACE_FORMAT_VERSION
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -847,7 +848,7 @@ class TerminalBenchRunner:
         merged.update(
             {
                 "type": "trace_metadata",
-                "trace_format_version": 5,
+                "trace_format_version": CURRENT_TRACE_FORMAT_VERSION,
                 "mode": "collect",
                 "scaffold": "openclaw",
                 "execution_environment": "container",

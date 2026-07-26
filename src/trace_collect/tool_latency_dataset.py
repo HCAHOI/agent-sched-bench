@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
-from dataclasses import dataclass
 import json
 import math
+from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -17,8 +17,8 @@ from trace_collect.tool_gap_extractor import (
 )
 from trace_collect.trace_data import TraceData
 
-
 MISSING_TOOL_NAME = "__missing_tool_name__"
+TOOL_LATENCY_CORPUS_SCHEMA_VERSION = 1
 
 _FIXED_CORPUS_CONFIG = {
     "fold_count": 5,
@@ -331,8 +331,11 @@ def read_tool_latency_corpus_manifest(
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("tool-latency corpus manifest must be a JSON object")
-    if payload.get("schema_version") != 1:
-        raise ValueError("tool-latency corpus manifest schema_version must be 1")
+    if payload.get("schema_version") != TOOL_LATENCY_CORPUS_SCHEMA_VERSION:
+        raise ValueError(
+            "tool-latency corpus manifest schema_version must be "
+            f"{TOOL_LATENCY_CORPUS_SCHEMA_VERSION}"
+        )
 
     collection_id = payload.get("collection_id")
     if not isinstance(collection_id, str) or not collection_id.strip():

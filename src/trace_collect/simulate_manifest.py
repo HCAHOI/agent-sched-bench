@@ -13,6 +13,8 @@ from trace_collect.simulate_types import (
     WorkerTraceInput,
 )
 
+SIMULATE_MANIFEST_SCHEMA_VERSION = 1
+
 
 def _group_actions_by_iteration(
     actions: list[dict[str, Any]],
@@ -319,9 +321,12 @@ def _load_simulate_manifest(
         if unknown_manifest_keys:
             keys = ", ".join(sorted(str(key) for key in unknown_manifest_keys))
             raise SimulateError(f"simulate manifest has unsupported top-level keys: {keys}")
-        version = raw.get("version", 1)
-        if version != 1:
-            raise SimulateError(f"simulate manifest version must be 1, got {version!r}")
+        version = raw.get("version", SIMULATE_MANIFEST_SCHEMA_VERSION)
+        if version != SIMULATE_MANIFEST_SCHEMA_VERSION:
+            raise SimulateError(
+                "simulate manifest version must be "
+                f"{SIMULATE_MANIFEST_SCHEMA_VERSION}, got {version!r}"
+            )
         defaults = raw.get("defaults") or {}
         if not isinstance(defaults, dict):
             raise SimulateError("simulate manifest defaults must be an object")

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-_RESOURCE_TIMELINE_VERSION = 1
+RESOURCE_TIMELINE_SCHEMA_VERSION = 1
 _DEFAULT_SAMPLE_INTERVAL_S = 0.5
 _CGROUP_ROOT = Path("/sys/fs/cgroup")
 _PROC_NET_DEV = Path("/proc/net/dev")
@@ -313,7 +313,7 @@ class ResourceTimelineRecorder:
         net_tx_bytes = sum(int(sample.get("net_tx_bytes", 0)) for sample in samples)
         wall_s = sum(float(sample.get("dt_s", 0.0)) for sample in samples)
         return {
-            "version": _RESOURCE_TIMELINE_VERSION,
+            "version": RESOURCE_TIMELINE_SCHEMA_VERSION,
             "source": "cgroup_cpu_proc_net",
             "scope": self.scope,
             "sample_interval_s": self.sample_interval_s,
@@ -329,11 +329,11 @@ class ResourceTimelineRecorder:
 
 
 def valid_resource_timeline(value: Any) -> dict[str, Any] | None:
-    """Return value when it is a usable v1 resource timeline."""
+    """Return value when it uses the supported resource timeline schema."""
 
     if not isinstance(value, dict):
         return None
-    if value.get("version") != _RESOURCE_TIMELINE_VERSION:
+    if value.get("version") != RESOURCE_TIMELINE_SCHEMA_VERSION:
         return None
     samples = value.get("samples")
     if not isinstance(samples, list) or not samples:

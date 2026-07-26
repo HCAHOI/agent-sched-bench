@@ -14,6 +14,7 @@ from trace_collect.openclaw_tools import (
     execute_trace_tool,
     execute_trace_tool_detailed,
 )
+from trace_collect.resource_timeline import RESOURCE_TIMELINE_SCHEMA_VERSION
 
 
 def _nested(tool_name: str, payload: dict) -> str:
@@ -667,7 +668,7 @@ def test_exec_command_source_timeout_fallback_preserves_source_timeout() -> None
 def test_exec_command_passes_source_resource_timeline() -> None:
     agent = FakeAgent({"exec": {"ok": True, "result": "ok", "returncode": 0}})
     source_resource_timeline = {
-        "version": 1,
+        "version": RESOURCE_TIMELINE_SCHEMA_VERSION,
         "samples": [
             {
                 "offset_s": 0.5,
@@ -716,7 +717,7 @@ def test_execute_trace_tool_detailed_preserves_resource_metadata() -> None:
             tool_args_json=_nested("exec", {"command": "pytest", "timeout": 12}),
             command_timeout_s=600.0,
             source_resource_timeline={
-                "version": 1,
+                "version": RESOURCE_TIMELINE_SCHEMA_VERSION,
                 "samples": [{"offset_s": 0.5, "dt_s": 0.5, "cpu_core_s": 1.0}],
             },
         )
@@ -733,7 +734,7 @@ def test_execute_trace_tool_detailed_preserves_resource_metadata() -> None:
 def test_commands_do_not_claim_resource_timeline_support() -> None:
     agent = FakeAgent({"commands": {"ok": True, "result": "ok", "returncode": 0}})
     source_resource_timeline = {
-        "version": 1,
+        "version": RESOURCE_TIMELINE_SCHEMA_VERSION,
         "samples": [{"offset_s": 0.5, "dt_s": 0.5, "cpu_core_s": 1.0}],
     }
 
@@ -756,7 +757,7 @@ def test_resource_progress_uses_cpu_and_network_bottleneck() -> None:
     namespace: dict[str, object] = {}
     exec(_REPLAY_AGENT_SCRIPT.split("\nHANDLERS = ", 1)[0], namespace)
     timeline = {
-        "version": 1,
+        "version": RESOURCE_TIMELINE_SCHEMA_VERSION,
         "samples": [
             {
                 "dt_s": 1.0,

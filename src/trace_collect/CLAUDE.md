@@ -44,5 +44,5 @@ stall detector plus a 24h outer protocol guard.
 The production BSD pacct and bash-xtrace segment-timeline replay paths were
 removed on 2026-07-25, including their flags, instrumentation, side channels,
 trace metadata, and offline extraction helpers. Historical traces and result
-artifacts remain evidence. New clause-level resource work uses the Stage-2 eBPF
+artifacts remain evidence. New clause-level resource work uses the eBPF
 collector and preserves the ordinary command envelope and `resource_timeline`.
