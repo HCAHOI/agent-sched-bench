@@ -308,11 +308,12 @@ Before planning or executing work that changes tool-resource data, prediction,
 evaluation, or scheduler integration, read
 `analysis/development/tool-resource-canonical-objective.md`. Its objective,
 metric definitions, evidence boundary, and current-integration statement
-override conflicting older development plans and chat summaries. In
-particular: primary acceptance is three command-level dominant-type
-classifications measured by balanced accuracy; `q90` means q-error p90; and the
-composition candidate ORs per-clause flags per target. The current
-clause-integration status is stated there, not here — defer to that file.
+override conflicting older development plans and chat summaries. The final
+family is log-spaced latency/CPU/memory bucket prediction; the current stage is
+latency buckets only while canonical CPU/memory telemetry finishes. Bucket
+intervals are right-open, exact numeric boundaries have no default, and bucket
+IDs are never composed with boolean OR. Defer all details and current status to
+the lock file.
 
 ## Environment
 
