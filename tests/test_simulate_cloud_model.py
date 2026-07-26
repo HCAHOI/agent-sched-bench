@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 
+import trace_collect.simulator as simulator_module
 from harness.container_image_prep import normalize_image_reference
+from harness.trace_logger import TraceLogger
 from trace_collect.cli import _run_simulate, parse_simulate_args
 from trace_collect.resource_timeline import RESOURCE_TIMELINE_SCHEMA_VERSION
 from trace_collect.simulate_manifest import _parse_trace_session_file
@@ -570,6 +572,174 @@ def test_cloud_model_dependency_queue_releases_child_after_parent_finalizes(
         "finalize:child",
     ]
 
+
+def test_cloud_model_queue_continues_after_container_prep_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def loaded(task_id: str, manifest_index: int) -> LoadedTraceSession:
+        return LoadedTraceSession(
+            source_trace=tmp_path / f"{task_id}.jsonl",
+            task_source=tmp_path / "tasks.json",
+            task_instance_id=task_id,
+            source_action_agent_id=task_id,
+            run_instance_id=task_id,
+            manifest_index=manifest_index,
+            scaffold="openclaw",
+            metadata={"source_model": "model"},
+            summary=None,
+            task={"instance_id": task_id},
+            actions=[],
+            iterations={},
+        )
+
+    bad = loaded("broken-networking", 0)
+    good = loaded("next-task", 1)
+    events: list[str] = []
+
+    async def fake_prepare(
+        loaded_session: LoadedTraceSession,
+        **_kwargs,
+    ) -> PreparedTraceSession:
+        events.append(f"prepare:{loaded_session.task_instance_id}")
+        if loaded_session is bad:
+            raise RuntimeError(
+                "task-container python probe failed: "
+                "no Python >=3.11 interpreter found in container"
+            )
+        return PreparedTraceSession(loaded=loaded_session)
+
+    async def fake_replay(
+        prepared: PreparedTraceSession,
+        **_kwargs,
+    ) -> ReplayTaskStats:
+        events.append(f"replay:{prepared.loaded.task_instance_id}")
+        loaded_session = prepared.loaded
+        return ReplayTaskStats(
+            agent_id=loaded_session.agent_id,
+            run_instance_id=loaded_session.run_instance_id,
+            source_agent_id=loaded_session.source_action_agent_id,
+            manifest_index=loaded_session.manifest_index,
+            label=loaded_session.label,
+            source_trace=str(loaded_session.source_trace),
+            success=True,
+            elapsed_s=0.0,
+            action_count=0,
+            llm_call_count=0,
+            tool_exec_count=0,
+        )
+
+    async def fake_finalize(_prepared: PreparedTraceSession) -> None:
+        return None
+
+    monkeypatch.setattr("trace_collect.simulator._prepare_replay_session", fake_prepare)
+    monkeypatch.setattr("trace_collect.simulator._replay_cloud_model_session", fake_replay)
+    monkeypatch.setattr("trace_collect.simulator._finalize_prepared_session", fake_finalize)
+    trace_logger = TraceLogger(tmp_path, "prep-fail-soft")
+    try:
+        prepared, stats = asyncio.run(
+            _run_cloud_model_queue(
+                [bad, good],
+                output_path=tmp_path / "out",
+                trace_logger=trace_logger,
+                concurrency=1,
+                container_executable="docker",
+                network_mode="host",
+                container_resource_recorder=None,
+                replay_speed=1.0,
+                llm_timing=LLMTimingConfig(),
+                command_timeout_s=1.0,
+                warmup_skip_iterations=0,
+            )
+        )
+    finally:
+        trace_logger.close()
+
+    assert events == [
+        "prepare:broken-networking",
+        "prepare:next-task",
+        "replay:next-task",
+    ]
+    stats_by_task = {stat.agent_id: stat for stat in stats}
+    assert stats_by_task["broken-networking"].success is False
+    assert stats_by_task["next-task"].success is True
+    failed_prepared = next(item for item in prepared if item.loaded is bad)
+    assert failed_prepared.task_output_dir is not None
+    startup = json.loads(
+        (failed_prepared.task_output_dir / "container_startup.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert startup["status"] == "failed"
+    assert startup["reason"] == "container_python_unavailable"
+    failed_summary = next(
+        record
+        for record in _read_jsonl(trace_logger.path)
+        if record.get("type") == "summary"
+        and record.get("agent_id") == "broken-networking"
+    )
+    assert failed_summary["status"] == "failed"
+    assert failed_summary["reason"] == "container_python_unavailable"
+
+
+def test_prepare_failure_preserves_attempt_when_cleanup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    loaded = LoadedTraceSession(
+        source_trace=tmp_path / "broken.jsonl",
+        task_source=tmp_path / "tasks.json",
+        task_instance_id="broken",
+        source_action_agent_id="broken",
+        run_instance_id="broken",
+        manifest_index=0,
+        scaffold="tongyi-deepresearch",
+        metadata={"source_model": "model"},
+        summary=None,
+        task={"instance_id": "broken"},
+        actions=[],
+        iterations={},
+    )
+    finalized: list[PreparedTraceSession] = []
+
+    def fail_startup_write(*_args, **_kwargs) -> None:
+        raise RuntimeError(
+            "task-container python probe failed: "
+            "no Python >=3.11 interpreter found in container"
+        )
+
+    async def fail_finalize(prepared: PreparedTraceSession) -> None:
+        finalized.append(prepared)
+        raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(simulator_module, "_requires_task_container", lambda _loaded: False)
+    monkeypatch.setattr(
+        simulator_module.ContainerStartupRecorder,
+        "write",
+        fail_startup_write,
+    )
+    monkeypatch.setattr(simulator_module, "_finalize_prepared_session", fail_finalize)
+
+    with pytest.raises(simulator_module._ReplayPreparationError) as exc_info:
+        asyncio.run(
+            simulator_module._prepare_replay_session(
+                loaded,
+                output_path=tmp_path / "out",
+                container_executable=None,
+                network_mode="host",
+                container_resource_recorder=None,
+                resource_monitoring_enabled=False,
+                memory_bandwidth_enabled=False,
+                monitoring_policy={},
+            )
+        )
+
+    assert finalized == [exc_info.value.prepared]
+    assert exc_info.value.prepared.task_output_dir is not None
+    assert exc_info.value.reason == "container_python_unavailable"
+    assert str(exc_info.value.cleanup_error) == "cleanup failed"
+
+
 def test_resolve_prep_concurrency_preserves_default_limit() -> None:
     assert _resolve_prep_concurrency(0, 640) == 20
     assert _resolve_prep_concurrency(64, 640) == 64
@@ -592,6 +762,148 @@ class _SetOnlyEvent:
 
     def set(self) -> None:
         self.set_called = True
+
+
+class _ReadyBarrier:
+    def wait(self) -> None:
+        return None
+
+
+class _SharedWallTime:
+    value = 0.0
+
+
+def test_worker_wave_continues_after_container_prep_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    bad_trace = tmp_path / "bad.jsonl"
+    good_trace = tmp_path / "good.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(bad_trace, agent_id="bad", execution_environment="host")
+    _write_trace(good_trace, agent_id="good", execution_environment="host")
+    _write_host_tasks(task_source, "bad", "good")
+    inputs = [
+        WorkerTraceInput(
+            source_trace=str(trace),
+            task_source=str(task_source),
+            manifest_index=index,
+            docker_image_override=None,
+            label=None,
+            run_instance_id=agent_id,
+            task_instance_id=agent_id,
+            source_action_agent_id=agent_id,
+        )
+        for index, (agent_id, trace) in enumerate(
+            (("bad", bad_trace), ("good", good_trace))
+        )
+    ]
+    output_path = tmp_path / "out"
+    finalized: list[str] = []
+
+    async def fake_prepare(
+        loaded: LoadedTraceSession,
+        **_kwargs,
+    ) -> PreparedTraceSession:
+        task_output_dir = output_path / loaded.agent_id / "attempt_1"
+        task_output_dir.mkdir(parents=True)
+        prepared = PreparedTraceSession(
+            loaded=loaded,
+            task_output_dir=task_output_dir,
+        )
+        if loaded.agent_id == "bad":
+            (task_output_dir / "container_startup.json").write_text(
+                '{"status":"failed","marker":"original-attempt"}\n',
+                encoding="utf-8",
+            )
+            raise simulator_module._ReplayPreparationError(
+                prepared,
+                "container_python_unavailable",
+                RuntimeError("python probe failed"),
+            )
+        return prepared
+
+    async def fake_run(
+        prepared_sessions: list[PreparedTraceSession],
+        **_kwargs,
+    ) -> list[ReplayTaskStats]:
+        assert [prepared.loaded.agent_id for prepared in prepared_sessions] == ["good"]
+        loaded = prepared_sessions[0].loaded
+        return [
+            ReplayTaskStats(
+                agent_id=loaded.agent_id,
+                run_instance_id=loaded.run_instance_id,
+                source_agent_id=loaded.source_action_agent_id,
+                manifest_index=loaded.manifest_index,
+                label=loaded.label,
+                source_trace=str(loaded.source_trace),
+                success=True,
+                elapsed_s=0.0,
+                action_count=0,
+                llm_call_count=0,
+                tool_exec_count=0,
+            )
+        ]
+
+    async def fake_finalize(prepared: PreparedTraceSession) -> None:
+        finalized.append(prepared.loaded.agent_id)
+
+    monkeypatch.setattr(
+        simulator_module,
+        "_prepare_replay_session_with_shared_limit",
+        fake_prepare,
+    )
+    monkeypatch.setattr(
+        simulator_module,
+        "_run_prepared_cloud_model_sessions",
+        fake_run,
+    )
+    monkeypatch.setattr(simulator_module, "_finalize_prepared_session", fake_finalize)
+
+    result = asyncio.run(
+        _run_worker_wave_async(
+            worker_inputs=inputs,
+            output_path=output_path,
+            worker_run_id="worker",
+            global_run_id="global",
+            global_concurrency=2,
+            wave_index=0,
+            worker_index=0,
+            worker_count=1,
+            container_executable=None,
+            network_mode="host",
+            replay_speed=1.0,
+            llm_timing=LLMTimingConfig(),
+            command_timeout_s=1.0,
+            warmup_skip_iterations=0,
+            fixed_images_by_source=None,
+            resource_monitoring_enabled=False,
+            memory_bandwidth_enabled=False,
+            monitoring_policy={},
+            prep_semaphore=object(),
+            replay_start_barrier=_ReadyBarrier(),
+            replay_start_event=_SetOnlyEvent(),
+            replay_start_wall_time=_SharedWallTime(),
+        )
+    )
+
+    assert [stat.agent_id for stat in result.task_stats] == ["bad", "good"]
+    assert [stat.success for stat in result.task_stats] == [False, True]
+    assert result.task_output_dirs["bad"].endswith("bad/attempt_1")
+    startup = json.loads(
+        (Path(result.task_output_dirs["bad"]) / "container_startup.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert startup["marker"] == "original-attempt"
+    failed_summary = next(
+        record
+        for record in _read_jsonl(Path(result.trace_file))
+        if record.get("type") == "summary" and record.get("agent_id") == "bad"
+    )
+    assert failed_summary["status"] == "failed"
+    assert failed_summary["reason"] == "container_python_unavailable"
+    assert finalized == ["bad", "good"]
 
 
 def test_worker_wave_finalizes_successful_preparations_after_prepare_failure(
@@ -640,7 +952,7 @@ def test_worker_wave_finalizes_successful_preparations_after_prepare_failure(
 
     async def fake_prepare(loaded, **_kwargs):
         if loaded.agent_id == "bad":
-            raise RuntimeError("prepare failed")
+            raise ValueError("prepare failed")
         return PreparedTraceSession(
             loaded=loaded,
             task_output_dir=tmp_path / loaded.agent_id / "attempt_1",
@@ -2794,17 +3106,16 @@ def test_cloud_model_agent_start_failure_writes_failed_container_startup_json(
     )
     monkeypatch.setattr("trace_collect.openclaw_tools.ContainerAgent", _FailingContainerAgent)
 
-    with pytest.raises(RuntimeError, match="agent failed"):
-        asyncio.run(
-            simulate(
-                manifest=_single_trace_manifest(tmp_path, trace_path),
-                task_source=task_source,
-                output_dir=output_dir,
-                mode="cloud_model",
-                container_executable="docker",
-                replay_speed=100.0,
-            )
+    asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=output_dir,
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
         )
+    )
 
     startup = json.loads(
         (output_dir / "task-a" / "attempt_1" / "container_startup.json").read_text()
@@ -2818,10 +3129,10 @@ def test_cloud_model_agent_start_failure_writes_failed_container_startup_json(
     assert startup["resources"]["samples"] == []
     assert startup["resources"]["summary"]["sample_count"] == 0
     assert stopped_containers == ["fake-cid"]
-    assert removed_images == []
+    assert removed_images == ["fixed-image"]
 
 
-def test_cloud_model_start_container_failure_keeps_sweep_fixed_image(
+def test_cloud_model_start_container_failure_cleans_sweep_fixed_image(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -2855,17 +3166,16 @@ def test_cloud_model_start_container_failure_keeps_sweep_fixed_image(
         lambda image, *, container_executable: removed_images.append(image) or True,
     )
 
-    with pytest.raises(RuntimeError, match="container start failed"):
-        asyncio.run(
-            simulate(
-                manifest=_single_trace_manifest(tmp_path, trace_path),
-                task_source=task_source,
-                output_dir=output_dir,
-                mode="cloud_model",
-                container_executable="docker",
-                replay_speed=100.0,
-            )
+    asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=output_dir,
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
         )
+    )
 
     startup = json.loads(
         (output_dir / "task-a" / "attempt_1" / "container_startup.json").read_text()
@@ -2873,10 +3183,10 @@ def test_cloud_model_start_container_failure_keeps_sweep_fixed_image(
     assert startup["status"] == "failed"
     assert startup["phases"][-1]["name"] == "start_task_container"
     assert startup["phases"][-1]["status"] == "failed"
-    assert removed_images == []
+    assert removed_images == ["fixed-image"]
 
 
-def test_cloud_model_agent_start_failure_keeps_fixed_image_when_stop_fails(
+def test_cloud_model_agent_start_failure_is_fail_soft_when_stop_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -2925,21 +3235,17 @@ def test_cloud_model_agent_start_failure_keeps_fixed_image_when_stop_fails(
     )
     monkeypatch.setattr("trace_collect.openclaw_tools.ContainerAgent", _FailingContainerAgent)
 
-    with pytest.raises(RuntimeError, match="container cleanup failed") as exc_info:
-        asyncio.run(
-            simulate(
-                manifest=_single_trace_manifest(tmp_path, trace_path),
-                task_source=task_source,
-                output_dir=output_dir,
-                mode="cloud_model",
-                container_executable="docker",
-                replay_speed=100.0,
-            )
+    asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=output_dir,
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
         )
-
-    assert isinstance(exc_info.value.__context__, RuntimeError)
-    assert str(exc_info.value.__context__) == "agent failed"
-    assert removed_images == []
+    )
+    assert removed_images == ["fixed-image"]
 
 
 def test_cloud_model_worker_failure_waits_for_inflight_cleanup(
@@ -3015,18 +3321,17 @@ def test_cloud_model_worker_failure_waits_for_inflight_cleanup(
     monkeypatch.setattr("trace_collect.simulator.stop_task_container", fake_stop_task_container)
 
     started = time.monotonic()
-    with pytest.raises(RuntimeError, match="prepare failed"):
-        asyncio.run(
-            simulate(
-                manifest=manifest,
-                task_source=task_source,
-                output_dir=tmp_path / "out",
-                mode="cloud_model",
-                concurrency=2,
-                container_executable="docker",
-                replay_speed=100.0,
-            )
+    asyncio.run(
+        simulate(
+            manifest=manifest,
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            concurrency=2,
+            container_executable="docker",
+            replay_speed=100.0,
         )
+    )
 
     assert time.monotonic() - started >= 0.04
     assert agent_stops == ["task-slow"]
@@ -3087,16 +3392,15 @@ def test_cloud_model_prepare_failure_cleans_returned_container(
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _RaisingSampler)
     monkeypatch.setattr("trace_collect.simulator.stop_task_container", fake_stop_task_container)
 
-    with pytest.raises(RuntimeError, match="sampler failed"):
-        asyncio.run(
-            simulate(
-                manifest=_single_trace_manifest(tmp_path, trace_path),
-                task_source=task_source,
-                output_dir=tmp_path / "out",
-                mode="cloud_model",
-                container_executable="docker",
-            )
+    asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
         )
+    )
 
     assert agent_stops == 1
     assert container_stops == 1
