@@ -33,6 +33,7 @@ from trace_collect.clause_telemetry import (
 from trace_collect.cli import _run_simulate, parse_simulate_args
 from trace_collect.openclaw_host_runtime import (
     _attach_clause_telemetry,
+    _downgrade_clause_telemetry,
     _finalized_clause_telemetry_status,
 )
 
@@ -163,13 +164,13 @@ def test_finalizer_error_cannot_reuse_stale_valid_artifact(tmp_path: Path) -> No
         encoding="utf-8",
     )
     collector = SimpleNamespace(
-        finalize=lambda **_kwargs: "telemetry finalize failed: RuntimeError: boom"
+        finalize=lambda **_kwargs: "telemetry finalize failed: RuntimeError: boom",
+        final_artifact=None,
     )
 
     status, errors = _finalized_clause_telemetry_status(
         collector,
         replay_execution="completed",
-        artifact_path=artifact_path,
     )
 
     assert status == {
@@ -179,6 +180,80 @@ def test_finalizer_error_cannot_reuse_stale_valid_artifact(tmp_path: Path) -> No
         "collection_validity": "invalid",
     }
     assert errors == ["telemetry finalize failed: RuntimeError: boom"]
+
+
+def test_finalized_status_comes_from_sidecar_artifact() -> None:
+    collector = SimpleNamespace(
+        finalize=lambda **_kwargs: None,
+        final_artifact={
+            "telemetry_quality": "ok",
+            "formal_completeness": "partial",
+            "call_coverage": {
+                "total_call_count": 2,
+                "eligible_call_count": 1,
+                "withheld_call_count": 1,
+                "eligible_fraction": 0.5,
+            },
+            "collection_validity": "valid",
+        },
+    )
+
+    status, errors = _finalized_clause_telemetry_status(
+        collector,
+        replay_execution="completed",
+    )
+
+    assert status["telemetry_quality"] == "ok"
+    assert status["formal_completeness"] == "partial"
+    assert status["call_coverage"]["eligible_fraction"] == 0.5
+    assert status["collection_validity"] == "valid"
+    assert errors == []
+
+
+def test_sidecar_cleanup_failure_downgrades_status_and_artifact(
+    tmp_path: Path,
+) -> None:
+    artifact_path = tmp_path / "clause-telemetry.json"
+    artifact_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "cleanup": "ok",
+                "telemetry_quality": "ok",
+                "formal_completeness": "complete",
+                "collection_validity": "valid",
+                "collector": {"health": "healthy"},
+                "integrity": {"status": "ok", "errors": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    status = {
+        "telemetry_quality": "ok",
+        "formal_completeness": "complete",
+        "collection_validity": "valid",
+    }
+
+    error = _downgrade_clause_telemetry(
+        status,
+        artifact_path,
+        "sidecar cleanup failed: fixture",
+    )
+
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert error is None
+    assert status["telemetry_quality"] == "unavailable"
+    assert status["formal_completeness"] == "unavailable"
+    assert status["collection_validity"] == "invalid"
+    assert artifact["cleanup"] == "failed"
+    assert artifact["telemetry_quality"] == "unavailable"
+    assert artifact["formal_completeness"] == "unavailable"
+    assert artifact["collection_validity"] == "invalid"
+    assert artifact["collector"]["health"] == "unavailable"
+    assert artifact["integrity"] == {
+        "status": "failed",
+        "errors": ["sidecar cleanup failed: fixture"],
+    }
 
 
 def _failed_exec_events() -> list[dict[str, Any]]:

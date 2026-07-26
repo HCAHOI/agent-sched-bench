@@ -6,7 +6,13 @@ from typing import Any
 
 import pytest
 
-from tool_resource import DockerExecutionContext, LatencyBuckets, ToolResourceSDK
+from tool_resource import (
+    DockerExecutionContext,
+    LatencyBuckets,
+    SidecarUnavailableError,
+    ToolResourceSDK,
+)
+from tool_resource.sidecar_protocol import SidecarTransport
 
 
 def _clause(*, timestamps: bool) -> dict[str, Any]:
@@ -97,9 +103,7 @@ def _write_artifact(
                     "state_before_close": (
                         "active" if collector_healthy else "disabled"
                     ),
-                    "health": (
-                        "healthy" if collector_healthy else "unavailable"
-                    ),
+                    "health": ("healthy" if collector_healthy else "unavailable"),
                     "valid_call_count": valid_count,
                     "invalid_call_count": invalid_count,
                     "unavailable_call_count": unavailable_count,
@@ -107,13 +111,9 @@ def _write_artifact(
                 },
                 "cleanup": cleanup,
                 "replay_execution": replay_execution,
-                "telemetry_quality": (
-                    "ok" if collector_healthy else "unavailable"
-                ),
+                "telemetry_quality": ("ok" if collector_healthy else "unavailable"),
                 "formal_completeness": formal_completeness,
-                "collection_validity": (
-                    "valid" if collector_healthy else "invalid"
-                ),
+                "collection_validity": ("valid" if collector_healthy else "invalid"),
                 "integrity": {
                     "status": "ok" if collector_healthy else "failed",
                     "errors": (
@@ -127,12 +127,20 @@ def _write_artifact(
     )
 
 
-def _cold_start_sdk(tmp_path: Path) -> ToolResourceSDK:
+def _cold_start_sdk(
+    tmp_path: Path,
+    *,
+    transport_factory: Any | None = None,
+) -> ToolResourceSDK:
     path = tmp_path / "cold-start.json"
     cold_call = _call("cold-1", timestamps=False)
     cold_call["clauses"][0]["latency_ms"] = 50.0
     _write_artifact(path, [cold_call])
-    return ToolResourceSDK.from_traces(path, LatencyBuckets((100.0,)))
+    return ToolResourceSDK.from_traces(
+        path,
+        LatencyBuckets((100.0,)),
+        transport_factory=transport_factory,
+    )
 
 
 class _Collector:
@@ -176,6 +184,73 @@ class _Collector:
         )
 
 
+class _CollectorTransport:
+    def __init__(self, context: DockerExecutionContext, collector_class: type) -> None:
+        self.context = context
+        self.collector_class = collector_class
+        self.collector: Any | None = None
+        self.tokens: dict[str, object] = {}
+
+    def request(
+        self,
+        operation: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = payload or {}
+        if operation == "open":
+            self.collector = self.collector_class(
+                container_id=payload["container_id"],
+                container_executable=self.context.container_executable,
+                repo=payload["repo"],
+                artifact_path=self.context.artifact_path.with_suffix(".sidecar.json"),
+                source_actions=payload["source_actions"],
+            )
+            return {"session_id": "session-1"}
+        assert self.collector is not None
+        if operation == "begin":
+            token = self.collector.begin_tool_call(
+                payload["tool_call_id"],
+                payload["command"],
+            )
+            self.tokens["token-1"] = token
+            return {"token_id": "token-1"}
+        if operation == "finish":
+            return {
+                "call": self.collector.finish_tool_call(
+                    self.tokens.pop(payload["token_id"]),
+                    replay_response=payload["replay_response"],
+                )
+            }
+        if operation == "safety_guard":
+            return {
+                "call": self.collector.record_safety_guard_blocked(
+                    payload["tool_call_id"],
+                    payload["command"],
+                    payload["replay_result"],
+                )
+            }
+        if operation == "add_error":
+            self.collector.add_integrity_error(payload["message"])
+            return {}
+        if operation == "finalize":
+            self.collector.finalize(replay_execution=payload["replay_execution"])
+            artifact_path = self.collector.artifact_path
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+            artifact_path.unlink()
+            return {"artifact": artifact}
+        raise AssertionError(operation)
+
+
+def _observing_sdk(
+    tmp_path: Path,
+    collector_class: type = _Collector,
+) -> ToolResourceSDK:
+    def transport_factory(context: DockerExecutionContext) -> SidecarTransport:
+        return _CollectorTransport(context, collector_class)
+
+    return _cold_start_sdk(tmp_path, transport_factory=transport_factory)
+
+
 def _context(tmp_path: Path, name: str) -> DockerExecutionContext:
     return DockerExecutionContext(
         container_id="container-1",
@@ -186,14 +261,9 @@ def _context(tmp_path: Path, name: str) -> DockerExecutionContext:
 
 
 def test_cold_start_command_transaction_and_causal_update(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(
-        "trace_collect.clause_telemetry.ClauseTelemetryCollector",
-        _Collector,
-    )
-    sdk = _cold_start_sdk(tmp_path)
+    sdk = _observing_sdk(tmp_path)
     run = sdk.start_command(
         _context(tmp_path, "first"),
         "call-1",
@@ -241,8 +311,7 @@ def test_cold_start_command_transaction_and_causal_update(
         ts_start=12.1,
     )
     assert (
-        after_end.prediction is not None
-        and after_end.prediction.prediction is not None
+        after_end.prediction is not None and after_end.prediction.prediction is not None
     )
     assert after_end.prediction.prediction.scope == "repo"
     assert after_end.prediction.prediction.bucket_id == 1
@@ -263,14 +332,9 @@ class _CleanupFailureCollector(_Collector):
 
 
 def test_kb_update_waits_for_final_cleanup_and_collection_validity(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(
-        "trace_collect.clause_telemetry.ClauseTelemetryCollector",
-        _CleanupFailureCollector,
-    )
-    sdk = _cold_start_sdk(tmp_path)
+    sdk = _observing_sdk(tmp_path, _CleanupFailureCollector)
     run = sdk.start_command(
         _context(tmp_path, "cleanup-failed"),
         "call-1",
@@ -306,14 +370,9 @@ class _FailingCollector(_Collector):
 
 
 def test_telemetry_failure_preserves_actual_result_and_does_not_update_kb(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(
-        "trace_collect.clause_telemetry.ClauseTelemetryCollector",
-        _FailingCollector,
-    )
-    sdk = _cold_start_sdk(tmp_path)
+    sdk = _observing_sdk(tmp_path, _FailingCollector)
     run = sdk.start_command(
         _context(tmp_path, "telemetry-failed"),
         "call-1",
@@ -388,15 +447,10 @@ def test_cold_start_isolates_unavailable_artifact(tmp_path: Path) -> None:
 
 
 def test_command_run_cannot_be_finished_by_another_sdk(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(
-        "trace_collect.clause_telemetry.ClauseTelemetryCollector",
-        _Collector,
-    )
-    sdk = _cold_start_sdk(tmp_path)
-    other = _cold_start_sdk(tmp_path)
+    sdk = _observing_sdk(tmp_path)
+    other = _observing_sdk(tmp_path)
     run = sdk.start_command(
         _context(tmp_path, "owned"),
         "call-1",
@@ -417,14 +471,9 @@ class _FinalizeFailureCollector(_Collector):
 
 
 def test_stale_artifact_or_finalizer_failure_cannot_update_kb(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(
-        "trace_collect.clause_telemetry.ClauseTelemetryCollector",
-        _FinalizeFailureCollector,
-    )
-    sdk = _cold_start_sdk(tmp_path)
+    sdk = _observing_sdk(tmp_path, _FinalizeFailureCollector)
     stale_context = _context(tmp_path, "stale")
     _write_artifact(
         stale_context.artifact_path,
@@ -451,3 +500,62 @@ def test_stale_artifact_or_finalizer_failure_cannot_update_kb(
     assert result.telemetry_artifact is None
     assert result.kb_observations_added == 0
     assert "cleanup failed" in str(result.kb_update_error)
+
+
+class _DisconnectingTransport(_CollectorTransport):
+    def request(
+        self,
+        operation: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if operation == "finish":
+            raise SidecarUnavailableError("socket disconnected")
+        return super().request(operation, payload)
+
+
+def test_sidecar_disconnect_preserves_workload_and_blocks_update(
+    tmp_path: Path,
+) -> None:
+    sdk = _cold_start_sdk(
+        tmp_path,
+        transport_factory=lambda context: _DisconnectingTransport(
+            context,
+            _Collector,
+        ),
+    )
+    run = sdk.start_command(
+        _context(tmp_path, "disconnect"),
+        "call-1",
+        "echo hi",
+        ts_start=9.0,
+    )
+    actual = {"returncode": 0, "result": "hi"}
+
+    result = sdk.finish_command(run, actual)
+
+    assert result.workload_result is actual
+    assert result.call_telemetry["telemetry_quality"] == "unavailable"
+    assert result.telemetry_artifact is None
+    assert result.kb_observations_added == 0
+    assert "disconnected" in str(result.kb_update_error)
+
+
+def test_sidecar_unavailable_preserves_workload_and_blocks_update(
+    tmp_path: Path,
+) -> None:
+    sdk = _cold_start_sdk(tmp_path)
+    run = sdk.start_command(
+        _context(tmp_path, "unavailable"),
+        "call-1",
+        "echo hi",
+        ts_start=9.0,
+    )
+    actual = {"returncode": 9, "result": "workload failed"}
+
+    result = sdk.finish_command(run, actual)
+
+    assert result.workload_result is actual
+    assert result.call_telemetry["telemetry_quality"] == "unavailable"
+    assert result.telemetry_artifact is None
+    assert result.kb_observations_added == 0
+    assert "not configured" in str(result.kb_update_error)

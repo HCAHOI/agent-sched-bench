@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
+import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -848,7 +851,6 @@ def _finalized_clause_telemetry_status(
     collector: Any,
     *,
     replay_execution: str,
-    artifact_path: Path,
 ) -> tuple[dict[str, Any], list[str]]:
     try:
         finalize_error = collector.finalize(replay_execution=replay_execution)
@@ -867,7 +869,9 @@ def _finalized_clause_telemetry_status(
             [str(finalize_error)],
         )
     try:
-        telemetry_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        telemetry_payload = collector.final_artifact
+        if not isinstance(telemetry_payload, dict):
+            raise ValueError("sidecar returned no finalized artifact")
         return (
             {
                 "telemetry_quality": telemetry_payload["telemetry_quality"],
@@ -892,6 +896,130 @@ def _finalized_clause_telemetry_status(
                 f"{type(exc).__name__}: {exc}"
             ],
         )
+
+
+def _mark_clause_telemetry_unavailable(path: Path, message: str) -> str | None:
+    temporary_path: Path | None = None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("version") != 2:
+            raise ValueError("expected clause telemetry artifact v2")
+        payload["cleanup"] = "failed"
+        payload["telemetry_quality"] = "unavailable"
+        payload["formal_completeness"] = "unavailable"
+        payload["collection_validity"] = "invalid"
+        collector = payload.get("collector")
+        if isinstance(collector, dict):
+            collector["health"] = "unavailable"
+        integrity = payload.get("integrity")
+        errors = (
+            list(integrity.get("errors") or []) if isinstance(integrity, dict) else []
+        )
+        errors.append(message)
+        payload["integrity"] = {"status": "failed", "errors": errors}
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            json.dump(payload, temporary, ensure_ascii=False, indent=2, sort_keys=True)
+            temporary.write("\n")
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+    except Exception as exc:  # noqa: BLE001 - telemetry is fail-isolated
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        return f"telemetry artifact downgrade failed: {type(exc).__name__}: {exc}"
+    return None
+
+
+def _downgrade_clause_telemetry(
+    status: dict[str, Any],
+    path: Path,
+    message: str,
+) -> str | None:
+    status.update(
+        {
+            "telemetry_quality": "unavailable",
+            "formal_completeness": "unavailable",
+            "collection_validity": "invalid",
+        }
+    )
+    return _mark_clause_telemetry_unavailable(path, message)
+
+
+@dataclass
+class _SidecarProcess:
+    process: subprocess.Popen[bytes]
+    temporary_directory: tempfile.TemporaryDirectory[str]
+    socket_path: Path
+
+    def close(self) -> None:
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=5.0)
+        self.temporary_directory.cleanup()
+
+
+def _start_tool_resource_sidecar(
+    container_executable: str,
+    *,
+    timeout_s: float = 10.0,
+) -> _SidecarProcess:
+    from tool_resource.sidecar_protocol import UnixSocketTransport
+
+    temporary_directory = tempfile.TemporaryDirectory(
+        prefix="tool-resource-sidecar-client-"
+    )
+    socket_path = Path(temporary_directory.name) / "sidecar.sock"
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "tool_resource.sidecar_server",
+            "--socket",
+            str(socket_path),
+            "--container-executable",
+            container_executable,
+            "--state-dir",
+            str(Path(temporary_directory.name) / "state"),
+            "--parent-pid",
+            str(os.getpid()),
+        ]
+    )
+    deadline = time.monotonic() + timeout_s
+    transport = UnixSocketTransport(socket_path, timeout_s=0.2)
+    try:
+        while True:
+            if process.poll() is not None:
+                raise RuntimeError(
+                    f"tool-resource sidecar exited with {process.returncode}"
+                )
+            try:
+                transport.ping()
+                return _SidecarProcess(process, temporary_directory, socket_path)
+            except BaseException:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("tool-resource sidecar did not become ready")
+                time.sleep(0.05)
+    except BaseException:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5.0)
+        temporary_directory.cleanup()
+        raise
 
 
 async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str, Any]:
@@ -942,6 +1070,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
     status: dict[str, Any]
     clause_collector: Any | None = None
     clause_collector_finalized = False
+    sidecar_process: _SidecarProcess | None = None
     telemetry_run_status = {
         "replay_execution": "completed",
         "telemetry_quality": (
@@ -983,12 +1112,10 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 clause_collector.add_integrity_error(telemetry_errors[-1])
             except BaseException:
                 pass
-        telemetry_path = Path(request["clause_telemetry_path"])
         try:
             final_status, final_errors = _finalized_clause_telemetry_status(
                 clause_collector,
                 replay_execution=replay_execution,
-                artifact_path=telemetry_path,
             )
             telemetry_run_status.update(final_status)
             telemetry_errors.extend(final_errors)
@@ -1003,6 +1130,21 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 DockerExecutionContext,
             )
 
+            configured_socket = request.get("tool_resource_sidecar_socket")
+            sidecar_socket: Path | None
+            if configured_socket:
+                sidecar_socket = Path(str(configured_socket))
+            else:
+                try:
+                    sidecar_process = _start_tool_resource_sidecar(
+                        container_executable
+                    )
+                    sidecar_socket = sidecar_process.socket_path
+                except BaseException as exc:
+                    sidecar_socket = None
+                    telemetry_errors.append(
+                        f"sidecar startup failed: {type(exc).__name__}: {exc}"
+                    )
             clause_collector = DockerCommandObserver.attach(
                 DockerExecutionContext(
                     container_id=container_id,
@@ -1010,6 +1152,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                     repo=repo,
                     artifact_path=Path(request["clause_telemetry_path"]),
                     source_actions=source_actions,
+                    sidecar_socket=sidecar_socket,
                 )
             )
         await agent.start()
@@ -1170,6 +1313,21 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
         finally:
             if clause_collector is not None and not clause_collector_finalized:
                 finalize_clause_telemetry("failed")
+            if sidecar_process is not None:
+                try:
+                    sidecar_process.close()
+                except Exception as exc:  # noqa: BLE001 - telemetry is fail-isolated
+                    cleanup_error = (
+                        f"sidecar cleanup failed: {type(exc).__name__}: {exc}"
+                    )
+                    telemetry_errors.append(cleanup_error)
+                    downgrade_error = _downgrade_clause_telemetry(
+                        telemetry_run_status,
+                        Path(request["clause_telemetry_path"]),
+                        cleanup_error,
+                    )
+                    if downgrade_error is not None:
+                        telemetry_errors.append(downgrade_error)
             status["telemetry_integrity_failed"] = bool(
                 status.get("telemetry_integrity_failed")
                 or telemetry_errors

@@ -2,8 +2,9 @@
 
 `tool_resource` is a local command library: cold-start it from valid Stage-2
 telemetry traces, then let it parse, query, predict, observe, and update around
-Docker-owned execution. The package includes the eBPF collector and pinned
-mvdan adapter source; it does not execute Docker or serve requests.
+Docker-owned execution. `ToolResourceSDK` is unprivileged. A separate local
+sidecar owns the eBPF collector and exposes finalized data over a bounded,
+versioned Unix-domain-socket protocol; raw events never cross the socket.
 
 ```python
 from pathlib import Path
@@ -20,6 +21,7 @@ context = DockerExecutionContext(
     container_executable="docker",
     repo=repo,
     artifact_path=Path("command-clause-telemetry.json"),
+    sidecar_socket=Path("/run/tool-resource/sidecar.sock"),
 )
 
 run = sdk.start_command(context, tool_call_id, command)
@@ -46,10 +48,21 @@ At artifact level, `replay_execution` is workload status,
 eligible fraction.
 
 The Docker runner owns execution, timeout, exit status, and container
-lifecycle. The observer resolves the init PID and cgroup from the supplied live
-container. Commands must descend from one long-lived in-container runner
-process; independent `docker exec` roots have no trustworthy fork ancestry and
-fail closed.
+lifecycle. The existing replay runner starts and stops a sidecar automatically.
+Other runners start one locally before constructing the SDK context:
+
+```console
+sudo install -d -m 0750 -o root -g 1000 /run/tool-resource
+sudo python3 -m tool_resource.sidecar_server \
+  --socket /run/tool-resource/sidecar.sock \
+  --socket-mode 0660 --socket-gid 1000
+```
+
+The sidecar resolves the init PID and cgroup from the supplied live container.
+Commands must descend from one long-lived in-container runner process;
+independent `docker exec` roots have no trustworthy fork ancestry and fail
+closed. Socket unavailability, disconnect, or timeout marks telemetry
+unavailable without replacing the Docker result or updating the KB.
 
 Bucket intervals are `[0, b1)`, `[b1, b2)`, ..., `[bk, +inf)`. A compound
 command returns `compound_command_uncomposed`; bucket IDs are never ORed or

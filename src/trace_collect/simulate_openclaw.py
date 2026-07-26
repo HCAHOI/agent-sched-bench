@@ -225,6 +225,9 @@ async def _run_openclaw_replay_session(
         },
         "command_timeout_s": command_timeout_s,
         "tool_resource_telemetry": tool_resource_telemetry,
+        "tool_resource_sidecar_socket": os.environ.get(
+            "TOOL_RESOURCE_SIDECAR_SOCKET"
+        ),
         "task_instance_id": loaded.task_instance_id,
         "repo": loaded.task.get("repo"),
         "source_action_agent_id": loaded.source_action_agent_id,

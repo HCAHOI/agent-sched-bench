@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 from tool_resource.runtime_kb import (
@@ -15,6 +17,11 @@ from tool_resource.runtime_kb import (
     ClauseResourceKB,
     CommandLatencyBucketPrediction,
     LatencyBuckets,
+)
+from tool_resource.sidecar_protocol import (
+    SidecarProtocolError,
+    SidecarTransport,
+    UnixSocketTransport,
 )
 
 
@@ -27,6 +34,8 @@ class DockerExecutionContext:
     repo: str
     artifact_path: Path
     source_actions: Sequence[Mapping[str, Any]] = ()
+    sidecar_socket: Path | None = None
+    sidecar_timeout_s: float = 10.0
 
     def __post_init__(self) -> None:
         if not self.container_id:
@@ -35,6 +44,8 @@ class DockerExecutionContext:
             raise ValueError("container_executable is required")
         if not self.repo:
             raise ValueError("repo is required")
+        if not math.isfinite(self.sidecar_timeout_s) or self.sidecar_timeout_s <= 0:
+            raise ValueError("sidecar_timeout_s must be finite and positive")
 
 
 @dataclass(frozen=True)
@@ -48,48 +59,97 @@ class CommandObservationToken:
 
 
 class DockerCommandObserver:
-    """Fail-isolated wrapper around the current Stage-2 collector."""
+    """Fail-isolated client for a privileged Stage-2 sidecar session."""
 
-    def __init__(self, context: DockerExecutionContext, collector: Any) -> None:
+    def __init__(
+        self,
+        context: DockerExecutionContext,
+        transport: SidecarTransport | None,
+        session_id: str | None,
+        attach_error: str | None = None,
+    ) -> None:
         self.context = context
-        self._collector = collector
+        self._transport = transport
+        self._session_id = session_id
+        self._attach_error = attach_error
+        self._transport_error: str | None = None
+        self._calls: list[dict[str, Any]] = []
+        self._final_artifact: dict[str, Any] | None = None
 
     @classmethod
-    def attach(cls, context: DockerExecutionContext) -> DockerCommandObserver:
-        """Attach Stage-2 telemetry, falling back to an unavailable collector."""
+    def attach(
+        cls,
+        context: DockerExecutionContext,
+        transport: SidecarTransport | None = None,
+    ) -> DockerCommandObserver:
+        """Open a remote collector session; connection failure stays local."""
 
-        from tool_resource.telemetry import ClauseTelemetryCollector
-
+        if transport is None:
+            if context.sidecar_socket is None:
+                return cls.unavailable(context, "sidecar socket is not configured")
+            transport = UnixSocketTransport(
+                context.sidecar_socket,
+                timeout_s=context.sidecar_timeout_s,
+            )
         try:
-            collector = ClauseTelemetryCollector(
-                container_id=context.container_id,
-                container_executable=context.container_executable,
-                repo=context.repo,
-                artifact_path=context.artifact_path,
-                source_actions=context.source_actions,
+            result = transport.request(
+                "open",
+                {
+                    "container_id": context.container_id,
+                    "repo": context.repo,
+                    "source_actions": list(context.source_actions),
+                },
             )
-        except BaseException as exc:
-            collector = ClauseTelemetryCollector.unavailable(
-                container_id=context.container_id,
-                repo=context.repo,
-                artifact_path=context.artifact_path,
-                source_actions=context.source_actions,
-                reason=f"collector attach failed: {type(exc).__name__}: {exc}",
+            session_id = result.get("session_id")
+            if not isinstance(session_id, str) or not session_id:
+                raise SidecarProtocolError("sidecar returned no session id")
+        except Exception as exc:  # noqa: BLE001 - telemetry is fail-isolated
+            return cls.unavailable(
+                context,
+                f"sidecar attach failed: {type(exc).__name__}: {exc}",
             )
-        return cls(context, collector)
+        return cls(context, transport, session_id)
+
+    @classmethod
+    def unavailable(
+        cls,
+        context: DockerExecutionContext,
+        reason: str,
+    ) -> DockerCommandObserver:
+        return cls(context, None, None, reason)
 
     @property
     def calls(self) -> list[dict[str, Any]]:
-        calls = getattr(self._collector, "calls", None)
-        return calls if isinstance(calls, list) else []
+        return self._calls
+
+    @property
+    def final_artifact(self) -> dict[str, Any] | None:
+        return self._final_artifact
 
     def start(self, tool_call_id: str, command: str) -> CommandObservationToken:
         """Start observation immediately before the Docker runner executes."""
 
+        if self._session_id is None or self._transport is None:
+            return CommandObservationToken(
+                tool_call_id,
+                command,
+                None,
+                self._attach_error or "sidecar is unavailable",
+            )
         try:
-            token = self._collector.begin_tool_call(tool_call_id, command)
+            result = self._transport.request(
+                "begin",
+                {
+                    "session_id": self._session_id,
+                    "tool_call_id": tool_call_id,
+                    "command": command,
+                },
+            )
+            token = result.get("token_id")
+            if not isinstance(token, str) or not token:
+                raise SidecarProtocolError("sidecar returned no token id")
             error = None
-        except BaseException as exc:
+        except Exception as exc:  # noqa: BLE001 - telemetry is fail-isolated
             token = None
             error = self._record_error("start", exc)
         return CommandObservationToken(tool_call_id, command, token, error)
@@ -107,14 +167,22 @@ class DockerCommandObserver:
         if token._start_error is not None:
             return self._failure_summary(token, token._start_error)
         try:
-            summary = self._collector.finish_tool_call(
-                token._collector_token,
-                replay_response=replay_response,
+            if self._session_id is None or self._transport is None:
+                raise RuntimeError("sidecar session is unavailable")
+            result = self._transport.request(
+                "finish",
+                {
+                    "session_id": self._session_id,
+                    "token_id": token._collector_token,
+                    "replay_response": (
+                        None if replay_response is None else dict(replay_response)
+                    ),
+                },
             )
-            if not isinstance(summary, dict):
-                raise TypeError("collector finish did not return a summary mapping")
+            summary = self._result_mapping(result, "call")
+            self._calls.append(summary)
             return summary
-        except BaseException as exc:
+        except Exception as exc:  # noqa: BLE001 - telemetry is fail-isolated
             return self._failure_summary(token, self._record_error("finish", exc))
 
     finish_tool_call = finish
@@ -126,15 +194,21 @@ class DockerCommandObserver:
         replay_result: str,
     ) -> dict[str, Any]:
         try:
-            summary = self._collector.record_safety_guard_blocked(
-                tool_call_id,
-                command,
-                replay_result,
+            if self._session_id is None or self._transport is None:
+                raise RuntimeError(self._attach_error or "sidecar is unavailable")
+            result = self._transport.request(
+                "safety_guard",
+                {
+                    "session_id": self._session_id,
+                    "tool_call_id": tool_call_id,
+                    "command": command,
+                    "replay_result": replay_result,
+                },
             )
-            if not isinstance(summary, dict):
-                raise TypeError("collector guard result is not a summary mapping")
+            summary = self._result_mapping(result, "call")
+            self._calls.append(summary)
             return summary
-        except BaseException as exc:
+        except Exception as exc:  # noqa: BLE001 - telemetry is fail-isolated
             token = CommandObservationToken(tool_call_id, command, None)
             return self._failure_summary(
                 token,
@@ -142,22 +216,57 @@ class DockerCommandObserver:
             )
 
     def add_integrity_error(self, message: str) -> None:
+        if self._session_id is None or self._transport is None:
+            self._transport_error = self._transport_error or message
+            return
         try:
-            self._collector.add_integrity_error(message)
-        except BaseException:
-            pass
+            self._transport.request(
+                "add_error",
+                {"session_id": self._session_id, "message": message},
+            )
+        except Exception as exc:  # noqa: BLE001 - telemetry is fail-isolated
+            self._transport_error = self._transport_error or self._error_message(
+                "add_error", exc
+            )
 
     def finalize(self, *, replay_execution: str = "completed") -> str | None:
+        if self._session_id is None or self._transport is None:
+            return self._attach_error or "sidecar is unavailable"
+        prior_error = self._transport_error
+        session_id, self._session_id = self._session_id, None
         try:
-            self._collector.finalize(replay_execution=replay_execution)
+            result = self._transport.request(
+                "finalize",
+                {
+                    "session_id": session_id,
+                    "replay_execution": replay_execution,
+                },
+            )
+            artifact = self._result_mapping(result, "artifact")
+            if prior_error is not None:
+                return prior_error
+            _write_artifact(self.context.artifact_path, artifact)
+            self._final_artifact = artifact
             return None
-        except BaseException as exc:
-            return self._record_error("finalize", exc)
+        except Exception as exc:  # noqa: BLE001 - telemetry is fail-isolated
+            return prior_error or self._error_message("finalize", exc)
 
     def _record_error(self, phase: str, exc: BaseException) -> str:
-        message = f"telemetry {phase} failed: {type(exc).__name__}: {exc}"
+        message = self._error_message(phase, exc)
+        self._transport_error = self._transport_error or message
         self.add_integrity_error(message)
         return message
+
+    @staticmethod
+    def _error_message(phase: str, exc: BaseException) -> str:
+        return f"telemetry {phase} failed: {type(exc).__name__}: {exc}"
+
+    @staticmethod
+    def _result_mapping(result: Mapping[str, Any], name: str) -> dict[str, Any]:
+        value = result.get(name)
+        if not isinstance(value, Mapping):
+            raise SidecarProtocolError(f"sidecar returned invalid {name}")
+        return dict(value)
 
     def _failure_summary(
         self,
@@ -171,17 +280,12 @@ class DockerCommandObserver:
             "command": token.command,
             "telemetry_quality": "unavailable",
             "eligible_for_kb": False,
-            "invalid_reasons": [
-                {"kind": "observer_failure", "detail": message}
-            ],
+            "invalid_reasons": [{"kind": "observer_failure", "detail": message}],
             "clauses": [],
             "integrity": {"status": "failed", "errors": [message]},
         }
-        try:
-            if not self.calls or self.calls[-1] != summary:
-                self.calls.append(summary)
-        except BaseException:
-            pass
+        if not self._calls or self._calls[-1] != summary:
+            self._calls.append(summary)
         return summary
 
 
@@ -237,10 +341,14 @@ class ToolResourceSDK:
         kb: ClauseResourceKB,
         latency_buckets: LatencyBuckets,
         cold_start_report: ColdStartReport | None = None,
+        *,
+        transport_factory: Callable[[DockerExecutionContext], SidecarTransport]
+        | None = None,
     ) -> None:
         self._kb = kb
         self.latency_buckets = latency_buckets
         self.cold_start_report = cold_start_report
+        self._transport_factory = transport_factory
         self._owner = object()
         self._next_run_id = 0
         self._pending_run_ids: set[int] = set()
@@ -250,6 +358,9 @@ class ToolResourceSDK:
         cls,
         trace_paths: str | Path | Iterable[str | Path],
         latency_buckets: LatencyBuckets,
+        *,
+        transport_factory: Callable[[DockerExecutionContext], SidecarTransport]
+        | None = None,
     ) -> ToolResourceSDK:
         """Fit frozen public knowledge from valid Stage-2 telemetry artifacts."""
 
@@ -268,9 +379,7 @@ class ToolResourceSDK:
         for path in paths:
             try:
                 artifact = _load_valid_artifact(path)
-                repo = str(
-                    artifact.get("provenance", {}).get("repo") or "public"
-                )
+                repo = str(artifact.get("provenance", {}).get("repo") or "public")
                 artifact_observations: list[ClauseObservation] = []
                 artifact_eligible_calls = 0
                 for call in artifact["calls"]:
@@ -309,6 +418,7 @@ class ToolResourceSDK:
                 observations_loaded=len(observations),
                 rejections=tuple(rejections),
             ),
+            transport_factory=transport_factory,
         )
 
     def start_command(
@@ -339,7 +449,19 @@ class ToolResourceSDK:
         except Exception as exc:
             prediction = None
             prediction_error = f"{type(exc).__name__}: {exc}"
-        observer = DockerCommandObserver.attach(context)
+        if self._transport_factory is None:
+            observer = DockerCommandObserver.attach(context)
+        else:
+            try:
+                observer = DockerCommandObserver.attach(
+                    context,
+                    self._transport_factory(context),
+                )
+            except Exception as exc:  # noqa: BLE001 - telemetry is fail-isolated
+                observer = DockerCommandObserver.unavailable(
+                    context,
+                    f"sidecar transport failed: {type(exc).__name__}: {exc}",
+                )
         token = observer.start(tool_call_id, command)
         run_id = self._next_run_id
         self._next_run_id += 1
@@ -379,7 +501,9 @@ class ToolResourceSDK:
         try:
             if finalize_error is not None:
                 raise ValueError(finalize_error)
-            artifact = _read_artifact(run._observer.context.artifact_path)
+            artifact = run._observer.final_artifact
+            if artifact is None:
+                raise ValueError("sidecar returned no finalized artifact")
             _validate_artifact(
                 run._observer.context.artifact_path,
                 artifact,
@@ -419,6 +543,35 @@ class ToolResourceSDK:
             kb_observations_added=len(observations),
             kb_update_error=update_error,
         )
+
+
+def _write_artifact(path: Path, artifact: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            json.dump(
+                dict(artifact),
+                temporary,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            temporary.write("\n")
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+    except Exception:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def _load_valid_artifact(path: Path) -> dict[str, Any]:
@@ -476,12 +629,8 @@ def _validate_artifact(
     ):
         raise ValueError(f"{path}: container identity does not match the request")
     provenance = artifact.get("provenance")
-    if (
-        expected_repo is not None
-        and (
-            not isinstance(provenance, Mapping)
-            or provenance.get("repo") != expected_repo
-        )
+    if expected_repo is not None and (
+        not isinstance(provenance, Mapping) or provenance.get("repo") != expected_repo
     ):
         raise ValueError(f"{path}: repository identity does not match the request")
 
@@ -554,9 +703,7 @@ def _observation_from_clause(
         ts_end=ts_end,
         latency_ms=latency_ms,
         peak_cpu_cores=_optional_finite_float(row.get("peak_cpu_cores")),
-        sampled_peak_rss_mb=_optional_finite_float(
-            row.get("sampled_peak_rss_mb")
-        ),
+        sampled_peak_rss_mb=_optional_finite_float(row.get("sampled_peak_rss_mb")),
         cpu_ns_cumulative=_optional_nonnegative_int(row.get("cpu_ns_cumulative")),
         in_loop=bool(row.get("in_loop", False)),
         in_pipe=bool(row.get("in_pipe", False)),

@@ -3282,16 +3282,8 @@ async def simulate(
         raise ValueError("tool_resource_telemetry must be one of: off, command, clause")
     if tool_resource_telemetry == "clause":
         from tool_resource.mvdan_client import ensure_compatible_adapter
-        from trace_collect.clause_telemetry import (
-            validate_clause_telemetry_runtime,
-        )
 
         ensure_compatible_adapter()
-        validate_clause_telemetry_runtime(
-            container_executable=container_executable,
-            concurrency=concurrency,
-            workers=workers,
-    )
     os.environ["OPENCLAW_TOOL_RESOURCE_TELEMETRY"] = tool_resource_telemetry
     llm_timing = LLMTimingConfig(
         mode=llm_timing_mode,

@@ -15,8 +15,17 @@ from tool_resource.sdk import (
     DockerExecutionContext,
     ToolResourceSDK,
 )
+from tool_resource.sidecar_protocol import (
+    PROTOCOL_VERSION,
+    SidecarError,
+    SidecarProtocolError,
+    SidecarTransport,
+    SidecarUnavailableError,
+    UnixSocketTransport,
+)
 
 __all__ = [
+    "PROTOCOL_VERSION",
     "ClauseObservation",
     "ClauseResourceKB",
     "ColdStartReport",
@@ -27,5 +36,10 @@ __all__ = [
     "DockerCommandObserver",
     "DockerExecutionContext",
     "LatencyBuckets",
+    "SidecarError",
+    "SidecarProtocolError",
+    "SidecarTransport",
+    "SidecarUnavailableError",
     "ToolResourceSDK",
+    "UnixSocketTransport",
 ]
