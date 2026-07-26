@@ -40,3 +40,5 @@ docs/
 .rpiv/
 figures/
 analysis/**/*-decisions.json.zst
+.agents/
+IDEA.md
