@@ -152,6 +152,7 @@ def test_terminal_bench_normalize_task_preserves_non_swe_shape(tb_stub) -> None:
 
 def test_terminal_bench_build_runner_preserves_mcp_config() -> None:
     plugin = get_benchmark_class("terminal-bench")(_make_config())
+    resource_runs = {}
     runner = plugin.build_runner(
         scaffold="openclaw",
         provider=types.SimpleNamespace(
@@ -167,5 +168,7 @@ def test_terminal_bench_build_runner_preserves_mcp_config() -> None:
         api_base="https://openrouter.ai/api/v1",
         api_key="test-key",
         mcp_config="configs/mcp/context7.yaml",
+        tool_resource_runs=resource_runs,
     )
     assert runner.mcp_config == str(Path("configs/mcp/context7.yaml").resolve())
+    assert runner.tool_resource_runs is resource_runs

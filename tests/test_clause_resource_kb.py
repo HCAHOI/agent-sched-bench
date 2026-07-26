@@ -57,9 +57,18 @@ def test_latency_buckets_are_right_open_and_final_extends_to_infinity() -> None:
 
 @pytest.mark.parametrize(
     "edges",
-    [(), (0.0,), (-1.0,), (100.0, 100.0), (100.0, 50.0), (float("inf"),)],
+    [
+        (),
+        (0.0,),
+        (-1.0,),
+        (100.0, 100.0),
+        (100.0, 50.0),
+        (float("inf"),),
+        (True,),
+        ("100",),
+    ],
 )
-def test_latency_buckets_reject_invalid_edges(edges: tuple[float, ...]) -> None:
+def test_latency_buckets_reject_invalid_edges(edges: tuple[object, ...]) -> None:
     with pytest.raises(ValueError):
         LatencyBuckets(edges)
 
@@ -250,9 +259,7 @@ def test_invalid_observation_and_unfit_public_fail_fast() -> None:
 @pytest.mark.parametrize("ts_start", [float("inf"), float("nan")])
 def test_nonfinite_query_time_fails_before_absorbing_pending(ts_start: float) -> None:
     kb = _fit(_obs("pub", "x", ("x",), 0.0, 1.0, latency_ms=100.0))
-    kb.observe_completed_clause(
-        _obs("r1", "x", ("x",), 10.0, 12.0, latency_ms=2000.0)
-    )
+    kb.observe_completed_clause(_obs("r1", "x", ("x",), 10.0, 12.0, latency_ms=2000.0))
 
     with pytest.raises(ValueError, match="finite"):
         kb.predict_command_latency_bucket(

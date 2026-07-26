@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -50,6 +51,16 @@ logger = logging.getLogger(__name__)
 _DOCKER_HOST_GATEWAY = "172.17.0.1"
 _TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 _FALSY_ENV_VALUES = {"0", "false", "no", "off"}
+
+
+def _tool_resource_scope(task: dict[str, Any]) -> str:
+    repo = task.get("repo")
+    if isinstance(repo, str) and repo.strip():
+        return repo.strip()
+    identity = task.get("instance_id") or task.get("task_id")
+    if not isinstance(identity, str) or not identity:
+        raise ValueError("tool-resource tasks require a repository or task identity")
+    return f"task:{identity}"
 
 
 @dataclass(frozen=True)
@@ -711,6 +722,7 @@ async def collect_traces(
     mcp_config: str | None = None,
     prompt_template: str | None = None,
     min_free_disk_gb: float = 30.0,
+    tool_resource_profile: Path | None = None,
 ) -> Path:
     """Collect traces for any scaffold supported by the benchmark plugin."""
     benchmark.validate_scaffold_support(scaffold)
@@ -731,6 +743,11 @@ async def collect_traces(
         execution_environment == "container" or runtime_mode == "task_container_agent"
     ) and container_executable is None:
         raise ValueError("--container required for container-mode benchmarks")
+    if tool_resource_profile is not None:
+        from tool_resource.profile import ResourceProfile
+
+        tool_resource_profile = tool_resource_profile.resolve()
+        ResourceProfile.load(tool_resource_profile)
 
     run_dir = Path(run_id) if run_id else build_run_dir(benchmark, model)
     generation_config = _generation_config(
@@ -746,6 +763,15 @@ async def collect_traces(
         provider_name=provider_name,
         generation_config=generation_config,
     )
+    tasks = _select_tasks(
+        benchmark,
+        benchmark.load_tasks(),
+        instance_ids=instance_ids,
+        sample=sample,
+        selection_seed=selection_seed,
+        skip=skip,
+    )
+    resource_runs: dict[str, Any] = {}
     runner = None
     if runtime_mode == "host_controller":
         runner = benchmark.build_runner(
@@ -763,16 +789,21 @@ async def collect_traces(
             mcp_config=mcp_config,
             mcp_servers=load_mcp_servers(mcp_config),
             generation_config=generation_config,
+            tool_resource_profile=tool_resource_profile,
+            tool_resource_runs=resource_runs,
         )
+    if tool_resource_profile is not None:
+        from tool_resource.client import ResourceRun
 
-    tasks = _select_tasks(
-        benchmark,
-        benchmark.load_tasks(),
-        instance_ids=instance_ids,
-        sample=sample,
-        selection_seed=selection_seed,
-        skip=skip,
-    )
+        manifest_dir = run_dir / "tool_resource_runs"
+        for scope in sorted({_tool_resource_scope(task) for task in tasks}):
+            scope_digest = hashlib.sha256(scope.encode()).hexdigest()[:16]
+            resource_runs[scope] = ResourceRun.open(
+                tool_resource_profile,
+                run_id=f"collect:{run_dir.name}:{scope_digest}",
+                workspace_scope=scope,
+                manifest_path=manifest_dir / f"{scope_digest}.json",
+            )
 
     def make_inner(task: dict[str, Any]):
         async def inner(ctx: AttemptContext) -> AttemptResult:
@@ -800,6 +831,8 @@ async def collect_traces(
                     mcp_config=mcp_config,
                     container_executable=container_executable,
                     run_config_overrides=model_backend.trace_run_config,
+                    tool_resource_profile=tool_resource_profile,
+                    resource_run=resource_runs.get(_tool_resource_scope(task)),
                 )
 
             assert runner is not None
@@ -822,18 +855,29 @@ async def collect_traces(
 
         return inner
 
-    return await _run_scaffold_tasks(
-        benchmark=benchmark,
-        tasks=tasks,
-        run_dir=run_dir,
-        model=model,
-        scaffold=scaffold,
-        container_executable=container_executable,
-        prompt_template=prompt_template,
-        min_free_disk_gb=min_free_disk_gb,
-        inner_factory=make_inner,
-        concurrency=concurrency,
-    )
+    completed = False
+    try:
+        result = await _run_scaffold_tasks(
+            benchmark=benchmark,
+            tasks=tasks,
+            run_dir=run_dir,
+            model=model,
+            scaffold=scaffold,
+            container_executable=container_executable,
+            prompt_template=prompt_template,
+            min_free_disk_gb=min_free_disk_gb,
+            inner_factory=make_inner,
+            concurrency=concurrency,
+        )
+        completed = True
+        return result
+    finally:
+        for resource_run in resource_runs.values():
+            error = resource_run.finalize(
+                workload_status="completed" if completed else "failed"
+            )
+            if error is not None:
+                logger.error("%s", error)
 
 
 def _set_run_config(merged: dict[str, Any], key: str, value: Any) -> None:
@@ -965,8 +1009,6 @@ def _stamp_trace_run_config(trace_path: Path, values: dict[str, Any]) -> None:
     trace_path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
-
-
 async def _run_openclaw_in_task_container(
     *,
     ctx: AttemptContext,
@@ -982,6 +1024,8 @@ async def _run_openclaw_in_task_container(
     max_context_tokens: int,
     mcp_config: str | None,
     run_config_overrides: dict[str, Any] | None = None,
+    tool_resource_profile: Path | None = None,
+    resource_run: Any | None = None,
 ) -> AttemptResult:
     fixed_image = ctx.fixed_image or task.get("image_name") or ""
     if not fixed_image:
@@ -992,6 +1036,19 @@ async def _run_openclaw_in_task_container(
     stderr_path = runtime_dir / "stderr.txt"
     runtime_result = None
     runtime_proof = None
+    resource_trace = None
+    resource_trace_finalized = False
+    resource_status: dict[str, Any] = {
+        "telemetry_quality": "ok" if tool_resource_profile is None else "unavailable",
+        "formal_completeness": (
+            "not_requested" if tool_resource_profile is None else "unavailable"
+        ),
+        "call_coverage": None,
+        "collection_validity": (
+            "not_requested" if tool_resource_profile is None else "invalid"
+        ),
+    }
+    resource_errors: list[str] = []
     total_llm_ms: float | None = None
     total_tool_ms: float | None = None
     total_tokens: int | None = None
@@ -1010,6 +1067,60 @@ async def _run_openclaw_in_task_container(
     )
     ctx.mark_container_ready(container_id)
     agent = None
+
+    def finalize_resource_trace(workload_status: str) -> None:
+        nonlocal resource_trace_finalized
+        if resource_trace is None or resource_trace_finalized:
+            return
+        trace_path = ctx.attempt_dir / "trace.jsonl"
+        from trace_collect.openclaw_host_runtime import (
+            _attach_resource_observations,
+            _finalized_resource_status,
+            _update_trace_metadata,
+        )
+
+        try:
+            for error in _attach_resource_observations(
+                trace_path,
+                resource_trace.calls,
+                [],
+            ):
+                resource_trace.add_integrity_error(error)
+            final_status, final_errors = _finalized_resource_status(
+                resource_trace,
+                replay_execution=workload_status,
+            )
+            resource_status.update(final_status)
+            resource_errors.extend(final_errors)
+            if resource_trace.final_artifact is not None:
+                resource_errors.extend(
+                    _attach_resource_observations(
+                        trace_path,
+                        resource_trace.calls,
+                        [],
+                    )
+                )
+        except BaseException as exc:
+            resource_errors.append(
+                f"resource finalization failed: {type(exc).__name__}: {exc}"
+            )
+        finally:
+            resource_trace_finalized = True
+            _update_trace_metadata(
+                trace_path,
+                {
+                    "tool_resource": {
+                        "profile": str(tool_resource_profile),
+                        "service_enabled": True,
+                    },
+                    "resource_artifact_path": str(
+                        ctx.attempt_dir / "resource_observations.json"
+                    ),
+                    "telemetry_errors": resource_errors,
+                    **resource_status,
+                },
+            )
+
     try:
         apt_mirror = configure_task_container_apt_mirror(
             container_id,
@@ -1039,6 +1150,14 @@ async def _run_openclaw_in_task_container(
             expected_workdir="/testbed",
         )
         runtime_label = container_runtime_label(runtime_proof)
+        if tool_resource_profile is not None and resource_run is not None:
+            resource_trace = resource_run.open_trace(
+                trace_id=ctx.instance_id,
+                container_runtime=container_executable,
+                container_id=container_id,
+                artifact_path=ctx.attempt_dir / "resource_observations.json",
+                runner_pid=os.getpid(),
+            )
 
         async def _patch_extractor(
             _diff_cwd: str,
@@ -1068,6 +1187,7 @@ async def _run_openclaw_in_task_container(
                 exec_timeout=300,
                 exec_path_append="",
                 workspace="/testbed",
+                resource_trace=resource_trace,
             ),
             container_patch_extractor=_patch_extractor,
         )
@@ -1113,7 +1233,15 @@ async def _run_openclaw_in_task_container(
         runtime_result.usage["total_llm_ms"] = total_llm_ms or 0.0
         runtime_result.usage["total_tool_ms"] = total_tool_ms or 0.0
         runtime_result.usage["total_tokens"] = total_tokens or 0
+        finalize_resource_trace(
+            "completed"
+            if runtime_result.stop_reason == "completed"
+            and runtime_result.error is None
+            else "failed"
+        )
     finally:
+        if resource_trace is not None and not resource_trace_finalized:
+            finalize_resource_trace("failed")
         if agent is not None:
             try:
                 await agent.stop()

@@ -76,6 +76,8 @@ class TerminalBenchRunner:
         benchmark_extras: dict[str, Any],
         mcp_config: str | None = None,
         generation_config: dict[str, Any] | None = None,
+        tool_resource_profile: Path | None = None,
+        tool_resource_runs: dict[str, Any] | None = None,
     ) -> None:
         self.provider_name = provider_name or "openai"
         self.env_key = env_key or "OPENAI_API_KEY"
@@ -88,6 +90,10 @@ class TerminalBenchRunner:
         self.benchmark_slug = benchmark_slug
         self.benchmark_extras = dict(benchmark_extras)
         self.generation_config = dict(generation_config or {})
+        self.tool_resource_profile = tool_resource_profile
+        self.tool_resource_runs = (
+            tool_resource_runs if tool_resource_runs is not None else {}
+        )
         self.global_agent_timeout_sec = _optional_positive_float(
             self.benchmark_extras.get("global_agent_timeout_sec"),
             name="benchmark_extras.global_agent_timeout_sec",
@@ -413,6 +419,26 @@ class TerminalBenchRunner:
                 [
                     "--agent-kwarg",
                     f"mcp_config_path={self.mcp_config}",
+                ]
+            )
+        if self.tool_resource_profile is not None:
+            identity = task.get("instance_id") or task.get("task_id")
+            repo = task.get("repo")
+            resource_scope = (
+                repo.strip()
+                if isinstance(repo, str) and repo.strip()
+                else f"task:{identity}"
+            )
+            resource_run = self.tool_resource_runs.get(resource_scope)
+            command.extend(
+                [
+                    "--agent-kwarg",
+                    f"tool_resource_profile={self.tool_resource_profile}",
+                    "--agent-kwarg",
+                    "resource_run_token="
+                    f"{getattr(resource_run, 'run_token', None) or ''}",
+                    "--agent-kwarg",
+                    f"resource_trace_id={identity}",
                 ]
             )
         return command

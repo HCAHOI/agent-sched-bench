@@ -114,6 +114,8 @@ class TerminalBenchBenchmark(Benchmark):
             benchmark_extras=self.config.extras,
             mcp_config=kwargs.get("mcp_config"),
             generation_config=kwargs.get("generation_config") or {},
+            tool_resource_profile=kwargs.get("tool_resource_profile"),
+            tool_resource_runs=kwargs.get("tool_resource_runs"),
         )
 
     def _load_dataset_paths(self) -> tuple[Path, list[Path]]:

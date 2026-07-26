@@ -3,9 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
-import sys
-import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,7 +17,6 @@ from llm_call.provider_base import (
     LLMResponse,
     ToolCallRequest,
 )
-from tool_resource.artifact_schema import CLAUSE_TELEMETRY_SCHEMA_VERSION
 from trace_collect.openclaw_tools import ContainerAgent
 
 
@@ -657,7 +653,7 @@ def build_container_tools_for_agent(
     exec_timeout: int,
     exec_path_append: str = "",
     workspace: str = "/testbed",
-    clause_telemetry: Any | None = None,
+    resource_trace: Any | None = None,
     runtime_artifact_root_map: dict[str, str] | None = None,
 ) -> list[Any]:
     return build_container_tool_overrides(
@@ -665,12 +661,12 @@ def build_container_tools_for_agent(
         exec_timeout=exec_timeout,
         exec_path_append=exec_path_append,
         workspace=workspace,
-        clause_telemetry=clause_telemetry,
+        resource_trace=resource_trace,
         runtime_artifact_root_map=runtime_artifact_root_map,
     )
 
 
-def _attach_clause_telemetry(
+def _attach_resource_observations(
     trace_path: Path,
     calls: list[dict[str, Any]],
     source_actions: list[dict[str, Any]],
@@ -681,18 +677,18 @@ def _attach_clause_telemetry(
     for call in calls:
         tool_call_id = str(call.get("tool_call_id") or "")
         if not tool_call_id:
-            errors.append("clause telemetry has no tool_call_id")
+            errors.append("resource observation has no tool_call_id")
         elif tool_call_id in by_id:
             duplicate_call_ids.add(tool_call_id)
         else:
             by_id[tool_call_id] = call
     for tool_call_id in sorted(duplicate_call_ids):
-        errors.append(f"duplicate clause telemetry tool_call_id {tool_call_id}")
+        errors.append(f"duplicate resource observation tool_call_id {tool_call_id}")
         by_id.pop(tool_call_id)
 
     seen: set[str] = set()
     if not trace_path.exists():
-        return [*errors, "clause telemetry trace is missing"]
+        return [*errors, "resource observation trace is missing"]
     records = [
         json.loads(line)
         for line in trace_path.read_text(encoding="utf-8").splitlines()
@@ -738,7 +734,7 @@ def _attach_clause_telemetry(
                 if summary is None:
                     errors.append(
                         f"exec action {tool_call_id or '<missing>'} has no "
-                        "clause telemetry"
+                        "resource observation"
                     )
                 else:
                     raw_tool_args = data.get("tool_args")
@@ -754,10 +750,10 @@ def _attach_clause_telemetry(
                     if command != summary.get("command"):
                         errors.append(
                             f"exec action {tool_call_id} command does not match "
-                            "clause telemetry"
+                            "resource observation"
                         )
                     else:
-                        data["clause_telemetry"] = summary
+                        data["resource_observation"] = summary
                         seen.add(tool_call_id)
                 source_data = (
                     source_action.get("data")
@@ -780,7 +776,9 @@ def _attach_clause_telemetry(
                 }
         updated.append(json.dumps(record, ensure_ascii=False))
     for tool_call_id in sorted(set(by_id) - seen):
-        errors.append(f"clause telemetry {tool_call_id} has no matching exec action")
+        errors.append(
+            f"resource observation {tool_call_id} has no matching exec action"
+        )
     temporary_path: Path | None = None
     try:
         with NamedTemporaryFile(
@@ -848,7 +846,7 @@ def _worker_trace_action_counts(
     return replay_action_failure_counts(source_actions, records)
 
 
-def _finalized_clause_telemetry_status(
+def _finalized_resource_status(
     collector: Any,
     *,
     replay_execution: str,
@@ -872,7 +870,7 @@ def _finalized_clause_telemetry_status(
     try:
         telemetry_payload = collector.final_artifact
         if not isinstance(telemetry_payload, dict):
-            raise ValueError("sidecar returned no finalized artifact")
+            raise ValueError("resource-agentd returned no finalized artifact")
         return (
             {
                 "telemetry_quality": telemetry_payload["telemetry_quality"],
@@ -899,133 +897,6 @@ def _finalized_clause_telemetry_status(
         )
 
 
-def _mark_clause_telemetry_unavailable(path: Path, message: str) -> str | None:
-    temporary_path: Path | None = None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if payload.get("version") != CLAUSE_TELEMETRY_SCHEMA_VERSION:
-            raise ValueError(
-                "expected clause telemetry artifact schema "
-                f"{CLAUSE_TELEMETRY_SCHEMA_VERSION}"
-            )
-        payload["cleanup"] = "failed"
-        payload["telemetry_quality"] = "unavailable"
-        payload["formal_completeness"] = "unavailable"
-        payload["collection_validity"] = "invalid"
-        collector = payload.get("collector")
-        if isinstance(collector, dict):
-            collector["health"] = "unavailable"
-        integrity = payload.get("integrity")
-        errors = (
-            list(integrity.get("errors") or []) if isinstance(integrity, dict) else []
-        )
-        errors.append(message)
-        payload["integrity"] = {"status": "failed", "errors": errors}
-        with NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            delete=False,
-        ) as temporary:
-            temporary_path = Path(temporary.name)
-            json.dump(payload, temporary, ensure_ascii=False, indent=2, sort_keys=True)
-            temporary.write("\n")
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        os.replace(temporary_path, path)
-    except Exception as exc:  # noqa: BLE001 - telemetry is fail-isolated
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
-        return f"telemetry artifact downgrade failed: {type(exc).__name__}: {exc}"
-    return None
-
-
-def _downgrade_clause_telemetry(
-    status: dict[str, Any],
-    path: Path,
-    message: str,
-) -> str | None:
-    status.update(
-        {
-            "telemetry_quality": "unavailable",
-            "formal_completeness": "unavailable",
-            "collection_validity": "invalid",
-        }
-    )
-    return _mark_clause_telemetry_unavailable(path, message)
-
-
-@dataclass
-class _SidecarProcess:
-    process: subprocess.Popen[bytes]
-    temporary_directory: tempfile.TemporaryDirectory[str]
-    socket_path: Path
-
-    def close(self) -> None:
-        if self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=5.0)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=5.0)
-        self.temporary_directory.cleanup()
-
-
-def _start_tool_resource_sidecar(
-    container_executable: str,
-    *,
-    timeout_s: float = 10.0,
-) -> _SidecarProcess:
-    from tool_resource.sidecar_protocol import UnixSocketTransport
-
-    temporary_directory = tempfile.TemporaryDirectory(
-        prefix="tool-resource-sidecar-client-"
-    )
-    socket_path = Path(temporary_directory.name) / "sidecar.sock"
-    process = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "tool_resource.sidecar_server",
-            "--socket",
-            str(socket_path),
-            "--container-executable",
-            container_executable,
-            "--state-dir",
-            str(Path(temporary_directory.name) / "state"),
-            "--parent-pid",
-            str(os.getpid()),
-        ]
-    )
-    deadline = time.monotonic() + timeout_s
-    transport = UnixSocketTransport(socket_path, timeout_s=0.2)
-    try:
-        while True:
-            if process.poll() is not None:
-                raise RuntimeError(
-                    f"tool-resource sidecar exited with {process.returncode}"
-                )
-            try:
-                transport.ping()
-                return _SidecarProcess(process, temporary_directory, socket_path)
-            except BaseException:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("tool-resource sidecar did not become ready")
-                time.sleep(0.05)
-    except BaseException:
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=5.0)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5.0)
-        temporary_directory.cleanup()
-        raise
-
-
 async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str, Any]:
     """Run one OpenClaw replay in this host process and write structured status."""
 
@@ -1043,13 +914,12 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
     status_path = Path(request["status_path"])
     replay_speed = float(request["replay_speed"])
     llm_timing = dict(request["llm_timing"])
-    tool_resource_telemetry = str(request.get("tool_resource_telemetry") or "command")
-    if tool_resource_telemetry not in {"off", "command", "clause"}:
-        raise ValueError("tool_resource_telemetry must be one of: off, command, clause")
-    os.environ["OPENCLAW_TOOL_RESOURCE_TELEMETRY"] = tool_resource_telemetry
-    repo = str(request.get("repo") or "")
-    if tool_resource_telemetry == "clause" and not repo:
-        raise ValueError("clause telemetry requires task repository identity")
+    tool_resource_profile = request.get("tool_resource_profile")
+    if tool_resource_profile is not None:
+        tool_resource_profile = str(tool_resource_profile)
+    tool_resource_run_token = request.get("tool_resource_run_token")
+    if tool_resource_run_token is not None:
+        tool_resource_run_token = str(tool_resource_run_token)
     command_timeout_s = float(request["command_timeout_s"])
     run_instance_id = str(request["run_instance_id"])
     prompt = str(request["prompt"])
@@ -1072,93 +942,63 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
         workdir=container_workdir,
     )
     status: dict[str, Any]
-    clause_collector: Any | None = None
-    clause_collector_finalized = False
-    sidecar_process: _SidecarProcess | None = None
+    resource_trace: Any | None = None
+    resource_trace_finalized = False
     telemetry_run_status = {
         "replay_execution": "completed",
-        "telemetry_quality": (
-            "ok" if tool_resource_telemetry != "clause" else "unavailable"
-        ),
+        "telemetry_quality": "ok" if not tool_resource_profile else "unavailable",
         "formal_completeness": (
-            "not_requested"
-            if tool_resource_telemetry != "clause"
-            else "unavailable"
+            "not_requested" if not tool_resource_profile else "unavailable"
         ),
         "call_coverage": None,
         "collection_validity": (
-            "not_requested" if tool_resource_telemetry != "clause" else "invalid"
+            "not_requested" if not tool_resource_profile else "invalid"
         ),
     }
     telemetry_errors: list[str] = []
 
-    def finalize_clause_telemetry(replay_execution: str) -> None:
-        nonlocal clause_collector_finalized
-        if clause_collector is None or clause_collector_finalized:
+    def finalize_resource_trace(replay_execution: str) -> None:
+        nonlocal resource_trace_finalized
+        if resource_trace is None or resource_trace_finalized:
             return
         try:
             if output_trace.exists():
-                for error in _attach_clause_telemetry(
+                for error in _attach_resource_observations(
                     output_trace,
-                    clause_collector.calls,
+                    resource_trace.calls,
                     source_actions,
                 ):
-                    clause_collector.add_integrity_error(error)
+                    resource_trace.add_integrity_error(error)
             else:
-                clause_collector.add_integrity_error(
-                    "clause telemetry trace is missing"
-                )
+                resource_trace.add_integrity_error("resource trace is missing")
         except BaseException as exc:
             telemetry_errors.append(
-                f"telemetry attach failed: {type(exc).__name__}: {exc}"
+                f"resource attachment failed: {type(exc).__name__}: {exc}"
             )
             try:
-                clause_collector.add_integrity_error(telemetry_errors[-1])
+                resource_trace.add_integrity_error(telemetry_errors[-1])
             except BaseException:
                 pass
         try:
-            final_status, final_errors = _finalized_clause_telemetry_status(
-                clause_collector,
+            final_status, final_errors = _finalized_resource_status(
+                resource_trace,
                 replay_execution=replay_execution,
             )
             telemetry_run_status.update(final_status)
             telemetry_errors.extend(final_errors)
+            if resource_trace.final_artifact is not None and output_trace.exists():
+                telemetry_errors.extend(
+                    _attach_resource_observations(
+                        output_trace,
+                        resource_trace.calls,
+                        source_actions,
+                    )
+                )
         finally:
-            clause_collector_finalized = True
+            resource_trace_finalized = True
 
     wall_start = time.time()
     try:
-        if tool_resource_telemetry == "clause":
-            from tool_resource.sdk import (
-                DockerCommandObserver,
-                DockerExecutionContext,
-            )
-
-            configured_socket = request.get("tool_resource_sidecar_socket")
-            sidecar_socket: Path | None
-            if configured_socket:
-                sidecar_socket = Path(str(configured_socket))
-            else:
-                try:
-                    sidecar_process = _start_tool_resource_sidecar(
-                        container_executable
-                    )
-                    sidecar_socket = sidecar_process.socket_path
-                except BaseException as exc:
-                    sidecar_socket = None
-                    telemetry_errors.append(
-                        f"sidecar startup failed: {type(exc).__name__}: {exc}"
-                    )
-            clause_collector = DockerCommandObserver.attach(
-                DockerExecutionContext(
-                    container_id=container_id,
-                    container_executable=container_executable,
-                    repo=repo,
-                    artifact_path=Path(request["clause_telemetry_path"]),
-                    source_actions=source_actions,
-                    sidecar_socket=sidecar_socket,
-                )
-            )
         await agent.start()
         proof = await container_runtime_proof(
             agent,
@@ -1167,6 +1007,19 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             expected_workdir=container_workdir,
         )
         runtime_label = container_runtime_label(proof)
+        if tool_resource_profile:
+            from tool_resource.client import ResourceTrace
+
+            resource_trace = ResourceTrace.open(
+                tool_resource_profile,
+                run_token=tool_resource_run_token or "",
+                trace_id=run_instance_id,
+                container_runtime=Path(container_executable).name,
+                container_id=container_id,
+                artifact_path=Path(request["resource_artifact_path"]),
+                source_actions=source_actions,
+                runner_pid=os.getpid(),
+            )
         provider = OpenClawReplayProvider(
             llm_actions=llm_actions,
             replay_speed=replay_speed,
@@ -1187,7 +1040,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 agent,
                 exec_timeout=int(command_timeout_s),
                 workspace=container_workdir,
-                clause_telemetry=clause_collector,
+                resource_trace=resource_trace,
                 runtime_artifact_root_map=dict(
                     request.get("runtime_artifact_root_map") or {}
                 ),
@@ -1200,10 +1053,9 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             "source_agent_id": request["source_action_agent_id"],
             "run_instance_id": run_instance_id,
             "replay_mode": "openclaw_host_worker",
-            "tool_resource_telemetry": {
-                "mode": tool_resource_telemetry,
-                "command_envelope_enabled": tool_resource_telemetry != "off",
-                "clause_observations_enabled": (tool_resource_telemetry == "clause"),
+            "tool_resource": {
+                "profile": tool_resource_profile,
+                "service_enabled": bool(tool_resource_profile),
             },
         }
         result = await runner.run(
@@ -1238,7 +1090,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 provider.request_sequence_matches
             ),
         )
-        finalize_clause_telemetry("completed" if success else "failed")
+        finalize_resource_trace("completed" if success else "failed")
         telemetry_run_status["replay_execution"] = (
             "completed" if success else "failed"
         )
@@ -1298,40 +1150,24 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             "call_coverage": telemetry_run_status["call_coverage"],
             "collection_validity": telemetry_run_status["collection_validity"],
             "telemetry_integrity_failed": (
-                tool_resource_telemetry == "clause"
+                bool(tool_resource_profile)
                 and (
-                    clause_collector is None
+                    resource_trace is None
                     or type(exc).__name__ == "ClauseTelemetryIntegrityError"
                 )
             ),
             "telemetry_errors": telemetry_errors,
-            "tool_resource_telemetry": {
-                "mode": tool_resource_telemetry,
-                "command_envelope_enabled": tool_resource_telemetry != "off",
-                "clause_observations_enabled": (tool_resource_telemetry == "clause"),
+            "tool_resource": {
+                "profile": tool_resource_profile,
+                "service_enabled": bool(tool_resource_profile),
             },
         }
     finally:
         try:
-            await agent.stop()
+            if resource_trace is not None and not resource_trace_finalized:
+                finalize_resource_trace("failed")
         finally:
-            if clause_collector is not None and not clause_collector_finalized:
-                finalize_clause_telemetry("failed")
-            if sidecar_process is not None:
-                try:
-                    sidecar_process.close()
-                except Exception as exc:  # noqa: BLE001 - telemetry is fail-isolated
-                    cleanup_error = (
-                        f"sidecar cleanup failed: {type(exc).__name__}: {exc}"
-                    )
-                    telemetry_errors.append(cleanup_error)
-                    downgrade_error = _downgrade_clause_telemetry(
-                        telemetry_run_status,
-                        Path(request["clause_telemetry_path"]),
-                        cleanup_error,
-                    )
-                    if downgrade_error is not None:
-                        telemetry_errors.append(downgrade_error)
+            await agent.stop()
             status["telemetry_integrity_failed"] = bool(
                 status.get("telemetry_integrity_failed")
                 or telemetry_errors

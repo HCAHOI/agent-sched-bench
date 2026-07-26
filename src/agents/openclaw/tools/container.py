@@ -231,16 +231,16 @@ class ContainerExecTool(_ContainerTool):
         path_append: str = "",
         restrict_to_workspace: bool = False,
         workspace: str = "/testbed",
-        clause_telemetry: Any | None = None,
+        resource_trace: Any | None = None,
     ) -> None:
         super().__init__(agent)
         self.timeout = timeout
         self.path_append = path_append
         self.workspace = workspace or "/testbed"
-        self._clause_telemetry = clause_telemetry
+        self._resource_trace = resource_trace
         self._tool_call_id: str | None = None
-        self._pending_clause_token: Any | None = None
-        self._pending_clause_response: dict[str, Any] | None = None
+        self._pending_resource_token: Any | None = None
+        self._pending_resource_response: dict[str, Any] | None = None
         self._guard = ExecTool(
             timeout=timeout,
             working_dir=self.workspace,
@@ -255,32 +255,32 @@ class ContainerExecTool(_ContainerTool):
     ) -> None:
         self._tool_call_id = tool_call_id
 
-    def finish_clause_telemetry(self) -> None:
-        token, self._pending_clause_token = self._pending_clause_token, None
-        response, self._pending_clause_response = (
-            self._pending_clause_response,
+    def finish_resource_call(self) -> None:
+        token, self._pending_resource_token = self._pending_resource_token, None
+        response, self._pending_resource_response = (
+            self._pending_resource_response,
             None,
         )
         if token is not None:
             try:
-                self._clause_telemetry.finish_tool_call(
+                self._resource_trace.finish_tool_call(
                     token,
                     replay_response=response,
                 )
             except BaseException as exc:
-                self._record_telemetry_failure("finish", exc)
+                self._record_resource_failure("finish", exc)
 
-    def _record_telemetry_failure(self, phase: str, exc: BaseException) -> None:
+    def _record_resource_failure(self, phase: str, exc: BaseException) -> None:
         try:
-            self._clause_telemetry.add_integrity_error(
-                f"telemetry {phase} failed: {type(exc).__name__}: {exc}"
+            self._resource_trace.add_integrity_error(
+                f"resource {phase} failed: {type(exc).__name__}: {exc}"
             )
         except BaseException:
             pass
 
     @property
-    def clause_telemetry_enabled(self) -> bool:
-        return self._clause_telemetry is not None
+    def resource_service_enabled(self) -> bool:
+        return self._resource_trace is not None
 
     @property
     def name(self) -> str:
@@ -307,39 +307,39 @@ class ContainerExecTool(_ContainerTool):
         timeout: int | None = None,
         **_: Any,
     ) -> str:
-        self._pending_clause_response = None
+        self._pending_resource_response = None
         workdir = working_dir or self.workspace
         guard_error = self._guard._guard_command(command, workdir)
         if guard_error:
             replay_result = guard_error + TOOL_ERROR_HINT
-            if self._clause_telemetry is not None:
+            if self._resource_trace is not None:
                 try:
-                    self._clause_telemetry.record_safety_guard_blocked(
+                    self._resource_trace.record_safety_guard_blocked(
                         self._tool_call_id or "",
                         command,
                         replay_result,
                     )
                 except BaseException as exc:
-                    self._record_telemetry_failure("safety_guard", exc)
+                    self._record_resource_failure("safety_guard", exc)
             return replay_result
         effective_timeout = min(int(timeout or self.timeout), self._MAX_TIMEOUT)
         effective_command = command
         if workdir != self.workspace:
             effective_command = f"cd {shlex.quote(workdir)} && {command}"
-        if self._clause_telemetry is not None:
+        if self._resource_trace is not None:
             try:
-                self._pending_clause_token = self._clause_telemetry.begin_tool_call(
+                self._pending_resource_token = self._resource_trace.begin_tool_call(
                     self._tool_call_id or "",
                     command,
                 )
             except BaseException as exc:
-                self._record_telemetry_failure("begin", exc)
+                self._record_resource_failure("begin", exc)
         response = await self._request(
             "exec",
             {"command": effective_command, "timeout": effective_timeout},
             timeout_s=float(effective_timeout),
         )
-        self._pending_clause_response = response
+        self._pending_resource_response = response
         result = self._result_or_error(response)
         returncode = response.get("returncode")
         if isinstance(returncode, int) and not isinstance(returncode, bool):
@@ -394,7 +394,7 @@ def build_container_tool_overrides(
     exec_path_append: str = "",
     restrict_to_workspace: bool = False,
     workspace: str = "/testbed",
-    clause_telemetry: Any | None = None,
+    resource_trace: Any | None = None,
     runtime_artifact_root_map: dict[str, str] | None = None,
 ) -> list[Tool]:
     """Return OpenClaw tool replacements backed by a task-container agent."""
@@ -413,7 +413,7 @@ def build_container_tool_overrides(
             path_append=exec_path_append,
             restrict_to_workspace=restrict_to_workspace,
             workspace=workspace,
-            clause_telemetry=clause_telemetry,
+            resource_trace=resource_trace,
         ),
         *[UnsupportedReplayTool(name) for name in _UNSUPPORTED_REPLAY_TOOL_NAMES],
     ]

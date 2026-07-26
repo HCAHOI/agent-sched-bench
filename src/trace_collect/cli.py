@@ -151,6 +151,14 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Resume an interrupted run by passing its existing run directory path.",
     )
     parser.add_argument(
+        "--tool-resource-profile",
+        default=None,
+        help=(
+            "Canonical tool-resource profile. Omit to disable the resource "
+            "service for collection."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -305,14 +313,11 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         help="Simulated TPOT in milliseconds when --llm-timing ttft-tpot.",
     )
     parser.add_argument(
-        "--tool-resource-telemetry",
-        choices=["off", "command", "clause"],
-        default="command",
+        "--tool-resource-profile",
+        default=None,
         help=(
-            "Per-tool resource telemetry: off disables new command envelopes, "
-            "command preserves resource_timeline, and clause adds eBPF "
-            "clause observations. Clause mode requires root/BCC, Docker, "
-            "and workers=1."
+            "Canonical tool-resource profile. Omit to disable the resource "
+            "service for this replay."
         ),
     )
     parser.add_argument(
@@ -430,12 +435,24 @@ def _run_collect(args: argparse.Namespace) -> None:
             mcp_config=args.mcp_config,
             prompt_template=args.prompt_template,
             min_free_disk_gb=args.min_free_disk_gb,
+            tool_resource_profile=(
+                Path(args.tool_resource_profile) if args.tool_resource_profile else None
+            ),
         )
     )
     print(f"Traces written to: {run_dir}/")
     results_path = run_dir / "results.jsonl"
     if results_path.exists():
         print(f"Results written to: {results_path}")
+    if args.tool_resource_profile and _resource_run_manifests_invalid(
+        run_dir / "tool_resource_runs"
+    ):
+        print(
+            "ERROR: formal resource collection invalid after all workloads completed: "
+            f"{run_dir}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def _parse_concurrency_values(value: str) -> list[int]:
@@ -464,7 +481,10 @@ def _append_throughput_sweep_record(sweep_path: Path, trace_file: Path) -> None:
         fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
 
 
-def _clause_collection_invalid(trace_file: Path) -> bool:
+def _resource_collection_invalid(trace_file: Path) -> bool:
+    manifest_dir = trace_file.parent / "tool_resource_runs" / trace_file.stem
+    if manifest_dir.exists():
+        return _resource_run_manifests_invalid(manifest_dir)
     try:
         records = [
             json.loads(line)
@@ -481,6 +501,20 @@ def _clause_collection_invalid(trace_file: Path) -> bool:
     return not states or any(state != "valid" for state in states)
 
 
+def _resource_run_manifests_invalid(manifest_dir: Path) -> bool:
+    run_manifests = sorted(manifest_dir.glob("*.json"))
+    if not run_manifests:
+        return True
+    try:
+        evidence = [
+            json.loads(path.read_text(encoding="utf-8")).get("evidence_valid")
+            for path in run_manifests
+        ]
+    except (OSError, json.JSONDecodeError):
+        return True
+    return any(value is not True for value in evidence)
+
+
 def _run_simulate(args: argparse.Namespace) -> None:
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -494,17 +528,6 @@ def _run_simulate(args: argparse.Namespace) -> None:
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
-    if args.tool_resource_telemetry == "clause":
-        from tool_resource.mvdan_client import (
-            MvdanClientError,
-            ensure_compatible_adapter,
-        )
-
-        try:
-            ensure_compatible_adapter()
-        except MvdanClientError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            sys.exit(1)
     simulate_kwargs = {
         "manifest": Path(args.manifest),
         "task_source": Path(args.task_source) if args.task_source else None,
@@ -524,14 +547,16 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "llm_ttft_ms": args.llm_ttft_ms,
         "llm_tpot_ms": args.llm_tpot_ms,
         "structured_output": args.output_dir == "traces/simulate",
-        "tool_resource_telemetry": args.tool_resource_telemetry,
+        "tool_resource_profile": (
+            Path(args.tool_resource_profile) if args.tool_resource_profile else None
+        ),
         "cleanup_images": args.cleanup_images,
     }
 
     sweep_path = Path(args.output_dir) / "throughput_sweep.jsonl"
     if len(concurrency_values) > 1 and sweep_path.exists():
         sweep_path.unlink()
-    invalid_clause_runs: list[Path] = []
+    invalid_resource_runs: list[Path] = []
     for concurrency in concurrency_values:
         try:
             trace_file = asyncio.run(
@@ -541,19 +566,16 @@ def _run_simulate(args: argparse.Namespace) -> None:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
         print(f"Simulate trace written to: {trace_file}")
-        if (
-            args.tool_resource_telemetry == "clause"
-            and _clause_collection_invalid(trace_file)
-        ):
-            invalid_clause_runs.append(trace_file)
+        if args.tool_resource_profile and _resource_collection_invalid(trace_file):
+            invalid_resource_runs.append(trace_file)
         if len(concurrency_values) > 1:
             _append_throughput_sweep_record(sweep_path, trace_file)
     if len(concurrency_values) > 1:
         print(f"Throughput sweep written to: {sweep_path}")
-    if invalid_clause_runs:
+    if invalid_resource_runs:
         print(
-            "ERROR: formal clause collection invalid after all workloads completed: "
-            + ", ".join(str(path) for path in invalid_clause_runs),
+            "ERROR: formal resource collection invalid after all workloads completed: "
+            + ", ".join(str(path) for path in invalid_resource_runs),
             file=sys.stderr,
         )
         sys.exit(1)

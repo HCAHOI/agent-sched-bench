@@ -81,6 +81,9 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         top_k: int | str | None = None,
         repetition_penalty: float | str | None = None,
         bridge_bootstrap_timeout_sec: float | str | None = None,
+        tool_resource_profile: str | None = None,
+        resource_run_token: str | None = None,
+        resource_trace_id: str | None = None,
         *args: Any,
         **kwargs: Any,
     ) -> None:
@@ -126,6 +129,9 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         self._top_p = _optional_float(top_p)
         self._top_k = _optional_int(top_k)
         self._repetition_penalty = _optional_float(repetition_penalty)
+        self._tool_resource_profile = tool_resource_profile
+        self._resource_run_token = resource_run_token
+        self._resource_trace_id = resource_trace_id
 
     @property
     def _env(self) -> dict[str, str]:
@@ -202,6 +208,64 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             container_executable,
             workdir=container_workdir,
         )
+        resource_trace = None
+        resource_trace_finalized = False
+
+        def finalize_resource_trace(workload_status: str) -> None:
+            nonlocal resource_trace_finalized
+            if resource_trace is None or resource_trace_finalized:
+                return
+            from trace_collect.openclaw_host_runtime import (
+                _attach_resource_observations,
+                _finalized_resource_status,
+            )
+
+            errors: list[str] = []
+            try:
+                for error in _attach_resource_observations(
+                    trace_file,
+                    resource_trace.calls,
+                    [],
+                ):
+                    resource_trace.add_integrity_error(error)
+                status, errors = _finalized_resource_status(
+                    resource_trace,
+                    replay_execution=workload_status,
+                )
+                if resource_trace.final_artifact is not None:
+                    errors.extend(
+                        _attach_resource_observations(
+                            trace_file,
+                            resource_trace.calls,
+                            [],
+                        )
+                    )
+            except BaseException as exc:
+                status = {
+                    "telemetry_quality": "unavailable",
+                    "formal_completeness": "unavailable",
+                    "call_coverage": None,
+                    "collection_validity": "invalid",
+                }
+                errors.append(
+                    f"resource finalization failed: {type(exc).__name__}: {exc}"
+                )
+            finally:
+                resource_trace_finalized = True
+            _update_trace_metadata(
+                trace_file,
+                {
+                    "tool_resource": {
+                        "profile": self._tool_resource_profile,
+                        "service_enabled": True,
+                    },
+                    "resource_artifact_path": str(
+                        log_dir / "resource_observations.json"
+                    ),
+                    "telemetry_errors": errors,
+                    **status,
+                },
+            )
 
         try:
             await self._start_container_agent(agent, session=session, deadline=deadline)
@@ -215,6 +279,18 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
                 deadline,
             )
             runtime_label = container_runtime_label(proof)
+            if self._tool_resource_profile is not None:
+                from tool_resource.client import ResourceTrace
+
+                resource_trace = ResourceTrace.open(
+                    self._tool_resource_profile,
+                    run_token=self._resource_run_token or "",
+                    trace_id=self._resource_trace_id or log_dir.name,
+                    container_runtime=Path(container_executable).name,
+                    container_id=container_id,
+                    artifact_path=log_dir / "resource_observations.json",
+                    runner_pid=os.getpid(),
+                )
             provider = UnifiedProvider(
                 api_key=self._api_key,
                 api_base=self._api_base,
@@ -231,6 +307,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
                     exec_timeout=300,
                     exec_path_append="",
                     workspace=container_workdir,
+                    resource_trace=resource_trace,
                 ),
             )
             rendered_instruction = self._render_instruction(instruction)
@@ -260,6 +337,11 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
                 "provider_name": self._provider_name,
             }
             _update_trace_metadata(trace_file, metadata_extra)
+            finalize_resource_trace(
+                "completed"
+                if result.stop_reason == "completed" and result.error is None
+                else "failed"
+            )
             if result.stop_reason != "completed" or result.error is not None:
                 self._write_error(
                     log_dir,
@@ -268,6 +350,8 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
                 )
                 return AgentResult(failure_mode=FailureMode.UNKNOWN_AGENT_ERROR)
         finally:
+            if resource_trace is not None and not resource_trace_finalized:
+                finalize_resource_trace("failed")
             await agent.stop()
 
         (log_dir / "openclaw-complete.marker").write_text(

@@ -104,6 +104,7 @@ def test_perform_task_runs_host_session_with_container_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, Any]] = []
+    resource_open: dict[str, Any] = {}
 
     class FakeContainer:
         id = "abcdef1234567890"
@@ -188,7 +189,34 @@ def test_perform_task_runs_host_session_with_container_tools(
         calls.append(("build_tools", kwargs))
         return ["container-tool"]
 
-    monkeypatch.setattr("agents.terminal_bench.openclaw_agent.shutil.which", lambda _: "/usr/bin/docker")
+    class FakeResourceTrace:
+        calls: list[dict[str, Any]] = []
+        final_artifact = {
+            "telemetry_quality": "ok",
+            "formal_completeness": "complete",
+            "call_coverage": {
+                "total_call_count": 0,
+                "eligible_call_count": 0,
+                "withheld_call_count": 0,
+                "eligible_fraction": 1.0,
+            },
+            "collection_validity": "valid",
+        }
+
+        def add_integrity_error(self, message: str) -> None:
+            raise AssertionError(message)
+
+        def finalize(self, *, replay_execution: str) -> None:
+            resource_open["replay_execution"] = replay_execution
+
+    def fake_resource_open(*args: Any, **kwargs: Any) -> FakeResourceTrace:
+        resource_open["args"] = args
+        resource_open.update(kwargs)
+        return FakeResourceTrace()
+
+    monkeypatch.setattr(
+        "agents.terminal_bench.openclaw_agent.shutil.which", lambda _: "/usr/bin/docker"
+    )
     monkeypatch.setattr(
         "agents.terminal_bench.openclaw_agent.ContainerAgent",
         FakeContainerAgent,
@@ -209,8 +237,17 @@ def test_perform_task_runs_host_session_with_container_tools(
         "agents.terminal_bench.openclaw_agent.build_container_tools_for_agent",
         fake_build_tools,
     )
+    monkeypatch.setattr(
+        "tool_resource.client.ResourceTrace.open",
+        fake_resource_open,
+    )
 
-    result = make_agent(api_key="secret-value").perform_task(
+    result = make_agent(
+        api_key="secret-value",
+        tool_resource_profile="/tmp/resource.yaml",
+        resource_run_token="run-token",
+        resource_trace_id="hello-world",
+    ).perform_task(
         "solve sqlite query",
         FakeSession(),  # type: ignore[arg-type]
         logging_dir=tmp_path,
@@ -222,17 +259,18 @@ def test_perform_task_runs_host_session_with_container_tools(
     )
     trace_records = [
         json.loads(line)
-        for line in (tmp_path / "openclaw-trace.jsonl").read_text(
-            encoding="utf-8"
-        ).splitlines()
+        for line in (tmp_path / "openclaw-trace.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
     ]
     assert trace_records[0]["openclaw_runtime"] == "host_session_runner"
     assert trace_records[0]["terminal_bench_container_id"] == "abcdef1234567890"
     assert trace_records[0]["terminal_bench_workdir"] == "/workdir"
     assert trace_records[0]["tool_container_python"] == "Python 3.6.9"
-    assert "Shell/file tools `python3`: Python 3.6.9" in trace_records[0][
-        "prompt_runtime_label"
-    ]
+    assert (
+        "Shell/file tools `python3`: Python 3.6.9"
+        in trace_records[0]["prompt_runtime_label"]
+    )
 
     provider_kwargs = next(value for name, value in calls if name == "provider_init")
     assert provider_kwargs["api_key"] == "secret-value"
@@ -251,12 +289,13 @@ def test_perform_task_runs_host_session_with_container_tools(
     assert run_kwargs["session_key"] == "terminal-bench:abcdef123456"
     assert run_kwargs["channel"] == "terminal-bench"
     assert "Shell/file tools runtime: Linux x86_64" in run_kwargs["runtime_label"]
-    assert "Shell/file tools `python3`: Python 3.6.9" in run_kwargs[
-        "runtime_label"
-    ]
+    assert "Shell/file tools `python3`: Python 3.6.9" in run_kwargs["runtime_label"]
 
     assert ("container_agent_start", None) in calls
     assert ("container_agent_stop", None) in calls
+    assert resource_open["run_token"] == "run-token"
+    assert resource_open["trace_id"] == "hello-world"
+    assert resource_open["container_runtime"] == "docker"
     rendered_calls = repr(calls)
     assert "secret-value" in repr(provider_kwargs)
     assert "secret-value" not in rendered_calls.replace(repr(provider_kwargs), "")
@@ -398,7 +437,9 @@ def test_perform_task_reports_failed_host_session(
     async def fake_runtime_proof(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return {}
 
-    monkeypatch.setattr("agents.terminal_bench.openclaw_agent.shutil.which", lambda _: "/usr/bin/docker")
+    monkeypatch.setattr(
+        "agents.terminal_bench.openclaw_agent.shutil.which", lambda _: "/usr/bin/docker"
+    )
     monkeypatch.setattr(
         "agents.terminal_bench.openclaw_agent.ContainerAgent",
         FakeContainerAgent,
@@ -423,6 +464,6 @@ def test_perform_task_reports_failed_host_session(
     )
 
     assert result.failure_mode == FailureMode.UNKNOWN_AGENT_ERROR
-    assert "stop_reason='max_iterations'" in (tmp_path / "openclaw-error.txt").read_text(
-        encoding="utf-8"
-    )
+    assert "stop_reason='max_iterations'" in (
+        tmp_path / "openclaw-error.txt"
+    ).read_text(encoding="utf-8")

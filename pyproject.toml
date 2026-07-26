@@ -59,6 +59,8 @@ gantt-test = [
 ]
 [project.scripts]
 openclaw = "agents.openclaw._cli:main"
+resource-agentd = "tool_resource.resource_agentd:main"
+resource-telemetryd = "tool_resource.telemetryd:main"
 
 [tool.setuptools]
 package-dir = {"" = "src", "demo" = "demo"}

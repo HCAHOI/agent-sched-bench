@@ -123,7 +123,12 @@ class LatencyBuckets:
             raise ValueError("at least one latency bucket edge is required")
         previous = 0.0
         for edge in self.edges_ms:
-            if not math.isfinite(edge) or edge <= previous:
+            if (
+                not isinstance(edge, (int, float))
+                or isinstance(edge, bool)
+                or not math.isfinite(edge)
+                or edge <= previous
+            ):
                 raise ValueError(
                     "latency bucket edges must be finite, positive, and "
                     "strictly increasing"

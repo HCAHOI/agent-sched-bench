@@ -709,6 +709,7 @@ class ToolCallToken:
     source_tool_call_id: str = ""
     source_command: str = ""
     source_tool_result: str = ""
+    static_plan: Mapping[str, Any] | None = None
 
 
 _EXIT_CODE_DIAGNOSTIC = re.compile(r"^Exit code: (?P<code>-?\d+)$")
@@ -2513,8 +2514,29 @@ class ClauseTelemetryCollector:
         self.calls.append(summary)
         return summary
 
-    def begin_tool_call(self, tool_call_id: str, command: str) -> ToolCallToken:
-        source_tool_call_id, source_command, source_tool_result = self._source_fields()
+    def begin_tool_call(
+        self,
+        tool_call_id: str,
+        command: str,
+        *,
+        static_plan: Mapping[str, Any] | None = None,
+        source_tool_call_id: str | None = None,
+        source_command: str | None = None,
+        source_tool_result: str | None = None,
+    ) -> ToolCallToken:
+        if (
+            source_tool_call_id is None
+            and source_command is None
+            and source_tool_result is None
+        ):
+            source_tool_call_id, source_command, source_tool_result = (
+                self._source_fields()
+            )
+        elif not all(
+            isinstance(value, str)
+            for value in (source_tool_call_id, source_command, source_tool_result)
+        ):
+            raise ValueError("source call plan fields must all be strings")
         if self.state == "active" and self._poll_error is not None:
             self._disable(
                 "ring poller failed: "
@@ -2570,6 +2592,7 @@ class ClauseTelemetryCollector:
             source_tool_call_id=source_tool_call_id,
             source_command=source_command,
             source_tool_result=source_tool_result,
+            static_plan=static_plan,
         )
         self._active = token
         return token
@@ -2726,12 +2749,24 @@ class ClauseTelemetryCollector:
         tool_call_id: str,
         command: str,
         replay_result: str,
+        *,
+        static_plan: Mapping[str, Any] | None = None,
+        source_tool_call_id: str | None = None,
+        source_command: str | None = None,
+        source_tool_result: str | None = None,
     ) -> dict[str, Any]:
         """Record an exec rejected before the container runtime was entered."""
 
         from tool_resource.clause_bridge import SafetyGuardBlockEvidence
 
-        token = self.begin_tool_call(tool_call_id, command)
+        token = self.begin_tool_call(
+            tool_call_id,
+            command,
+            static_plan=static_plan,
+            source_tool_call_id=source_tool_call_id,
+            source_command=source_command,
+            source_tool_result=source_tool_result,
+        )
         ended_ns = time.monotonic_ns()
         self._active = None
         if self.state != "active":
@@ -2951,6 +2986,7 @@ class ClauseTelemetryCollector:
             self.repo,
             token.command,
             exec_image_records,
+            parsed_command=token.static_plan,
             failed_exec_attempts=[
                 attempt
                 for attempt in _failed_exec_attempt_records(events)

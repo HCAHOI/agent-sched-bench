@@ -664,8 +664,7 @@ class AgentRunner:
             resource_recorder = ResourceTimelineRecorder(
                 enabled=(
                     tool_call.name == "exec"
-                    and os.environ.get("OPENCLAW_TOOL_RESOURCE_TELEMETRY", "command")
-                    != "off"
+                    and os.environ.get("OPENCLAW_RESOURCE_TIMELINE", "on") != "off"
                 ),
                 scope="openclaw_exec_tool_interval",
             )
@@ -674,33 +673,33 @@ class AgentRunner:
                     result = await tool.execute(**params)
                 else:
                     result = await spec.tools.execute(tool_call.name, params)
-            finish_clause_telemetry = getattr(tool, "finish_clause_telemetry", None)
-            if getattr(tool, "clause_telemetry_enabled", False) and callable(
-                finish_clause_telemetry
+            finish_resource_call = getattr(tool, "finish_resource_call", None)
+            if getattr(tool, "resource_service_enabled", False) and callable(
+                finish_resource_call
             ):
                 tool_ended_wall = time.time()
                 try:
-                    finish_clause_telemetry()
+                    finish_resource_call()
                 except BaseException as exc:
                     logger.warning(
-                        "Clause telemetry finish failed after tool result: {}", exc
+                        "Resource service finish failed after tool result: {}", exc
                     )
             resource_timeline = resource_recorder.to_trace_dict()
         except asyncio.CancelledError:
             raise
         except BaseException as caught:
             failure = caught
-            finish_clause_telemetry = getattr(tool, "finish_clause_telemetry", None)
-            if getattr(tool, "clause_telemetry_enabled", False) and callable(
-                finish_clause_telemetry
+            finish_resource_call = getattr(tool, "finish_resource_call", None)
+            if getattr(tool, "resource_service_enabled", False) and callable(
+                finish_resource_call
             ):
                 if tool_ended_wall is None:
                     tool_ended_wall = time.time()
                 try:
-                    finish_clause_telemetry()
+                    finish_resource_call()
                 except BaseException as telemetry_exc:
                     logger.warning(
-                        "Clause telemetry finish failed after tool error: {}",
+                        "Resource service finish failed after tool error: {}",
                         telemetry_exc,
                     )
             if resource_recorder is not None:

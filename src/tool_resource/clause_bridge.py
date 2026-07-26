@@ -951,6 +951,7 @@ def bridge_command(
     command: str,
     exec_images: Sequence[ExecImageRecord],
     *,
+    parsed_command: Mapping[str, Any] | None = None,
     failed_exec_attempts: Sequence[FailedExecAttempt] = (),
     command_lookup_failure: ShellCommandLookupFailure | None = None,
     safety_guard_blocked: SafetyGuardBlockEvidence | None = None,
@@ -969,7 +970,11 @@ def bridge_command(
     KB observations — the clauses become coverage gaps instead.
     """
 
-    parsed = parse_command_clauses(command)
+    parsed = (
+        parse_command_clauses(command)
+        if parsed_command is None
+        else dict(parsed_command)
+    )
     static = parsed["clauses"]
 
     if parsed["parse_failed"] or loss_count > 0:

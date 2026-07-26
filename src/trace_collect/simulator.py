@@ -99,6 +99,16 @@ from trace_collect.simulate_utils import (
     _utc_now_iso,
 )
 
+_TOOL_RESOURCE_RUN_TOKENS_ENV = "TOOL_RESOURCE_RUN_TOKENS"
+
+
+def _tool_resource_scope(loaded: LoadedTraceSession) -> str:
+    repo = loaded.task.get("repo")
+    if isinstance(repo, str) and repo.strip():
+        return repo.strip()
+    return f"task:{loaded.task_instance_id}"
+
+
 logger = logging.getLogger(__name__)
 GLOBAL_CONTAINER_RESOURCE_SAMPLE_INTERVAL_S = 1.0
 _SHARED_SEMAPHORE_POLL_S = 0.05
@@ -3267,7 +3277,7 @@ async def simulate(
     llm_ttft_ms: float | None = None,
     llm_tpot_ms: float | None = None,
     structured_output: bool = False,
-    tool_resource_telemetry: str = "command",
+    tool_resource_profile: Path | None = None,
     cleanup_images: bool = False,
 ) -> Path:
     if mode != "cloud_model":
@@ -3278,13 +3288,15 @@ async def simulate(
         raise ValueError("workers must be >= 1")
     if prep_concurrency < 0:
         raise ValueError("prep_concurrency must be >= 0")
-    if tool_resource_telemetry not in {"off", "command", "clause"}:
-        raise ValueError("tool_resource_telemetry must be one of: off, command, clause")
-    if tool_resource_telemetry == "clause":
-        from tool_resource.mvdan_client import ensure_compatible_adapter
+    resolved_tool_resource_profile: Path | None = None
+    if tool_resource_profile is None:
+        os.environ.pop("TOOL_RESOURCE_PROFILE", None)
+    else:
+        from tool_resource.profile import ResourceProfile
 
-        ensure_compatible_adapter()
-    os.environ["OPENCLAW_TOOL_RESOURCE_TELEMETRY"] = tool_resource_telemetry
+        resolved_tool_resource_profile = tool_resource_profile.resolve()
+        ResourceProfile.load(resolved_tool_resource_profile)
+        os.environ["TOOL_RESOURCE_PROFILE"] = str(resolved_tool_resource_profile)
     llm_timing = LLMTimingConfig(
         mode=llm_timing_mode,
         ttft_ms=llm_ttft_ms,
@@ -3366,6 +3378,7 @@ async def simulate(
     container_resource_summary: dict[str, Any] | None = None
     sweep_fixed_images: dict[str, str] = {}
     run_completed_for_fixed_cleanup = False
+    resource_runs: dict[str, Any] = {}
     run_wall_start: float | None = None
     run_wall_end: float | None = None
     output_path.mkdir(parents=True, exist_ok=True)
@@ -3397,6 +3410,27 @@ async def simulate(
             )
         run_wall_start = time.monotonic()
         run_id = _build_run_id(mode=mode, model=model, concurrency=concurrency)
+        if resolved_tool_resource_profile is not None:
+            from tool_resource.client import ResourceRun
+
+            manifest_dir = output_path / "tool_resource_runs" / run_id
+            for scope in sorted(
+                {_tool_resource_scope(item) for item in loaded_sessions}
+            ):
+                scope_digest = hashlib.sha256(scope.encode()).hexdigest()[:16]
+                resource_runs[scope] = ResourceRun.open(
+                    resolved_tool_resource_profile,
+                    run_id=f"simulate:{run_id}:{scope_digest}",
+                    workspace_scope=scope,
+                    manifest_path=manifest_dir / f"{scope_digest}.json",
+                )
+            os.environ[_TOOL_RESOURCE_RUN_TOKENS_ENV] = json.dumps(
+                {
+                    scope: resource_run.run_token or ""
+                    for scope, resource_run in resource_runs.items()
+                },
+                sort_keys=True,
+            )
         if workers == 1:
             trace_path = output_path / f"{run_id}.jsonl"
             if trace_path.exists():
@@ -3418,12 +3452,13 @@ async def simulate(
                     "workers": workers,
                     "prep_concurrency": prep_concurrency,
                     "monitoring": monitoring_policy_dict,
-                    "tool_resource_telemetry": {
-                        "mode": tool_resource_telemetry,
-                        "command_envelope_enabled": (tool_resource_telemetry != "off"),
-                        "clause_observations_enabled": (
-                            tool_resource_telemetry == "clause"
+                    "tool_resource": {
+                        "profile": (
+                            str(tool_resource_profile.resolve())
+                            if tool_resource_profile is not None
+                            else None
                         ),
+                        "service_enabled": tool_resource_profile is not None,
                     },
                 },
             )
@@ -3521,6 +3556,17 @@ async def simulate(
                     await _finalize_prepared_session(prepared)
             except (Exception, asyncio.CancelledError) as exc:
                 finalization_error = exc
+            for resource_run in resource_runs.values():
+                resource_error = resource_run.finalize(
+                    workload_status=(
+                        "completed"
+                        if run_completed_for_fixed_cleanup
+                        and finalization_error is None
+                        else "failed"
+                    )
+                )
+                if resource_error is not None:
+                    logger.error("%s", resource_error)
             if finalization_error is None:
                 run_wall_end = time.monotonic()
             if container_resource_recorder is not None:
@@ -3537,6 +3583,7 @@ async def simulate(
                     sorted(sweep_fixed_images.values()),
                 )
         finally:
+            os.environ.pop(_TOOL_RESOURCE_RUN_TOKENS_ENV, None)
             if finalization_error is not None:
                 raise finalization_error
 

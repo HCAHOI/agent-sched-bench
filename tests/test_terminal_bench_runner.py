@@ -77,6 +77,28 @@ def test_build_tb_command_uses_agent_import_path() -> None:
     assert "api_key=test-key" not in joined
 
 
+def test_build_tb_command_forwards_canonical_resource_profile() -> None:
+    class FakeResourceRun:
+        run_token = "run-token"
+
+    resource_runs = {}
+    runner = _make_runner(
+        tool_resource_profile=Path("/tmp/resource.yaml"),
+        tool_resource_runs=resource_runs,
+    )
+    resource_runs["task:hello-world"] = FakeResourceRun()
+    cmd = runner._build_tb_command(
+        task={"dataset_root": "/tmp/dataset", "task_id": "hello-world"},
+        run_root=Path("/tmp/out"),
+        run_id="hello-world",
+        prompt_template="default",
+    )
+    joined = " ".join(cmd)
+    assert "--agent-kwarg tool_resource_profile=/tmp/resource.yaml" in joined
+    assert "--agent-kwarg resource_run_token=run-token" in joined
+    assert "--agent-kwarg resource_trace_id=hello-world" in joined
+
+
 def test_build_tb_command_forwards_global_agent_timeout() -> None:
     runner = _make_runner(
         benchmark_extras={
@@ -114,7 +136,6 @@ def test_build_tb_command_forwards_llm_timeout_to_agent() -> None:
     assert "--agent-kwarg llm_timeout_sec=1800.0" in joined
 
 
-
 def test_build_tb_command_forwards_bridge_bootstrap_timeout_to_agent() -> None:
     runner = _make_runner(
         benchmark_extras={
@@ -132,6 +153,7 @@ def test_build_tb_command_forwards_bridge_bootstrap_timeout_to_agent() -> None:
     )
 
     assert "--agent-kwarg bridge_bootstrap_timeout_sec=60.0" in " ".join(cmd)
+
 
 def test_build_tb_command_forwards_task_timeout_without_global() -> None:
     runner = _make_runner(
@@ -279,7 +301,10 @@ def test_augment_trace_metadata_stamps_terminal_bench_fields(tmp_path: Path) -> 
     assert metadata["run_config"]["tb_process_cleanup_grace_sec"] == 300.0
     summary = runner._summary(
         tb_version="0.2.18",
-        task={"tb_dataset": "terminal-bench-core", "tb_registry_source": "registry.json"},
+        task={
+            "tb_dataset": "terminal-bench-core",
+            "tb_registry_source": "registry.json",
+        },
         tb_run_path=tmp_path / "tb-run",
     )
     assert summary["bridge_bootstrap_timeout_sec"] == 60.0

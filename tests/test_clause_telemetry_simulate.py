@@ -16,7 +16,7 @@ from agents.openclaw.tools.base import Tool
 from agents.openclaw.tools.container import ContainerExecTool
 from agents.openclaw.tools.registry import ToolRegistry
 from llm_call.provider_base import LLMProvider, LLMResponse, ToolCallRequest
-from tool_resource import CLAUSE_TELEMETRY_SCHEMA_VERSION
+from tool_resource.artifact_schema import CLAUSE_TELEMETRY_SCHEMA_VERSION
 from tool_resource.telemetry import (
     ARG_FLAG_ARGV_CAPPED,
     ARG_FLAG_CONTINUED,
@@ -33,9 +33,8 @@ from tool_resource.telemetry import (
 )
 from trace_collect.cli import _run_simulate, parse_simulate_args
 from trace_collect.openclaw_host_runtime import (
-    _attach_clause_telemetry,
-    _downgrade_clause_telemetry,
-    _finalized_clause_telemetry_status,
+    _attach_resource_observations,
+    _finalized_resource_status,
 )
 
 
@@ -159,9 +158,7 @@ def _clean_events() -> list[dict[str, Any]]:
 def test_finalizer_error_cannot_reuse_stale_valid_artifact(tmp_path: Path) -> None:
     artifact_path = tmp_path / "clause-telemetry.json"
     artifact_path.write_text(
-        json.dumps(
-            {"telemetry_quality": "ok", "collection_validity": "valid"}
-        ),
+        json.dumps({"telemetry_quality": "ok", "collection_validity": "valid"}),
         encoding="utf-8",
     )
     collector = SimpleNamespace(
@@ -169,7 +166,7 @@ def test_finalizer_error_cannot_reuse_stale_valid_artifact(tmp_path: Path) -> No
         final_artifact=None,
     )
 
-    status, errors = _finalized_clause_telemetry_status(
+    status, errors = _finalized_resource_status(
         collector,
         replay_execution="completed",
     )
@@ -183,7 +180,7 @@ def test_finalizer_error_cannot_reuse_stale_valid_artifact(tmp_path: Path) -> No
     assert errors == ["telemetry finalize failed: RuntimeError: boom"]
 
 
-def test_finalized_status_comes_from_sidecar_artifact() -> None:
+def test_finalized_status_comes_from_resource_artifact() -> None:
     collector = SimpleNamespace(
         finalize=lambda **_kwargs: None,
         final_artifact={
@@ -199,7 +196,7 @@ def test_finalized_status_comes_from_sidecar_artifact() -> None:
         },
     )
 
-    status, errors = _finalized_clause_telemetry_status(
+    status, errors = _finalized_resource_status(
         collector,
         replay_execution="completed",
     )
@@ -209,52 +206,6 @@ def test_finalized_status_comes_from_sidecar_artifact() -> None:
     assert status["call_coverage"]["eligible_fraction"] == 0.5
     assert status["collection_validity"] == "valid"
     assert errors == []
-
-
-def test_sidecar_cleanup_failure_downgrades_status_and_artifact(
-    tmp_path: Path,
-) -> None:
-    artifact_path = tmp_path / "clause-telemetry.json"
-    artifact_path.write_text(
-        json.dumps(
-            {
-                "version": CLAUSE_TELEMETRY_SCHEMA_VERSION,
-                "cleanup": "ok",
-                "telemetry_quality": "ok",
-                "formal_completeness": "complete",
-                "collection_validity": "valid",
-                "collector": {"health": "healthy"},
-                "integrity": {"status": "ok", "errors": []},
-            }
-        ),
-        encoding="utf-8",
-    )
-    status = {
-        "telemetry_quality": "ok",
-        "formal_completeness": "complete",
-        "collection_validity": "valid",
-    }
-
-    error = _downgrade_clause_telemetry(
-        status,
-        artifact_path,
-        "sidecar cleanup failed: fixture",
-    )
-
-    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
-    assert error is None
-    assert status["telemetry_quality"] == "unavailable"
-    assert status["formal_completeness"] == "unavailable"
-    assert status["collection_validity"] == "invalid"
-    assert artifact["cleanup"] == "failed"
-    assert artifact["telemetry_quality"] == "unavailable"
-    assert artifact["formal_completeness"] == "unavailable"
-    assert artifact["collection_validity"] == "invalid"
-    assert artifact["collector"]["health"] == "unavailable"
-    assert artifact["integrity"] == {
-        "status": "failed",
-        "errors": ["sidecar cleanup failed: fixture"],
-    }
 
 
 def _failed_exec_events() -> list[dict[str, Any]]:
@@ -344,29 +295,25 @@ def _apt_fork_chain_events() -> list[dict[str, Any]]:
     ]
 
 
-def test_cli_defaults_to_command_and_accepts_clause() -> None:
+def test_cli_resource_profile_is_explicit() -> None:
     default = parse_simulate_args(["--manifest", "manifest.yaml"])
-    clause = parse_simulate_args(
+    configured = parse_simulate_args(
         [
             "--manifest",
             "manifest.yaml",
-            "--tool-resource-telemetry",
-            "clause",
+            "--tool-resource-profile",
+            "resource.yaml",
         ]
     )
-    assert default.tool_resource_telemetry == "command"
-    assert clause.tool_resource_telemetry == "clause"
+    assert default.tool_resource_profile is None
+    assert configured.tool_resource_profile == "resource.yaml"
 
 
-def test_formal_clause_sweep_finishes_before_nonzero_exit(
+def test_formal_resource_sweep_finishes_before_nonzero_exit(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     seen: list[int] = []
-    monkeypatch.setattr(
-        "tool_resource.mvdan_client.ensure_compatible_adapter",
-        lambda: tmp_path / "adapter",
-    )
 
     async def fake_simulate(**kwargs: Any) -> Path:
         concurrency = int(kwargs["concurrency"])
@@ -376,17 +323,14 @@ def test_formal_clause_sweep_finishes_before_nonzero_exit(
             json.dumps(
                 {
                     "type": "summary",
-                    "collection_validity": (
-                        "invalid" if concurrency == 1 else "valid"
-                    ),
+                    "collection_validity": ("invalid" if concurrency == 1 else "valid"),
                 }
             )
             + "\n",
             encoding="utf-8",
         )
         trace.with_name(f"{trace.stem}.throughput_summary.json").write_text(
-            json.dumps({"concurrency": concurrency, "run_id": str(concurrency)})
-            + "\n",
+            json.dumps({"concurrency": concurrency, "run_id": str(concurrency)}) + "\n",
             encoding="utf-8",
         )
         return trace
@@ -402,8 +346,8 @@ def test_formal_clause_sweep_finishes_before_nonzero_exit(
             str(tmp_path),
             "--concurrency",
             "1,2",
-            "--tool-resource-telemetry",
-            "clause",
+            "--tool-resource-profile",
+            str(tmp_path / "resource.yaml"),
         ]
     )
 
@@ -413,47 +357,6 @@ def test_formal_clause_sweep_finishes_before_nonzero_exit(
     assert raised.value.code == 1
     assert seen == [1, 2]
     assert (tmp_path / "throughput_sweep.jsonl").exists()
-
-
-def test_formal_clause_preflight_fails_before_workload_or_output_change(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    from tool_resource.mvdan_client import MvdanClientError
-
-    called = False
-
-    async def fake_simulate(**_kwargs: Any) -> Path:
-        nonlocal called
-        called = True
-        return tmp_path / "unexpected.jsonl"
-
-    monkeypatch.setattr("trace_collect.simulator.simulate", fake_simulate)
-    monkeypatch.setattr(
-        "tool_resource.mvdan_client.ensure_compatible_adapter",
-        lambda: (_ for _ in ()).throw(MvdanClientError("stale schema")),
-    )
-    sweep_path = tmp_path / "throughput_sweep.jsonl"
-    sweep_path.write_text("preserved\n", encoding="utf-8")
-    args = parse_simulate_args(
-        [
-            "--manifest",
-            "manifest.yaml",
-            "--output-dir",
-            str(tmp_path),
-            "--concurrency",
-            "1,2",
-            "--tool-resource-telemetry",
-            "clause",
-        ]
-    )
-
-    with pytest.raises(SystemExit) as raised:
-        _run_simulate(args)
-
-    assert raised.value.code == 1
-    assert not called
-    assert sweep_path.read_text(encoding="utf-8") == "preserved\n"
 
 
 def test_clause_runtime_rejects_configuration_before_bcc(
@@ -760,9 +663,7 @@ def test_truncated_requested_path_invalidates_bare_head_mapping() -> None:
     assert len(violations) == 1
     assert "runtime_argv_incomplete" in violations[0]
     assert summary["mapping"]["observation_clause_count"] == 0
-    assert summary["runtime_invocations"][0][
-        "requested_executable_path_truncated"
-    ]
+    assert summary["runtime_invocations"][0]["requested_executable_path_truncated"]
 
 
 def test_mapping_failure_does_not_disable_later_valid_call(
@@ -771,9 +672,7 @@ def test_mapping_failure_does_not_disable_later_valid_call(
     collector = _active_collector()
     monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
     monkeypatch.setattr("tool_resource.telemetry.time.sleep", lambda *_: None)
-    monkeypatch.setattr(
-        "tool_resource.telemetry.time.monotonic_ns", lambda: 230
-    )
+    monkeypatch.setattr("tool_resource.telemetry.time.monotonic_ns", lambda: 230)
 
     bad = ToolCallToken("bad", "missing arg", 100, 0, 0)
     collector._active = bad
@@ -795,9 +694,7 @@ def test_internal_analysis_failure_disables_later_collection(
     collector = _active_collector()
     monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
     monkeypatch.setattr("tool_resource.telemetry.time.sleep", lambda *_: None)
-    monkeypatch.setattr(
-        "tool_resource.telemetry.time.monotonic_ns", lambda: 230
-    )
+    monkeypatch.setattr("tool_resource.telemetry.time.monotonic_ns", lambda: 230)
 
     def fail_analysis(**_kwargs: Any) -> tuple[dict[str, Any], list[str]]:
         raise RuntimeError("analyzer state corrupt")
@@ -837,20 +734,14 @@ def test_per_call_loss_does_not_disable_later_valid_call(
     )
     monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
     monkeypatch.setattr("tool_resource.telemetry.time.sleep", lambda *_: None)
-    monkeypatch.setattr(
-        "tool_resource.telemetry.time.monotonic_ns", lambda: 230
-    )
+    monkeypatch.setattr("tool_resource.telemetry.time.monotonic_ns", lambda: 230)
 
     first_token = ToolCallToken("loss", "echo hi", 100, 0, 0)
     collector._active = first_token
-    first = collector.finish_tool_call(
-        first_token, replay_response={"returncode": 0}
-    )
+    first = collector.finish_tool_call(first_token, replay_response={"returncode": 0})
     second_token = ToolCallToken("recovered", "echo hi", 100, 0, 0)
     collector._active = second_token
-    second = collector.finish_tool_call(
-        second_token, replay_response={"returncode": 0}
-    )
+    second = collector.finish_tool_call(second_token, replay_response={"returncode": 0})
 
     assert first["telemetry_quality"] == "invalid"
     assert first["mapping"]["observation_clause_count"] == 0
@@ -858,16 +749,16 @@ def test_per_call_loss_does_not_disable_later_valid_call(
     assert collector.state == "active"
 
 
-def test_poller_failure_disables_session_and_marks_following_calls_unavailable() -> None:
+def test_poller_failure_disables_session_and_marks_following_calls_unavailable() -> (
+    None
+):
     collector = _active_collector()
     collector._poll_error = RuntimeError("poll stopped")
 
     first_token = collector.begin_tool_call("first", "echo hi")
     first = collector.finish_tool_call(first_token, replay_response={"returncode": 0})
     second_token = collector.begin_tool_call("second", "echo again")
-    second = collector.finish_tool_call(
-        second_token, replay_response={"returncode": 0}
-    )
+    second = collector.finish_tool_call(second_token, replay_response={"returncode": 0})
 
     assert collector.state == "disabled"
     assert collector._first_disabled_call == "first"
@@ -1690,11 +1581,11 @@ def test_container_guard_block_records_exact_final_replay_result(
         Agent(),  # type: ignore[arg-type]
         timeout=10,
         workspace="/testbed",
-        clause_telemetry=collector,
+        resource_trace=collector,
     )
     registry = ToolRegistry()
     registry.register(tool)
-    monkeypatch.setenv("OPENCLAW_TOOL_RESOURCE_TELEMETRY", "off")
+    monkeypatch.setenv("OPENCLAW_RESOURCE_TIMELINE", "off")
     result = asyncio.run(
         AgentRunner(None)._run_tool(  # type: ignore[arg-type]
             AgentRunSpec(
@@ -1757,11 +1648,11 @@ def test_exec_delimiter_uses_tool_call_id_and_original_command() -> None:
         Agent(),  # type: ignore[arg-type]
         timeout=10,
         workspace="/testbed",
-        clause_telemetry=collector,
+        resource_trace=collector,
     )
     tool.set_tool_call_context("tc-123", {"command": "echo hi"})
     result = asyncio.run(tool.execute("echo hi", working_dir="/tmp", timeout=10))
-    tool.finish_clause_telemetry()
+    tool.finish_resource_call()
     assert result == "hi\n\nExit code: 0"
     assert collector.calls == [("tc-123", "echo hi")]
     assert collector.finished == 1
@@ -1789,12 +1680,12 @@ def test_unavailable_collector_preserves_tool_output_and_exit_code(
         Agent(),  # type: ignore[arg-type]
         timeout=10,
         workspace="/testbed",
-        clause_telemetry=collector,
+        resource_trace=collector,
     )
     tool.set_tool_call_context("call-1", {"command": "false"})
 
     result = asyncio.run(tool.execute("false"))
-    tool.finish_clause_telemetry()
+    tool.finish_resource_call()
 
     assert result == "Error: original stderr\n\nExit code: 7"
     assert collector.calls[0]["telemetry_quality"] == "unavailable"
@@ -1841,13 +1732,13 @@ def test_concurrent_tools_isolate_one_telemetry_failure() -> None:
         Agent("broken-stream workload"),  # type: ignore[arg-type]
         timeout=10,
         workspace="/testbed",
-        clause_telemetry=BrokenCollector(),
+        resource_trace=BrokenCollector(),
     )
     healthy_tool = ContainerExecTool(
         Agent("healthy-stream workload"),  # type: ignore[arg-type]
         timeout=10,
         workspace="/testbed",
-        clause_telemetry=healthy,
+        resource_trace=healthy,
     )
     broken_tool.set_tool_call_context("broken", {"command": "echo broken"})
     healthy_tool.set_tool_call_context("healthy", {"command": "echo healthy"})
@@ -1857,8 +1748,8 @@ def test_concurrent_tools_isolate_one_telemetry_failure() -> None:
             broken_tool.execute("echo broken"),
             healthy_tool.execute("echo healthy"),
         )
-        broken_tool.finish_clause_telemetry()
-        healthy_tool.finish_clause_telemetry()
+        broken_tool.finish_resource_call()
+        healthy_tool.finish_resource_call()
         return first, second
 
     assert asyncio.run(run_both()) == (
@@ -2031,9 +1922,9 @@ def test_attached_summary_is_keyed_by_tool_call_id(tmp_path: Path) -> None:
             },
         }
     ]
-    assert _attach_clause_telemetry(trace, [summary], source_actions) == []
+    assert _attach_resource_observations(trace, [summary], source_actions) == []
     record = json.loads(trace.read_text(encoding="utf-8"))
-    assert record["data"]["clause_telemetry"] == summary
+    assert record["data"]["resource_observation"] == summary
     assert record["data"]["exit_code_agreement"] == {
         "source": 0,
         "replay": 0,
@@ -2068,7 +1959,7 @@ def test_attachment_replace_failure_preserves_authoritative_trace(
     )
 
     with pytest.raises(OSError, match="replace failed"):
-        _attach_clause_telemetry(
+        _attach_resource_observations(
             trace,
             [{"tool_call_id": "tc-1", "command": "echo hi"}],
             [],
@@ -2100,11 +1991,11 @@ def test_duplicate_tool_call_ids_fail_attachment(tmp_path: Path) -> None:
         {"tool_call_id": "duplicate", "command": command}
         for command in ("echo one", "echo two")
     ]
-    errors = _attach_clause_telemetry(trace, calls, [])
-    assert "duplicate clause telemetry tool_call_id duplicate" in errors
+    errors = _attach_resource_observations(trace, calls, [])
+    assert "duplicate resource observation tool_call_id duplicate" in errors
     assert "duplicate exec action tool_call_id duplicate" in errors
     assert all(
-        "clause_telemetry" not in json.loads(line)["data"]
+        "resource_observation" not in json.loads(line)["data"]
         for line in trace.read_text(encoding="utf-8").splitlines()
     )
 
@@ -2126,28 +2017,28 @@ def test_attachment_rejects_command_mismatch(tmp_path: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    errors = _attach_clause_telemetry(
+    errors = _attach_resource_observations(
         trace,
         [{"tool_call_id": "tc-1", "command": "echo other"}],
         [],
     )
     assert errors == [
-        "exec action tc-1 command does not match clause telemetry",
-        "clause telemetry tc-1 has no matching exec action",
+        "exec action tc-1 command does not match resource observation",
+        "resource observation tc-1 has no matching exec action",
     ]
-    assert "clause_telemetry" not in json.loads(trace.read_text())["data"]
+    assert "resource_observation" not in json.loads(trace.read_text())["data"]
 
 
 def test_integrity_error_does_not_replace_recoverable_tool_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Tool:
-        clause_telemetry_enabled = True
+        resource_service_enabled = True
 
         async def execute(self, **_kwargs: Any) -> str:
             return "/bin/sh: 1: python: not found\n\n\nExit code: 127"
 
-        def finish_clause_telemetry(self) -> None:
+        def finish_resource_call(self) -> None:
             raise ClauseTelemetryIntegrityError("mapping gap")
 
     class Tools:
@@ -2158,7 +2049,7 @@ def test_integrity_error_does_not_replace_recoverable_tool_result(
         ) -> tuple[Tool, dict[str, Any], None]:
             return Tool(), params, None
 
-    monkeypatch.setenv("OPENCLAW_TOOL_RESOURCE_TELEMETRY", "off")
+    monkeypatch.setenv("OPENCLAW_RESOURCE_TIMELINE", "off")
     spec = AgentRunSpec(
         initial_messages=[],
         tools=Tools(),  # type: ignore[arg-type]
@@ -2205,7 +2096,7 @@ def test_integrity_finalization_preserves_tool_result_for_trace_hook() -> None:
             return "fake"
 
     class ExecTool(Tool):
-        clause_telemetry_enabled = True
+        resource_service_enabled = True
 
         @property
         def name(self) -> str:
@@ -2226,7 +2117,7 @@ def test_integrity_finalization_preserves_tool_result_for_trace_hook() -> None:
         async def execute(self, **_kwargs: Any) -> str:
             return "/bin/sh: 1: python: not found\n\n\nExit code: 127"
 
-        def finish_clause_telemetry(self) -> None:
+        def finish_resource_call(self) -> None:
             raise ClauseTelemetryIntegrityError("mapping gap")
 
     class Hook(AgentHook):

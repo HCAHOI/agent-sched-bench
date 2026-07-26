@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from trace_collect.attempt_pipeline import AttemptContext
 from trace_collect.collector import (
     _run_openclaw_in_task_container,
+    _tool_resource_scope,
 )
 from trace_collect.runtime.task_container import TaskContainerExecConfig
 
@@ -55,6 +56,16 @@ def _make_relative_ctx(monkeypatch, tmp_path: Path, *, scaffold: str) -> Attempt
     )
 
 
+def test_tool_resource_scope_never_falls_back_to_benchmark() -> None:
+    assert (
+        _tool_resource_scope({"instance_id": "repo-task", "repo": "owner/repo"})
+        == "owner/repo"
+    )
+    assert _tool_resource_scope({"instance_id": "unknown-task"}) == (
+        "task:unknown-task"
+    )
+
+
 def test_run_openclaw_in_task_container_runs_openclaw_on_host_with_container_tools(
     tmp_path: Path,
     monkeypatch,
@@ -64,6 +75,7 @@ def test_run_openclaw_in_task_container_runs_openclaw_on_host_with_container_too
     build_seen: dict[str, object] = {}
     run_seen: dict[str, object] = {}
     provider_seen: dict[str, object] = {}
+    resource_seen: dict[str, object] = {}
     ctx = _make_relative_ctx(monkeypatch, tmp_path, scaffold="openclaw")
     runtime_dir = ctx.attempt_dir.resolve() / "_task_container_runtime" / "openclaw"
 
@@ -177,6 +189,32 @@ def test_run_openclaw_in_task_container_runs_openclaw_on_host_with_container_too
         lambda **kwargs: (provider_seen.update(kwargs), SimpleNamespace())[1],
     )
 
+    class FakeResourceTrace:
+        calls: list[dict] = []
+        final_artifact = {
+            "telemetry_quality": "ok",
+            "formal_completeness": "complete",
+            "call_coverage": {
+                "total_call_count": 0,
+                "eligible_call_count": 0,
+                "withheld_call_count": 0,
+                "eligible_fraction": 1.0,
+            },
+            "collection_validity": "valid",
+        }
+
+        def add_integrity_error(self, message: str) -> None:
+            raise AssertionError(message)
+
+        def finalize(self, *, replay_execution: str) -> None:
+            resource_seen["replay_execution"] = replay_execution
+
+    class FakeResourceRun:
+        def open_trace(self, **kwargs):
+            assert agent_seen["started"] is True
+            resource_seen.update(kwargs)
+            return FakeResourceTrace()
+
     result = asyncio.run(
         _run_openclaw_in_task_container(
             ctx=ctx,
@@ -191,6 +229,8 @@ def test_run_openclaw_in_task_container_runs_openclaw_on_host_with_container_too
             generation_config=None,
             max_context_tokens=1024,
             mcp_config=None,
+            tool_resource_profile=tmp_path / "resource.yaml",
+            resource_run=FakeResourceRun(),
         )
     )
 
@@ -204,6 +244,8 @@ def test_run_openclaw_in_task_container_runs_openclaw_on_host_with_container_too
     assert metadata["runtime_proof"]["tool_container_user"] == "root"
     assert metadata["runtime_proof"]["tool_container_user_id"] == 0
     assert metadata["runtime_proof"]["tool_container_workdir"] == "/testbed"
+    assert metadata["tool_resource"]["service_enabled"] is True
+    assert metadata["collection_validity"] == "valid"
     assert start_seen["run_as_host_user"] is False
     assert start_seen["mount_host_home"] is False
     assert start_seen["container_home"] == "/root"
@@ -220,13 +262,19 @@ def test_run_openclaw_in_task_container_runs_openclaw_on_host_with_container_too
     assert build_seen["max_iterations"] == 10
     assert build_seen["context_window_tokens"] == 1024
     assert build_seen["tool_overrides"]
+    assert resource_seen["container_id"] == "cid-openclaw"
+    assert resource_seen["trace_id"] == ctx.instance_id
+    assert resource_seen["replay_execution"] == "completed"
     assert callable(build_seen["container_patch_extractor"])
     assert run_seen["tool_workspace"] == Path("/testbed")
     assert run_seen["exec_working_dir"] == "/testbed"
     assert Path(run_seen["trace_file"]) == (ctx.attempt_dir / "trace.jsonl").resolve()
     assert "Shell/file tools runtime: Linux x86_64" in run_seen["runtime_label"]
     assert "Shell/file tools `python3`: Python 3.11.0" in run_seen["runtime_label"]
-    assert Path(run_seen["eval_task"].workspace_dir) == runtime_dir / "workspace_base" / ctx.instance_id
+    assert (
+        Path(run_seen["eval_task"].workspace_dir)
+        == runtime_dir / "workspace_base" / ctx.instance_id
+    )
     assert result.total_llm_ms == 12.0
     assert result.total_tool_ms == 6.0
     assert result.total_tokens == 99
@@ -362,5 +410,3 @@ def test_run_openclaw_in_task_container_completed_without_patch_is_not_success(
     assert result.exit_status == "completed"
     assert result.model_patch == ""
     assert result.error is None
-
-

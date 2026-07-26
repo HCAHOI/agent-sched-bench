@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tool_resource import (
+from tool_resource.artifact_schema import (
     CLAUSE_TELEMETRY_SCHEMA_VERSION,
     CLAUSE_TELEMETRY_STATUS_MODEL,
 )
@@ -486,6 +486,7 @@ def test_simulator_rejects_task_without_docker_image(tmp_path: Path) -> None:
                 model="dummy",
             )
         )
+
 def test_simulator_accepts_task_with_image_name(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -588,7 +589,6 @@ def test_simulator_accepts_task_with_image_name(
         )
     )
     assert trace_file.exists()
-
 
 
 def test_openclaw_replay_provider_sleep_records_source_and_pid() -> None:
@@ -834,7 +834,6 @@ def test_llm_replay_duration_rejects_negative_completion_tokens() -> None:
         )
 
 
-
 def test_source_model_prefers_summary_and_metadata_audit_fields() -> None:
     from trace_collect.simulate_utils import _source_model
     from trace_collect.simulator import LoadedTraceSession
@@ -926,7 +925,6 @@ def test_replay_failure_counts_rejects_extra_actions() -> None:
     assert not wrong_tool.action_sequence_matches
 
 
-
 def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -983,7 +981,6 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
         + "\n",
         encoding="utf-8",
     )
-
 
     from trace_collect.simulator import (
         PreparedContainer,
@@ -1117,6 +1114,10 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
         "trace_collect.simulator.asyncio.create_subprocess_exec",
         fake_create_subprocess_exec,
     )
+    monkeypatch.setattr(
+        "trace_collect.simulator.stop_task_container",
+        lambda *_args, **_kwargs: "",
+    )
 
     trace_file = asyncio.run(
         simulate(
@@ -1230,6 +1231,7 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
         request = json.loads(request_path.read_text(encoding="utf-8"))
         assert request["task_instance_id"] == "fc_openclaw_failed_replay"
         assert request["source_action_agent_id"] == "cli:oc-failed"
+        assert request["tool_resource_run_token"] == "shared-run-token"
         Path(request["status_path"]).write_text(
             json.dumps(
                 {
@@ -1266,7 +1268,7 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
             "".join(json.dumps(action) + "\n" for action in request["source_actions"]),
             encoding="utf-8",
         )
-        Path(request["clause_telemetry_path"]).write_text(
+        Path(request["resource_artifact_path"]).write_text(
             json.dumps(
                 {
                     "version": CLAUSE_TELEMETRY_SCHEMA_VERSION,
@@ -1295,7 +1297,11 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
         "trace_collect.simulate_openclaw._run_openclaw_worker_process",
         fake_worker_process,
     )
-    monkeypatch.setenv("OPENCLAW_TOOL_RESOURCE_TELEMETRY", "clause")
+    monkeypatch.setenv("TOOL_RESOURCE_PROFILE", str(tmp_path / "resource.yaml"))
+    monkeypatch.setenv(
+        "TOOL_RESOURCE_RUN_TOKENS",
+        json.dumps({"task:fc_openclaw_failed_replay": "shared-run-token"}),
+    )
     trace_logger = TraceLogger(tmp_path / "replay-output", "replay")
     try:
         stats = asyncio.run(
@@ -1329,15 +1335,15 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
     assert summary["call_coverage"]["eligible_call_count"] == 30
     assert summary["collection_validity"] == "valid"
     assert summary["telemetry_integrity_failed"] is False
-    sidecar = json.loads(
-        (prepared.task_output_dir / "clause_telemetry.json").read_text(
+    resource_artifact = json.loads(
+        (prepared.task_output_dir / "resource_observations.json").read_text(
             encoding="utf-8"
         )
     )
-    assert sidecar["replay_execution"] == "failed"
-    assert sidecar["formal_completeness"] == "partial"
-    assert sidecar["collection_validity"] == "valid"
-    assert sidecar["integrity"]["status"] == "ok"
+    assert resource_artifact["replay_execution"] == "completed"
+    assert resource_artifact["formal_completeness"] == "partial"
+    assert resource_artifact["collection_validity"] == "valid"
+    assert resource_artifact["integrity"]["status"] == "ok"
     assert summary["agent_execution_environment"] == "host"
     assert summary["tool_execution_environment"] == "task_container"
     assert summary["tool_container_id"] == "cid-openclaw-failed-replay"

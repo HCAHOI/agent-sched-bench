@@ -5,11 +5,9 @@ import json
 import os
 import sys
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from typing import Any
 
 from harness.trace_logger import TraceLogger
-from tool_resource.artifact_schema import CLAUSE_TELEMETRY_SCHEMA_VERSION
 from trace_collect.openclaw_host_runtime import replay_action_failure_counts
 from trace_collect.simulate_outputs import _make_task_stats, _make_trace_summary
 from trace_collect.simulate_types import (
@@ -66,40 +64,6 @@ def _source_terminal_reason(loaded: LoadedTraceSession) -> str:
     if last.get("action_type") == "tool_exec":
         return "trace_ended_after_tools"
     return "completed"
-
-
-def _record_clause_replay_execution(
-    path: Path,
-    *,
-    replay_execution: str,
-) -> str | None:
-    temporary_path: Path | None = None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if payload.get("version") != CLAUSE_TELEMETRY_SCHEMA_VERSION:
-            raise ValueError(
-                "expected clause telemetry artifact schema "
-                f"{CLAUSE_TELEMETRY_SCHEMA_VERSION}"
-            )
-        payload["replay_execution"] = replay_execution
-        with NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            delete=False,
-        ) as temporary:
-            temporary_path = Path(temporary.name)
-            json.dump(payload, temporary, ensure_ascii=False, indent=2, sort_keys=True)
-            temporary.write("\n")
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        os.replace(temporary_path, path)
-    except BaseException as exc:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
-        return f"clause telemetry downgrade failed: {type(exc).__name__}: {exc}"
-    return None
 
 
 def _openclaw_worker_timeout_s(
@@ -198,13 +162,24 @@ async def _run_openclaw_replay_session(
     request_path = task_output_dir / "openclaw_host_replay_request.json"
     stdout_path = task_output_dir / "openclaw_host_replay_stdout.txt"
     stderr_path = task_output_dir / "openclaw_host_replay_stderr.txt"
-    clause_telemetry_path = task_output_dir / "clause_telemetry.json"
+    resource_artifact_path = task_output_dir / "resource_observations.json"
     prompt = str(
         loaded.task.get("problem_statement") or "Replay source OpenClaw trace."
     )
-    tool_resource_telemetry = os.environ.get(
-        "OPENCLAW_TOOL_RESOURCE_TELEMETRY", "command"
+    tool_resource_profile = os.environ.get("TOOL_RESOURCE_PROFILE")
+    resource_enabled = tool_resource_profile is not None
+    repo = loaded.task.get("repo")
+    resource_scope = (
+        repo.strip()
+        if isinstance(repo, str) and repo.strip()
+        else f"task:{loaded.task_instance_id}"
     )
+    resource_run_tokens = json.loads(os.environ.get("TOOL_RESOURCE_RUN_TOKENS", "{}"))
+    if not isinstance(resource_run_tokens, dict):
+        raise ValueError("TOOL_RESOURCE_RUN_TOKENS must be a JSON object")
+    resource_run_token = resource_run_tokens.get(resource_scope)
+    if resource_run_token is not None and not isinstance(resource_run_token, str):
+        raise ValueError("tool-resource run token must be a string")
     request = {
         "source_trace": str(loaded.source_trace),
         "source_actions": loaded.actions,
@@ -215,7 +190,7 @@ async def _run_openclaw_replay_session(
         "runtime_artifact_root_map": prepared_session.runtime_artifact_root_map,
         "workspace": str(workspace),
         "status_path": str(status_path),
-        "clause_telemetry_path": str(clause_telemetry_path),
+        "resource_artifact_path": str(resource_artifact_path),
         "container_executable": ctr.container_executable,
         "container_id": ctr.container_id,
         "container_workdir": ctr.workdir,
@@ -228,10 +203,8 @@ async def _run_openclaw_replay_session(
             "tpot_ms": llm_timing.tpot_ms,
         },
         "command_timeout_s": command_timeout_s,
-        "tool_resource_telemetry": tool_resource_telemetry,
-        "tool_resource_sidecar_socket": os.environ.get(
-            "TOOL_RESOURCE_SIDECAR_SOCKET"
-        ),
+        "tool_resource_profile": tool_resource_profile,
+        "tool_resource_run_token": resource_run_token,
         "task_instance_id": loaded.task_instance_id,
         "repo": loaded.task.get("repo"),
         "source_action_agent_id": loaded.source_action_agent_id,
@@ -275,22 +248,14 @@ async def _run_openclaw_replay_session(
             "tool_container_id": ctr.container_id,
             "tool_container_user": "unknown",
             "openclaw_host_pid": None,
-            "telemetry_integrity_failed": (tool_resource_telemetry == "clause"),
+            "telemetry_integrity_failed": resource_enabled,
             "replay_execution": "incomplete",
-            "telemetry_quality": (
-                "unavailable" if tool_resource_telemetry == "clause" else "ok"
-            ),
+            "telemetry_quality": ("unavailable" if resource_enabled else "ok"),
             "formal_completeness": (
-                "unavailable"
-                if tool_resource_telemetry == "clause"
-                else "not_requested"
+                "unavailable" if resource_enabled else "not_requested"
             ),
             "call_coverage": None,
-            "collection_validity": (
-                "invalid"
-                if tool_resource_telemetry == "clause"
-                else "not_requested"
-            ),
+            "collection_validity": ("invalid" if resource_enabled else "not_requested"),
             "telemetry_errors": ["worker status unavailable"],
         }
 
@@ -340,27 +305,18 @@ async def _run_openclaw_replay_session(
     )
     telemetry_quality = status.get(
         "telemetry_quality",
-        "unavailable" if tool_resource_telemetry == "clause" else "ok",
+        "unavailable" if resource_enabled else "ok",
     )
     formal_completeness = status.get(
         "formal_completeness",
-        "unavailable" if tool_resource_telemetry == "clause" else "not_requested",
+        "unavailable" if resource_enabled else "not_requested",
     )
     call_coverage = status.get("call_coverage")
     collection_validity = status.get(
         "collection_validity",
-        "invalid" if tool_resource_telemetry == "clause" else "not_requested",
+        "invalid" if resource_enabled else "not_requested",
     )
     telemetry_errors = list(status.get("telemetry_errors") or [])
-    if failed_actions and tool_resource_telemetry == "clause":
-        update_error = _record_clause_replay_execution(
-            clause_telemetry_path,
-            replay_execution=replay_execution,
-        )
-        if update_error is not None:
-            telemetry_integrity_failed = True
-            collection_validity = "invalid"
-            telemetry_errors.append(update_error)
     task_success = (
         failed_actions == 0 and (loaded.summary or {}).get("success") is not False
     )
@@ -410,16 +366,12 @@ async def _run_openclaw_replay_session(
         "tool_container_user_id": status.get("tool_container_user_id"),
         "tool_container_workdir": status.get("tool_container_workdir"),
         "openclaw_host_pid": status.get("openclaw_host_pid"),
-        "tool_resource_telemetry": status.get(
-            "tool_resource_telemetry",
-            {
-                "mode": tool_resource_telemetry,
-                "command_envelope_enabled": tool_resource_telemetry != "off",
-                "clause_observations_enabled": (tool_resource_telemetry == "clause"),
-            },
+        "tool_resource": status.get(
+            "tool_resource",
+            {"profile": tool_resource_profile, "service_enabled": resource_enabled},
         ),
-        "clause_telemetry_path": (
-            str(clause_telemetry_path) if tool_resource_telemetry == "clause" else None
+        "resource_artifact_path": (
+            str(resource_artifact_path) if resource_enabled else None
         ),
         "telemetry_integrity_failed": telemetry_integrity_failed,
         "replay_execution": replay_execution,
