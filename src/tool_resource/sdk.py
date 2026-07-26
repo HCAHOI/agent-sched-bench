@@ -58,7 +58,7 @@ class DockerCommandObserver:
     def attach(cls, context: DockerExecutionContext) -> DockerCommandObserver:
         """Attach Stage-2 telemetry, falling back to an unavailable collector."""
 
-        from trace_collect.clause_telemetry import ClauseTelemetryCollector
+        from tool_resource.telemetry import ClauseTelemetryCollector
 
         try:
             collector = ClauseTelemetryCollector(

@@ -2,7 +2,8 @@
 
 `tool_resource` is a local command library: cold-start it from valid Stage-2
 telemetry traces, then let it parse, query, predict, observe, and update around
-Docker-owned execution. It does not execute Docker or serve requests.
+Docker-owned execution. The package includes the eBPF collector and pinned
+mvdan adapter source; it does not execute Docker or serve requests.
 
 ```python
 from pathlib import Path
