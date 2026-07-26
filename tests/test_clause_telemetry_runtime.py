@@ -107,7 +107,7 @@ def test_argv_capture_flags_cover_truncation_cap_and_short_argv() -> None:
         "subprocess.run(['/bin/true','l'*1110],check=True);"
         f"subprocess.run(['/bin/true','m'*{C.MAX_ARG_WORD_BYTES}],check=True);"
         f"subprocess.run(['/bin/true','x'*{C.MAX_ARG_WORD_BYTES + 1}],check=True);"
-        "subprocess.run(['/bin/true',*map(str,range(16))],check=True);"
+        f"subprocess.run(['/bin/true',*map(str,range({C.MAX_ARGS}))],check=True);"
         "subprocess.run(['/bin/true','ok'],check=True)"
     )
     run = collect_case(

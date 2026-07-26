@@ -185,6 +185,20 @@ class _MismatchedClauseCollector(_FakeCollector):
         return result
 
 
+class _BuiltinOmittingCollector(_FakeCollector):
+    def finish_tool_call(
+        self,
+        token: dict[str, Any],
+        *,
+        replay_response: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        result = super().finish_tool_call(token, replay_response=replay_response)
+        clause = token["static_plan"]["clauses"][-1]
+        result["clauses"][0]["bin"] = clause["bin"]
+        result["clauses"][0]["argv"] = clause["argv"]
+        return result
+
+
 def _envelope(
     observation_id: str,
     *,
@@ -606,6 +620,34 @@ def test_telemetry_clause_identity_mismatch_is_withheld(tmp_path: Path) -> None:
     assert closed["artifact"]["calls"][0]["invalid_reasons"][-1]["kind"] == (
         "canonicalization"
     )
+    service.close()
+
+
+def test_unobserved_builtin_does_not_block_valid_external_clause(
+    tmp_path: Path,
+) -> None:
+    service = ResourceService(
+        ObservationStore(tmp_path / "observations.sqlite3"),
+        _DirectTransport(
+            TelemetryService(
+                collector_factory=_BuiltinOmittingCollector,
+                state_dir=tmp_path / "telemetry",
+            )
+        ),
+    )
+    run = _open_run(service)
+    trace = _open_trace(service, run["run_token"])
+    _run_call(
+        service,
+        trace["trace_token"],
+        call_id="call",
+        command="cd /tmp && printf ok",
+    )
+    closed = service.dispatch(
+        "CloseTrace",
+        {"trace_token": trace["trace_token"], "workload_status": "completed"},
+    )
+    assert closed["artifact"]["calls"][0]["eligible_for_kb"] is True
     service.close()
 
 

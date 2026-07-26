@@ -1073,7 +1073,7 @@ class ResourceService:
             )
             if (
                 sum(observed_clause_identities.values()) != len(clauses)
-                or observed_clause_identities != expected_clause_identities
+                or observed_clause_identities - expected_clause_identities
             ):
                 reasons.append(
                     {
