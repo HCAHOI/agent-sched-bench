@@ -17,7 +17,7 @@ PARSER_NAME = "mvdan.cc/sh/v3"
 PARSER_VERSION = "v3.13.1"
 ADAPTER_PROTOCOL_VERSION = 3
 REQUIRED_CAPABILITIES = frozenset({"structural_context", "word_intents"})
-_BUILD_SCRIPT = "scripts/setup/build_mvdan_adapter.sh"
+_BUILD_SCRIPT = Path(__file__).with_name("_mvdan_adapter") / "build.sh"
 _MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 
 
@@ -101,7 +101,7 @@ class MvdanClient:
         if not self.binary_path.is_file() or not os.access(self.binary_path, os.X_OK):
             raise MvdanClientError(
                 f"mvdan adapter is missing at {self.binary_path}; "
-                f"run {_BUILD_SCRIPT} from the repository root"
+                f"run bundled builder {_BUILD_SCRIPT}"
             )
         try:
             self._process = subprocess.Popen(
@@ -236,13 +236,15 @@ def ensure_compatible_adapter() -> Path:
         with MvdanClient(binary_path):
             return binary_path
     except MvdanClientError:
-        repo_root = Path(__file__).resolve().parents[2]
-        build_script = repo_root / _BUILD_SCRIPT
         try:
-            subprocess.run([str(build_script)], cwd=repo_root, check=True)
+            subprocess.run(
+                [str(_BUILD_SCRIPT)],
+                cwd=_BUILD_SCRIPT.parent,
+                check=True,
+            )
         except (OSError, subprocess.CalledProcessError) as error:
             raise MvdanClientError(
-                f"failed to build compatible mvdan adapter with {build_script}"
+                f"failed to build compatible mvdan adapter with {_BUILD_SCRIPT}"
             ) from error
         with MvdanClient(binary_path):
             return binary_path

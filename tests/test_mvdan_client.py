@@ -95,7 +95,7 @@ def test_missing_binary_names_build_contract(tmp_path: Path) -> None:
 
     with pytest.raises(
         MvdanClientError,
-        match=r"scripts/setup/build_mvdan_adapter\.sh",
+        match=r"tool_resource/_mvdan_adapter/build\.sh",
     ):
         client.parse("echo one")
 

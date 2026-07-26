@@ -844,6 +844,56 @@ def _worker_trace_action_counts(
     return replay_action_failure_counts(source_actions, records)
 
 
+def _finalized_clause_telemetry_status(
+    collector: Any,
+    *,
+    replay_execution: str,
+    artifact_path: Path,
+) -> tuple[dict[str, Any], list[str]]:
+    try:
+        finalize_error = collector.finalize(replay_execution=replay_execution)
+    except BaseException as exc:
+        finalize_error = (
+            f"telemetry finalize failed: {type(exc).__name__}: {exc}"
+        )
+    if finalize_error is not None:
+        return (
+            {
+                "telemetry_quality": "unavailable",
+                "formal_completeness": "unavailable",
+                "call_coverage": None,
+                "collection_validity": "invalid",
+            },
+            [str(finalize_error)],
+        )
+    try:
+        telemetry_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        return (
+            {
+                "telemetry_quality": telemetry_payload["telemetry_quality"],
+                "formal_completeness": telemetry_payload[
+                    "formal_completeness"
+                ],
+                "call_coverage": telemetry_payload["call_coverage"],
+                "collection_validity": telemetry_payload["collection_validity"],
+            },
+            [],
+        )
+    except BaseException as exc:
+        return (
+            {
+                "telemetry_quality": "unavailable",
+                "formal_completeness": "unavailable",
+                "call_coverage": None,
+                "collection_validity": "invalid",
+            },
+            [
+                "telemetry artifact unavailable: "
+                f"{type(exc).__name__}: {exc}"
+            ],
+        )
+
+
 async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str, Any]:
     """Run one OpenClaw replay in this host process and write structured status."""
 
@@ -897,6 +947,12 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
         "telemetry_quality": (
             "ok" if tool_resource_telemetry != "clause" else "unavailable"
         ),
+        "formal_completeness": (
+            "not_requested"
+            if tool_resource_telemetry != "clause"
+            else "unavailable"
+        ),
+        "call_coverage": None,
         "collection_validity": (
             "not_requested" if tool_resource_telemetry != "clause" else "invalid"
         ),
@@ -927,58 +983,35 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 clause_collector.add_integrity_error(telemetry_errors[-1])
             except BaseException:
                 pass
-        try:
-            clause_collector.finalize(replay_execution=replay_execution)
-        except BaseException as exc:
-            telemetry_errors.append(
-                f"telemetry finalize failed: {type(exc).__name__}: {exc}"
-            )
-        finally:
-            clause_collector_finalized = True
-
         telemetry_path = Path(request["clause_telemetry_path"])
         try:
-            telemetry_payload = json.loads(
-                telemetry_path.read_text(encoding="utf-8")
+            final_status, final_errors = _finalized_clause_telemetry_status(
+                clause_collector,
+                replay_execution=replay_execution,
+                artifact_path=telemetry_path,
             )
-            telemetry_run_status.update(
-                {
-                    "telemetry_quality": telemetry_payload["telemetry_quality"],
-                    "collection_validity": telemetry_payload["collection_validity"],
-                }
-            )
-        except BaseException as exc:
-            telemetry_errors.append(
-                f"telemetry artifact unavailable: {type(exc).__name__}: {exc}"
-            )
-            telemetry_run_status.update(
-                {"telemetry_quality": "unavailable", "collection_validity": "invalid"}
-            )
+            telemetry_run_status.update(final_status)
+            telemetry_errors.extend(final_errors)
+        finally:
+            clause_collector_finalized = True
 
     wall_start = time.time()
     try:
         if tool_resource_telemetry == "clause":
-            from trace_collect.clause_telemetry import ClauseTelemetryCollector
+            from tool_resource.sdk import (
+                DockerCommandObserver,
+                DockerExecutionContext,
+            )
 
-            try:
-                clause_collector = ClauseTelemetryCollector(
+            clause_collector = DockerCommandObserver.attach(
+                DockerExecutionContext(
                     container_id=container_id,
                     container_executable=container_executable,
                     repo=repo,
                     artifact_path=Path(request["clause_telemetry_path"]),
                     source_actions=source_actions,
                 )
-            except BaseException as exc:
-                clause_collector = ClauseTelemetryCollector.unavailable(
-                    container_id=container_id,
-                    repo=repo,
-                    artifact_path=Path(request["clause_telemetry_path"]),
-                    source_actions=source_actions,
-                    reason=(
-                        "collector attach failed: "
-                        f"{type(exc).__name__}: {exc}"
-                    ),
-                )
+            )
         await agent.start()
         proof = await container_runtime_proof(
             agent,
@@ -1112,6 +1145,10 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             "replay_mode": "openclaw_host_worker",
             "replay_execution": "failed",
             "telemetry_quality": telemetry_run_status["telemetry_quality"],
+            "formal_completeness": telemetry_run_status[
+                "formal_completeness"
+            ],
+            "call_coverage": telemetry_run_status["call_coverage"],
             "collection_validity": telemetry_run_status["collection_validity"],
             "telemetry_integrity_failed": (
                 tool_resource_telemetry == "clause"
@@ -1139,6 +1176,10 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 or telemetry_run_status["collection_validity"] == "invalid"
             )
             status["telemetry_quality"] = telemetry_run_status["telemetry_quality"]
+            status["formal_completeness"] = telemetry_run_status[
+                "formal_completeness"
+            ]
+            status["call_coverage"] = telemetry_run_status["call_coverage"]
             status["collection_validity"] = telemetry_run_status[
                 "collection_validity"
             ]

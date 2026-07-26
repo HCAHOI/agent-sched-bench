@@ -1244,6 +1244,13 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
                     "openclaw_host_pid": 98765,
                     "telemetry_integrity_failed": False,
                     "telemetry_quality": "ok",
+                    "formal_completeness": "partial",
+                    "call_coverage": {
+                        "total_call_count": 31,
+                        "eligible_call_count": 30,
+                        "withheld_call_count": 1,
+                        "eligible_fraction": 30 / 31,
+                    },
                     "collection_validity": "valid",
                     "telemetry_errors": [],
                 }
@@ -1259,8 +1266,16 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
             json.dumps(
                 {
                     "version": 2,
+                    "status_model": "call_granular_v1",
                     "replay_execution": "completed",
                     "telemetry_quality": "ok",
+                    "formal_completeness": "partial",
+                    "call_coverage": {
+                        "total_call_count": 31,
+                        "eligible_call_count": 30,
+                        "withheld_call_count": 1,
+                        "eligible_fraction": 30 / 31,
+                    },
                     "collection_validity": "valid",
                     "integrity": {"status": "ok", "errors": []},
                 }
@@ -1305,16 +1320,20 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
     assert summary["worker_returncode"] == 7
     assert summary["worker_error"] is None
     assert summary["replay_execution"] == "failed"
-    assert summary["collection_validity"] == "invalid"
-    assert summary["telemetry_integrity_failed"] is True
+    assert summary["telemetry_quality"] == "ok"
+    assert summary["formal_completeness"] == "partial"
+    assert summary["call_coverage"]["eligible_call_count"] == 30
+    assert summary["collection_validity"] == "valid"
+    assert summary["telemetry_integrity_failed"] is False
     sidecar = json.loads(
         (prepared.task_output_dir / "clause_telemetry.json").read_text(
             encoding="utf-8"
         )
     )
     assert sidecar["replay_execution"] == "failed"
-    assert sidecar["collection_validity"] == "invalid"
-    assert sidecar["integrity"]["status"] == "failed"
+    assert sidecar["formal_completeness"] == "partial"
+    assert sidecar["collection_validity"] == "valid"
+    assert sidecar["integrity"]["status"] == "ok"
     assert summary["agent_execution_environment"] == "host"
     assert summary["tool_execution_environment"] == "task_container"
     assert summary["tool_container_id"] == "cid-openclaw-failed-replay"

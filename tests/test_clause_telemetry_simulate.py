@@ -31,7 +31,10 @@ from trace_collect.clause_telemetry import (
     validate_clause_telemetry_runtime,
 )
 from trace_collect.cli import _run_simulate, parse_simulate_args
-from trace_collect.openclaw_host_runtime import _attach_clause_telemetry
+from trace_collect.openclaw_host_runtime import (
+    _attach_clause_telemetry,
+    _finalized_clause_telemetry_status,
+)
 
 
 def _event(
@@ -149,6 +152,33 @@ def _clean_events() -> list[dict[str, Any]]:
             mm_ptr=10,
         ),
     ]
+
+
+def test_finalizer_error_cannot_reuse_stale_valid_artifact(tmp_path: Path) -> None:
+    artifact_path = tmp_path / "clause-telemetry.json"
+    artifact_path.write_text(
+        json.dumps(
+            {"telemetry_quality": "ok", "collection_validity": "valid"}
+        ),
+        encoding="utf-8",
+    )
+    collector = SimpleNamespace(
+        finalize=lambda **_kwargs: "telemetry finalize failed: RuntimeError: boom"
+    )
+
+    status, errors = _finalized_clause_telemetry_status(
+        collector,
+        replay_execution="completed",
+        artifact_path=artifact_path,
+    )
+
+    assert status == {
+        "telemetry_quality": "unavailable",
+        "formal_completeness": "unavailable",
+        "call_coverage": None,
+        "collection_validity": "invalid",
+    }
+    assert errors == ["telemetry finalize failed: RuntimeError: boom"]
 
 
 def _failed_exec_events() -> list[dict[str, Any]]:
@@ -459,6 +489,7 @@ def test_summary_preserves_structural_gap_and_target_availability() -> None:
         "reserve_failures": 0,
         "perf_sample_count": 2,
     }
+    assert summary["clauses"][0]["ts_start"] < summary["clauses"][0]["ts_end"]
     assert summary["clauses"][0]["disk_io"] == {
         "read_bytes_total": 0,
         "write_bytes_total": 0,
@@ -1782,15 +1813,19 @@ def test_v2_artifact_records_disabled_session_and_replay_state(
     assert artifact["collector"] == {
         "state": "closed",
         "state_before_close": "disabled",
+        "health": "unavailable",
         "first_disabled_call": None,
         "disabled_reason": "collector attach failed",
         "valid_call_count": 0,
         "invalid_call_count": 0,
         "unavailable_call_count": 1,
+        "eligible_call_count": 0,
     }
+    assert artifact["formal_completeness"] == "unavailable"
+    assert artifact["call_coverage"]["eligible_fraction"] == 0.0
 
 
-def test_replay_failure_invalidates_collection_without_corrupting_telemetry_quality(
+def test_replay_failure_is_separate_from_healthy_telemetry(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1804,14 +1839,69 @@ def test_replay_failure_invalidates_collection_without_corrupting_telemetry_qual
             "argv_boundary_read_failures": 0,
         },
     )
-    monkeypatch.setattr(collector, "_close_bpf", lambda: None)
+    monkeypatch.setattr(
+        collector,
+        "_close_bpf",
+        lambda: setattr(collector, "_cleanup_status", "ok"),
+    )
 
     collector.finalize(replay_execution="failed")
 
     artifact = json.loads(collector.artifact_path.read_text(encoding="utf-8"))
     assert artifact["replay_execution"] == "failed"
     assert artifact["telemetry_quality"] == "ok"
-    assert artifact["collection_validity"] == "invalid"
+    assert artifact["formal_completeness"] == "complete"
+    assert artifact["collection_validity"] == "valid"
+
+
+def test_finalize_marks_mapping_gaps_partial_without_discarding_valid_calls(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    collector = _active_collector()
+    collector.artifact_path = tmp_path / "clause.json"
+    mapping_error = "call-2: mapping gaps=unmatched_static_clause"
+    collector.calls = [
+        {
+            "telemetry_quality": "ok",
+            "eligible_for_kb": True,
+            "integrity": {"status": "ok", "errors": []},
+        },
+        {
+            "telemetry_quality": "invalid",
+            "eligible_for_kb": False,
+            "integrity": {"status": "failed", "errors": [mapping_error]},
+        },
+    ]
+    collector._integrity_errors = [mapping_error]
+    monkeypatch.setattr(
+        "trace_collect.clause_telemetry._loss_counts",
+        lambda _bpf: {
+            "ringbuf_reserve_failures": 0,
+            "argv_read_failures": 0,
+            "argv_boundary_read_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        collector,
+        "_close_bpf",
+        lambda: setattr(collector, "_cleanup_status", "ok"),
+    )
+
+    collector.finalize()
+
+    artifact = json.loads(collector.artifact_path.read_text(encoding="utf-8"))
+    assert artifact["telemetry_quality"] == "ok"
+    assert artifact["formal_completeness"] == "partial"
+    assert artifact["collection_validity"] == "valid"
+    assert artifact["collector"]["health"] == "healthy"
+    assert artifact["call_coverage"] == {
+        "total_call_count": 2,
+        "eligible_call_count": 1,
+        "withheld_call_count": 1,
+        "eligible_fraction": 0.5,
+    }
+    assert artifact["integrity"] == {"status": "ok", "errors": []}
 
 
 def test_finalize_records_disable_state_after_health_check(

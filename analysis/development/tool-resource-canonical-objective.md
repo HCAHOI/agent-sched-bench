@@ -72,6 +72,13 @@ and memory bucket family. Preserve its collector, bridge, attribution,
 availability, mapping, loss, and cleanup gates. Do not interrupt or modify an
 active telemetry run or its artifacts.
 
+Telemetry validity is call-granular. Attempt artifacts report workload
+execution, collector health, and formal mapping completeness separately. A
+healthy attempt with withheld calls is `partial`: downstream consumers use
+only calls with `eligible_for_kb=true` and never discard its valid calls or
+treat withheld clauses as negative observations. Collector failure, loss, or
+cleanup failure remains `unavailable` and contributes no KB evidence.
+
 The legacy SWE `pacct` / bash-xtrace replay and fresh-277 segment timeline are
 development-exposed diagnostic proxies. They may exercise plumbing, but they
 cannot support canonical resource claims. SWE-100/fresh-277 are

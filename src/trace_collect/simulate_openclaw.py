@@ -67,11 +67,10 @@ def _source_terminal_reason(loaded: LoadedTraceSession) -> str:
     return "completed"
 
 
-def _downgrade_clause_sidecar(
+def _record_clause_replay_execution(
     path: Path,
     *,
     replay_execution: str,
-    reason: str,
 ) -> str | None:
     temporary_path: Path | None = None
     try:
@@ -79,12 +78,6 @@ def _downgrade_clause_sidecar(
         if payload.get("version") != 2:
             raise ValueError("expected clause telemetry artifact v2")
         payload["replay_execution"] = replay_execution
-        payload["collection_validity"] = "invalid"
-        integrity = payload.setdefault("integrity", {})
-        integrity["status"] = "failed"
-        errors = integrity.setdefault("errors", [])
-        if reason not in errors:
-            errors.append(reason)
         with NamedTemporaryFile(
             "w",
             encoding="utf-8",
@@ -280,6 +273,12 @@ async def _run_openclaw_replay_session(
             "telemetry_quality": (
                 "unavailable" if tool_resource_telemetry == "clause" else "ok"
             ),
+            "formal_completeness": (
+                "unavailable"
+                if tool_resource_telemetry == "clause"
+                else "not_requested"
+            ),
+            "call_coverage": None,
             "collection_validity": (
                 "invalid"
                 if tool_resource_telemetry == "clause"
@@ -336,26 +335,25 @@ async def _run_openclaw_replay_session(
         "telemetry_quality",
         "unavailable" if tool_resource_telemetry == "clause" else "ok",
     )
+    formal_completeness = status.get(
+        "formal_completeness",
+        "unavailable" if tool_resource_telemetry == "clause" else "not_requested",
+    )
+    call_coverage = status.get("call_coverage")
     collection_validity = status.get(
         "collection_validity",
         "invalid" if tool_resource_telemetry == "clause" else "not_requested",
     )
     telemetry_errors = list(status.get("telemetry_errors") or [])
     if failed_actions and tool_resource_telemetry == "clause":
-        reason = (
-            "parent detected replay failure after worker: "
-            f"returncode={worker_returncode}, "
-            f"action_sequence_matches={action_counts.action_sequence_matches}, "
-            f"status_success={status.get('success')!r}"
-        )
-        downgrade_error = _downgrade_clause_sidecar(
+        update_error = _record_clause_replay_execution(
             clause_telemetry_path,
             replay_execution=replay_execution,
-            reason=reason,
         )
-        telemetry_integrity_failed = True
-        collection_validity = "invalid"
-        telemetry_errors.append(downgrade_error or reason)
+        if update_error is not None:
+            telemetry_integrity_failed = True
+            collection_validity = "invalid"
+            telemetry_errors.append(update_error)
     task_success = (
         failed_actions == 0 and (loaded.summary or {}).get("success") is not False
     )
@@ -419,6 +417,8 @@ async def _run_openclaw_replay_session(
         "telemetry_integrity_failed": telemetry_integrity_failed,
         "replay_execution": replay_execution,
         "telemetry_quality": telemetry_quality,
+        "formal_completeness": formal_completeness,
+        "call_coverage": call_coverage,
         "collection_validity": collection_validity,
         "telemetry_errors": telemetry_errors,
     }

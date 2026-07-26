@@ -752,6 +752,8 @@ class ClauseResourceKB:
         )
 
     def _advance(self, ts_start: float) -> None:
+        if not math.isfinite(ts_start):
+            raise ValueError("query ts_start must be finite")
         if self._last_query_ts is not None and ts_start < self._last_query_ts:
             raise ValueError(
                 f"backdated query at ts_start {ts_start} after a query at "

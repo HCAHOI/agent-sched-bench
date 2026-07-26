@@ -75,6 +75,9 @@ include = [
   "demo*",
 ]
 
+[tool.setuptools.package-data]
+tool_resource = ["_mvdan_adapter/*"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
 testpaths = ["tests", "demo/gantt_viewer/tests"]

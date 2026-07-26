@@ -2971,10 +2971,16 @@ class ClauseTelemetryCollector:
             {
                 "bin": bridged.observation.bin,
                 "argv": list(bridged.observation.argv),
+                "ts_start": bridged.observation.ts_start,
+                "ts_end": bridged.observation.ts_end,
                 "latency_ms": bridged.observation.latency_ms,
                 "peak_cpu_cores": bridged.observation.peak_cpu_cores,
                 "sampled_peak_rss_mb": bridged.observation.sampled_peak_rss_mb,
                 "cpu_ns_cumulative": bridged.observation.cpu_ns_cumulative,
+                "in_loop": bridged.observation.in_loop,
+                "in_pipe": bridged.observation.in_pipe,
+                "in_subst": bridged.observation.in_subst,
+                "pipeline_position": bridged.observation.pipeline_position,
                 "disk_io": {
                     "read_bytes_total": bridged.disk_read_bytes_total,
                     "write_bytes_total": bridged.disk_write_bytes_total,
@@ -3281,21 +3287,35 @@ class ClauseTelemetryCollector:
         unavailable_count = sum(
             call.get("telemetry_quality") == "unavailable" for call in self.calls
         )
-        telemetry_quality = (
-            "ok"
-            if not self._integrity_errors
-            and invalid_count == 0
-            and unavailable_count == 0
-            else (
-                "unavailable"
-                if unavailable_count and not valid_count and not invalid_count
-                else "invalid"
-            )
+        eligible_count = sum(
+            call.get("eligible_for_kb") is True for call in self.calls
         )
-        collection_validity = (
-            "valid"
-            if replay_execution == "completed" and telemetry_quality == "ok"
-            else "invalid"
+        collector_healthy = (
+            prior_state == "active"
+            and self._cleanup_status == "ok"
+            and total_loss == 0
+            and unavailable_count == 0
+        )
+        telemetry_quality = "ok" if collector_healthy else "unavailable"
+        formal_completeness = (
+            "unavailable"
+            if not collector_healthy
+            else ("complete" if eligible_count == len(self.calls) else "partial")
+        )
+        collection_validity = "valid" if collector_healthy else "invalid"
+        call_errors = {
+            str(error)
+            for call in self.calls
+            for error in (call.get("integrity") or {}).get("errors", [])
+        }
+        collector_errors = (
+            [
+                error
+                for error in self._integrity_errors
+                if error not in call_errors
+            ]
+            if collector_healthy
+            else list(self._integrity_errors)
         )
         self.artifact_path.parent.mkdir(parents=True, exist_ok=True)
         self.artifact_path.write_text(
@@ -3303,6 +3323,7 @@ class ClauseTelemetryCollector:
                 {
                     "version": 2,
                     "mode": "clause",
+                    "status_model": "call_granular_v1",
                     "container_id": self.container_id,
                     "cgroup_id": self.cgroup_id,
                     "quota_cores": self.quota_cores,
@@ -3316,18 +3337,31 @@ class ClauseTelemetryCollector:
                     "collector": {
                         "state": "closed",
                         "state_before_close": prior_state,
+                        "health": (
+                            "healthy" if collector_healthy else "unavailable"
+                        ),
                         "first_disabled_call": self._first_disabled_call,
                         "disabled_reason": self._disabled_reason,
                         "valid_call_count": valid_count,
                         "invalid_call_count": invalid_count,
                         "unavailable_call_count": unavailable_count,
+                        "eligible_call_count": eligible_count,
+                    },
+                    "call_coverage": {
+                        "total_call_count": len(self.calls),
+                        "eligible_call_count": eligible_count,
+                        "withheld_call_count": len(self.calls) - eligible_count,
+                        "eligible_fraction": (
+                            eligible_count / len(self.calls) if self.calls else 1.0
+                        ),
                     },
                     "replay_execution": replay_execution,
                     "telemetry_quality": telemetry_quality,
+                    "formal_completeness": formal_completeness,
                     "collection_validity": collection_validity,
                     "integrity": {
-                        "status": ("failed" if self._integrity_errors else "ok"),
-                        "errors": self._integrity_errors,
+                        "status": "ok" if collector_healthy else "failed",
+                        "errors": collector_errors,
                     },
                     "provenance": {
                         "collector": "stage2_ebpf",

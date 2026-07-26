@@ -245,3 +245,21 @@ def test_invalid_observation_and_unfit_public_fail_fast() -> None:
         ClauseResourceKB.fit_public(
             [_obs("pub", "x", ("x",), 0.0, 1.0, latency_ms=None)]
         )
+
+
+@pytest.mark.parametrize("ts_start", [float("inf"), float("nan")])
+def test_nonfinite_query_time_fails_before_absorbing_pending(ts_start: float) -> None:
+    kb = _fit(_obs("pub", "x", ("x",), 0.0, 1.0, latency_ms=100.0))
+    kb.observe_completed_clause(
+        _obs("r1", "x", ("x",), 10.0, 12.0, latency_ms=2000.0)
+    )
+
+    with pytest.raises(ValueError, match="finite"):
+        kb.predict_command_latency_bucket(
+            "r1", "x", ts_start, LatencyBuckets((1000.0,))
+        )
+
+    prediction = kb.predict_command_latency_bucket(
+        "r1", "x", 11.0, LatencyBuckets((1000.0,))
+    ).prediction
+    assert prediction is not None and prediction.scope == "public"
