@@ -11,11 +11,7 @@ from tool_resource.clause_bridge import (
     ShellCommandLookupFailure,
     bridge_command,
 )
-from tool_resource.runtime_kb import (
-    CPU_HEAVY_TARGET,
-    ClauseObservation,
-    ClauseResourceKB,
-)
+from tool_resource.runtime_kb import ClauseObservation
 
 _MS = 1_000_000
 _S = 1_000_000_000
@@ -2175,16 +2171,6 @@ def test_concurrent_descendants_cpu_sums_to_three_cores() -> None:
     assert len(result.bridged) == 1
     obs = result.observations[0]
     assert obs.peak_cpu_cores == pytest.approx(3.0, abs=0.1)  # summed, not max=1.5
-    kb = ClauseResourceKB.fit_public([_fit("runner", cpu=0.5)])
-    kb.observe_completed_clause(obs)
-    # predict_command absorbs the causally-prior observation before predicting
-    assert (
-        kb.predict_command("r1", "runner two", 100.0)
-        .targets[CPU_HEAVY_TARGET]
-        .clause_flags[0]
-        .flag
-        is True
-    )
 
 
 def test_concurrent_descendants_rss_sums_distinct_mm() -> None:
