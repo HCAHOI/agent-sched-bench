@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -16,6 +17,7 @@ from scripts.evaluation.evaluate_clause_latency_buckets import (
     _parser,
     _proxy_latency_observations,
     _score,
+    _serialize_virtual_deployment,
     _trace_finalization_timestamp,
     _validate_partition,
     evaluate,
@@ -164,19 +166,26 @@ def test_metrics_use_cumulative_pmf_at_each_fixed_boundary() -> None:
         probability_by_bucket=(0.4, 0.3, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
     )
     metrics = _metrics(
-        [_row(0, 0), cumulative, _row(1, 2), _row(2, None, "compound")],
+        [
+            _row(0, 0),
+            cumulative,
+            _row(0, 1),
+            _row(1, 0),
+            _row(2, None, "compound"),
+        ],
     )
 
-    assert metrics["eligible_examples"] == 3
-    assert metrics["unavailable_examples"] == 1
     assert metrics["by_boundary"][0] == {
         "boundary_ms": 500.0,
-        "accuracy": 1.0,
-        "eligible_examples": 3,
+        "accuracy": 0.5,
+        "eligible_examples": 4,
         "positive_count": 2,
-        "positive_rate": pytest.approx(2 / 3),
+        "positive_rate": 0.5,
+        "true_positive": 1,
+        "true_negative": 1,
+        "false_positive": 1,
+        "false_negative": 1,
     }
-    assert metrics["unavailable_reasons"] == {"compound": 1}
     assert "mean_abs_bucket_error" not in metrics
 
 
@@ -306,18 +315,20 @@ def test_trace_stays_unpublished_until_its_actual_finalization() -> None:
         {"fixture": True},
     )
 
-    overlap = {row.sample_id: row for row in rows}["overlap"]
+    overlap = {row.sample_id: row for row in rows}["overlap:clause:0"]
     assert overlap.probability_by_bucket is not None
     assert overlap.probability_by_bucket[0] == 1.0
     assert overlap.layer == "public"
-    while_trace_open = {row.sample_id: row for row in rows}["while-trace-open"]
+    while_trace_open = {row.sample_id: row for row in rows}["while-trace-open:clause:0"]
     assert while_trace_open.layer == "public"
-    after_trace_close = {row.sample_id: row for row in rows}["after-trace-close"]
+    after_trace_close = {row.sample_id: row for row in rows}[
+        "after-trace-close:clause:0"
+    ]
     assert after_trace_close.layer == "repo"
     assert after_trace_close.evidence_count == 2
 
 
-def test_fit_routes_active_repository_history_to_causal_local_state() -> None:
+def test_fit_keeps_active_repository_history_out_of_public_and_local_state() -> None:
     fit_calls = [
         _call(
             "same-repo",
@@ -357,10 +368,71 @@ def test_fit_routes_active_repository_history_to_causal_local_state() -> None:
 
     _, rows = evaluate(fit_calls, eval_calls, {"fixture": True})
 
-    assert rows[0].layer == "repo"
+    assert rows[0].layer == "public"
     assert rows[0].evidence_count == 1
     assert rows[0].probability_by_bucket is not None
-    assert rows[0].probability_by_bucket[1] == 1.0
+    assert rows[0].probability_by_bucket[0] == 1.0
+
+
+def test_serialized_virtual_deployment_uses_input_trace_order() -> None:
+    raw = [
+        _call(
+            "first-early",
+            "eval__repo-1",
+            start=100.0,
+            end=100.75,
+            command="a",
+            clauses=({"bin": "a", "argv": ["a"]},),
+            segments=((0.0, 750.0),),
+            trace_finalized_at=math.nan,
+            source_trace="manifest-first.jsonl",
+        ),
+        _call(
+            "first-late",
+            "eval__repo-1",
+            start=110.0,
+            end=110.05,
+            command="a",
+            clauses=({"bin": "a", "argv": ["a"]},),
+            segments=((0.0, 50.0),),
+            trace_finalized_at=math.nan,
+            source_trace="manifest-first.jsonl",
+        ),
+        _call(
+            "second",
+            "eval__repo-2",
+            start=1.0,
+            end=1.05,
+            command="a",
+            clauses=({"bin": "a", "argv": ["a"]},),
+            segments=((0.0, 50.0),),
+            trace_finalized_at=math.nan,
+            source_trace="manifest-second.jsonl",
+        ),
+    ]
+    calls = _serialize_virtual_deployment(raw)
+
+    assert calls[0].sample.tool_ts_start == 0.0
+    assert calls[1].sample.tool_ts_start == 10.0
+    assert calls[0].trace_finalized_at == calls[1].trace_finalized_at
+    assert calls[1].trace_finalized_at < calls[2].sample.tool_ts_start
+
+    fit = _call(
+        "public",
+        "other__repo-1",
+        start=-2.0,
+        end=-1.95,
+        command="a",
+        clauses=({"bin": "a", "argv": ["a"]},),
+        segments=((0.0, 50.0),),
+        trace_finalized_at=-1.0,
+    )
+    _, rows = evaluate([fit], calls, {"fixture": True})
+    by_id = {row.sample_id: row for row in rows}
+    assert by_id["first-early:clause:0"].layer == "public"
+    assert by_id["first-late:clause:0"].layer == "public"
+    assert by_id["second:clause:0"].layer == "repo"
+    assert by_id["second:clause:0"].evidence_count == 2
 
 
 def test_empty_cross_repo_public_evidence_is_unavailable(tmp_path: Path) -> None:
@@ -391,8 +463,11 @@ def test_empty_cross_repo_public_evidence_is_unavailable(tmp_path: Path) -> None
     assert rows[0].unavailable_reason == (
         "ValueError: no public global clause latency node"
     )
-    assert result["metrics"]["eligible_examples"] == 0
-    assert result["metrics"]["unavailable_examples"] == 1
+    assert result["diagnostics"]["unavailable_clause_examples"] == 1
+    assert result["diagnostics"]["censored_exec_call_count"] == 0
+    assert result["diagnostics"]["unavailable_reasons"] == {
+        "ValueError: no public global clause latency node": 1
+    }
     assert result["metrics"]["by_boundary"][0]["eligible_examples"] == 0
     assert result["metrics"]["by_boundary"][0]["accuracy"] is None
 
@@ -644,10 +719,9 @@ def test_offline_and_agentd_match_one_restored_timestamped_stream(
         while_trace_open,
         after_close,
         after_restore,
-        compound,
     ):
         online = online_by_id[call.sample.sample_id]
-        offline_row = offline_by_id[call.sample.sample_id]
+        offline_row = offline_by_id[f"{call.sample.sample_id}:clause:0"]
         clause = online["prediction"]
         assert offline_row.probability_by_bucket == (
             None if clause is None else clause["probability_by_bucket"]
@@ -663,21 +737,29 @@ def test_offline_and_agentd_match_one_restored_timestamped_stream(
         assert offline_row.unavailable_reason == online["unavailable_reason"]
         assert id(service._runs[run["run_token"]].kb) == runtime_kb_id
 
-    assert offline_by_id["learned-early"].layer == "public"
-    assert offline_by_id["same-trace-late"].layer == "public"
-    assert offline_by_id["while-trace-open"].layer == "public"
-    assert offline_by_id["after-close"].evidence_count == 2
-    assert offline_by_id["after-close"].probability_by_bucket[:2] == (0.5, 0.5)
-    assert offline_by_id["after-restore"].evidence_count == 4
-    assert offline_by_id["after-restore"].probability_by_bucket[:2] == (0.75, 0.25)
-    assert offline_by_id["compound"].unavailable_reason == "compound_command_uncomposed"
+    assert offline_by_id["learned-early:clause:0"].layer == "public"
+    assert offline_by_id["same-trace-late:clause:0"].layer == "public"
+    assert offline_by_id["while-trace-open:clause:0"].layer == "public"
+    assert offline_by_id["after-close:clause:0"].evidence_count == 2
+    assert offline_by_id["after-close:clause:0"].probability_by_bucket[:2] == (
+        0.5,
+        0.5,
+    )
+    assert offline_by_id["after-restore:clause:0"].evidence_count == 4
+    assert offline_by_id["after-restore:clause:0"].probability_by_bucket[:2] == (
+        0.75,
+        0.25,
+    )
+    assert offline_by_id["compound:clause:0"].probability_by_bucket is not None
+    assert offline_by_id["compound:clause:1"].probability_by_bucket is not None
+    assert online_by_id["compound"]["unavailable_reason"] == (
+        "compound_command_uncomposed"
+    )
     service.close()
     telemetry.close()
 
 
-def test_evaluator_uses_strict_threshold_labels_and_leaves_compounds_uncomposed() -> (
-    None
-):
+def test_evaluator_scores_each_mapped_clause_without_composition() -> None:
     fit_calls = [
         _call(
             "fit",
@@ -699,20 +781,20 @@ def test_evaluator_uses_strict_threshold_labels_and_leaves_compounds_uncomposed(
             command="a",
             clauses=({"bin": "a", "argv": ["a"]},),
             segments=((0.0, 500.0),),
-            trace_finalized_at=21.0,
+            trace_finalized_at=23.0,
         ),
         _call(
             "compound",
             "eval__repo-1",
             start=20.0,
-            end=20.2,
+            end=22.0,
             command="a; b",
             clauses=(
                 {"bin": "a", "argv": ["a"]},
                 {"bin": "b", "argv": ["b"]},
             ),
-            segments=((0.0, 100.0), (100.0, 200.0)),
-            trace_finalized_at=21.0,
+            segments=((0.0, 100.0), (100.0, 1600.0)),
+            trace_finalized_at=23.0,
         ),
     ]
 
@@ -723,10 +805,16 @@ def test_evaluator_uses_strict_threshold_labels_and_leaves_compounds_uncomposed(
     )
 
     by_id = {row.sample_id: row for row in rows}
-    assert by_id["edge"].label_bucket == 0
-    assert by_id["edge"].probability_by_bucket is not None
-    assert by_id["compound"].probability_by_bucket is None
-    assert by_id["compound"].unavailable_reason == "compound_command_uncomposed"
+    assert by_id["edge:clause:0"].label_bucket == 0
+    assert by_id["edge:clause:0"].probability_by_bucket is not None
+    assert by_id["compound:clause:0"].label_bucket == 0
+    assert by_id["compound:clause:1"].label_bucket == 2
+    assert by_id["compound:clause:0"].probability_by_bucket is not None
+    assert by_id["compound:clause:1"].probability_by_bucket is not None
+    assert len(rows) == 3
+    assert result["diagnostics"]["payload_clause_count"] == 3
+    assert result["diagnostics"]["mapped_uncensored_clause_count"] == 3
+    assert result["diagnostics"]["unavailable_clause_examples"] == 0
     assert result["claim_bearing"] is False
     assert result["bucket_edges_ms"] == [
         500.0,

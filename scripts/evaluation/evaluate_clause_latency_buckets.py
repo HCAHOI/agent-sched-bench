@@ -14,7 +14,7 @@ import math
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +39,7 @@ _FIT_ROOT = Path(
 _EVAL_ROOT = Path("traces/fresh-277-segtimeline")
 _FIT_MANIFEST = Path("configs/corpora/swe-100.json")
 _EVAL_MANIFEST = Path("configs/corpora/swe-277.json")
+_VIRTUAL_TRACE_GAP_S = 1.0
 
 
 @dataclass(frozen=True)
@@ -69,13 +70,24 @@ class ScoredRow:
 
 
 def _load_proxy_calls(
-    root: Path, manifest: Path
+    root: Path,
+    manifest: Path,
+    *,
+    limit_tasks: int | None = None,
 ) -> tuple[list[ProxyCall], list[str], int]:
-    samples_by_task, task_ids = load_resource_corpus(root, manifest)
+    samples_by_task, loaded_task_ids = load_resource_corpus(root, manifest)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    task_ids = [task_id.strip() for task_id in payload["task_ids"]]
+    if set(task_ids) != set(loaded_task_ids):
+        raise ValueError(f"{manifest}: loaded task IDs differ from manifest order")
+    if limit_tasks is not None:
+        if limit_tasks < 1:
+            raise ValueError("--limit-eval-tasks must be positive")
+        task_ids = task_ids[:limit_tasks]
     calls: list[ProxyCall] = []
     parse_failures = 0
     for task_id in task_ids:
-        action_data, trace_finalized_at = _action_data_by_key(samples_by_task[task_id])
+        action_data = _action_data_by_key(samples_by_task[task_id])
         for sample in samples_by_task[task_id]:
             command = (sample.tool_args or {}).get("command")
             if sample.tool_name != "exec" or not isinstance(command, str):
@@ -96,26 +108,22 @@ def _load_proxy_calls(
                     parse_failed=parse_failed,
                     mapping_evidence=mapping_evidence,
                     segment_times_ms=segment_times_ms,
-                    trace_finalized_at=trace_finalized_at[sample.source_trace],
+                    trace_finalized_at=math.nan,
                 )
             )
-    return calls, task_ids, parse_failures
+    return _serialize_virtual_deployment(calls), task_ids, parse_failures
 
 
 def _action_data_by_key(
     samples: Sequence[ResourceCallSample],
-) -> tuple[
-    dict[tuple[str, int, str], Mapping[str, Any]],
-    dict[str, float],
-]:
+) -> dict[tuple[str, int, str], Mapping[str, Any]]:
     by_trace: dict[str, list[ResourceCallSample]] = defaultdict(list)
     for sample in samples:
         by_trace[sample.source_trace].append(sample)
     output: dict[tuple[str, int, str], Mapping[str, Any]] = {}
-    trace_finalized_at: dict[str, float] = {}
     for trace_path, trace_samples in by_trace.items():
         trace = TraceData.load(Path(trace_path))
-        trace_finalized_at[trace_path] = _trace_finalization_timestamp(trace)
+        _final_trace_summary(trace)
         actions = {
             (
                 str(action["agent_id"]),
@@ -132,12 +140,10 @@ def _action_data_by_key(
             if key in output:
                 raise ValueError(f"duplicate tool action key: {key}")
             output[key] = actions[key]
-    return output, trace_finalized_at
+    return output
 
 
-def _trace_finalization_timestamp(trace: TraceData) -> float:
-    """Return the timestamp on the source trace's final summary event."""
-
+def _final_trace_summary(trace: TraceData) -> Mapping[str, Any]:
     final_record: Mapping[str, Any] | None = None
     with trace.path.open(encoding="utf-8") as fh:
         for line in fh:
@@ -147,6 +153,13 @@ def _trace_finalization_timestamp(trace: TraceData) -> float:
         raise ValueError(
             f"{trace.path}: final record is not a successful trace summary"
         )
+    return final_record
+
+
+def _trace_finalization_timestamp(trace: TraceData) -> float:
+    """Return the timestamp on the source trace's final summary event."""
+
+    final_record = _final_trace_summary(trace)
     timestamp = final_record.get("ts")
     if (
         not isinstance(timestamp, (int, float))
@@ -158,6 +171,38 @@ def _trace_finalization_timestamp(trace: TraceData) -> float:
             "faithful CloseTrace ordering is unavailable"
         )
     return float(timestamp)
+
+
+def _serialize_virtual_deployment(calls: Sequence[ProxyCall]) -> list[ProxyCall]:
+    """Place source traces in input order on a deterministic synthetic clock."""
+
+    by_trace: dict[str, list[ProxyCall]] = {}
+    for call in calls:
+        by_trace.setdefault(call.sample.source_trace, []).append(call)
+    serialized: list[ProxyCall] = []
+    next_trace_start = 0.0
+    for trace_calls in by_trace.values():
+        source_start = min(call.sample.tool_ts_start for call in trace_calls)
+        shift = next_trace_start - source_start
+        shifted = [
+            replace(
+                call,
+                sample=replace(
+                    call.sample,
+                    tool_ts_start=call.sample.tool_ts_start + shift,
+                    tool_ts_end=call.sample.tool_ts_end + shift,
+                ),
+            )
+            for call in trace_calls
+        ]
+        trace_closed_at = (
+            max(call.sample.tool_ts_end for call in shifted) + _VIRTUAL_TRACE_GAP_S
+        )
+        serialized.extend(
+            replace(call, trace_finalized_at=trace_closed_at) for call in shifted
+        )
+        next_trace_start = trace_closed_at + _VIRTUAL_TRACE_GAP_S
+    return serialized
 
 
 def _segment_evidence(
@@ -199,20 +244,34 @@ def _segment_evidence(
     return "bin_exact", tuple(times)
 
 
+def _payload_clauses(
+    call: ProxyCall,
+) -> tuple[tuple[Mapping[str, Any], ...], int]:
+    clauses = list(call.clauses)
+    structural = 0
+    while len(clauses) > 1 and str(clauses[0]["bin"]) == "cd":
+        clauses.pop(0)
+        structural += 1
+    return tuple(clauses), structural
+
+
+def _call_unavailable_reason(call: ProxyCall) -> str | None:
+    if call.sample.censored:
+        return "censored"
+    if call.parse_failed:
+        return "parse_failed"
+    if call.mapping_evidence != "bin_exact":
+        return f"segment_evidence_{call.mapping_evidence}"
+    return None
+
+
 def _proxy_latency_observations(call: ProxyCall, repo: str) -> list[ClauseObservation]:
     """Legacy segment latency only; never attach proxy CPU or RSS."""
 
-    if (
-        call.parse_failed
-        or call.mapping_evidence != "bin_exact"
-        or call.sample.censored
-    ):
+    if _call_unavailable_reason(call) is not None:
         return []
-    clauses = list(call.clauses)
-    times = list(call.segment_times_ms)
-    while len(clauses) > 1 and str(clauses[0]["bin"]) == "cd":
-        clauses.pop(0)
-        times.pop(0)
+    clauses, structural = _payload_clauses(call)
+    times = call.segment_times_ms[structural:]
     return [
         ClauseObservation(
             repo=repo,
@@ -288,59 +347,44 @@ def _score(
         for close_event in deferred_closes:
             heapq.heappush(close_events, close_event)
         kb = kb_by_repo[repo]
-        prediction_error = None
-        try:
-            prediction = kb.predict_command_latency_bucket_from_clauses(
-                repo,
-                call.clauses,
-                call.sample.tool_ts_start,
-                CANONICAL_LATENCY_BUCKETS,
-                command=call.command,
-                parse_failed=call.parse_failed,
-            )
-        except ValueError as exc:
-            if str(exc) != "no public global clause latency node":
-                raise
-            prediction = None
-            prediction_error = f"ValueError: {exc}"
-        if not call.sample.censored:
-            clause_prediction = None if prediction is None else prediction.prediction
-            latency_ms = (call.sample.tool_ts_end - call.sample.tool_ts_start) * 1000.0
+        for clause_index, observation in enumerate(
+            _proxy_latency_observations(call, repo)
+        ):
+            prediction_error = None
+            try:
+                prediction = kb.predict_clause_latency_bucket(
+                    repo,
+                    observation.bin,
+                    observation.argv,
+                    CANONICAL_LATENCY_BUCKETS,
+                    ts_start=call.sample.tool_ts_start,
+                )
+            except ValueError as exc:
+                if str(exc) != "no public global clause latency node":
+                    raise
+                prediction = None
+                prediction_error = f"ValueError: {exc}"
             rows.append(
                 ScoredRow(
-                    sample_id=call.sample.sample_id,
+                    sample_id=f"{call.sample.sample_id}:clause:{clause_index}",
                     task_id=call.sample.task_id,
                     repo=repo,
                     command=call.command,
-                    label_bucket=CANONICAL_LATENCY_BUCKETS.bucket_id(latency_ms),
+                    label_bucket=CANONICAL_LATENCY_BUCKETS.bucket_id(
+                        observation.latency_ms
+                    ),
                     probability_by_bucket=(
-                        None
-                        if clause_prediction is None
-                        else clause_prediction.probability_by_bucket
+                        None if prediction is None else prediction.probability_by_bucket
                     ),
-                    layer=(
-                        None if clause_prediction is None else clause_prediction.scope
-                    ),
-                    key_kind=(
-                        None
-                        if clause_prediction is None
-                        else clause_prediction.key_kind
-                    ),
+                    layer=None if prediction is None else prediction.scope,
+                    key_kind=None if prediction is None else prediction.key_kind,
                     evidence_count=(
-                        0
-                        if clause_prediction is None
-                        else clause_prediction.evidence_count
+                        0 if prediction is None else prediction.evidence_count
                     ),
                     fallback_path=(
-                        None
-                        if clause_prediction is None
-                        else clause_prediction.fallback_path
+                        None if prediction is None else prediction.fallback_path
                     ),
-                    unavailable_reason=(
-                        prediction_error
-                        if prediction is None
-                        else prediction.unavailable_reason
-                    ),
+                    unavailable_reason=prediction_error,
                     mapping_evidence=call.mapping_evidence,
                 )
             )
@@ -370,9 +414,6 @@ def _fit_public_kbs(
             observation for observation in observations if observation.repo != repo
         ]
         kb = ClauseResourceKB.fit_public(public) if public else ClauseResourceKB()
-        for observation in observations:
-            if observation.repo == repo:
-                kb.observe_completed_clause(observation)
         kb_by_repo[repo] = kb
     return kb_by_repo, observations
 
@@ -401,20 +442,56 @@ def _validate_trace_finalizations(calls: Sequence[ProxyCall]) -> None:
 def _metrics(rows: Sequence[ScoredRow]) -> dict[str, Any]:
     known = [row for row in rows if row.probability_by_bucket is not None]
     return {
-        "eligible_examples": len(known),
-        "unavailable_examples": len(rows) - len(known),
         "by_boundary": [
             _boundary_metrics(known, boundary_index, boundary_ms)
             for boundary_index, boundary_ms in enumerate(
                 CANONICAL_LATENCY_BUCKETS.edges_ms
             )
         ],
-        "unavailable_reasons": dict(
+    }
+
+
+def _diagnostics(
+    rows: Sequence[ScoredRow],
+    *,
+    calls: Sequence[ProxyCall],
+) -> dict[str, Any]:
+    prediction_unavailable = [row for row in rows if row.probability_by_bucket is None]
+    parsed_static_clause_count = sum(len(call.clauses) for call in calls)
+    payload_clause_count = 0
+    structural_clause_count = 0
+    unavailable_reasons: Counter[str] = Counter(
+        row.unavailable_reason
+        for row in prediction_unavailable
+        if row.unavailable_reason
+    )
+    for call in calls:
+        payload, structural = _payload_clauses(call)
+        payload_clause_count += len(payload)
+        structural_clause_count += structural
+        reason = _call_unavailable_reason(call)
+        if reason is not None:
+            unavailable_reasons[reason] += len(payload)
+    eligible_examples = sum(row.probability_by_bucket is not None for row in rows)
+    unavailable_clause_examples = payload_clause_count - eligible_examples
+    if parsed_static_clause_count != structural_clause_count + payload_clause_count:
+        raise ValueError("static clause reconciliation failed")
+    if unavailable_clause_examples != sum(unavailable_reasons.values()):
+        raise ValueError("unavailable clause reconciliation failed")
+    return {
+        "parsed_static_clause_count": parsed_static_clause_count,
+        "structural_leading_cd_clause_count": structural_clause_count,
+        "payload_clause_count": payload_clause_count,
+        "mapped_uncensored_clause_count": len(rows),
+        "unavailable_clause_examples": unavailable_clause_examples,
+        "unavailable_reasons": dict(sorted(unavailable_reasons.items())),
+        "censored_exec_call_count": sum(call.sample.censored for call in calls),
+        "prediction_provenance_counts": dict(
             sorted(
                 Counter(
-                    row.unavailable_reason
+                    f"{row.layer}:{row.key_kind}"
                     for row in rows
-                    if row.unavailable_reason is not None
+                    if row.probability_by_bucket is not None
                 ).items()
             )
         ),
@@ -426,18 +503,31 @@ def _boundary_metrics(
     boundary_index: int,
     boundary_ms: float,
 ) -> dict[str, Any]:
-    positives = sum(row.label_bucket > boundary_index for row in rows)
-    correct = 0
+    true_positive = true_negative = false_positive = false_negative = 0
     for row in rows:
         assert row.probability_by_bucket is not None
         predicted_positive = sum(row.probability_by_bucket[boundary_index + 1 :]) > 0.5
-        correct += predicted_positive == (row.label_bucket > boundary_index)
+        positive = row.label_bucket > boundary_index
+        if predicted_positive and positive:
+            true_positive += 1
+        elif predicted_positive:
+            false_positive += 1
+        elif positive:
+            false_negative += 1
+        else:
+            true_negative += 1
+    positives = true_positive + false_negative
+    correct = true_positive + true_negative
     return {
         "boundary_ms": boundary_ms,
         "accuracy": correct / len(rows) if rows else None,
         "eligible_examples": len(rows),
         "positive_count": positives,
         "positive_rate": positives / len(rows) if rows else None,
+        "true_positive": true_positive,
+        "true_negative": true_negative,
+        "false_positive": false_positive,
+        "false_negative": false_negative,
     }
 
 
@@ -452,7 +542,7 @@ def evaluate(
         {
             "status": "development_diagnostic_proxy_not_canonical_telemetry",
             "claim_bearing": False,
-            "objective": "latency_bucket_prediction",
+            "objective": "clause_latency_bucket_prediction",
             "bucket_edges_ms": list(CANONICAL_LATENCY_BUCKETS.edges_ms),
             "bucket_intervals": [
                 {
@@ -475,6 +565,7 @@ def evaluate(
             "fit_clause_observation_count": len(observations),
             "eval_exec_call_count": len(eval_calls),
             "metrics": _metrics(rows),
+            "diagnostics": _diagnostics(rows, calls=eval_calls),
             "provenance": dict(provenance),
         },
         rows,
@@ -487,6 +578,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-root", type=Path, default=_EVAL_ROOT)
     parser.add_argument("--fit-manifest", type=Path, default=_FIT_MANIFEST)
     parser.add_argument("--eval-manifest", type=Path, default=_EVAL_MANIFEST)
+    parser.add_argument("--limit-eval-tasks", type=int)
     parser.add_argument("--out", type=Path)
     parser.add_argument("--dump-rows", type=Path)
     return parser
@@ -498,7 +590,9 @@ def main() -> None:
         args.fit_root, args.fit_manifest
     )
     eval_calls, eval_tasks, eval_parse_failures = _load_proxy_calls(
-        args.eval_root, args.eval_manifest
+        args.eval_root,
+        args.eval_manifest,
+        limit_tasks=args.limit_eval_tasks,
     )
     provenance = {
         **_validate_partition(fit_tasks, eval_tasks),
@@ -511,6 +605,19 @@ def main() -> None:
         "proxy_adapter": (
             "legacy bash-xtrace exact-bin segment latency only; no proxy CPU/RSS"
         ),
+        "scoring_unit": "mapped_non_structural_clause",
+        "deployment_semantics": "serialized_virtual_deployment",
+        "task_order": "manifest task_ids order; no shuffle",
+        "trace_order": "one source trace per task in manifest order",
+        "trace_update": (
+            "predict every mapped clause in all calls without intra-trace learning, "
+            "then successful CloseTrace before the next trace"
+        ),
+        "virtual_clock": (
+            "deterministic monotonic shift preserving source call order and "
+            "durations; not historical concurrency or a historical close timestamp"
+        ),
+        "virtual_trace_gap_s": _VIRTUAL_TRACE_GAP_S,
         "edge_source": "canonical_objective",
     }
     result, rows = evaluate(fit_calls, eval_calls, provenance)

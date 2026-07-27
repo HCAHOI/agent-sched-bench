@@ -311,9 +311,13 @@ class ClauseResourceKB:
         bin_: str,
         argv: Sequence[str],
         buckets: LatencyBuckets,
+        *,
+        ts_start: float | None = None,
     ) -> ClauseLatencyBucketPrediction:
         """Predict the empirical latency-bucket PMF for one clause."""
 
+        if ts_start is not None:
+            self._advance(ts_start)
         selected = self._select(repo, _LATENCY_MS, bin_, argv)
         if selected is None:
             raise ValueError("no public global clause latency node")

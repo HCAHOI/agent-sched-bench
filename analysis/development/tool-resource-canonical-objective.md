@@ -46,8 +46,9 @@ The sole prediction score is classification accuracy at each fixed boundary:
 accuracy_i = correct(T > b_i) / eligible_examples
 ```
 
-Reports include `eligible_examples`, positive count, and positive rate so raw
-accuracy is interpretable. They are counts, not additional acceptance metrics.
+Reports include `eligible_examples`, positive count/rate, and the four confusion
+counts so raw accuracy is interpretable. These are reconciliation/diagnostic
+counts, not additional acceptance metrics.
 Do not add balanced accuracy, precision/recall, Brier/NLL, bucket MAE, q-error,
 or legacy 3500/5000 ms metrics unless the human explicitly changes this lock.
 There is no hidden aggregate across boundaries.
@@ -138,6 +139,12 @@ Stop and review after P0. Do not begin a long SWE replay in P0.
 Run the canonical core on the development-exposed SWE fit/replay corpora with
 these exact boundaries. Report per-boundary accuracy and the required counts.
 This is a diagnostic baseline, not confirmation.
+P1 scores each mapped non-structural clause against its aligned segment latency;
+outer command bucket composition remains out of scope.
+Use manifest task order as a serialized virtual deployment: predict every call
+in one source trace before successful finalization releases its observations,
+preserve repository state across later traces, and use synthetic monotonic
+timestamps only to order sessions rather than represent historical concurrency.
 
 ### P2 — representation and arbitration
 
