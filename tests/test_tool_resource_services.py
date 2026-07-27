@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+import tool_resource
 from tool_resource._uds import StrictUnixServer, receive_message, send_message
 from tool_resource.client import ResourceRun
 from tool_resource.profile import ResourceProfile
@@ -519,6 +520,46 @@ def test_tool_resource_daemon_imports_do_not_load_trace_collect() -> None:
         text=True,
     )
     assert result.stdout.strip() == "False"
+
+
+def test_tool_resource_package_is_self_contained() -> None:
+    # tool_resource is meant to be copied out of this repo as one directory.
+    # Importing every submodule must pull in no sibling repo package and none
+    # of the heavy numeric stacks that only the offline evaluation lane needs.
+    forbidden = (
+        "trace_collect",
+        "tool_time",
+        "tool_resource_eval",
+        "harness",
+        "agents",
+        "llm_call",
+        "numpy",
+        "torch",
+    )
+    package_dir = Path(tool_resource.__file__).parent
+    submodules = sorted(
+        path.stem
+        for path in package_dir.glob("*.py")
+        if path.stem != "__init__"
+        # bcc is a root-only distro package; telemetry defers that import.
+    )
+    assert "telemetry" in submodules and "resource_agentd" in submodules
+    program = (
+        "import sys\n"
+        "import tool_resource\n"
+        + "".join(f"import tool_resource.{name}\n" for name in submodules)
+        + f"leaked = sorted({{n.split('.')[0] for n in sys.modules}} & set({forbidden!r}))\n"
+        "print(','.join(leaked))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.strip() == "", (
+        f"tool_resource leaked imports: {result.stdout.strip()}"
+    )
 
 
 def test_trace_adapter_normalizes_expected_resource_calls() -> None:

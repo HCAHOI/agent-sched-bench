@@ -49,7 +49,7 @@ from dataclasses import dataclass, field, replace
 from fnmatch import fnmatchcase
 from typing import Any, Mapping, Sequence
 
-from tool_resource.features import parse_command_clauses
+from tool_resource.clause_parser import parse_command_clauses
 from tool_resource.runtime_kb import ClauseObservation
 
 # Kept in sync with the collector runtime's windowing constants.

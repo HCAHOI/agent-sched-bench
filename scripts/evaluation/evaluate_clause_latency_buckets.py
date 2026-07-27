@@ -21,10 +21,11 @@ from typing import Any
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from tool_resource.features import parse_command_clauses, repo_of  # noqa: E402
-from tool_resource.labels import (  # noqa: E402
+from tool_resource.clause_parser import parse_command_clauses  # noqa: E402
+from tool_resource_eval.labels import (  # noqa: E402
     ResourceCallSample,
     load_resource_corpus,
+    repo_of,
 )
 from tool_resource.runtime_kb import (  # noqa: E402
     CANONICAL_LATENCY_BUCKETS,

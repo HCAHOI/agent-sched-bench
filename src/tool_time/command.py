@@ -45,12 +45,6 @@ from typing import Any, Callable
 _HEAD_SEPARATOR_CHARS = frozenset(";|&()")
 _REDIRECTION_CHARS = frozenset("<>&")
 _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-# Separators whose sides execute one after another, so their times add.
-# Pipes (|) and background (&) run concurrently and stay within one unit;
-# `||` alternatives rarely both run - counting them as sequential
-# over-approximates total time, documented.
-_SEQUENTIAL_SEPARATOR_TOKENS = frozenset({"&&", ";", ";;", "||"})
-_GROUPING_TOKENS = frozenset({"(", ")"})
 
 
 def shell_command_heads(command: str) -> list[str]:
@@ -147,34 +141,6 @@ def make_row_command_prefix_keys(
     return row_keys
 
 
-def shell_command_segments(command: str) -> list[list[str]]:
-    """Sequential execution units of a shell command, as token lists.
-
-    Units are split at sequential separators (``&&``, ``;``, ``||``) whose
-    sides run one after another; pipeline (``|``) and background (``&``)
-    parts run concurrently and stay within one unit. Grouping parens are
-    dropped. Untokenizable commands return an empty list. Escaped
-    separators (e.g. find's ``\\;`` exec terminator) are indistinguishable
-    from real ones after POSIX unescaping and over-split such commands -
-    a rare, granularity-only ambiguity.
-    """
-
-    segments: list[list[str]] = []
-    current: list[str] = []
-    for token in shell_command_prefix_tokens(command):
-        if token in _SEQUENTIAL_SEPARATOR_TOKENS:
-            if current:
-                segments.append(current)
-                current = []
-        elif token in _GROUPING_TOKENS:
-            continue
-        else:
-            current.append(token)
-    if current:
-        segments.append(current)
-    return segments
-
-
 def _skip_leading_cd_segments(
     tokens: tuple[tuple[str, bool], ...],
 ) -> tuple[tuple[str, bool], ...]:
@@ -254,5 +220,4 @@ __all__ = [
     "make_row_command_prefix_keys",
     "shell_command_heads",
     "shell_command_prefix_tokens",
-    "shell_command_segments",
 ]

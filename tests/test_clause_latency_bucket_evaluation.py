@@ -31,7 +31,7 @@ from tests.test_tool_resource_services import (
     _open_trace,
     _run_call,
 )
-from tool_resource.labels import ResourceCallSample
+from tool_resource_eval.labels import ResourceCallSample
 from tool_resource.resource_agentd import ResourceService
 from tool_resource.runtime_kb import ClauseResourceKB
 from tool_resource.store import ObservationStore

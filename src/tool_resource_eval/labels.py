@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import json
 import math
 from pathlib import Path
+import re
 from typing import Any, Sequence
 
 from harness.container_stats_sampler import _parse_memory_mb
@@ -23,6 +24,13 @@ from trace_collect.trace_data import TraceData
 _AMBIENT_MEMORY_TOLERANCE_S = 2.0
 _CENSOR_RESULT_PREFIX = "Error: [timeout]"
 _CENSOR_RESULT_MARKER = "Exit code: 124"
+_REPO_SUFFIX_RE = re.compile(r"-\d+$")
+
+
+def repo_of(task_id: str) -> str:
+    """Repository of a task id, dropping the trailing instance number."""
+
+    return _REPO_SUFFIX_RE.sub("", task_id)
 
 
 @dataclass(frozen=True)

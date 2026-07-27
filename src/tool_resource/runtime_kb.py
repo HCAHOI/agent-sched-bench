@@ -34,7 +34,7 @@ from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from tool_resource.features import parse_command_clauses
+from tool_resource.clause_parser import parse_command_clauses
 
 NodeKey = tuple[str, str]
 

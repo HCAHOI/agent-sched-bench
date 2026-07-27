@@ -14,7 +14,7 @@ from typing import Any
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from tool_resource.features import repo_of  # noqa: E402
+from tool_resource_eval.labels import repo_of  # noqa: E402
 from tool_resource.runtime_kb import (  # noqa: E402
     CANONICAL_RESOURCE_HEAVY_THRESHOLDS,
     SHORT_NULL_LIGHT_MAX_LATENCY_MS,

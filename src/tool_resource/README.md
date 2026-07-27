@@ -1,5 +1,22 @@
 # Tool-resource services
 
+This directory is self-contained: it imports nothing from the rest of this
+repository and needs only `PyYAML` (client) plus the distribution's
+`python3-bpfcc` (privileged telemetry only, imported lazily). Copy the whole
+directory to use it elsewhere; the Go clause parser under `_mvdan_adapter/`
+builds itself on first use. The offline lane that reads this repository's trace
+files lives outside it, in `src/tool_resource_eval/`.
+
+Internal lanes:
+
+- **telemetry** — `telemetry.py` (BCC/eBPF collector), `telemetryd.py`,
+  `telemetry_protocol.py`, `artifact_schema.py`, `clause_bridge.py`
+- **knowledge base** — `runtime_kb.py`, `store.py`
+- **parser** — `clause_parser.py`, `mvdan_client.py`, `_shell_split.py`,
+  `_mvdan_adapter/`
+- **service and client** — `resource_agentd.py`, `resource_protocol.py`,
+  `client.py`, `profile.py`, `_uds.py`
+
 The canonical path has two independently managed Unix-domain-socket services:
 
 - `telemetryd` runs as root and alone resolves container cgroups and loads BCC/eBPF.

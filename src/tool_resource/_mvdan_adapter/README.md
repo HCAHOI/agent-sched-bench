@@ -1,15 +1,20 @@
 # Mvdan clause adapter
 
 This JSONL service is the static parser behind
-`tool_resource.features.parse_command_clauses`. It uses
+`tool_resource.clause_parser.parse_command_clauses`. It uses
 `mvdan.cc/sh/v3` v3.13.1 and reports byte offsets; the Python client converts
 them to Python string indices.
 
-Build it from the repository root:
+Build it with the bundled script, which needs no repository context:
 
 ```sh
-scripts/setup/build_mvdan_adapter.sh
+src/tool_resource/_mvdan_adapter/build.sh
 ```
+
+`tool_resource.mvdan_client.ensure_compatible_adapter()` runs this script
+automatically when the cached binary is missing or stale, so the directory
+stays self-contained: copy `src/tool_resource/` anywhere and the parser still
+builds.
 
 The script uses exactly Go 1.26.1. If that version is not on `PATH`, it
 downloads the official Linux amd64 archive into

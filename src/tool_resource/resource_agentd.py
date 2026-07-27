@@ -29,7 +29,7 @@ from tool_resource._uds import (
     process_identity_is_alive,
     require_fields,
 )
-from tool_resource.features import parse_command_clauses
+from tool_resource.clause_parser import parse_command_clauses
 from tool_resource.resource_protocol import (
     RESOURCE_PROTOCOL_VERSION,
     ResourceProtocolError,

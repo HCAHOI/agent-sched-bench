@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from tool_resource.labels import extract_resource_call_samples, load_resource_corpus
+from tool_resource_eval.labels import extract_resource_call_samples, load_resource_corpus
 
 
 def test_resource_labels_keep_peak_ambient_missing_and_censored_separate(

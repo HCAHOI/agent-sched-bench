@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from tool_resource.features import parse_command_clauses
+from tool_resource._shell_split import shell_command_segments
+from tool_resource.clause_parser import parse_command_clauses
 
 
 _CLAUSE_KEYS = {
@@ -333,3 +334,20 @@ def test_malformed_input_uses_shell_segment_fallback() -> None:
     assert [clause["bin"] for clause in parsed["clauses"]] == ["echo"]
     assert parsed["clauses"][0]["original"] == command
     assert parsed["clauses"][0]["span"] == (0, len(command))
+
+
+def test_vendored_shell_split_matches_documented_sequential_units() -> None:
+    # _shell_split is a vendored copy of the tokenizer tool_time also keeps.
+    # These cases pin the split contract the degraded fallback relies on.
+    assert shell_command_segments("a && b ; c || d") == [["a"], ["b"], ["c"], ["d"]]
+    # Pipelines and background parts run concurrently: one unit, separators kept.
+    assert shell_command_segments("a | b & c") == [["a", "|", "b", "&", "c"]]
+    # Grouping parens are dropped, heads are basenamed, env assignments stripped.
+    assert shell_command_segments("( /usr/bin/make -j2 ) && FOO=1 pytest") == [
+        ["make", "-j2"],
+        ["pytest"],
+    ]
+    # Redirection operators, their targets, and dup fd numbers leave no tokens.
+    assert shell_command_segments("cmd > out.log 2>&1") == [["cmd"]]
+    # Untokenizable input is expected in agent traces and yields no units.
+    assert shell_command_segments('echo "unbalanced') == []
