@@ -1,4 +1,4 @@
-"""Causal clause latency bucket knowledge base.
+"""Causal clause latency and resource-class knowledge base.
 
 Public and repo layers intentionally use different key granularity because
 they encode different environment assumptions:
@@ -27,9 +27,11 @@ from __future__ import annotations
 
 import heapq
 import math
-from bisect import bisect_right
+import re
+from bisect import bisect_left
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from tool_resource.features import parse_command_clauses
@@ -54,19 +56,45 @@ def _nodes_from_json(
 # Clause latency bucket predictor
 # ==========================================================================
 
-_CLAUSE_SCHEMA = "runtime_clause_resource_kb_v4"
+_CLAUSE_SCHEMA = "runtime_clause_resource_kb_v6"
 _CLAUSE_MAX_DEPTH = 4  # frozen ordered argv-prefix depth budget
 _DELIM = "\x00"  # argv tokens may contain spaces; NUL cannot collide
+GENERIC_ARGV_CANONICALIZER_VERSION = "generic-argv-v2-shape"
+_ENV_ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", re.DOTALL)
+_NUMBER = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
+_UUID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    re.IGNORECASE,
+)
+_HEX_ID = re.compile(r"(?:0x)?[0-9a-f]{8,}", re.IGNORECASE)
+_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://.+")
+_LONG_OPTION = re.compile(r"--[A-Za-z][A-Za-z0-9_-]*")
+_SHORT_OPTION = re.compile(r"-[A-Za-z]")
+_SHORT_ATTACHED_VALUE = re.compile(r"(-[A-Za-z])(.+)", re.DOTALL)
 
 # Aggregated clause-observation value sources. Each is a per-clause
 # MEASURED metric (see ``tool_resource.clause_bridge``), not an eBPF exit field:
 #   latency_ms          -- clause wall interval;
 #   peak_cpu_cores       -- windowed peak CPU cores (never cpu_ns/wall_ns);
 #   sampled_peak_rss_mb  -- max aligned distinct-mm RSS (never lifetime hiwater).
+#   disk_read_write_bytes_total -- task-I/O-accounting read + write bytes.
 _LATENCY_MS = "latency_ms"
 _PEAK_CPU_CORES = "peak_cpu_cores"
 _SAMPLED_PEAK_RSS_MB = "sampled_peak_rss_mb"
-_CLAUSE_SOURCES = (_LATENCY_MS, _PEAK_CPU_CORES, _SAMPLED_PEAK_RSS_MB)
+_DISK_READ_WRITE_BYTES_TOTAL = "disk_read_write_bytes_total"
+_CLAUSE_SOURCES = (
+    _LATENCY_MS,
+    _PEAK_CPU_CORES,
+    _SAMPLED_PEAK_RSS_MB,
+    _DISK_READ_WRITE_BYTES_TOTAL,
+)
+
+SHORT_NULL_LIGHT_MAX_LATENCY_MS = 500.0
+CANONICAL_RESOURCE_HEAVY_THRESHOLDS = {
+    _PEAK_CPU_CORES: 2.0,
+    _SAMPLED_PEAK_RSS_MB: 500.0,
+    _DISK_READ_WRITE_BYTES_TOTAL: float(100 * 1024 * 1024),
+}
 
 
 @dataclass(frozen=True)
@@ -77,12 +105,13 @@ class ClauseObservation:
     exec-image occurrence. A single static clause may own an exec chain
     (``env -> nice -> workload``) and descendants; the bridge
     (``tool_resource.clause_bridge``) aggregates all owned exec images into one
-    observation. The three fields are per-clause MEASURED metrics, each
+    observation. The four fields are per-clause MEASURED metrics, each
     ``None`` when its target-specific coverage was insufficient:
 
     - ``latency_ms``      -- clause wall interval;
     - ``peak_cpu_cores``  -- windowed peak CPU cores over the owned lineage;
     - ``sampled_peak_rss_mb`` -- max aligned distinct-mm RSS over the lineage.
+    - ``disk_read_write_bytes_total`` -- task-I/O read + write byte deltas.
 
     ``cpu_ns_cumulative`` is preserved as a separate raw field.
     ``ts_start``/``ts_end`` are wall-clock seconds for the causal
@@ -97,6 +126,8 @@ class ClauseObservation:
     latency_ms: float | None = None
     peak_cpu_cores: float | None = None
     sampled_peak_rss_mb: float | None = None
+    disk_read_write_bytes_total: float | None = None
+    impute_short_null_resources_as_light: bool = False
     cpu_ns_cumulative: int | None = None  # raw, separate; never a flag source
     in_loop: bool = False
     in_pipe: bool = False
@@ -114,7 +145,7 @@ class ClauseObservation:
 
 @dataclass(frozen=True)
 class LatencyBuckets:
-    """Explicit positive boundaries for right-open latency buckets."""
+    """Positive boundaries for ``T > boundary`` latency decisions."""
 
     edges_ms: tuple[float, ...]
 
@@ -140,19 +171,45 @@ class LatencyBuckets:
         return len(self.edges_ms) + 1
 
     def bucket_id(self, latency_ms: float) -> int:
-        """Return i for [b_i, b_{i+1}); the final bucket extends to +inf."""
+        """Return i for [0, b_0], then (b_{i-1}, b_i], and the final tail."""
 
         if not math.isfinite(latency_ms) or latency_ms < 0.0:
             raise ValueError("latency_ms must be finite and non-negative")
-        return bisect_right(self.edges_ms, latency_ms)
+        return bisect_left(self.edges_ms, latency_ms)
+
+
+CANONICAL_LATENCY_BUCKET_EDGES_MS = (
+    500.0,
+    1000.0,
+    2000.0,
+    4000.0,
+    8000.0,
+    16000.0,
+    32000.0,
+    64000.0,
+)
+CANONICAL_LATENCY_BUCKETS = LatencyBuckets(CANONICAL_LATENCY_BUCKET_EDGES_MS)
 
 
 @dataclass(frozen=True)
 class ClauseLatencyBucketPrediction:
     """Empirical latency-bucket prediction for one clause."""
 
-    bucket_id: int
     probability_by_bucket: tuple[float, ...]
+    scope: str
+    key_kind: str
+    evidence_count: int
+    fallback_path: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ClauseHeavyLightPrediction:
+    """Empirical Heavy/Light prediction for one clause resource."""
+
+    resource: str
+    threshold: float
+    probability_heavy: float
+    label: str
     scope: str
     key_kind: str
     evidence_count: int
@@ -175,16 +232,104 @@ def _clause_value(obs: ClauseObservation, source: str) -> float | None:
     if source == _LATENCY_MS:
         return obs.latency_ms
     if source == _PEAK_CPU_CORES:
-        return obs.peak_cpu_cores
-    if source == _SAMPLED_PEAK_RSS_MB:
-        return obs.sampled_peak_rss_mb
-    raise ValueError(f"unknown clause value source {source!r}")
+        value = obs.peak_cpu_cores
+    elif source == _SAMPLED_PEAK_RSS_MB:
+        value = obs.sampled_peak_rss_mb
+    elif source == _DISK_READ_WRITE_BYTES_TOTAL:
+        value = obs.disk_read_write_bytes_total
+    else:
+        raise ValueError(f"unknown clause value source {source!r}")
+    if (
+        value is None
+        and obs.impute_short_null_resources_as_light
+        and obs.latency_ms is not None
+        and obs.latency_ms < SHORT_NULL_LIGHT_MAX_LATENCY_MS
+    ):
+        return 0.0
+    return value
 
 
 def _clause_tokens(bin_: str, argv: Sequence[str]) -> tuple[str, ...]:
     # Identity token stream: bin head then the argv tail (argv[0] may be a full
     # path; bin is its basename, already normalized by mvdan).
     return (bin_, *argv[1:])
+
+
+def _canonical_dynamic_value(value: str) -> str:
+    if _URL.fullmatch(value):
+        return "<URL>"
+    if _UUID.fullmatch(value):
+        return "<ID>"
+    if _NUMBER.fullmatch(value):
+        try:
+            number = Decimal(value)
+        except InvalidOperation:
+            return "<NUM:EXTREME>"
+        if not number:
+            return "<NUM:0>"
+        exponent = max(-9, min(9, number.copy_abs().adjusted()))
+        sign = "-" if number.is_signed() else "+"
+        return f"<NUM:{sign}E{exponent}>"
+    if _HEX_ID.fullmatch(value) and (
+        value.lower().startswith("0x")
+        or any(character in "abcdefABCDEF" for character in value)
+    ):
+        return "<ID>"
+    if "/" in value or "\\" in value or value.startswith(("~", ".")):
+        return "<PATH>"
+    return "<ARG>"
+
+
+def _generic_argv_tokens(bin_: str, argv: Sequence[str]) -> tuple[str, ...]:
+    tokens = [bin_]
+    operands_only = False
+    for token in argv[1:]:
+        if token == "--":
+            tokens.append(token)
+            operands_only = True
+            continue
+        assignment = _ENV_ASSIGNMENT.fullmatch(token)
+        if assignment:
+            tokens.append(
+                f"{assignment.group(1)}={_canonical_dynamic_value(assignment.group(2))}"
+            )
+            continue
+        if operands_only:
+            tokens.append(_canonical_dynamic_value(token))
+            continue
+        if token.startswith("--") and "=" in token:
+            flag, value = token.split("=", 1)
+            name = flag if _LONG_OPTION.fullmatch(flag) else "<OPT>"
+            tokens.append(f"{name}={_canonical_dynamic_value(value)}")
+            continue
+        if _NUMBER.fullmatch(token):
+            tokens.append(_canonical_dynamic_value(token))
+            continue
+        if _LONG_OPTION.fullmatch(token) or _SHORT_OPTION.fullmatch(token):
+            tokens.append(token)
+            continue
+        attached = _SHORT_ATTACHED_VALUE.fullmatch(token)
+        if attached:
+            tokens.append(
+                f"{attached.group(1)}={_canonical_dynamic_value(attached.group(2))}"
+            )
+            continue
+        tokens.append(
+            "<OPT>" if token.startswith("-") else _canonical_dynamic_value(token)
+        )
+    return tuple(tokens)
+
+
+def generic_argv_keys(bin_: str, argv: Sequence[str]) -> list[NodeKey]:
+    """Development-only generic canonical exact/prefix clause keys."""
+
+    tokens = _generic_argv_tokens(bin_, argv)
+    keys: list[NodeKey] = [("exact_clause", _DELIM.join(tokens))]
+    depth = min(len(tokens), _CLAUSE_MAX_DEPTH)
+    for length in range(depth, 1, -1):
+        keys.append((f"argv_prefix_depth_{length}", _DELIM.join(tokens[:length])))
+    keys.append(("bin", bin_))
+    return keys
 
 
 def _clause_repo_keys(bin_: str, argv: Sequence[str]) -> list[NodeKey]:
@@ -213,7 +358,7 @@ def _clause_public_keys(bin_: str) -> list[NodeKey]:
 
 
 class ClauseResourceKB:
-    """Causal clause history with a latency-bucket API.
+    """Causal clause history with latency and resource-class APIs.
 
     Public bin priors are frozen after construction; repo clause/prefix nodes
     accumulate causally under a monotonic-query guard.
@@ -247,7 +392,7 @@ class ClauseResourceKB:
                 for key in keys:
                     acc[source].setdefault(key, []).append(value)
         if not acc[_LATENCY_MS].get(("global", "")):
-            raise ValueError("fit corpus has no clause latency (wall_ns) evidence")
+            raise ValueError("fit corpus has no clause latency evidence")
         kb = cls()
         kb._public = {
             source: {key: tuple(values) for key, values in nodes.items()}
@@ -299,9 +444,13 @@ class ClauseResourceKB:
         bin_: str,
         argv: Sequence[str],
         buckets: LatencyBuckets,
+        *,
+        ts_start: float | None = None,
     ) -> ClauseLatencyBucketPrediction:
-        """Predict the modal empirical latency bucket for one clause."""
+        """Predict the empirical latency-bucket PMF for one clause."""
 
+        if ts_start is not None:
+            self._advance(ts_start)
         selected = self._select(repo, _LATENCY_MS, bin_, argv)
         if selected is None:
             raise ValueError("no public global clause latency node")
@@ -309,15 +458,61 @@ class ClauseResourceKB:
         counts = [0] * buckets.bucket_count
         for value in values:
             counts[buckets.bucket_id(value)] += 1
-        predicted = max(range(buckets.bucket_count), key=lambda i: (counts[i], -i))
         return ClauseLatencyBucketPrediction(
-            bucket_id=predicted,
             probability_by_bucket=tuple(count / len(values) for count in counts),
             scope=scope,
             key_kind=kind,
             evidence_count=len(values),
             fallback_path=path,
         )
+
+    def predict_clause_heavy_light(
+        self,
+        repo: str,
+        bin_: str,
+        argv: Sequence[str],
+        resource: str,
+        *,
+        ts_start: float | None = None,
+    ) -> ClauseHeavyLightPrediction | None:
+        """Predict one resource using the same public/local backoff hierarchy."""
+
+        try:
+            threshold = CANONICAL_RESOURCE_HEAVY_THRESHOLDS[resource]
+        except KeyError as exc:
+            raise ValueError(f"unknown Heavy/Light resource {resource!r}") from exc
+        if ts_start is not None:
+            self._advance(ts_start)
+        selected = self._select(repo, resource, bin_, argv)
+        if selected is None:
+            return None
+        values, scope, kind, path = selected
+        probability_heavy = sum(value > threshold for value in values) / len(values)
+        return ClauseHeavyLightPrediction(
+            resource=resource,
+            threshold=threshold,
+            probability_heavy=probability_heavy,
+            label="heavy" if probability_heavy > 0.5 else "light",
+            scope=scope,
+            key_kind=kind,
+            evidence_count=len(values),
+            fallback_path=path,
+        )
+
+    def predict_clause_resource_classes(
+        self,
+        repo: str,
+        bin_: str,
+        argv: Sequence[str],
+        *,
+        ts_start: float | None = None,
+    ) -> dict[str, ClauseHeavyLightPrediction | None]:
+        if ts_start is not None:
+            self._advance(ts_start)
+        return {
+            resource: self.predict_clause_heavy_light(repo, bin_, argv, resource)
+            for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS
+        }
 
     def predict_command_latency_bucket_from_clauses(
         self,
@@ -416,6 +611,11 @@ class ClauseResourceKB:
         """Restore a snapshot produced by :meth:`to_json_obj`."""
 
         if obj.get("schema") != _CLAUSE_SCHEMA:
+            if obj.get("schema") == "runtime_clause_resource_kb_v5":
+                raise ValueError(
+                    "runtime_clause_resource_kb_v5 lacks Disk and short-null "
+                    "resource labels; refit the snapshot"
+                )
             raise ValueError(f"unsupported clause schema {obj.get('schema')!r}")
         if obj.get("max_prefix_depth") != _CLAUSE_MAX_DEPTH:
             raise ValueError("snapshot prefix depth differs from module depth")
@@ -427,8 +627,6 @@ class ClauseResourceKB:
             }
             for source in _CLAUSE_SOURCES
         }
-        if not kb._public[_LATENCY_MS].get(("global", "")):
-            raise ValueError("snapshot has no public clause latency global node")
         kb._repo = {
             repo: {
                 source: {
@@ -449,9 +647,16 @@ class ClauseResourceKB:
 
 
 __all__ = [
+    "CANONICAL_LATENCY_BUCKETS",
+    "CANONICAL_LATENCY_BUCKET_EDGES_MS",
+    "CANONICAL_RESOURCE_HEAVY_THRESHOLDS",
+    "GENERIC_ARGV_CANONICALIZER_VERSION",
+    "SHORT_NULL_LIGHT_MAX_LATENCY_MS",
+    "ClauseHeavyLightPrediction",
     "ClauseLatencyBucketPrediction",
     "ClauseObservation",
     "ClauseResourceKB",
     "CommandLatencyBucketPrediction",
     "LatencyBuckets",
+    "generic_argv_keys",
 ]

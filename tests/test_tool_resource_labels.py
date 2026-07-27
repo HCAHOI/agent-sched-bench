@@ -4,8 +4,6 @@ import json
 from pathlib import Path
 
 from tool_resource.labels import extract_resource_call_samples, load_resource_corpus
-from tool_resource.prior import build_resource_prior, resource_prior_hierarchy
-from tool_time.command import make_row_command_prefix_keys
 
 
 def test_resource_labels_keep_peak_ambient_missing_and_censored_separate(
@@ -100,10 +98,8 @@ def test_ambient_before_never_uses_at_or_after_call_start(tmp_path: Path) -> Non
     assert measured.ambient_before_age_s == 1.0
 
 
-def test_corpus_loader_and_resource_prior_reuse_shared_hierarchy(
-    tmp_path: Path,
-) -> None:
-    trace_path = _write_trace(tmp_path)
+def test_corpus_loader_uses_declared_membership(tmp_path: Path) -> None:
+    _write_trace(tmp_path)
     manifest = tmp_path / "tasks.json"
     manifest.write_text(
         json.dumps({"expected_task_count": 1, "task_ids": ["task-a"]}),
@@ -113,37 +109,6 @@ def test_corpus_loader_and_resource_prior_reuse_shared_hierarchy(
     samples_by_task, task_ids = load_resource_corpus(tmp_path, manifest)
     assert task_ids == ["task-a"]
     assert len(samples_by_task["task-a"]) == 6
-
-    rows = [
-        {
-            "sample_id": "a",
-            "source_trace": str(trace_path),
-            "task_id": "task-a",
-            "tool_name": "exec",
-            "tool_args": {"command": "pytest -q"},
-            "peak_memory_mb": 10.0,
-        },
-        {
-            "sample_id": "b",
-            "source_trace": str(tmp_path / "other.jsonl"),
-            "task_id": "task-b",
-            "tool_name": "exec",
-            "tool_args": {"command": "pytest -q"},
-            "peak_memory_mb": 20.0,
-        },
-    ]
-    keyer = make_row_command_prefix_keys("command", max_depth=4)
-    prior = build_resource_prior(
-        rows, value_field="peak_memory_mb", row_group_keys=keyer
-    )
-    hierarchy = resource_prior_hierarchy(
-        prior,
-        "exec",
-        keyer(rows[0]),
-        min_tool_history=1,
-        min_profile_tasks=2,
-    )
-    assert hierarchy[-1].values == [10.0, 20.0]
 
 
 def _write_trace(root: Path) -> Path:

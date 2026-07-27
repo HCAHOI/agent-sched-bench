@@ -778,8 +778,7 @@ def _alignment_evidence(
                 )
             return
         is_glob = any(
-            component["kind"] == "pathname_expansion"
-            for component in components
+            component["kind"] == "pathname_expansion" for component in components
         )
         if not is_glob:
             if (
@@ -794,7 +793,9 @@ def _alignment_evidence(
             return
         pattern = str(intent["cooked"])
         for end in range(runtime_index + 1, len(runtime) + 1):
-            if all(_pathname_match(word, pattern) for word in runtime[runtime_index:end]):
+            if all(
+                _pathname_match(word, pattern) for word in runtime[runtime_index:end]
+            ):
                 align(
                     static_index + 1,
                     end,
@@ -811,9 +812,7 @@ def _alignment_evidence(
     if len(alignments) != 1:
         return (
             None,
-            "ambiguous_expansion_alignment"
-            if alignments
-            else "no_full_argv_alignment",
+            "ambiguous_expansion_alignment" if alignments else "no_full_argv_alignment",
         )
     if any(segments is not None for segments in segments_by_word):
         return (
@@ -946,17 +945,13 @@ def _assign(
             if si in assigned:
                 continue
             opts = [
-                pid
-                for pid in chains
-                if pid not in used and (si, pid) in candidates
+                pid for pid in chains if pid not in used and (si, pid) in candidates
             ]
             if len(opts) != 1:
                 continue
             pid = opts[0]
             claimants = [
-                sj
-                for sj in statics
-                if sj not in assigned and (sj, pid) in candidates
+                sj for sj in statics if sj not in assigned and (sj, pid) in candidates
             ]
             if len(claimants) == 1:
                 assigned[si] = pid
@@ -1404,8 +1399,7 @@ def bridge_command(
             )
 
     mapping_anchors = {
-        (pid, chains[pid][0].exec_seq)
-        for pid in (*assigned.values(), *loop_pids)
+        (pid, chains[pid][0].exec_seq) for pid in (*assigned.values(), *loop_pids)
     }
     accepted_capped_prefixes = {
         (pid, chains[pid][0].exec_seq)
@@ -1418,9 +1412,7 @@ def bridge_command(
         for pid in pids
     }
     owned_exec_images = {
-        image
-        for clause in bridged
-        for image in clause.owned_exec_images
+        image for clause in bridged for image in clause.owned_exec_images
     }
     ownership_only_images = owned_exec_images - mapping_anchors
     incomplete_capture_gaps = [
@@ -1465,12 +1457,16 @@ def bridge_command(
         }
         for child, parent in fork_parent.items()
     )
-    attribution_reasons = [
-        MappingGap(
-            "attribution_gap",
-            f"runtime attribution has {attribution_gap_count} relevant gap(s)",
-        )
-    ] if attribution_gap_count else []
+    attribution_reasons = (
+        [
+            MappingGap(
+                "attribution_gap",
+                f"runtime attribution has {attribution_gap_count} relevant gap(s)",
+            )
+        ]
+        if attribution_gap_count
+        else []
+    )
     return BridgeResult(
         bridged=bridged,
         no_runtime_exec=no_runtime_exec,
@@ -1615,6 +1611,10 @@ def _aggregate(
         latency_ms=(None if protocol_timeout_terminated else (t_end - t_exec) / 1e6),
         peak_cpu_cores=peak_cpu,
         sampled_peak_rss_mb=peak_rss,
+        disk_read_write_bytes_total=(
+            None if disk_io is None else float(disk_io[0] + disk_io[1])
+        ),
+        impute_short_null_resources_as_light=True,
         cpu_ns_cumulative=sum(i.cpu_ns_cumulative for i in owned_images),
         in_loop=bool(clause.get("in_loop", False)),
         in_pipe=bool(clause.get("in_pipe", False)),

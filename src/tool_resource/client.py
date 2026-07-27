@@ -235,15 +235,9 @@ class ResourceRun:
                 "workspace_scope": self.workspace_scope,
                 "pinned_snapshot_id": self._open_result.get("pinned_snapshot_id"),
                 "resulting_snapshot_id": None,
-                "canonicalizer_version": self._open_result.get(
-                    "canonicalizer_version"
-                ),
-                "store_schema_version": self._open_result.get(
-                    "store_schema_version"
-                ),
-                "latency_bucket_edges_ms": list(
-                    self.profile.latency_bucket_edges_ms
-                ),
+                "canonicalizer_version": self._open_result.get("canonicalizer_version"),
+                "store_schema_version": self._open_result.get("store_schema_version"),
+                "latency_bucket_edges_ms": list(self.profile.latency_bucket_edges_ms),
                 "update_policy": self.profile.update_policy,
                 "telemetry_requirement": self.profile.telemetry_requirement,
                 "behavior": self.profile.behavior,
@@ -361,6 +355,7 @@ class ResourceTrace:
                 {
                     "call_token",
                     "prediction",
+                    "resource_classifications",
                     "probability_by_bucket",
                     "selected_scope",
                     "fallback_path",
@@ -377,6 +372,13 @@ class ResourceTrace:
             prediction = result.get("prediction")
             if not isinstance(prediction, Mapping):
                 prediction = None
+            elif isinstance(result.get("resource_classifications"), Mapping):
+                prediction = {
+                    **dict(prediction),
+                    "resource_classifications": dict(
+                        result["resource_classifications"]
+                    ),
+                }
             return ResourceCallToken(
                 call_id,
                 command,

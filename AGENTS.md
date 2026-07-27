@@ -308,12 +308,11 @@ Before planning or executing work that changes tool-resource data, prediction,
 evaluation, or scheduler integration, read
 `analysis/development/tool-resource-canonical-objective.md`. Its objective,
 metric definitions, evidence boundary, and current-integration statement
-override conflicting older development plans and chat summaries. The final
-family is log-spaced latency/CPU/memory bucket prediction; the current stage is
-latency buckets only while canonical CPU/memory telemetry finishes. Bucket
-intervals are right-open, exact numeric boundaries have no default, and bucket
-IDs are never composed with boolean OR. Defer all details and current status to
-the lock file.
+override conflicting older development plans and chat summaries. The current
+targets are latency bucket PMF plus independent CPU peak, sampled RSS, and Disk
+I/O Heavy/Light classifications. Thresholds, short-null label policy, metrics,
+and current evidence status live only in the lock file. Compound command targets
+are never composed with boolean OR.
 
 ## Environment
 

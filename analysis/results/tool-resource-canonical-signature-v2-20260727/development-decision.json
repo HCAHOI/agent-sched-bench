@@ -1,0 +1,41 @@
+{
+  "amendment": {
+    "prior_artifacts_retained_as_exposure_record": true,
+    "prior_generator_committed": false,
+    "prior_visible_candidate": "generic-argv-v1",
+    "reason_for_v2": "remove plaintext opaque values from cross-repo keys and preserve numeric order of magnitude"
+  },
+  "claim_bearing": false,
+  "date": "2026-07-27",
+  "decision": {
+    "diagnostic_commit": "go",
+    "production_public_hierarchy": "no_go",
+    "production_runtime_remains": "public binary -> public global",
+    "reasons": [
+      "v2 improves over public binary in both exposed orientations but is below majority and raw argv on the larger SWE-277 evaluation",
+      "v1 is unsafe for shared public keys and its generator was not preserved",
+      "all SWE results are development-exposed and non-confirmatory"
+    ]
+  },
+  "results_by_orientation": {
+    "swe100-fit-swe277-eval": {
+      "eligible_examples": 12617,
+      "generic_argv_v1_exact_bucket_accuracy": 0.8277720535785051,
+      "generic_argv_v2_shape_exact_bucket_accuracy": 0.8261076325592455,
+      "generic_argv_v2_shape_hit_rate_of_public_fallbacks": 0.9927745664739884,
+      "majority_accuracy": 0.8281683442973765,
+      "public_binary_exact_bucket_accuracy": 0.8199254973448522,
+      "raw_argv_exact_bucket_accuracy": 0.8288024094475708
+    },
+    "swe277-fit-swe100-eval": {
+      "eligible_examples": 3926,
+      "generic_argv_v1_exact_bucket_accuracy": 0.847682119205298,
+      "generic_argv_v2_shape_exact_bucket_accuracy": 0.8466632705043301,
+      "generic_argv_v2_shape_hit_rate_of_public_fallbacks": 0.9980253878702398,
+      "majority_accuracy": 0.8372389200203769,
+      "public_binary_exact_bucket_accuracy": 0.8359653591441671,
+      "raw_argv_exact_bucket_accuracy": 0.8461538461538461
+    }
+  },
+  "status": "development_exposed_representation_decision"
+}

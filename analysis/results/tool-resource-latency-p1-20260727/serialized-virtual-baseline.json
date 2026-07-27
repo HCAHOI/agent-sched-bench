@@ -1,0 +1,222 @@
+{
+  "bucket_edges_ms": [
+    500.0,
+    1000.0,
+    2000.0,
+    4000.0,
+    8000.0,
+    16000.0,
+    32000.0,
+    64000.0
+  ],
+  "bucket_intervals": [
+    {
+      "bucket_id": 0,
+      "lower_inclusive": true,
+      "lower_ms": 0.0,
+      "upper_inclusive": true,
+      "upper_ms": 500.0
+    },
+    {
+      "bucket_id": 1,
+      "lower_inclusive": false,
+      "lower_ms": 500.0,
+      "upper_inclusive": true,
+      "upper_ms": 1000.0
+    },
+    {
+      "bucket_id": 2,
+      "lower_inclusive": false,
+      "lower_ms": 1000.0,
+      "upper_inclusive": true,
+      "upper_ms": 2000.0
+    },
+    {
+      "bucket_id": 3,
+      "lower_inclusive": false,
+      "lower_ms": 2000.0,
+      "upper_inclusive": true,
+      "upper_ms": 4000.0
+    },
+    {
+      "bucket_id": 4,
+      "lower_inclusive": false,
+      "lower_ms": 4000.0,
+      "upper_inclusive": true,
+      "upper_ms": 8000.0
+    },
+    {
+      "bucket_id": 5,
+      "lower_inclusive": false,
+      "lower_ms": 8000.0,
+      "upper_inclusive": true,
+      "upper_ms": 16000.0
+    },
+    {
+      "bucket_id": 6,
+      "lower_inclusive": false,
+      "lower_ms": 16000.0,
+      "upper_inclusive": true,
+      "upper_ms": 32000.0
+    },
+    {
+      "bucket_id": 7,
+      "lower_inclusive": false,
+      "lower_ms": 32000.0,
+      "upper_inclusive": true,
+      "upper_ms": 64000.0
+    },
+    {
+      "bucket_id": 8,
+      "lower_inclusive": false,
+      "lower_ms": 64000.0,
+      "upper_inclusive": false,
+      "upper_ms": null
+    }
+  ],
+  "claim_bearing": false,
+  "diagnostics": {
+    "censored_exec_call_count": 13,
+    "mapped_uncensored_clause_count": 12617,
+    "parsed_static_clause_count": 21902,
+    "payload_clause_count": 15474,
+    "prediction_provenance_counts": {
+      "public:bin": 9688,
+      "public:global": 94,
+      "repo:argv_prefix_depth_2": 642,
+      "repo:argv_prefix_depth_3": 417,
+      "repo:argv_prefix_depth_4": 112,
+      "repo:bin": 655,
+      "repo:exact_clause": 1009
+    },
+    "structural_leading_cd_clause_count": 6428,
+    "unavailable_clause_examples": 2857,
+    "unavailable_reasons": {
+      "censored": 23,
+      "segment_evidence_bin_mismatch": 1063,
+      "segment_evidence_count_mismatch": 279,
+      "segment_evidence_invalid_timing": 624,
+      "segment_evidence_missing": 38,
+      "segment_evidence_segment_parse_mismatch": 830
+    }
+  },
+  "eval_exec_call_count": 8976,
+  "fit_clause_observation_count": 3926,
+  "metrics": {
+    "by_boundary": [
+      {
+        "accuracy": 0.8639137671395736,
+        "boundary_ms": 500.0,
+        "eligible_examples": 12617,
+        "false_negative": 809,
+        "false_positive": 908,
+        "positive_count": 2168,
+        "positive_rate": 0.17183165570262343,
+        "true_negative": 9541,
+        "true_positive": 1359
+      },
+      {
+        "accuracy": 0.8708092256479353,
+        "boundary_ms": 1000.0,
+        "eligible_examples": 12617,
+        "false_negative": 1298,
+        "false_positive": 332,
+        "positive_count": 1631,
+        "positive_rate": 0.12927003249583896,
+        "true_negative": 10654,
+        "true_positive": 333
+      },
+      {
+        "accuracy": 0.9216136958072442,
+        "boundary_ms": 2000.0,
+        "eligible_examples": 12617,
+        "false_negative": 928,
+        "false_positive": 61,
+        "positive_count": 986,
+        "positive_rate": 0.07814852976143298,
+        "true_negative": 11570,
+        "true_positive": 58
+      },
+      {
+        "accuracy": 0.9493540461282397,
+        "boundary_ms": 4000.0,
+        "eligible_examples": 12617,
+        "false_negative": 612,
+        "false_positive": 27,
+        "positive_count": 628,
+        "positive_rate": 0.049774114290243324,
+        "true_negative": 11962,
+        "true_positive": 16
+      },
+      {
+        "accuracy": 0.9667908377585797,
+        "boundary_ms": 8000.0,
+        "eligible_examples": 12617,
+        "false_negative": 403,
+        "false_positive": 16,
+        "positive_count": 410,
+        "positive_rate": 0.03249583894745185,
+        "true_negative": 12191,
+        "true_positive": 7
+      },
+      {
+        "accuracy": 0.9847031782515654,
+        "boundary_ms": 16000.0,
+        "eligible_examples": 12617,
+        "false_negative": 177,
+        "false_positive": 16,
+        "positive_count": 178,
+        "positive_rate": 0.01410794959182056,
+        "true_negative": 12423,
+        "true_positive": 1
+      },
+      {
+        "accuracy": 0.9915193786161528,
+        "boundary_ms": 32000.0,
+        "eligible_examples": 12617,
+        "false_negative": 102,
+        "false_positive": 5,
+        "positive_count": 102,
+        "positive_rate": 0.008084330664975827,
+        "true_negative": 12510,
+        "true_positive": 0
+      },
+      {
+        "accuracy": 0.9961956090988349,
+        "boundary_ms": 64000.0,
+        "eligible_examples": 12617,
+        "false_negative": 45,
+        "false_positive": 3,
+        "positive_count": 45,
+        "positive_rate": 0.003566616469842276,
+        "true_negative": 12569,
+        "true_positive": 0
+      }
+    ]
+  },
+  "objective": "clause_latency_bucket_prediction",
+  "provenance": {
+    "deployment_semantics": "serialized_virtual_deployment",
+    "edge_source": "canonical_objective",
+    "eval_manifest": "/home/chiyu/workspace/agent-sched-bench-kb/configs/corpora/swe-277.json",
+    "eval_parse_failures": 0,
+    "eval_repo_count": 213,
+    "eval_root": "/home/chiyu/workspace/agent-sched-bench/traces/fresh-277-segtimeline",
+    "eval_task_count": 277,
+    "fit_manifest": "/home/chiyu/workspace/agent-sched-bench-kb/configs/corpora/swe-100.json",
+    "fit_parse_failures": 0,
+    "fit_repo_count": 94,
+    "fit_root": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/offline-gated-confirm-100-v2-pacct-perbin",
+    "fit_task_count": 100,
+    "proxy_adapter": "legacy bash-xtrace exact-bin segment latency only; no proxy CPU/RSS",
+    "repo_overlap_count": 36,
+    "scoring_unit": "mapped_non_structural_clause",
+    "task_order": "manifest task_ids order; no shuffle",
+    "task_overlap_count": 0,
+    "trace_order": "one source trace per task in manifest order",
+    "trace_update": "predict every mapped clause in all calls without intra-trace learning, then successful CloseTrace before the next trace",
+    "virtual_clock": "deterministic monotonic shift preserving source call order and durations; not historical concurrency or a historical close timestamp",
+    "virtual_trace_gap_s": 1.0
+  },
+  "status": "development_diagnostic_proxy_not_canonical_telemetry"
+}

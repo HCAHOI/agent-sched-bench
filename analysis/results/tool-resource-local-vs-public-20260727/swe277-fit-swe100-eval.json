@@ -1,0 +1,138 @@
+{
+  "arms": {
+    "current": "frozen public binary/global plus trace-close repo updates",
+    "public_only": "same frozen public binary/global without eval-local updates"
+  },
+  "bucket_edges_ms": [
+    500.0,
+    1000.0,
+    2000.0,
+    4000.0,
+    8000.0,
+    16000.0,
+    32000.0,
+    64000.0
+  ],
+  "by_local_evidence_count": {
+    "1": {
+      "eligible_examples": 200,
+      "local_exact_bucket_accuracy": 0.885,
+      "local_selected_key_kind_counts": {
+        "argv_prefix_depth_2": 60,
+        "argv_prefix_depth_3": 16,
+        "bin": 64,
+        "exact_clause": 60
+      },
+      "paired_exact_transitions": {
+        "local_correct_public_correct": 171,
+        "local_correct_public_wrong": 6,
+        "local_wrong_public_correct": 4,
+        "local_wrong_public_wrong": 19
+      },
+      "public_counterfactual_provenance_counts": {
+        "public:bin": 200
+      },
+      "public_minus_local_percentage_points": -1.0000000000000009,
+      "public_only_exact_bucket_accuracy": 0.875
+    },
+    "2-4": {
+      "eligible_examples": 90,
+      "local_exact_bucket_accuracy": 0.8777777777777778,
+      "local_selected_key_kind_counts": {
+        "argv_prefix_depth_2": 14,
+        "argv_prefix_depth_3": 11,
+        "argv_prefix_depth_4": 2,
+        "bin": 30,
+        "exact_clause": 33
+      },
+      "paired_exact_transitions": {
+        "local_correct_public_correct": 78,
+        "local_correct_public_wrong": 1,
+        "local_wrong_public_correct": 3,
+        "local_wrong_public_wrong": 8
+      },
+      "public_counterfactual_provenance_counts": {
+        "public:bin": 90
+      },
+      "public_minus_local_percentage_points": 2.2222222222222254,
+      "public_only_exact_bucket_accuracy": 0.9
+    },
+    "5+": {
+      "eligible_examples": 73,
+      "local_exact_bucket_accuracy": 0.7534246575342466,
+      "local_selected_key_kind_counts": {
+        "argv_prefix_depth_2": 1,
+        "argv_prefix_depth_3": 4,
+        "bin": 61,
+        "exact_clause": 7
+      },
+      "paired_exact_transitions": {
+        "local_correct_public_correct": 50,
+        "local_correct_public_wrong": 5,
+        "local_wrong_public_correct": 8,
+        "local_wrong_public_wrong": 10
+      },
+      "public_counterfactual_provenance_counts": {
+        "public:bin": 73
+      },
+      "public_minus_local_percentage_points": 4.109589041095885,
+      "public_only_exact_bucket_accuracy": 0.7945205479452054
+    }
+  },
+  "claim_bearing": false,
+  "eval_exec_call_count": 3004,
+  "fit_clause_observation_count": 12617,
+  "objective": "clause_latency_bucket_local_vs_public_arbitration",
+  "overall": {
+    "eligible_examples": 363,
+    "local_exact_bucket_accuracy": 0.8567493112947658,
+    "local_selected_key_kind_counts": {
+      "argv_prefix_depth_2": 75,
+      "argv_prefix_depth_3": 31,
+      "argv_prefix_depth_4": 2,
+      "bin": 155,
+      "exact_clause": 100
+    },
+    "paired_exact_transitions": {
+      "local_correct_public_correct": 299,
+      "local_correct_public_wrong": 12,
+      "local_wrong_public_correct": 15,
+      "local_wrong_public_wrong": 37
+    },
+    "public_counterfactual_provenance_counts": {
+      "public:bin": 363
+    },
+    "public_minus_local_percentage_points": 0.8264462809917328,
+    "public_only_exact_bucket_accuracy": 0.8650137741046832
+  },
+  "provenance": {
+    "deployment_semantics": "serialized_virtual_deployment",
+    "edge_source": "canonical_objective",
+    "eval_manifest": "/home/chiyu/workspace/agent-sched-bench-kb/configs/corpora/swe-100.json",
+    "eval_parse_failures": 0,
+    "eval_repo_count": 94,
+    "eval_root": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/offline-gated-confirm-100-v2-pacct-perbin",
+    "eval_task_count": 100,
+    "fit_manifest": "/home/chiyu/workspace/agent-sched-bench-kb/configs/corpora/swe-277.json",
+    "fit_parse_failures": 0,
+    "fit_repo_count": 213,
+    "fit_root": "/home/chiyu/workspace/agent-sched-bench/traces/fresh-277-segtimeline",
+    "fit_task_count": 277,
+    "proxy_adapter": "legacy bash-xtrace exact-bin segment latency only; no proxy CPU/RSS",
+    "repo_overlap_count": 36,
+    "scoring_unit": "mapped_non_structural_clause",
+    "task_order": "manifest task_ids order; no shuffle",
+    "task_overlap_count": 0,
+    "trace_order": "one source trace per task in manifest order",
+    "trace_update": "predict every mapped clause in all calls without intra-trace learning, then successful CloseTrace before the next trace",
+    "virtual_clock": "deterministic monotonic shift preserving source call order and durations; not historical concurrency or a historical close timestamp",
+    "virtual_trace_gap_s": 1.0
+  },
+  "row_identity": {
+    "eligible_row_count": 3926,
+    "identical_mapped_row_ids_labels_and_eligibility": true,
+    "mapped_row_count": 3926,
+    "repo_selected_row_count": 363
+  },
+  "status": "development_exposed_local_vs_public_diagnostic"
+}

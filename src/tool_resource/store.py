@@ -174,20 +174,28 @@ class ObservationStore:
     def observations_for_snapshot(
         self,
         snapshot_id: str,
-        workspace_scope: str,
+        workspace_scope: str | None = None,
     ) -> list[dict[str, Any]]:
+        """Return snapshot envelopes, optionally restricted to one workspace."""
+
         self.require_snapshot(snapshot_id)
+        scope_clause = "" if workspace_scope is None else "AND o.workspace_scope=?"
+        parameters = (
+            (snapshot_id,)
+            if workspace_scope is None
+            else (snapshot_id, workspace_scope)
+        )
         with self._lock:
             rows = self._connection.execute(
-                """
+                f"""
                 SELECT o.envelope_json
                 FROM observations AS o
                 JOIN snapshot_observations AS s
                   ON s.observation_id=o.observation_id
-                WHERE s.snapshot_id=? AND o.workspace_scope=?
+                WHERE s.snapshot_id=? {scope_clause}
                 ORDER BY o.ingestion_sequence
                 """,
-                (snapshot_id, workspace_scope),
+                parameters,
             ).fetchall()
         return [json.loads(row["envelope_json"]) for row in rows]
 

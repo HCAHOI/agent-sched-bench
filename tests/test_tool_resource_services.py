@@ -29,6 +29,9 @@ from tool_resource.resource_protocol import (
     ResourceProtocolError,
     ResourceUnixTransport,
 )
+from tool_resource.runtime_kb import (
+    CANONICAL_LATENCY_BUCKET_EDGES_MS,
+)
 from tool_resource.store import ObservationStore
 from tool_resource.telemetry_protocol import (
     TELEMETRY_PROTOCOL_VERSION,
@@ -179,9 +182,9 @@ class _FakeCollector:
                 {
                     "bin": clause["bin"],
                     "argv": clause["argv"],
-                    "ts_start": now - 0.25,
+                    "ts_start": now - 0.75,
                     "ts_end": now,
-                    "latency_ms": 250.0,
+                    "latency_ms": 750.0,
                     "peak_cpu_cores": 0.5,
                     "sampled_peak_rss_mb": 8.0,
                     "cpu_ns_cumulative": 10,
@@ -395,11 +398,27 @@ def test_pipeline_head_is_kb_evidence_but_sink_is_not() -> None:
     # measures the upstream's work, not its own. The head is self-determined.
     head = _envelope("head")
     head["normalized_measurements"][0]["pipeline_position"] = 0
-    assert [obs.bin for obs in _clause_observations("repo", head)] == ["printf"]
+    assert [obs.bin for obs in _clause_observations(head)] == ["printf"]
 
     sink = _envelope("sink")
     sink["normalized_measurements"][0]["pipeline_position"] = 1
-    assert _clause_observations("repo", sink) == []
+    assert _clause_observations(sink) == []
+
+
+def test_clause_observation_ingests_nested_disk_total_and_marks_null_policy() -> None:
+    envelope = _envelope("resource-fields", latency_ms=1000.0)
+    row = envelope["normalized_measurements"][0]
+    row["peak_cpu_cores"] = 3.0
+    row["sampled_peak_rss_mb"] = 700.0
+    row["disk_io"] = {"read_write_bytes_total": 200 * 1024 * 1024}
+
+    observations = _clause_observations(envelope)
+
+    assert len(observations) == 1
+    assert observations[0].peak_cpu_cores == 3.0
+    assert observations[0].sampled_peak_rss_mb == 700.0
+    assert observations[0].disk_read_write_bytes_total == 200 * 1024 * 1024
+    assert observations[0].impute_short_null_resources_as_light is True
 
 
 def _open_run(
@@ -417,7 +436,7 @@ def _open_run(
             "run_id": run_id,
             "workspace_scope": scope,
             "snapshot": snapshot,
-            "latency_bucket_edges_ms": [100.0],
+            "latency_bucket_edges_ms": list(CANONICAL_LATENCY_BUCKET_EDGES_MS),
             "update_policy": update_policy,
             "telemetry_requirement": "required_for_valid_evidence",
             "behavior": behavior,
@@ -585,6 +604,12 @@ def test_snapshot_strict_causal_boundary_and_cross_scope(tmp_path: Path) -> None
             )
         ),
     )
+    assert service.dispatch("Capabilities", {})["prediction_targets"] == [
+        "latency_bucket",
+        "peak_cpu_cores_heavy_light",
+        "sampled_peak_rss_mb_heavy_light",
+        "disk_read_write_bytes_total_heavy_light",
+    ]
     run = _open_run(
         service,
         behavior="predict",
@@ -601,7 +626,20 @@ def test_snapshot_strict_causal_boundary_and_cross_scope(tmp_path: Path) -> None
             "query_timestamp": 10.0,
         },
     )
-    assert at_boundary["prediction"] == {}
+    assert at_boundary["prediction"]["prediction"]["scope"] == "public"
+    assert at_boundary["evidence_count"] == 1
+    resource_predictions = at_boundary["resource_classifications"]["classifications"]
+    assert set(resource_predictions) == {
+        "peak_cpu_cores",
+        "sampled_peak_rss_mb",
+        "disk_read_write_bytes_total",
+    }
+    assert all(
+        prediction["label"] == "light" for prediction in resource_predictions.values()
+    )
+    assert all(
+        prediction["scope"] == "public" for prediction in resource_predictions.values()
+    )
     after_boundary = service.dispatch(
         "BeginCall",
         {
@@ -611,8 +649,15 @@ def test_snapshot_strict_causal_boundary_and_cross_scope(tmp_path: Path) -> None
             "query_timestamp": 10.1,
         },
     )
-    assert after_boundary["prediction"]["prediction"]["bucket_id"] == 0
+    assert after_boundary["prediction"]["prediction"]["scope"] == "repo"
+    assert after_boundary["prediction"]["prediction"]["probability_by_bucket"][0] == 1.0
     assert after_boundary["evidence_count"] == 1
+    assert all(
+        prediction["scope"] == "repo"
+        for prediction in after_boundary["resource_classifications"][
+            "classifications"
+        ].values()
+    )
     service.close()
 
 
@@ -625,7 +670,7 @@ def test_frozen_and_causal_visibility(
     expected_bucket: int,
 ) -> None:
     store = ObservationStore(tmp_path / f"{update_policy}.sqlite3")
-    store.insert_observation(_envelope("seed", command="printf old"))
+    store.insert_observation(_envelope("seed", scope="other", command="printf old"))
     store.promote_observations({"seed"})
     telemetry = TelemetryService(
         collector_factory=_FakeCollector,
@@ -655,7 +700,10 @@ def test_frozen_and_causal_visibility(
             "query_timestamp": time.time() + 1.0,
         },
     )
-    assert prediction["prediction"]["prediction"]["bucket_id"] == expected_bucket
+    assert (
+        prediction["prediction"]["prediction"]["probability_by_bucket"][expected_bucket]
+        == 1.0
+    )
     service.close()
 
 
@@ -1432,7 +1480,7 @@ def test_trace_settlement_does_not_block_other_resource_requests(
                 "run_id": "run",
                 "workspace_scope": "repo",
                 "snapshot": "latest_at_run_start",
-                "latency_bucket_edges_ms": [100.0],
+                "latency_bucket_edges_ms": list(CANONICAL_LATENCY_BUCKET_EDGES_MS),
                 "update_policy": "causal",
                 "telemetry_requirement": "required_for_valid_evidence",
                 "behavior": "observe_predict_learn",
@@ -1825,7 +1873,7 @@ def test_telemetry_startup_failure_preserves_prediction_and_workload(
         call_id="call",
         command="printf old",
     )
-    assert begin["prediction"]["prediction"]["bucket_id"] == 0
+    assert begin["prediction"]["prediction"]["probability_by_bucket"][0] == 1.0
     assert end["workload_result"] == {"returncode": 0, "result": "ok"}
     closed = service.dispatch(
         "CloseTrace",
@@ -1864,7 +1912,7 @@ def test_protocol_validation_and_two_client_isolation(tmp_path: Path) -> None:
             "run_id": "one",
             "workspace_scope": "repo",
             "snapshot": "latest_at_run_start",
-            "latency_bucket_edges_ms": [100.0],
+            "latency_bucket_edges_ms": list(CANONICAL_LATENCY_BUCKET_EDGES_MS),
             "update_policy": "frozen",
             "telemetry_requirement": "best_effort",
             "behavior": "predict",
@@ -1873,7 +1921,7 @@ def test_protocol_validation_and_two_client_isolation(tmp_path: Path) -> None:
             "run_id": "two",
             "workspace_scope": "repo",
             "snapshot": "latest_at_run_start",
-            "latency_bucket_edges_ms": [100.0],
+            "latency_bucket_edges_ms": list(CANONICAL_LATENCY_BUCKET_EDGES_MS),
             "update_policy": "causal",
             "telemetry_requirement": "best_effort",
             "behavior": "predict",
@@ -1981,7 +2029,7 @@ def test_stateful_retries_survive_response_cache_eviction(tmp_path: Path) -> Non
             "run_id": "stable-run",
             "workspace_scope": "repo",
             "snapshot": "latest_at_run_start",
-            "latency_bucket_edges_ms": [100.0],
+            "latency_bucket_edges_ms": list(CANONICAL_LATENCY_BUCKET_EDGES_MS),
             "update_policy": "frozen",
             "telemetry_requirement": "best_effort",
             "behavior": "predict",
@@ -2010,9 +2058,7 @@ def test_stateful_retries_survive_response_cache_eviction(tmp_path: Path) -> Non
 
         _evict_response_cache(transport, "resource-evict")
 
-        assert (
-            transport.request("OpenRun", run_payload, request_id="open-run") == run
-        )
+        assert transport.request("OpenRun", run_payload, request_id="open-run") == run
         assert (
             transport.request(
                 "OpenTrace",
@@ -2167,28 +2213,38 @@ def test_telemetry_protocol_is_strict_and_separate(tmp_path: Path) -> None:
 
 
 def test_profile_requires_explicit_canonical_edges(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="canonical boundaries"):
+        ResourceProfile(
+            endpoint="unix:///run/user/1000/resource.sock",
+            behavior="predict",
+            update_policy="frozen",
+            snapshot="latest_at_run_start",
+            telemetry_requirement="best_effort",
+            latency_bucket_edges_ms=(100.0,),
+        )
+
     profile_path = tmp_path / "resource.yaml"
     profile_path.write_text(
-        """
+        f"""
 tool_resource:
   endpoint: unix:///run/user/1000/resource.sock
   behavior: predict
   update_policy: frozen
   snapshot: latest_at_run_start
   telemetry_requirement: best_effort
-  latency_bucket_edges_ms: [100, 1000]
+  latency_bucket_edges_ms: {list(CANONICAL_LATENCY_BUCKET_EDGES_MS)}
 """.lstrip(),
         encoding="utf-8",
     )
     profile = ResourceProfile.load(profile_path)
-    assert profile.latency_bucket_edges_ms == (100, 1000)
+    assert profile.latency_bucket_edges_ms == CANONICAL_LATENCY_BUCKET_EDGES_MS
     assert profile.open_run_payload(run_id="run", workspace_scope="repo")[
         "latency_bucket_edges_ms"
-    ] == [100, 1000]
+    ] == list(CANONICAL_LATENCY_BUCKET_EDGES_MS)
 
     profile_path.write_text(
         profile_path.read_text(encoding="utf-8").replace(
-            "  latency_bucket_edges_ms: [100, 1000]\n",
+            f"  latency_bucket_edges_ms: {list(CANONICAL_LATENCY_BUCKET_EDGES_MS)}\n",
             "",
         ),
         encoding="utf-8",
@@ -2197,14 +2253,14 @@ tool_resource:
         ResourceProfile.load(profile_path)
 
     profile_path.write_text(
-        """
+        f"""
 tool_resource:
   endpoint: unix:///run/user/1000/resource.sock
   behavior: predict
   update_policy: frozen
   snapshot: null
   telemetry_requirement: best_effort
-  latency_bucket_edges_ms: [100]
+  latency_bucket_edges_ms: {list(CANONICAL_LATENCY_BUCKET_EDGES_MS)}
 """.lstrip(),
         encoding="utf-8",
     )
@@ -2240,7 +2296,7 @@ tool_resource:
   update_policy: causal
   snapshot: latest_at_run_start
   telemetry_requirement: required_for_valid_evidence
-  latency_bucket_edges_ms: [100]
+  latency_bucket_edges_ms: {list(CANONICAL_LATENCY_BUCKET_EDGES_MS)}
 """.lstrip(),
         encoding="utf-8",
     )
@@ -2269,7 +2325,9 @@ tool_resource:
         assert resource_run.finalize(workload_status="completed") is None
         run_artifact = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
         assert run_artifact["run_manifest"]["pinned_snapshot_id"]
-        assert run_artifact["run_manifest"]["latency_bucket_edges_ms"] == [100.0]
+        assert run_artifact["run_manifest"]["latency_bucket_edges_ms"] == list(
+            CANONICAL_LATENCY_BUCKET_EDGES_MS
+        )
         assert store.observation_count() == 1
         assert (
             json.loads(
@@ -2303,7 +2361,7 @@ def test_thin_client_recovers_post_commit_close_trace_response_loss(
         update_policy="causal",
         snapshot="latest_at_run_start",
         telemetry_requirement="required_for_valid_evidence",
-        latency_bucket_edges_ms=(100,),
+        latency_bucket_edges_ms=CANONICAL_LATENCY_BUCKET_EDGES_MS,
     )
     resource_run = ResourceRun.open(
         profile,
@@ -2353,7 +2411,7 @@ def test_thin_client_run_spans_traces_for_causal_visibility(tmp_path: Path) -> N
         update_policy="causal",
         snapshot="latest_at_run_start",
         telemetry_requirement="required_for_valid_evidence",
-        latency_bucket_edges_ms=(100,),
+        latency_bucket_edges_ms=CANONICAL_LATENCY_BUCKET_EDGES_MS,
     )
     resource_run = ResourceRun.open(
         profile,
@@ -2385,7 +2443,7 @@ def test_thin_client_run_spans_traces_for_causal_visibility(tmp_path: Path) -> N
     service._traces[second._trace_token].telemetry_queue.join()
     second_token = second.begin_tool_call("second-call", "echo learned")
     assert second_token.prediction is not None
-    assert second_token.prediction["prediction"]["bucket_id"] == 1
+    assert second_token.prediction["prediction"]["probability_by_bucket"][1] == 1.0
     second.finish_tool_call(
         second_token,
         replay_response={"returncode": 0, "result": "ok"},
@@ -2413,7 +2471,7 @@ def test_prediction_only_client_does_not_require_telemetry(tmp_path: Path) -> No
         update_policy="frozen",
         snapshot="latest_at_run_start",
         telemetry_requirement="best_effort",
-        latency_bucket_edges_ms=(100,),
+        latency_bucket_edges_ms=CANONICAL_LATENCY_BUCKET_EDGES_MS,
     )
     resource_run = ResourceRun.open(
         profile,
@@ -2461,7 +2519,7 @@ def test_best_effort_run_preserves_invalid_telemetry_as_valid_evidence_policy(
         update_policy="frozen",
         snapshot="latest_at_run_start",
         telemetry_requirement="best_effort",
-        latency_bucket_edges_ms=(100,),
+        latency_bucket_edges_ms=CANONICAL_LATENCY_BUCKET_EDGES_MS,
     )
     resource_run = ResourceRun.open(
         profile,
@@ -2509,7 +2567,7 @@ def test_thin_client_records_resource_service_unavailability(
         update_policy="frozen",
         snapshot="latest_at_run_start",
         telemetry_requirement=requirement,
-        latency_bucket_edges_ms=(100,),
+        latency_bucket_edges_ms=CANONICAL_LATENCY_BUCKET_EDGES_MS,
     )
     manifest_path = tmp_path / f"{requirement}.json"
     resource_run = ResourceRun.open(
@@ -2787,7 +2845,9 @@ def test_live_service_chain_produces_one_eligible_observation(
                             "run_id": container_name,
                             "workspace_scope": "live-service-smoke",
                             "snapshot": "latest_at_run_start",
-                            "latency_bucket_edges_ms": [10, 100, 1000],
+                            "latency_bucket_edges_ms": list(
+                                CANONICAL_LATENCY_BUCKET_EDGES_MS
+                            ),
                             "update_policy": "causal",
                             "telemetry_requirement": ("required_for_valid_evidence"),
                             "behavior": "observe_predict_learn",

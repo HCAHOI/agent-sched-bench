@@ -9,7 +9,7 @@ from urllib.parse import unquote, urlparse
 
 import yaml
 
-from tool_resource.runtime_kb import LatencyBuckets
+from tool_resource.runtime_kb import CANONICAL_LATENCY_BUCKETS, LatencyBuckets
 
 _BEHAVIORS = {"predict", "observe_predict", "observe_predict_learn"}
 _UPDATE_POLICIES = {"frozen", "causal"}
@@ -57,7 +57,11 @@ class ResourceProfile:
                 "unsupported tool-resource telemetry requirement "
                 f"{self.telemetry_requirement!r}"
             )
-        LatencyBuckets(self.latency_bucket_edges_ms)
+        if LatencyBuckets(self.latency_bucket_edges_ms) != CANONICAL_LATENCY_BUCKETS:
+            raise ValueError(
+                "tool-resource latency_bucket_edges_ms must match the "
+                "canonical boundaries"
+            )
 
     @classmethod
     def load(cls, path: str | Path) -> ResourceProfile:

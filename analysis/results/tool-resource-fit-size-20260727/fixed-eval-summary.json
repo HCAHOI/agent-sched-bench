@@ -1,0 +1,135 @@
+{
+  "both_corpora_development_exposed": true,
+  "claim_bearing": false,
+  "eligible_row_ids_and_labels_identical_across_runs": true,
+  "exact_bucket_accuracy_monotonic_non_decreasing": false,
+  "fit_eval_task_overlap_count": 0,
+  "fit_source_root": "/home/chiyu/workspace/agent-sched-bench/traces/fresh-277-segtimeline",
+  "fit_task_counts": [
+    100,
+    200,
+    277
+  ],
+  "fixed_eval_exec_call_count": 3004,
+  "fixed_eval_manifest": "/home/chiyu/workspace/agent-sched-bench-kb/configs/corpora/swe-100.json",
+  "fixed_eval_mapped_uncensored_clause_count": 3926,
+  "fixed_eval_parsed_static_clause_count": 7124,
+  "fixed_eval_payload_clause_count": 4898,
+  "fixed_eval_repo_count": 94,
+  "fixed_eval_root": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/offline-gated-confirm-100-v2-pacct-perbin",
+  "fixed_eval_structural_leading_cd_clause_count": 2226,
+  "fixed_eval_task_count": 100,
+  "fixed_eval_unavailable_clause_examples": 972,
+  "majority_definition": "most frequent truth bucket among the same eligible rows; lowest bucket ID on ties",
+  "nested_fit_prefixes": true,
+  "runs": [
+    {
+      "eligible_examples": 3926,
+      "exact_bucket_accuracy": 0.8364747834946511,
+      "exact_minus_majority_percentage_points": -0.07641365257258226,
+      "fit_clause_observation_count": 4462,
+      "fit_eval_repo_overlap_count": 18,
+      "fit_repo_count": 88,
+      "fit_task_count": 100,
+      "majority_bucket_accuracy": 0.8372389200203769,
+      "majority_bucket_id": 0,
+      "result_file": "fit100-eval-swe100.json"
+    },
+    {
+      "eligible_examples": 3926,
+      "exact_bucket_accuracy": 0.8364747834946511,
+      "exact_minus_majority_percentage_points": -0.07641365257258226,
+      "fit_clause_observation_count": 9207,
+      "fit_eval_repo_overlap_count": 29,
+      "fit_repo_count": 158,
+      "fit_task_count": 200,
+      "majority_bucket_accuracy": 0.8372389200203769,
+      "majority_bucket_id": 0,
+      "result_file": "fit200-eval-swe100.json"
+    },
+    {
+      "eligible_examples": 3926,
+      "exact_bucket_accuracy": 0.8359653591441671,
+      "exact_minus_majority_percentage_points": -0.12735608762097783,
+      "fit_clause_observation_count": 12617,
+      "fit_eval_repo_overlap_count": 36,
+      "fit_repo_count": 213,
+      "fit_task_count": 277,
+      "majority_bucket_accuracy": 0.8372389200203769,
+      "majority_bucket_id": 0,
+      "result_file": "fit277-eval-swe100.json"
+    }
+  ],
+  "seed_sensitivity_n100": {
+    "eligible_examples": 3926,
+    "eligible_row_ids_and_labels_identical": true,
+    "fit_task_count": 100,
+    "runs": [
+      {
+        "exact_bucket_accuracy": 0.8352012226184412,
+        "exact_minus_majority_percentage_points": -0.2037697401935712,
+        "fit_clause_observation_count": 4777,
+        "fit_repo_count": 84,
+        "shuffle_seed": 0,
+        "threshold_confusion": [
+          {
+            "boundary_ms": 500.0,
+            "false_negative": 337,
+            "false_positive": 207,
+            "true_positive": 302
+          },
+          {
+            "boundary_ms": 1000.0,
+            "false_negative": 272,
+            "false_positive": 235,
+            "true_positive": 224
+          }
+        ]
+      },
+      {
+        "exact_bucket_accuracy": 0.8362200713194091,
+        "exact_minus_majority_percentage_points": -0.10188487009678004,
+        "fit_clause_observation_count": 4558,
+        "fit_repo_count": 76,
+        "shuffle_seed": 1,
+        "threshold_confusion": [
+          {
+            "boundary_ms": 500.0,
+            "false_negative": 337,
+            "false_positive": 205,
+            "true_positive": 302
+          },
+          {
+            "boundary_ms": 1000.0,
+            "false_negative": 268,
+            "false_positive": 238,
+            "true_positive": 228
+          }
+        ]
+      },
+      {
+        "exact_bucket_accuracy": 0.8364747834946511,
+        "exact_minus_majority_percentage_points": -0.07641365257258226,
+        "fit_clause_observation_count": 4462,
+        "fit_repo_count": 88,
+        "shuffle_seed": 42,
+        "threshold_confusion": [
+          {
+            "boundary_ms": 500.0,
+            "false_negative": 348,
+            "false_positive": 199,
+            "true_positive": 291
+          },
+          {
+            "boundary_ms": 1000.0,
+            "false_negative": 263,
+            "false_positive": 238,
+            "true_positive": 233
+          }
+        ]
+      }
+    ]
+  },
+  "shuffle_seed": 42,
+  "status": "development_diagnostic_proxy_not_canonical_telemetry"
+}

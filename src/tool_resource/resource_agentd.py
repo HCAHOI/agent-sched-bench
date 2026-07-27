@@ -34,7 +34,12 @@ from tool_resource.resource_protocol import (
     RESOURCE_PROTOCOL_VERSION,
     ResourceProtocolError,
 )
-from tool_resource.runtime_kb import ClauseObservation, ClauseResourceKB, LatencyBuckets
+from tool_resource.runtime_kb import (
+    CANONICAL_LATENCY_BUCKETS,
+    ClauseObservation,
+    ClauseResourceKB,
+    LatencyBuckets,
+)
 from tool_resource.store import STORE_SCHEMA_VERSION, ObservationStore
 from tool_resource.telemetry_protocol import (
     TelemetryTransport,
@@ -105,8 +110,7 @@ class _Run:
     telemetry_requirement: str
     behavior: str
     owner_identity: tuple[int, int]
-    base_observations: list[ClauseObservation]
-    overlay_observations: list[ClauseObservation] = field(default_factory=list)
+    kb: ClauseResourceKB
     trace_tokens: set[str] = field(default_factory=set)
     trace_ids: set[str] = field(default_factory=set)
     aborted: bool = False
@@ -229,7 +233,12 @@ class ResourceService:
     def _capabilities(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         require_fields(payload, required=set(), error_type=ResourceProtocolError)
         return {
-            "prediction_targets": ["latency_bucket"],
+            "prediction_targets": [
+                "latency_bucket",
+                "peak_cpu_cores_heavy_light",
+                "sampled_peak_rss_mb_heavy_light",
+                "disk_read_write_bytes_total_heavy_light",
+            ],
             "canonicalizer_version": CANONICALIZER_VERSION,
             "store_schema_version": STORE_SCHEMA_VERSION,
             "raw_events_exposed": False,
@@ -264,6 +273,10 @@ class ResourceService:
             buckets = LatencyBuckets(tuple(edges))
         except (TypeError, ValueError) as exc:
             raise ResourceProtocolError(str(exc)) from exc
+        if buckets != CANONICAL_LATENCY_BUCKETS:
+            raise ResourceProtocolError(
+                "latency_bucket_edges_ms must match the canonical boundaries"
+            )
         update_policy = _choice(payload, "update_policy", {"frozen", "causal"})
         requirement = _choice(
             payload,
@@ -281,14 +294,23 @@ class ResourceService:
             else snapshot
         )
         try:
-            envelopes = self.store.observations_for_snapshot(snapshot_id, scope)
+            envelopes = self.store.observations_for_snapshot(snapshot_id)
             observations = [
                 observation
                 for envelope in envelopes
-                for observation in _clause_observations(scope, envelope)
+                for observation in _clause_observations(envelope)
             ]
         except ValueError as exc:
             raise ResourceProtocolError(str(exc)) from exc
+        public = [
+            observation
+            for observation in observations
+            if observation.repo != scope and observation.latency_ms is not None
+        ]
+        kb = ClauseResourceKB.fit_public(public) if public else ClauseResourceKB()
+        for observation in observations:
+            if observation.repo == scope:
+                kb.observe_completed_clause(observation)
         run_token = uuid.uuid4().hex
         with self._lock:
             self._runs[run_token] = _Run(
@@ -300,7 +322,7 @@ class ResourceService:
                 requirement,
                 behavior,
                 owner_identity,
-                observations,
+                kb,
             )
         return {
             "run_token": run_token,
@@ -706,6 +728,9 @@ class ResourceService:
             prediction, prediction_error = self._predict(
                 run, command, parsed, query_timestamp
             )
+            resource_predictions = self._predict_resources(
+                run, command, parsed, query_timestamp
+            )
             call_token = uuid.uuid4().hex
             call = _Call(
                 call_id=call_id,
@@ -734,6 +759,7 @@ class ResourceService:
         return {
             "call_token": call_token,
             "prediction": prediction_payload,
+            "resource_classifications": resource_predictions,
             "probability_by_bucket": selected.get("probability_by_bucket"),
             "selected_scope": selected.get("scope"),
             "fallback_path": selected.get("fallback_path"),
@@ -1098,12 +1124,8 @@ class ResourceService:
                     for envelope in ingested_envelopes:
                         if envelope["ingest_eligible"] is not True:
                             continue
-                        run.overlay_observations.extend(
-                            _clause_observations(
-                                run.workspace_scope,
-                                envelope,
-                            )
-                        )
+                        for observation in _clause_observations(envelope):
+                            run.kb.observe_completed_clause(observation)
             self._promote_trace(trace)
             trace.last_used = time.monotonic()
         with run.lock:
@@ -1291,37 +1313,67 @@ class ResourceService:
         parsed: Mapping[str, Any],
         query_timestamp: float,
     ) -> tuple[Any | None, str | None]:
-        with run.lock:
-            visible = [
-                observation
-                for observation in [
-                    *run.base_observations,
-                    *(
-                        run.overlay_observations
-                        if run.update_policy == "causal"
-                        else []
-                    ),
-                ]
-                if observation.repo == run.workspace_scope
-                and observation.ts_end < query_timestamp
-            ]
         try:
-            if not visible:
-                raise ValueError("pinned snapshot has no causally visible evidence")
-            kb = ClauseResourceKB.fit_public(visible)
-            for observation in visible:
-                kb.observe_completed_clause(observation)
-            prediction = kb.predict_command_latency_bucket_from_clauses(
-                run.workspace_scope,
-                parsed["clauses"],
-                query_timestamp,
-                run.buckets,
-                command=command,
-                parse_failed=bool(parsed["parse_failed"]),
-            )
+            with run.lock:
+                prediction = run.kb.predict_command_latency_bucket_from_clauses(
+                    run.workspace_scope,
+                    parsed["clauses"],
+                    query_timestamp,
+                    run.buckets,
+                    command=command,
+                    parse_failed=bool(parsed["parse_failed"]),
+                )
             return prediction, None
         except Exception as exc:
             return None, f"{type(exc).__name__}: {exc}"
+
+    def _predict_resources(
+        self,
+        run: _Run,
+        command: str,
+        parsed: Mapping[str, Any],
+        query_timestamp: float,
+    ) -> dict[str, Any]:
+        clauses = list(parsed["clauses"])
+        reason = None
+        if parsed["parse_failed"]:
+            reason = "parse_failed"
+        elif len(clauses) != 1:
+            reason = "compound_command_uncomposed"
+        if reason is not None:
+            return {
+                "command": command,
+                "clause_bins": [str(clause["bin"]) for clause in clauses],
+                "classifications": {},
+                "unavailable_reason": reason,
+            }
+        clause = clauses[0]
+        try:
+            with run.lock:
+                predictions = run.kb.predict_clause_resource_classes(
+                    run.workspace_scope,
+                    str(clause["bin"]),
+                    tuple(clause["argv"]),
+                    ts_start=query_timestamp,
+                )
+            return {
+                "command": command,
+                "clause_bins": [str(clause["bin"])],
+                "classifications": {
+                    resource: (
+                        None if prediction is None else dataclasses.asdict(prediction)
+                    )
+                    for resource, prediction in predictions.items()
+                },
+                "unavailable_reason": None,
+            }
+        except Exception as exc:  # noqa: BLE001 - latency prediction remains usable
+            return {
+                "command": command,
+                "clause_bins": [str(clause["bin"])],
+                "classifications": {},
+                "unavailable_reason": f"{type(exc).__name__}: {exc}",
+            }
 
     def _ingest_observation(
         self,
@@ -1743,12 +1795,17 @@ def _provisional_observation(
 
 
 def _clause_observations(
-    workspace_scope: str,
     envelope: Mapping[str, Any],
 ) -> list[ClauseObservation]:
+    workspace_scope = envelope.get("workspace_scope")
     interval = envelope.get("observation_interval")
     rows = envelope.get("normalized_measurements")
-    if not isinstance(interval, Mapping) or not isinstance(rows, list):
+    if (
+        not isinstance(workspace_scope, str)
+        or not workspace_scope
+        or not isinstance(interval, Mapping)
+        or not isinstance(rows, list)
+    ):
         return []
     observations: list[ClauseObservation] = []
     for row in rows:
@@ -1769,6 +1826,12 @@ def _clause_observations(
         if pipeline_position > 0:
             continue
         try:
+            disk_io = row.get("disk_io")
+            disk_total = (
+                disk_io.get("read_write_bytes_total")
+                if isinstance(disk_io, Mapping)
+                else None
+            )
             observations.append(
                 ClauseObservation(
                     repo=workspace_scope,
@@ -1787,6 +1850,10 @@ def _clause_observations(
                         if row.get("sampled_peak_rss_mb") is None
                         else float(row["sampled_peak_rss_mb"])
                     ),
+                    disk_read_write_bytes_total=(
+                        None if disk_total is None else float(disk_total)
+                    ),
+                    impute_short_null_resources_as_light=True,
                     cpu_ns_cumulative=(
                         None
                         if row.get("cpu_ns_cumulative") is None
