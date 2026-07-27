@@ -28,8 +28,10 @@ from tool_resource.labels import (  # noqa: E402
 )
 from tool_resource.runtime_kb import (  # noqa: E402
     CANONICAL_LATENCY_BUCKETS,
+    ClauseLatencyBucketPrediction,
     ClauseObservation,
     ClauseResourceKB,
+    _clause_repo_keys,
 )
 from trace_collect.trace_data import TraceData  # noqa: E402
 
@@ -40,6 +42,10 @@ _EVAL_ROOT = Path("traces/fresh-277-segtimeline")
 _FIT_MANIFEST = Path("configs/corpora/swe-100.json")
 _EVAL_MANIFEST = Path("configs/corpora/swe-277.json")
 _VIRTUAL_TRACE_GAP_S = 1.0
+_SignatureIndex = Mapping[
+    tuple[str, str],
+    Mapping[str, Sequence[float]],
+]
 
 
 @dataclass(frozen=True)
@@ -309,6 +315,8 @@ def _validate_partition(
 def _score(
     kb_by_repo: Mapping[str, ClauseResourceKB],
     calls: Sequence[ProxyCall],
+    *,
+    public_signatures: _SignatureIndex | None = None,
 ) -> list[ScoredRow]:
     _validate_trace_finalizations(calls)
     trace_observations: dict[tuple[str, str], list[ClauseObservation]] = defaultdict(
@@ -364,6 +372,21 @@ def _score(
                     raise
                 prediction = None
                 prediction_error = f"ValueError: {exc}"
+            if (
+                prediction is not None
+                and prediction.scope == "public"
+                and prediction.key_kind == "bin"
+                and public_signatures is not None
+            ):
+                prediction = (
+                    _public_signature_prediction(
+                        public_signatures,
+                        repo,
+                        observation.bin,
+                        observation.argv,
+                    )
+                    or prediction
+                )
             rows.append(
                 ScoredRow(
                     sample_id=f"{call.sample.sample_id}:clause:{clause_index}",
@@ -393,6 +416,58 @@ def _score(
         _, trace = heapq.heappop(close_events)
         close_trace(trace)
     return rows
+
+
+def _fit_public_signatures(
+    observations: Sequence[ClauseObservation],
+) -> dict[tuple[str, str], dict[str, tuple[float, ...]]]:
+    """Index the existing exact/prefix hierarchy by source repository."""
+
+    accumulated: dict[tuple[str, str], dict[str, list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for observation in observations:
+        assert observation.latency_ms is not None
+        for key in _clause_repo_keys(observation.bin, observation.argv):
+            if key[0] == "bin":
+                continue
+            accumulated[key][observation.repo].append(observation.latency_ms)
+    return {
+        key: {repo: tuple(values) for repo, values in by_repo.items()}
+        for key, by_repo in accumulated.items()
+    }
+
+
+def _public_signature_prediction(
+    signatures: _SignatureIndex,
+    repo: str,
+    bin_: str,
+    argv: Sequence[str],
+) -> ClauseLatencyBucketPrediction | None:
+    path: list[str] = []
+    for key in _clause_repo_keys(bin_, argv):
+        if key[0] == "bin":
+            break
+        path.append(f"public_argv:{key[0]}")
+        values = [
+            value
+            for source_repo, repo_values in signatures.get(key, {}).items()
+            if source_repo != repo
+            for value in repo_values
+        ]
+        if not values:
+            continue
+        counts = [0] * CANONICAL_LATENCY_BUCKETS.bucket_count
+        for value in values:
+            counts[CANONICAL_LATENCY_BUCKETS.bucket_id(value)] += 1
+        return ClauseLatencyBucketPrediction(
+            probability_by_bucket=tuple(count / len(values) for count in counts),
+            scope="public_argv",
+            key_kind=key[0],
+            evidence_count=len(values),
+            fallback_path=tuple(path),
+        )
+    return None
 
 
 def _fit_public_kbs(
@@ -589,6 +664,187 @@ def evaluate(
     )
 
 
+def _paired_exact_bucket_transitions(
+    baseline: Sequence[ScoredRow],
+    candidate: Sequence[ScoredRow],
+    *,
+    candidate_hits_only: bool,
+) -> dict[str, int]:
+    transitions: Counter[str] = Counter(
+        {
+            f"bin_{bin_result}_candidate_{candidate_result}": 0
+            for bin_result in ("correct", "wrong")
+            for candidate_result in ("correct", "wrong")
+        }
+    )
+    for public_bin, signature in zip(baseline, candidate, strict=True):
+        if public_bin.probability_by_bucket is None:
+            continue
+        assert signature.probability_by_bucket is not None
+        if candidate_hits_only and signature.layer != "public_argv":
+            continue
+        bin_correct = (
+            public_bin.probability_by_bucket.index(
+                max(public_bin.probability_by_bucket)
+            )
+            == public_bin.label_bucket
+        )
+        candidate_correct = (
+            signature.probability_by_bucket.index(max(signature.probability_by_bucket))
+            == signature.label_bucket
+        )
+        transitions[
+            f"bin_{'correct' if bin_correct else 'wrong'}_candidate_"
+            f"{'correct' if candidate_correct else 'wrong'}"
+        ] += 1
+    return dict(sorted(transitions.items()))
+
+
+def evaluate_representation(
+    fit_calls: Sequence[ProxyCall],
+    eval_calls: Sequence[ProxyCall],
+    provenance: Mapping[str, Any],
+) -> dict[str, Any]:
+    baseline_kbs, observations = _fit_public_kbs(fit_calls, eval_calls)
+    baseline = _score(baseline_kbs, eval_calls)
+    candidate_kbs, _ = _fit_public_kbs(fit_calls, eval_calls)
+    signatures = _fit_public_signatures(observations)
+    candidate = _score(
+        candidate_kbs,
+        eval_calls,
+        public_signatures=signatures,
+    )
+
+    baseline_identity = [(row.sample_id, row.label_bucket) for row in baseline]
+    candidate_identity = [(row.sample_id, row.label_bucket) for row in candidate]
+    if baseline_identity != candidate_identity:
+        raise ValueError("baseline/candidate row identity or labels differ")
+    if any(
+        public_bin != signature
+        for public_bin, signature in zip(baseline, candidate, strict=True)
+        if public_bin.layer == "repo" or signature.layer == "repo"
+    ):
+        raise ValueError("candidate changed repo-local prediction behavior")
+
+    baseline_known = [row for row in baseline if row.probability_by_bucket is not None]
+    candidate_known = [
+        row for row in candidate if row.probability_by_bucket is not None
+    ]
+    if [row.sample_id for row in baseline_known] != [
+        row.sample_id for row in candidate_known
+    ]:
+        raise ValueError("baseline/candidate eligible rows differ")
+    label_counts = Counter(row.label_bucket for row in baseline_known)
+    majority_bucket = (
+        max(
+            range(CANONICAL_LATENCY_BUCKETS.bucket_count),
+            key=lambda bucket: (label_counts[bucket], -bucket),
+        )
+        if label_counts
+        else None
+    )
+    majority_accuracy = (
+        label_counts[majority_bucket] / len(baseline_known) if baseline_known else None
+    )
+    baseline_metrics = _metrics(baseline)
+    candidate_metrics = _metrics(candidate)
+    baseline_exact = baseline_metrics["exact_bucket"]["exact_bucket_accuracy"]
+    candidate_exact = candidate_metrics["exact_bucket"]["exact_bucket_accuracy"]
+    hits = [row for row in candidate if row.layer == "public_argv"]
+    public_fallbacks = sum(
+        row.layer == "public" and row.key_kind == "bin" for row in baseline
+    )
+    support_bands = Counter(
+        "1" if row.evidence_count == 1 else "2-4" if row.evidence_count <= 4 else "5+"
+        for row in hits
+    )
+    key_kinds = Counter(kind for kind, _ in signatures)
+
+    return {
+        "status": "development_exposed_representation_diagnostic",
+        "claim_bearing": False,
+        "objective": "clause_latency_bucket_public_representation",
+        "bucket_edges_ms": list(CANONICAL_LATENCY_BUCKETS.edges_ms),
+        "fit_clause_observation_count": len(observations),
+        "eval_exec_call_count": len(eval_calls),
+        "row_identity": {
+            "identical_mapped_row_ids_and_labels": True,
+            "mapped_row_count": len(baseline),
+            "eligible_row_count": len(baseline_known),
+        },
+        "majority": {
+            "bucket_id": majority_bucket,
+            "accuracy": majority_accuracy,
+        },
+        "metrics": {
+            "public_bin_with_local_updates": {
+                **baseline_metrics,
+                "exact_minus_majority_percentage_points": (
+                    None
+                    if baseline_exact is None or majority_accuracy is None
+                    else 100.0 * (baseline_exact - majority_accuracy)
+                ),
+            },
+            "raw_argv_prefix_with_local_updates": {
+                **candidate_metrics,
+                "exact_minus_majority_percentage_points": (
+                    None
+                    if candidate_exact is None or majority_accuracy is None
+                    else 100.0 * (candidate_exact - majority_accuracy)
+                ),
+            },
+        },
+        "candidate": {
+            "hierarchy": (
+                "raw exact argv -> raw ordered argv_prefix_depth_4..2 -> public bin"
+            ),
+            "support_threshold": None,
+            "same_repo_fit_evidence_excluded": True,
+            "key_cardinality": {
+                "total": len(signatures),
+                "by_kind": dict(sorted(key_kinds.items())),
+            },
+            "hit_count": len(hits),
+            "hit_rate": len(hits) / len(baseline_known) if baseline_known else None,
+            "public_fallback_opportunity_count": public_fallbacks,
+            "hit_rate_of_public_fallbacks": (
+                len(hits) / public_fallbacks if public_fallbacks else None
+            ),
+            "support_bands": {band: support_bands[band] for band in ("1", "2-4", "5+")},
+            "paired_exact_bucket_transitions": {
+                "all_rows": _paired_exact_bucket_transitions(
+                    baseline,
+                    candidate,
+                    candidate_hits_only=False,
+                ),
+                "candidate_hits": _paired_exact_bucket_transitions(
+                    baseline,
+                    candidate,
+                    candidate_hits_only=True,
+                ),
+            },
+            "improves_over_public_bin": (
+                baseline_exact is not None
+                and candidate_exact is not None
+                and candidate_exact > baseline_exact
+            ),
+        },
+        "diagnostics": {
+            "public_bin": _diagnostics(baseline, calls=eval_calls),
+            "raw_argv_prediction_provenance_counts": dict(
+                sorted(
+                    Counter(
+                        f"{row.layer}:{row.key_kind}"
+                        for row in candidate
+                        if row.probability_by_bucket is not None
+                    ).items()
+                )
+            ),
+        },
+        "provenance": dict(provenance),
+    }
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--fit-root", type=Path, default=_FIT_ROOT)
@@ -596,6 +852,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--fit-manifest", type=Path, default=_FIT_MANIFEST)
     parser.add_argument("--eval-manifest", type=Path, default=_EVAL_MANIFEST)
     parser.add_argument("--limit-eval-tasks", type=int)
+    parser.add_argument("--representation-diagnostic", action="store_true")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--dump-rows", type=Path)
     return parser
@@ -637,7 +894,11 @@ def main() -> None:
         "virtual_trace_gap_s": _VIRTUAL_TRACE_GAP_S,
         "edge_source": "canonical_objective",
     }
-    result, rows = evaluate(fit_calls, eval_calls, provenance)
+    if args.representation_diagnostic:
+        result = evaluate_representation(fit_calls, eval_calls, provenance)
+        rows = []
+    else:
+        result, rows = evaluate(fit_calls, eval_calls, provenance)
     payload = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.out is None:
         sys.stdout.write(payload)

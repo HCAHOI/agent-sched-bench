@@ -21,6 +21,7 @@ from scripts.evaluation.evaluate_clause_latency_buckets import (
     _trace_finalization_timestamp,
     _validate_partition,
     evaluate,
+    evaluate_representation,
 )
 from tests.test_tool_resource_services import (
     _DirectTransport,
@@ -386,6 +387,63 @@ def test_fit_keeps_active_repository_history_out_of_public_and_local_state() -> 
     assert rows[0].evidence_count == 1
     assert rows[0].probability_by_bucket is not None
     assert rows[0].probability_by_bucket[0] == 1.0
+
+
+def test_representation_diagnostic_reuses_signature_without_repo_leakage() -> None:
+    def call(
+        sample_id: str,
+        task_id: str,
+        command: str,
+        latency_ms: float,
+        start: float,
+        trace: str,
+        closed_at: float,
+    ) -> ProxyCall:
+        argv = command.split()
+        return _call(
+            sample_id,
+            task_id,
+            start=start,
+            end=start + latency_ms / 1000.0,
+            command=command,
+            clauses=({"bin": argv[0], "argv": argv},),
+            segments=((0.0, latency_ms),),
+            trace_finalized_at=closed_at,
+            source_trace=trace,
+        )
+
+    fit_calls = [
+        call("same", "eval__repo-9", "a x", 70000.0, -100.0, "same", -29.0),
+        call("exact", "other__repo-1", "a x", 750.0, -10.0, "exact", -8.0),
+        call("bin", "another__repo-1", "a y", 50.0, -5.0, "bin", -4.0),
+    ]
+    eval_calls = [
+        call("hit", "eval__repo-1", "a x", 750.0, 0.0, "first", 2.0),
+        call("miss", "eval__repo-1", "a z", 50.0, 1.0, "first", 2.0),
+        call("local", "eval__repo-1", "a x", 750.0, 3.0, "second", 4.0),
+    ]
+
+    result = evaluate_representation(fit_calls, eval_calls, {"fixture": True})
+
+    assert result["row_identity"] == {
+        "identical_mapped_row_ids_and_labels": True,
+        "mapped_row_count": 3,
+        "eligible_row_count": 3,
+    }
+    assert result["candidate"]["hit_count"] == 1
+    assert result["candidate"]["public_fallback_opportunity_count"] == 2
+    assert result["candidate"]["support_bands"] == {"1": 1, "2-4": 0, "5+": 0}
+    assert result["candidate"]["paired_exact_bucket_transitions"]["candidate_hits"] == {
+        "bin_correct_candidate_correct": 0,
+        "bin_correct_candidate_wrong": 0,
+        "bin_wrong_candidate_correct": 1,
+        "bin_wrong_candidate_wrong": 0,
+    }
+    assert result["diagnostics"]["raw_argv_prediction_provenance_counts"] == {
+        "public:bin": 1,
+        "public_argv:exact_clause": 1,
+        "repo:exact_clause": 1,
+    }
 
 
 def test_serialized_virtual_deployment_uses_input_trace_order() -> None:
