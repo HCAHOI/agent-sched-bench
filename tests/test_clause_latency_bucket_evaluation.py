@@ -415,10 +415,29 @@ def test_representation_diagnostic_reuses_signature_without_repo_leakage() -> No
     fit_calls = [
         call("same", "eval__repo-9", "a x", 70000.0, -100.0, "same", -29.0),
         call("exact", "other__repo-1", "a x", 750.0, -10.0, "exact", -8.0),
-        call("bin", "another__repo-1", "a y", 50.0, -5.0, "bin", -4.0),
+        call(
+            "dynamic",
+            "other__repo-2",
+            "a /tmp/run-1 101",
+            750.0,
+            -7.0,
+            "dynamic",
+            -6.0,
+        ),
+        call("bin-y", "another__repo-1", "a y", 50.0, -5.0, "bin-y", -4.0),
+        call("bin-w", "another__repo-2", "a w", 50.0, -3.0, "bin-w", -2.0),
     ]
     eval_calls = [
         call("hit", "eval__repo-1", "a x", 750.0, 0.0, "first", 2.0),
+        call(
+            "canonical-hit",
+            "eval__repo-1",
+            "a /tmp/run-2 202",
+            750.0,
+            0.5,
+            "first",
+            2.0,
+        ),
         call("miss", "eval__repo-1", "a z", 50.0, 1.0, "first", 2.0),
         call("local", "eval__repo-1", "a x", 750.0, 3.0, "second", 4.0),
     ]
@@ -427,21 +446,60 @@ def test_representation_diagnostic_reuses_signature_without_repo_leakage() -> No
 
     assert result["row_identity"] == {
         "identical_mapped_row_ids_and_labels": True,
-        "mapped_row_count": 3,
-        "eligible_row_count": 3,
+        "mapped_row_count": 4,
+        "eligible_row_count": 4,
     }
-    assert result["candidate"]["hit_count"] == 1
-    assert result["candidate"]["public_fallback_opportunity_count"] == 2
-    assert result["candidate"]["support_bands"] == {"1": 1, "2-4": 0, "5+": 0}
-    assert result["candidate"]["paired_exact_bucket_transitions"]["candidate_hits"] == {
+    raw = result["candidates"]["raw_argv"]
+    canonical = result["candidates"]["canonical_argv"]
+    assert set(result["metrics"]) == {
+        "public_binary_with_local_updates",
+        "raw_argv_hierarchy_with_local_updates",
+        "canonical_argv_hierarchy_with_local_updates",
+    }
+    assert {
+        metrics["exact_bucket"]["eligible_examples"]
+        for metrics in result["metrics"].values()
+    } == {4}
+    assert raw["canonicalizer_version"] is None
+    assert canonical["canonicalizer_version"] == "generic-argv-v2-shape"
+    assert canonical["hierarchy"] == [
+        "repo_raw_argv:exact_clause",
+        "repo_raw_argv:argv_prefix_depth_4",
+        "repo_raw_argv:argv_prefix_depth_3",
+        "repo_raw_argv:argv_prefix_depth_2",
+        "repo:bin",
+        "public_canonical_argv:exact_clause",
+        "public_canonical_argv:argv_prefix_depth_4",
+        "public_canonical_argv:argv_prefix_depth_3",
+        "public_canonical_argv:argv_prefix_depth_2",
+        "public:bin",
+        "public:global",
+    ]
+    assert raw["hit_count"] == 1
+    assert canonical["hit_count"] == 3
+    assert raw["public_fallback_opportunity_count"] == 3
+    assert canonical["public_fallback_opportunity_count"] == 3
+    assert raw["support_bands"] == {"1": 1, "2-4": 0, "5+": 0}
+    assert canonical["support_bands"] == {"1": 1, "2-4": 2, "5+": 0}
+    assert raw["paired_exact_bucket_transitions"]["candidate_hits"] == {
         "bin_correct_candidate_correct": 0,
         "bin_correct_candidate_wrong": 0,
         "bin_wrong_candidate_correct": 1,
         "bin_wrong_candidate_wrong": 0,
     }
-    assert result["diagnostics"]["raw_argv_prediction_provenance_counts"] == {
-        "public:bin": 1,
-        "public_argv:exact_clause": 1,
+    assert canonical["paired_exact_bucket_transitions"]["candidate_hits"] == {
+        "bin_correct_candidate_correct": 1,
+        "bin_correct_candidate_wrong": 0,
+        "bin_wrong_candidate_correct": 1,
+        "bin_wrong_candidate_wrong": 1,
+    }
+    assert result["diagnostics"]["raw_argv"]["prediction_provenance_counts"] == {
+        "public:bin": 2,
+        "public_raw_argv:exact_clause": 1,
+        "repo:exact_clause": 1,
+    }
+    assert result["diagnostics"]["canonical_argv"]["prediction_provenance_counts"] == {
+        "public_canonical_argv:exact_clause": 3,
         "repo:exact_clause": 1,
     }
 

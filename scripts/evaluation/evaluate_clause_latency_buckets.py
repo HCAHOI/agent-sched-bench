@@ -13,7 +13,7 @@ import json
 import math
 import sys
 from collections import Counter, defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -28,10 +28,12 @@ from tool_resource.labels import (  # noqa: E402
 )
 from tool_resource.runtime_kb import (  # noqa: E402
     CANONICAL_LATENCY_BUCKETS,
+    GENERIC_ARGV_CANONICALIZER_VERSION,
     ClauseLatencyBucketPrediction,
     ClauseObservation,
     ClauseResourceKB,
     _clause_repo_keys,
+    generic_argv_keys,
 )
 from trace_collect.trace_data import TraceData  # noqa: E402
 
@@ -46,6 +48,7 @@ _SignatureIndex = Mapping[
     tuple[str, str],
     Mapping[str, Sequence[float]],
 ]
+_ClauseKeyHelper = Callable[[str, Sequence[str]], list[tuple[str, str]]]
 
 
 @dataclass(frozen=True)
@@ -317,6 +320,8 @@ def _score(
     calls: Sequence[ProxyCall],
     *,
     public_signatures: _SignatureIndex | None = None,
+    public_signature_keys: _ClauseKeyHelper = _clause_repo_keys,
+    public_signature_layer: str = "public_raw_argv",
 ) -> list[ScoredRow]:
     _validate_trace_finalizations(calls)
     trace_observations: dict[tuple[str, str], list[ClauseObservation]] = defaultdict(
@@ -384,6 +389,8 @@ def _score(
                         repo,
                         observation.bin,
                         observation.argv,
+                        public_signature_keys,
+                        public_signature_layer,
                     )
                     or prediction
                 )
@@ -420,15 +427,16 @@ def _score(
 
 def _fit_public_signatures(
     observations: Sequence[ClauseObservation],
+    key_helper: _ClauseKeyHelper,
 ) -> dict[tuple[str, str], dict[str, tuple[float, ...]]]:
-    """Index the existing exact/prefix hierarchy by source repository."""
+    """Index one exact/prefix hierarchy by source repository."""
 
     accumulated: dict[tuple[str, str], dict[str, list[float]]] = defaultdict(
         lambda: defaultdict(list)
     )
     for observation in observations:
         assert observation.latency_ms is not None
-        for key in _clause_repo_keys(observation.bin, observation.argv):
+        for key in key_helper(observation.bin, observation.argv):
             if key[0] == "bin":
                 continue
             accumulated[key][observation.repo].append(observation.latency_ms)
@@ -443,12 +451,14 @@ def _public_signature_prediction(
     repo: str,
     bin_: str,
     argv: Sequence[str],
+    key_helper: _ClauseKeyHelper,
+    layer: str,
 ) -> ClauseLatencyBucketPrediction | None:
     path: list[str] = []
-    for key in _clause_repo_keys(bin_, argv):
+    for key in key_helper(bin_, argv):
         if key[0] == "bin":
             break
-        path.append(f"public_argv:{key[0]}")
+        path.append(f"{layer}:{key[0]}")
         values = [
             value
             for source_repo, repo_values in signatures.get(key, {}).items()
@@ -462,7 +472,7 @@ def _public_signature_prediction(
             counts[CANONICAL_LATENCY_BUCKETS.bucket_id(value)] += 1
         return ClauseLatencyBucketPrediction(
             probability_by_bucket=tuple(count / len(values) for count in counts),
-            scope="public_argv",
+            scope=layer,
             key_kind=key[0],
             evidence_count=len(values),
             fallback_path=tuple(path),
@@ -491,6 +501,27 @@ def _fit_public_kbs(
         kb = ClauseResourceKB.fit_public(public) if public else ClauseResourceKB()
         kb_by_repo[repo] = kb
     return kb_by_repo, observations
+
+
+def _score_representation_candidate(
+    fit_calls: Sequence[ProxyCall],
+    eval_calls: Sequence[ProxyCall],
+    observations: Sequence[ClauseObservation],
+    key_helper: _ClauseKeyHelper,
+    layer: str,
+) -> tuple[list[ScoredRow], _SignatureIndex]:
+    kbs, _ = _fit_public_kbs(fit_calls, eval_calls)
+    signatures = _fit_public_signatures(observations, key_helper)
+    return (
+        _score(
+            kbs,
+            eval_calls,
+            public_signatures=signatures,
+            public_signature_keys=key_helper,
+            public_signature_layer=layer,
+        ),
+        signatures,
+    )
 
 
 def _validate_trace_finalizations(calls: Sequence[ProxyCall]) -> None:
@@ -668,7 +699,7 @@ def _paired_exact_bucket_transitions(
     baseline: Sequence[ScoredRow],
     candidate: Sequence[ScoredRow],
     *,
-    candidate_hits_only: bool,
+    candidate_hit_layer: str | None,
 ) -> dict[str, int]:
     transitions: Counter[str] = Counter(
         {
@@ -677,27 +708,107 @@ def _paired_exact_bucket_transitions(
             for candidate_result in ("correct", "wrong")
         }
     )
-    for public_bin, signature in zip(baseline, candidate, strict=True):
-        if public_bin.probability_by_bucket is None:
+    for public_binary, candidate_row in zip(baseline, candidate, strict=True):
+        if public_binary.probability_by_bucket is None:
             continue
-        assert signature.probability_by_bucket is not None
-        if candidate_hits_only and signature.layer != "public_argv":
+        assert candidate_row.probability_by_bucket is not None
+        if (
+            candidate_hit_layer is not None
+            and candidate_row.layer != candidate_hit_layer
+        ):
             continue
         bin_correct = (
-            public_bin.probability_by_bucket.index(
-                max(public_bin.probability_by_bucket)
+            public_binary.probability_by_bucket.index(
+                max(public_binary.probability_by_bucket)
             )
-            == public_bin.label_bucket
+            == public_binary.label_bucket
         )
         candidate_correct = (
-            signature.probability_by_bucket.index(max(signature.probability_by_bucket))
-            == signature.label_bucket
+            candidate_row.probability_by_bucket.index(
+                max(candidate_row.probability_by_bucket)
+            )
+            == candidate_row.label_bucket
         )
         transitions[
             f"bin_{'correct' if bin_correct else 'wrong'}_candidate_"
             f"{'correct' if candidate_correct else 'wrong'}"
         ] += 1
     return dict(sorted(transitions.items()))
+
+
+def _metrics_against_majority(
+    rows: Sequence[ScoredRow],
+    majority_accuracy: float | None,
+) -> dict[str, Any]:
+    metrics = _metrics(rows)
+    exact = metrics["exact_bucket"]["exact_bucket_accuracy"]
+    return {
+        **metrics,
+        "exact_minus_majority_percentage_points": (
+            None
+            if exact is None or majority_accuracy is None
+            else 100.0 * (exact - majority_accuracy)
+        ),
+    }
+
+
+def _representation_candidate_summary(
+    baseline: Sequence[ScoredRow],
+    candidate: Sequence[ScoredRow],
+    signatures: _SignatureIndex,
+    *,
+    layer: str,
+    hierarchy: list[str],
+    canonicalizer_version: str | None,
+) -> dict[str, Any]:
+    known = [row for row in baseline if row.probability_by_bucket is not None]
+    hits = [row for row in candidate if row.layer == layer]
+    public_fallbacks = sum(
+        row.layer == "public" and row.key_kind == "bin" for row in baseline
+    )
+    support_bands = Counter(
+        "1" if row.evidence_count == 1 else "2-4" if row.evidence_count <= 4 else "5+"
+        for row in hits
+    )
+    key_kinds = Counter(kind for kind, _ in signatures)
+    baseline_exact = _exact_bucket_metrics(known)["exact_bucket_accuracy"]
+    candidate_exact = _exact_bucket_metrics(
+        [row for row in candidate if row.probability_by_bucket is not None]
+    )["exact_bucket_accuracy"]
+    return {
+        "canonicalizer_version": canonicalizer_version,
+        "hierarchy": hierarchy,
+        "support_threshold": None,
+        "same_repo_fit_evidence_excluded": True,
+        "key_cardinality": {
+            "total": len(signatures),
+            "by_kind": dict(sorted(key_kinds.items())),
+        },
+        "hit_count": len(hits),
+        "hit_rate": len(hits) / len(known) if known else None,
+        "public_fallback_opportunity_count": public_fallbacks,
+        "hit_rate_of_public_fallbacks": (
+            len(hits) / public_fallbacks if public_fallbacks else None
+        ),
+        "support_bands": {band: support_bands[band] for band in ("1", "2-4", "5+")},
+        "paired_exact_bucket_transitions": {
+            "all_rows": _paired_exact_bucket_transitions(
+                baseline,
+                candidate,
+                candidate_hit_layer=None,
+            ),
+            "candidate_hits": _paired_exact_bucket_transitions(
+                baseline,
+                candidate,
+                candidate_hit_layer=layer,
+            ),
+        },
+        "improves_over_public_binary": (
+            baseline_exact is not None
+            and candidate_exact is not None
+            and candidate_exact > baseline_exact
+        ),
+    }
 
 
 def evaluate_representation(
@@ -707,33 +818,40 @@ def evaluate_representation(
 ) -> dict[str, Any]:
     baseline_kbs, observations = _fit_public_kbs(fit_calls, eval_calls)
     baseline = _score(baseline_kbs, eval_calls)
-    candidate_kbs, _ = _fit_public_kbs(fit_calls, eval_calls)
-    signatures = _fit_public_signatures(observations)
-    candidate = _score(
-        candidate_kbs,
+    raw, raw_signatures = _score_representation_candidate(
+        fit_calls,
         eval_calls,
-        public_signatures=signatures,
+        observations,
+        _clause_repo_keys,
+        "public_raw_argv",
+    )
+    canonical, canonical_signatures = _score_representation_candidate(
+        fit_calls,
+        eval_calls,
+        observations,
+        generic_argv_keys,
+        "public_canonical_argv",
     )
 
     baseline_identity = [(row.sample_id, row.label_bucket) for row in baseline]
-    candidate_identity = [(row.sample_id, row.label_bucket) for row in candidate]
-    if baseline_identity != candidate_identity:
-        raise ValueError("baseline/candidate row identity or labels differ")
-    if any(
-        public_bin != signature
-        for public_bin, signature in zip(baseline, candidate, strict=True)
-        if public_bin.layer == "repo" or signature.layer == "repo"
-    ):
-        raise ValueError("candidate changed repo-local prediction behavior")
-
     baseline_known = [row for row in baseline if row.probability_by_bucket is not None]
-    candidate_known = [
-        row for row in candidate if row.probability_by_bucket is not None
-    ]
-    if [row.sample_id for row in baseline_known] != [
-        row.sample_id for row in candidate_known
-    ]:
-        raise ValueError("baseline/candidate eligible rows differ")
+    baseline_known_ids = [row.sample_id for row in baseline_known]
+    for name, candidate in (("raw", raw), ("canonical", canonical)):
+        if baseline_identity != [
+            (row.sample_id, row.label_bucket) for row in candidate
+        ]:
+            raise ValueError(f"baseline/{name} row identity or labels differ")
+        if baseline_known_ids != [
+            row.sample_id for row in candidate if row.probability_by_bucket is not None
+        ]:
+            raise ValueError(f"baseline/{name} eligible rows differ")
+        if any(
+            public_binary != candidate_row
+            for public_binary, candidate_row in zip(baseline, candidate, strict=True)
+            if public_binary.layer == "repo" or candidate_row.layer == "repo"
+        ):
+            raise ValueError(f"{name} candidate changed repo-local prediction behavior")
+
     label_counts = Counter(row.label_bucket for row in baseline_known)
     majority_bucket = (
         max(
@@ -746,24 +864,20 @@ def evaluate_representation(
     majority_accuracy = (
         label_counts[majority_bucket] / len(baseline_known) if baseline_known else None
     )
-    baseline_metrics = _metrics(baseline)
-    candidate_metrics = _metrics(candidate)
-    baseline_exact = baseline_metrics["exact_bucket"]["exact_bucket_accuracy"]
-    candidate_exact = candidate_metrics["exact_bucket"]["exact_bucket_accuracy"]
-    hits = [row for row in candidate if row.layer == "public_argv"]
-    public_fallbacks = sum(
-        row.layer == "public" and row.key_kind == "bin" for row in baseline
-    )
-    support_bands = Counter(
-        "1" if row.evidence_count == 1 else "2-4" if row.evidence_count <= 4 else "5+"
-        for row in hits
-    )
-    key_kinds = Counter(kind for kind, _ in signatures)
 
     return {
         "status": "development_exposed_representation_diagnostic",
         "claim_bearing": False,
         "objective": "clause_latency_bucket_public_representation",
+        "development_amendment": {
+            "date": "2026-07-27",
+            "prior_visible_candidate": "generic-argv-v1",
+            "reason": (
+                "v2 removes plaintext opaque values from cross-repo keys and "
+                "preserves numeric order of magnitude after v1 results were visible"
+            ),
+            "confirmation_status": "development_only_not_confirmatory",
+        },
         "bucket_edges_ms": list(CANONICAL_LATENCY_BUCKETS.edges_ms),
         "fit_clause_observation_count": len(observations),
         "eval_exec_call_count": len(eval_calls),
@@ -776,70 +890,75 @@ def evaluate_representation(
             "bucket_id": majority_bucket,
             "accuracy": majority_accuracy,
         },
-        "metrics": {
-            "public_bin_with_local_updates": {
-                **baseline_metrics,
-                "exact_minus_majority_percentage_points": (
-                    None
-                    if baseline_exact is None or majority_accuracy is None
-                    else 100.0 * (baseline_exact - majority_accuracy)
-                ),
-            },
-            "raw_argv_prefix_with_local_updates": {
-                **candidate_metrics,
-                "exact_minus_majority_percentage_points": (
-                    None
-                    if candidate_exact is None or majority_accuracy is None
-                    else 100.0 * (candidate_exact - majority_accuracy)
-                ),
-            },
+        "baseline": {
+            "representation": "public_binary",
+            "hierarchy": [
+                "repo_raw_argv:exact_clause",
+                "repo_raw_argv:argv_prefix_depth_4",
+                "repo_raw_argv:argv_prefix_depth_3",
+                "repo_raw_argv:argv_prefix_depth_2",
+                "repo:bin",
+                "public:bin",
+                "public:global",
+            ],
         },
-        "candidate": {
-            "hierarchy": (
-                "raw exact argv -> raw ordered argv_prefix_depth_4..2 -> public bin"
+        "metrics": {
+            "public_binary_with_local_updates": _metrics_against_majority(
+                baseline, majority_accuracy
             ),
-            "support_threshold": None,
-            "same_repo_fit_evidence_excluded": True,
-            "key_cardinality": {
-                "total": len(signatures),
-                "by_kind": dict(sorted(key_kinds.items())),
-            },
-            "hit_count": len(hits),
-            "hit_rate": len(hits) / len(baseline_known) if baseline_known else None,
-            "public_fallback_opportunity_count": public_fallbacks,
-            "hit_rate_of_public_fallbacks": (
-                len(hits) / public_fallbacks if public_fallbacks else None
+            "raw_argv_hierarchy_with_local_updates": _metrics_against_majority(
+                raw, majority_accuracy
             ),
-            "support_bands": {band: support_bands[band] for band in ("1", "2-4", "5+")},
-            "paired_exact_bucket_transitions": {
-                "all_rows": _paired_exact_bucket_transitions(
-                    baseline,
-                    candidate,
-                    candidate_hits_only=False,
-                ),
-                "candidate_hits": _paired_exact_bucket_transitions(
-                    baseline,
-                    candidate,
-                    candidate_hits_only=True,
-                ),
-            },
-            "improves_over_public_bin": (
-                baseline_exact is not None
-                and candidate_exact is not None
-                and candidate_exact > baseline_exact
+            "canonical_argv_hierarchy_with_local_updates": (
+                _metrics_against_majority(canonical, majority_accuracy)
+            ),
+        },
+        "candidates": {
+            "raw_argv": _representation_candidate_summary(
+                baseline,
+                raw,
+                raw_signatures,
+                layer="public_raw_argv",
+                hierarchy=[
+                    "repo_raw_argv:exact_clause",
+                    "repo_raw_argv:argv_prefix_depth_4",
+                    "repo_raw_argv:argv_prefix_depth_3",
+                    "repo_raw_argv:argv_prefix_depth_2",
+                    "repo:bin",
+                    "public_raw_argv:exact_clause",
+                    "public_raw_argv:argv_prefix_depth_4",
+                    "public_raw_argv:argv_prefix_depth_3",
+                    "public_raw_argv:argv_prefix_depth_2",
+                    "public:bin",
+                    "public:global",
+                ],
+                canonicalizer_version=None,
+            ),
+            "canonical_argv": _representation_candidate_summary(
+                baseline,
+                canonical,
+                canonical_signatures,
+                layer="public_canonical_argv",
+                hierarchy=[
+                    "repo_raw_argv:exact_clause",
+                    "repo_raw_argv:argv_prefix_depth_4",
+                    "repo_raw_argv:argv_prefix_depth_3",
+                    "repo_raw_argv:argv_prefix_depth_2",
+                    "repo:bin",
+                    "public_canonical_argv:exact_clause",
+                    "public_canonical_argv:argv_prefix_depth_4",
+                    "public_canonical_argv:argv_prefix_depth_3",
+                    "public_canonical_argv:argv_prefix_depth_2",
+                    "public:bin",
+                    "public:global",
+                ],
+                canonicalizer_version=GENERIC_ARGV_CANONICALIZER_VERSION,
             ),
         },
         "diagnostics": {
-            "public_bin": _diagnostics(baseline, calls=eval_calls),
-            "raw_argv_prediction_provenance_counts": dict(
-                sorted(
-                    Counter(
-                        f"{row.layer}:{row.key_kind}"
-                        for row in candidate
-                        if row.probability_by_bucket is not None
-                    ).items()
-                )
-            ),
+            "public_binary": _diagnostics(baseline, calls=eval_calls),
+            "raw_argv": _diagnostics(raw, calls=eval_calls),
+            "canonical_argv": _diagnostics(canonical, calls=eval_calls),
         },
         "provenance": dict(provenance),
     }

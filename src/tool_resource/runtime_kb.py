@@ -27,9 +27,11 @@ from __future__ import annotations
 
 import heapq
 import math
+import re
 from bisect import bisect_left
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from tool_resource.features import parse_command_clauses
@@ -57,6 +59,18 @@ def _nodes_from_json(
 _CLAUSE_SCHEMA = "runtime_clause_resource_kb_v5"
 _CLAUSE_MAX_DEPTH = 4  # frozen ordered argv-prefix depth budget
 _DELIM = "\x00"  # argv tokens may contain spaces; NUL cannot collide
+GENERIC_ARGV_CANONICALIZER_VERSION = "generic-argv-v2-shape"
+_ENV_ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", re.DOTALL)
+_NUMBER = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
+_UUID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    re.IGNORECASE,
+)
+_HEX_ID = re.compile(r"(?:0x)?[0-9a-f]{8,}", re.IGNORECASE)
+_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://.+")
+_LONG_OPTION = re.compile(r"--[A-Za-z][A-Za-z0-9_-]*")
+_SHORT_OPTION = re.compile(r"-[A-Za-z]")
+_SHORT_ATTACHED_VALUE = re.compile(r"(-[A-Za-z])(.+)", re.DOTALL)
 
 # Aggregated clause-observation value sources. Each is a per-clause
 # MEASURED metric (see ``tool_resource.clause_bridge``), not an eBPF exit field:
@@ -197,6 +211,83 @@ def _clause_tokens(bin_: str, argv: Sequence[str]) -> tuple[str, ...]:
     # Identity token stream: bin head then the argv tail (argv[0] may be a full
     # path; bin is its basename, already normalized by mvdan).
     return (bin_, *argv[1:])
+
+
+def _canonical_dynamic_value(value: str) -> str:
+    if _URL.fullmatch(value):
+        return "<URL>"
+    if _UUID.fullmatch(value):
+        return "<ID>"
+    if _NUMBER.fullmatch(value):
+        try:
+            number = Decimal(value)
+        except InvalidOperation:
+            return "<NUM:EXTREME>"
+        if not number:
+            return "<NUM:0>"
+        exponent = max(-9, min(9, number.copy_abs().adjusted()))
+        sign = "-" if number.is_signed() else "+"
+        return f"<NUM:{sign}E{exponent}>"
+    if _HEX_ID.fullmatch(value) and (
+        value.lower().startswith("0x")
+        or any(character in "abcdefABCDEF" for character in value)
+    ):
+        return "<ID>"
+    if "/" in value or "\\" in value or value.startswith(("~", ".")):
+        return "<PATH>"
+    return "<ARG>"
+
+
+def _generic_argv_tokens(bin_: str, argv: Sequence[str]) -> tuple[str, ...]:
+    tokens = [bin_]
+    operands_only = False
+    for token in argv[1:]:
+        if token == "--":
+            tokens.append(token)
+            operands_only = True
+            continue
+        assignment = _ENV_ASSIGNMENT.fullmatch(token)
+        if assignment:
+            tokens.append(
+                f"{assignment.group(1)}={_canonical_dynamic_value(assignment.group(2))}"
+            )
+            continue
+        if operands_only:
+            tokens.append(_canonical_dynamic_value(token))
+            continue
+        if token.startswith("--") and "=" in token:
+            flag, value = token.split("=", 1)
+            name = flag if _LONG_OPTION.fullmatch(flag) else "<OPT>"
+            tokens.append(f"{name}={_canonical_dynamic_value(value)}")
+            continue
+        if _NUMBER.fullmatch(token):
+            tokens.append(_canonical_dynamic_value(token))
+            continue
+        if _LONG_OPTION.fullmatch(token) or _SHORT_OPTION.fullmatch(token):
+            tokens.append(token)
+            continue
+        attached = _SHORT_ATTACHED_VALUE.fullmatch(token)
+        if attached:
+            tokens.append(
+                f"{attached.group(1)}={_canonical_dynamic_value(attached.group(2))}"
+            )
+            continue
+        tokens.append(
+            "<OPT>" if token.startswith("-") else _canonical_dynamic_value(token)
+        )
+    return tuple(tokens)
+
+
+def generic_argv_keys(bin_: str, argv: Sequence[str]) -> list[NodeKey]:
+    """Development-only generic canonical exact/prefix clause keys."""
+
+    tokens = _generic_argv_tokens(bin_, argv)
+    keys: list[NodeKey] = [("exact_clause", _DELIM.join(tokens))]
+    depth = min(len(tokens), _CLAUSE_MAX_DEPTH)
+    for length in range(depth, 1, -1):
+        keys.append((f"argv_prefix_depth_{length}", _DELIM.join(tokens[:length])))
+    keys.append(("bin", bin_))
+    return keys
 
 
 def _clause_repo_keys(bin_: str, argv: Sequence[str]) -> list[NodeKey]:
@@ -463,9 +554,11 @@ class ClauseResourceKB:
 __all__ = [
     "CANONICAL_LATENCY_BUCKETS",
     "CANONICAL_LATENCY_BUCKET_EDGES_MS",
+    "GENERIC_ARGV_CANONICALIZER_VERSION",
     "ClauseLatencyBucketPrediction",
     "ClauseObservation",
     "ClauseResourceKB",
     "CommandLatencyBucketPrediction",
     "LatencyBuckets",
+    "generic_argv_keys",
 ]

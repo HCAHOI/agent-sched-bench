@@ -114,6 +114,12 @@ They may be used to implement, replay, and compare this mechanism but cannot
 support a canonical resource claim. Untouched Terminal-Bench confirmation data
 must remain untouched until the implementation and criterion are frozen.
 
+**2026-07-27 development amendment:** `generic-argv-v1` results were visible
+before `generic-argv-v2-shape` was defined. V2 removes plaintext opaque values
+from cross-repo keys and preserves numeric order of magnitude. Both versions
+remain non-confirmatory diagnostics; the production public layer remains
+binary/global until a candidate and criterion are frozen.
+
 ## 5. Implementation sequence
 
 ### P0 — one executable core

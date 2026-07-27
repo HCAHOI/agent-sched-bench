@@ -1,0 +1,543 @@
+{
+  "baseline": {
+    "hierarchy": [
+      "repo_raw_argv:exact_clause",
+      "repo_raw_argv:argv_prefix_depth_4",
+      "repo_raw_argv:argv_prefix_depth_3",
+      "repo_raw_argv:argv_prefix_depth_2",
+      "repo:bin",
+      "public:bin",
+      "public:global"
+    ],
+    "representation": "public_binary"
+  },
+  "bucket_edges_ms": [
+    500.0,
+    1000.0,
+    2000.0,
+    4000.0,
+    8000.0,
+    16000.0,
+    32000.0,
+    64000.0
+  ],
+  "candidates": {
+    "canonical_argv": {
+      "canonicalizer_version": "generic-argv-v1",
+      "hierarchy": [
+        "repo_raw_argv:exact_clause",
+        "repo_raw_argv:argv_prefix_depth_4",
+        "repo_raw_argv:argv_prefix_depth_3",
+        "repo_raw_argv:argv_prefix_depth_2",
+        "repo:bin",
+        "public_canonical_argv:exact_clause",
+        "public_canonical_argv:argv_prefix_depth_4",
+        "public_canonical_argv:argv_prefix_depth_3",
+        "public_canonical_argv:argv_prefix_depth_2",
+        "public:bin",
+        "public:global"
+      ],
+      "hit_count": 9366,
+      "hit_rate": 0.7423317745898391,
+      "hit_rate_of_public_fallbacks": 0.9667630057803468,
+      "improves_over_public_binary": true,
+      "key_cardinality": {
+        "by_kind": {
+          "argv_prefix_depth_2": 133,
+          "argv_prefix_depth_3": 401,
+          "argv_prefix_depth_4": 404,
+          "exact_clause": 855
+        },
+        "total": 1793
+      },
+      "paired_exact_bucket_transitions": {
+        "all_rows": {
+          "bin_correct_candidate_correct": 10279,
+          "bin_correct_candidate_wrong": 66,
+          "bin_wrong_candidate_correct": 165,
+          "bin_wrong_candidate_wrong": 2107
+        },
+        "candidate_hits": {
+          "bin_correct_candidate_correct": 7558,
+          "bin_correct_candidate_wrong": 66,
+          "bin_wrong_candidate_correct": 165,
+          "bin_wrong_candidate_wrong": 1577
+        }
+      },
+      "public_fallback_opportunity_count": 9688,
+      "same_repo_fit_evidence_excluded": true,
+      "support_bands": {
+        "1": 310,
+        "2-4": 554,
+        "5+": 8502
+      },
+      "support_threshold": null
+    },
+    "raw_argv": {
+      "canonicalizer_version": null,
+      "hierarchy": [
+        "repo_raw_argv:exact_clause",
+        "repo_raw_argv:argv_prefix_depth_4",
+        "repo_raw_argv:argv_prefix_depth_3",
+        "repo_raw_argv:argv_prefix_depth_2",
+        "repo:bin",
+        "public_raw_argv:exact_clause",
+        "public_raw_argv:argv_prefix_depth_4",
+        "public_raw_argv:argv_prefix_depth_3",
+        "public_raw_argv:argv_prefix_depth_2",
+        "public:bin",
+        "public:global"
+      ],
+      "hit_count": 9014,
+      "hit_rate": 0.7144329079812951,
+      "hit_rate_of_public_fallbacks": 0.9304293971924029,
+      "improves_over_public_binary": true,
+      "key_cardinality": {
+        "by_kind": {
+          "argv_prefix_depth_2": 250,
+          "argv_prefix_depth_3": 744,
+          "argv_prefix_depth_4": 919,
+          "exact_clause": 1572
+        },
+        "total": 3485
+      },
+      "paired_exact_bucket_transitions": {
+        "all_rows": {
+          "bin_correct_candidate_correct": 10290,
+          "bin_correct_candidate_wrong": 55,
+          "bin_wrong_candidate_correct": 167,
+          "bin_wrong_candidate_wrong": 2105
+        },
+        "candidate_hits": {
+          "bin_correct_candidate_correct": 7279,
+          "bin_correct_candidate_wrong": 55,
+          "bin_wrong_candidate_correct": 167,
+          "bin_wrong_candidate_wrong": 1513
+        }
+      },
+      "public_fallback_opportunity_count": 9688,
+      "same_repo_fit_evidence_excluded": true,
+      "support_bands": {
+        "1": 348,
+        "2-4": 543,
+        "5+": 8123
+      },
+      "support_threshold": null
+    }
+  },
+  "claim_bearing": false,
+  "diagnostics": {
+    "canonical_argv": {
+      "censored_exec_call_count": 13,
+      "mapped_uncensored_clause_count": 12617,
+      "parsed_static_clause_count": 21902,
+      "payload_clause_count": 15474,
+      "prediction_provenance_counts": {
+        "public:bin": 322,
+        "public:global": 94,
+        "public_canonical_argv:argv_prefix_depth_2": 843,
+        "public_canonical_argv:argv_prefix_depth_3": 436,
+        "public_canonical_argv:argv_prefix_depth_4": 616,
+        "public_canonical_argv:exact_clause": 7471,
+        "repo:argv_prefix_depth_2": 642,
+        "repo:argv_prefix_depth_3": 417,
+        "repo:argv_prefix_depth_4": 112,
+        "repo:bin": 655,
+        "repo:exact_clause": 1009
+      },
+      "structural_leading_cd_clause_count": 6428,
+      "unavailable_clause_examples": 2857,
+      "unavailable_reasons": {
+        "censored": 23,
+        "segment_evidence_bin_mismatch": 1063,
+        "segment_evidence_count_mismatch": 279,
+        "segment_evidence_invalid_timing": 624,
+        "segment_evidence_missing": 38,
+        "segment_evidence_segment_parse_mismatch": 830
+      }
+    },
+    "public_binary": {
+      "censored_exec_call_count": 13,
+      "mapped_uncensored_clause_count": 12617,
+      "parsed_static_clause_count": 21902,
+      "payload_clause_count": 15474,
+      "prediction_provenance_counts": {
+        "public:bin": 9688,
+        "public:global": 94,
+        "repo:argv_prefix_depth_2": 642,
+        "repo:argv_prefix_depth_3": 417,
+        "repo:argv_prefix_depth_4": 112,
+        "repo:bin": 655,
+        "repo:exact_clause": 1009
+      },
+      "structural_leading_cd_clause_count": 6428,
+      "unavailable_clause_examples": 2857,
+      "unavailable_reasons": {
+        "censored": 23,
+        "segment_evidence_bin_mismatch": 1063,
+        "segment_evidence_count_mismatch": 279,
+        "segment_evidence_invalid_timing": 624,
+        "segment_evidence_missing": 38,
+        "segment_evidence_segment_parse_mismatch": 830
+      }
+    },
+    "raw_argv": {
+      "censored_exec_call_count": 13,
+      "mapped_uncensored_clause_count": 12617,
+      "parsed_static_clause_count": 21902,
+      "payload_clause_count": 15474,
+      "prediction_provenance_counts": {
+        "public:bin": 674,
+        "public:global": 94,
+        "public_raw_argv:argv_prefix_depth_2": 1482,
+        "public_raw_argv:argv_prefix_depth_3": 1659,
+        "public_raw_argv:argv_prefix_depth_4": 366,
+        "public_raw_argv:exact_clause": 5507,
+        "repo:argv_prefix_depth_2": 642,
+        "repo:argv_prefix_depth_3": 417,
+        "repo:argv_prefix_depth_4": 112,
+        "repo:bin": 655,
+        "repo:exact_clause": 1009
+      },
+      "structural_leading_cd_clause_count": 6428,
+      "unavailable_clause_examples": 2857,
+      "unavailable_reasons": {
+        "censored": 23,
+        "segment_evidence_bin_mismatch": 1063,
+        "segment_evidence_count_mismatch": 279,
+        "segment_evidence_invalid_timing": 624,
+        "segment_evidence_missing": 38,
+        "segment_evidence_segment_parse_mismatch": 830
+      }
+    }
+  },
+  "eval_exec_call_count": 8976,
+  "fit_clause_observation_count": 3926,
+  "majority": {
+    "accuracy": 0.8281683442973765,
+    "bucket_id": 0
+  },
+  "metrics": {
+    "canonical_argv_hierarchy_with_local_updates": {
+      "by_boundary": [
+        {
+          "accuracy": 0.8675596417531901,
+          "boundary_ms": 500.0,
+          "eligible_examples": 12617,
+          "false_negative": 790,
+          "false_positive": 881,
+          "positive_count": 2168,
+          "positive_rate": 0.17183165570262343,
+          "true_negative": 9568,
+          "true_positive": 1378
+        },
+        {
+          "accuracy": 0.8749306491241975,
+          "boundary_ms": 1000.0,
+          "eligible_examples": 12617,
+          "false_negative": 1285,
+          "false_positive": 293,
+          "positive_count": 1631,
+          "positive_rate": 0.12927003249583896,
+          "true_negative": 10693,
+          "true_positive": 346
+        },
+        {
+          "accuracy": 0.9164619164619164,
+          "boundary_ms": 2000.0,
+          "eligible_examples": 12617,
+          "false_negative": 917,
+          "false_positive": 137,
+          "positive_count": 986,
+          "positive_rate": 0.07814852976143298,
+          "true_negative": 11494,
+          "true_positive": 69
+        },
+        {
+          "accuracy": 0.9453118807957518,
+          "boundary_ms": 4000.0,
+          "eligible_examples": 12617,
+          "false_negative": 606,
+          "false_positive": 84,
+          "positive_count": 628,
+          "positive_rate": 0.049774114290243324,
+          "true_negative": 11905,
+          "true_positive": 22
+        },
+        {
+          "accuracy": 0.9659982563208369,
+          "boundary_ms": 8000.0,
+          "eligible_examples": 12617,
+          "false_negative": 402,
+          "false_positive": 27,
+          "positive_count": 410,
+          "positive_rate": 0.03249583894745185,
+          "true_negative": 12180,
+          "true_positive": 8
+        },
+        {
+          "accuracy": 0.9839105968138226,
+          "boundary_ms": 16000.0,
+          "eligible_examples": 12617,
+          "false_negative": 176,
+          "false_positive": 27,
+          "positive_count": 178,
+          "positive_rate": 0.01410794959182056,
+          "true_negative": 12412,
+          "true_positive": 2
+        },
+        {
+          "accuracy": 0.9915193786161528,
+          "boundary_ms": 32000.0,
+          "eligible_examples": 12617,
+          "false_negative": 102,
+          "false_positive": 5,
+          "positive_count": 102,
+          "positive_rate": 0.008084330664975827,
+          "true_negative": 12510,
+          "true_positive": 0
+        },
+        {
+          "accuracy": 0.9961956090988349,
+          "boundary_ms": 64000.0,
+          "eligible_examples": 12617,
+          "false_negative": 45,
+          "false_positive": 3,
+          "positive_count": 45,
+          "positive_rate": 0.003566616469842276,
+          "true_negative": 12569,
+          "true_positive": 0
+        }
+      ],
+      "exact_bucket": {
+        "eligible_examples": 12617,
+        "exact_bucket_accuracy": 0.8277720535785051
+      },
+      "exact_minus_majority_percentage_points": -0.03962907188713727
+    },
+    "public_binary_with_local_updates": {
+      "by_boundary": [
+        {
+          "accuracy": 0.8639137671395736,
+          "boundary_ms": 500.0,
+          "eligible_examples": 12617,
+          "false_negative": 809,
+          "false_positive": 908,
+          "positive_count": 2168,
+          "positive_rate": 0.17183165570262343,
+          "true_negative": 9541,
+          "true_positive": 1359
+        },
+        {
+          "accuracy": 0.8708092256479353,
+          "boundary_ms": 1000.0,
+          "eligible_examples": 12617,
+          "false_negative": 1298,
+          "false_positive": 332,
+          "positive_count": 1631,
+          "positive_rate": 0.12927003249583896,
+          "true_negative": 10654,
+          "true_positive": 333
+        },
+        {
+          "accuracy": 0.9216136958072442,
+          "boundary_ms": 2000.0,
+          "eligible_examples": 12617,
+          "false_negative": 928,
+          "false_positive": 61,
+          "positive_count": 986,
+          "positive_rate": 0.07814852976143298,
+          "true_negative": 11570,
+          "true_positive": 58
+        },
+        {
+          "accuracy": 0.9493540461282397,
+          "boundary_ms": 4000.0,
+          "eligible_examples": 12617,
+          "false_negative": 612,
+          "false_positive": 27,
+          "positive_count": 628,
+          "positive_rate": 0.049774114290243324,
+          "true_negative": 11962,
+          "true_positive": 16
+        },
+        {
+          "accuracy": 0.9667908377585797,
+          "boundary_ms": 8000.0,
+          "eligible_examples": 12617,
+          "false_negative": 403,
+          "false_positive": 16,
+          "positive_count": 410,
+          "positive_rate": 0.03249583894745185,
+          "true_negative": 12191,
+          "true_positive": 7
+        },
+        {
+          "accuracy": 0.9847031782515654,
+          "boundary_ms": 16000.0,
+          "eligible_examples": 12617,
+          "false_negative": 177,
+          "false_positive": 16,
+          "positive_count": 178,
+          "positive_rate": 0.01410794959182056,
+          "true_negative": 12423,
+          "true_positive": 1
+        },
+        {
+          "accuracy": 0.9915193786161528,
+          "boundary_ms": 32000.0,
+          "eligible_examples": 12617,
+          "false_negative": 102,
+          "false_positive": 5,
+          "positive_count": 102,
+          "positive_rate": 0.008084330664975827,
+          "true_negative": 12510,
+          "true_positive": 0
+        },
+        {
+          "accuracy": 0.9961956090988349,
+          "boundary_ms": 64000.0,
+          "eligible_examples": 12617,
+          "false_negative": 45,
+          "false_positive": 3,
+          "positive_count": 45,
+          "positive_rate": 0.003566616469842276,
+          "true_negative": 12569,
+          "true_positive": 0
+        }
+      ],
+      "exact_bucket": {
+        "eligible_examples": 12617,
+        "exact_bucket_accuracy": 0.8199254973448522
+      },
+      "exact_minus_majority_percentage_points": -0.8242846952524308
+    },
+    "raw_argv_hierarchy_with_local_updates": {
+      "by_boundary": [
+        {
+          "accuracy": 0.8674011254656416,
+          "boundary_ms": 500.0,
+          "eligible_examples": 12617,
+          "false_negative": 977,
+          "false_positive": 696,
+          "positive_count": 2168,
+          "positive_rate": 0.17183165570262343,
+          "true_negative": 9753,
+          "true_positive": 1191
+        },
+        {
+          "accuracy": 0.8804787191883966,
+          "boundary_ms": 1000.0,
+          "eligible_examples": 12617,
+          "false_negative": 943,
+          "false_positive": 565,
+          "positive_count": 1631,
+          "positive_rate": 0.12927003249583896,
+          "true_negative": 10421,
+          "true_positive": 688
+        },
+        {
+          "accuracy": 0.9164619164619164,
+          "boundary_ms": 2000.0,
+          "eligible_examples": 12617,
+          "false_negative": 917,
+          "false_positive": 137,
+          "positive_count": 986,
+          "positive_rate": 0.07814852976143298,
+          "true_negative": 11494,
+          "true_positive": 69
+        },
+        {
+          "accuracy": 0.9458666878021716,
+          "boundary_ms": 4000.0,
+          "eligible_examples": 12617,
+          "false_negative": 606,
+          "false_positive": 77,
+          "positive_count": 628,
+          "positive_rate": 0.049774114290243324,
+          "true_negative": 11912,
+          "true_positive": 22
+        },
+        {
+          "accuracy": 0.9661567726083855,
+          "boundary_ms": 8000.0,
+          "eligible_examples": 12617,
+          "false_negative": 402,
+          "false_positive": 25,
+          "positive_count": 410,
+          "positive_rate": 0.03249583894745185,
+          "true_negative": 12182,
+          "true_positive": 8
+        },
+        {
+          "accuracy": 0.9841483712451454,
+          "boundary_ms": 16000.0,
+          "eligible_examples": 12617,
+          "false_negative": 176,
+          "false_positive": 24,
+          "positive_count": 178,
+          "positive_rate": 0.01410794959182056,
+          "true_negative": 12415,
+          "true_positive": 2
+        },
+        {
+          "accuracy": 0.9915193786161528,
+          "boundary_ms": 32000.0,
+          "eligible_examples": 12617,
+          "false_negative": 102,
+          "false_positive": 5,
+          "positive_count": 102,
+          "positive_rate": 0.008084330664975827,
+          "true_negative": 12510,
+          "true_positive": 0
+        },
+        {
+          "accuracy": 0.9961956090988349,
+          "boundary_ms": 64000.0,
+          "eligible_examples": 12617,
+          "false_negative": 45,
+          "false_positive": 3,
+          "positive_count": 45,
+          "positive_rate": 0.003566616469842276,
+          "true_negative": 12569,
+          "true_positive": 0
+        }
+      ],
+      "exact_bucket": {
+        "eligible_examples": 12617,
+        "exact_bucket_accuracy": 0.8288024094475708
+      },
+      "exact_minus_majority_percentage_points": 0.06340651501942629
+    }
+  },
+  "objective": "clause_latency_bucket_public_representation",
+  "provenance": {
+    "deployment_semantics": "serialized_virtual_deployment",
+    "edge_source": "canonical_objective",
+    "eval_manifest": "/home/chiyu/workspace/agent-sched-bench-kb/configs/corpora/swe-277.json",
+    "eval_parse_failures": 0,
+    "eval_repo_count": 213,
+    "eval_root": "/home/chiyu/workspace/agent-sched-bench/traces/fresh-277-segtimeline",
+    "eval_task_count": 277,
+    "fit_manifest": "/home/chiyu/workspace/agent-sched-bench-kb/configs/corpora/swe-100.json",
+    "fit_parse_failures": 0,
+    "fit_repo_count": 94,
+    "fit_root": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/offline-gated-confirm-100-v2-pacct-perbin",
+    "fit_task_count": 100,
+    "proxy_adapter": "legacy bash-xtrace exact-bin segment latency only; no proxy CPU/RSS",
+    "repo_overlap_count": 36,
+    "scoring_unit": "mapped_non_structural_clause",
+    "task_order": "manifest task_ids order; no shuffle",
+    "task_overlap_count": 0,
+    "trace_order": "one source trace per task in manifest order",
+    "trace_update": "predict every mapped clause in all calls without intra-trace learning, then successful CloseTrace before the next trace",
+    "virtual_clock": "deterministic monotonic shift preserving source call order and durations; not historical concurrency or a historical close timestamp",
+    "virtual_trace_gap_s": 1.0
+  },
+  "row_identity": {
+    "eligible_row_count": 12617,
+    "identical_mapped_row_ids_and_labels": true,
+    "mapped_row_count": 12617
+  },
+  "status": "development_exposed_representation_diagnostic"
+}

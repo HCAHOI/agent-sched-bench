@@ -6,9 +6,11 @@ import pytest
 
 from tool_resource.runtime_kb import (
     CANONICAL_LATENCY_BUCKET_EDGES_MS,
+    GENERIC_ARGV_CANONICALIZER_VERSION,
     ClauseObservation,
     ClauseResourceKB,
     LatencyBuckets,
+    generic_argv_keys,
 )
 
 
@@ -41,6 +43,102 @@ def _fit(*observations: ClauseObservation) -> ClauseResourceKB:
 
 def _clauses(*specs: tuple[str, list[str]]) -> list[dict]:
     return [{"bin": bin_, "argv": argv} for bin_, argv in specs]
+
+
+def _generic_exact(bin_: str, argv: tuple[str, ...]) -> str:
+    return generic_argv_keys(bin_, argv)[0][1]
+
+
+def test_generic_argv_collapses_opaque_values_and_has_explicit_version() -> None:
+    first = _generic_exact(
+        "runner",
+        (
+            "/usr/bin/runner",
+            "deploy",
+            "--path=/tmp/build-1",
+            "https://example.test/jobs/1",
+            "123e4567-e89b-12d3-a456-426614174000",
+            "deadbeef1234",
+            "1500",
+        ),
+    )
+    second = _generic_exact(
+        "runner",
+        (
+            "runner",
+            "publish",
+            "--path=./build-2",
+            "s3://other/jobs/2",
+            "987e6543-e21b-12d3-a456-426614174999",
+            "cafebabe5678",
+            "9000",
+        ),
+    )
+
+    assert GENERIC_ARGV_CANONICALIZER_VERSION == "generic-argv-v2-shape"
+    assert first == second
+    assert first.split("\x00") == [
+        "runner",
+        "<ARG>",
+        "--path=<PATH>",
+        "<URL>",
+        "<ID>",
+        "<ID>",
+        "<NUM:+E3>",
+    ]
+
+
+def test_generic_argv_preserves_option_shape_without_plaintext_values() -> None:
+    keys = {
+        _generic_exact("tool", ("tool", subcommand, first, second))
+        for subcommand, first, second in (
+            ("fetch", "--mode=fast", "target"),
+            ("push", "--other=fast", "target"),
+            ("fetch", "target", "--mode=fast"),
+        )
+    }
+    redacted = _generic_exact(
+        "tool",
+        (
+            "tool",
+            "HOME=/private/work",
+            "--password=hunter2",
+            "--api-key",
+            "split-secret",
+            "--mode=stable",
+            "-phunter2",
+            "-H",
+            "Authorization: Bearer private-token",
+        ),
+    )
+
+    assert len(keys) == 3
+    assert redacted.split("\x00") == [
+        "tool",
+        "HOME=<PATH>",
+        "--password=<ARG>",
+        "--api-key",
+        "<ARG>",
+        "--mode=<ARG>",
+        "-p=<ARG>",
+        "-H",
+        "<ARG>",
+    ]
+    for secret in ("private", "hunter2", "split-secret", "private-token"):
+        assert secret not in redacted
+
+
+def test_generic_argv_keeps_numeric_order_of_magnitude() -> None:
+    small = _generic_exact("tool", ("tool", "-j2", "5"))
+    large = _generic_exact("tool", ("tool", "-j64", "600"))
+    nearby = _generic_exact("tool", ("tool", "-j70", "900"))
+
+    assert small != large
+    assert large == nearby
+    assert large.split("\x00") == ["tool", "-j=<NUM:+E1>", "<NUM:+E2>"]
+    assert _generic_exact("tool", ("tool", "1e1000000000000000000")).endswith(
+        "<NUM:EXTREME>"
+    )
 
 
 def test_latency_buckets_match_strict_threshold_decisions() -> None:
