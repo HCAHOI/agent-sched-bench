@@ -85,6 +85,54 @@ cannot support canonical resource claims. SWE-100/fresh-277 are
 development-exposed; the untouched Terminal-Bench confirmation attempts must
 remain untouched.
 
+## Amendment record
+
+### 2026-07-27 — concurrency-one diagnostic
+
+Concurrency one (`c1`) was authorized after the concurrency-two (`c2`) rung-20
+results were visible. It tests whether cross-trace concurrency caused unstable
+promotion; it is an openly development-exposed diagnostic, not a pre-registered
+confirmation. The `c1` replay reproduced the same missing-evidence pattern, so
+concurrency was rejected as the cause.
+
+### 2026-07-27 — call-scoped promotion
+
+Before this amendment, four development replays had shown stable call mapping
+(82 of 139 calls eligible) but unstable promoted-observation counts
+(82, 50, and 81 were observed), including traces with eligible calls and zero
+promotion. Inspection then identified a trace-level promotion filter that
+discarded every valid call when any call-level telemetry RPC made the trace
+status unavailable.
+
+Promotion is amended to retain individually eligible observations whenever the
+session collector-health, loss, and cleanup gates passed. Trace/run lifecycle
+validity remains reported separately; a failed call contributes no observation
+and no longer voids eligible sibling calls. This correction can raise measured
+yield, so results produced before and after it are not directly comparable.
+
+The first post-change replay exposed a second lifecycle defect that the new
+daemon logs made observable: the SQLite store contained all 82 eligible
+observations, but run manifests reported only 81. Resource runs were opened
+before the serial task queue started; one healthy closed trace and two not-yet-
+started tasks crossed the 1800-second run lease. The earlier TTL hypothesis had
+been rejected using trace-open times, which are not run-open times.
+
+Active run/session lifetime is therefore amended to follow the reuse-safe local
+client process identity obtained from the Unix socket, not elapsed RPC
+inactivity. Eligible observations become visible when trace finalization has
+established healthy collector, loss, and cleanup state; `CloseRun` reports the
+already-settled observations but does not control their visibility. TTL remains
+only for bounded retention of completed results and unacknowledged finalized
+observations. Collector loss and cleanup failure remain fail-closed.
+`promoted_observation_count` is the sum of store-confirmed promotion row counts;
+any mismatch between that count and the eligible observation IDs blocks
+settlement.
+
+`traces/terminal-bench/tb-dev10-resource-agentd-50x-20260726-r3` is a pre-fix,
+development-exposed baseline. The exact-cohort direct comparison for the
+call-scoped promotion correction is
+`traces/terminal-bench/tb-dev20-c1-ladder-20260727-r4`.
+
 ## Runtime architecture lock
 
 The canonical runtime architecture is specified in
@@ -101,6 +149,17 @@ These are modules, not permission modes. Trace clients connect only to
 per-worker privileged auto-start, in-process KB ownership, direct telemetry
 observer APIs, and compatibility aliases are deleted unless a current caller is
 proved to require them.
+
+The online daemon import graph and wire protocols do not depend on
+`trace_collect` or its action schema. A trace runner may adapt its records into
+the normalized tool-resource client protocol; that dependency is one-way.
+The online client path synchronously performs only local clause parsing and
+prediction. Telemetry attachment and call collection run through a bounded
+per-trace FIFO; `CloseTrace`, after workload completion, is the settlement
+barrier. Backpressure or telemetry failure withholds evidence fail-closed and
+never delays or changes the workload. Formal replay joins asynchronous
+attachment once, before workload timing begins; this setup barrier is not part
+of the online Begin/End path.
 
 ## Task contract
 

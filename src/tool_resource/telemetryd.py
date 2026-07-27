@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import os
 import signal
@@ -21,6 +22,8 @@ from tool_resource._uds import (
     DEFAULT_TIMEOUT_S,
     MAX_MESSAGE_BYTES,
     StrictUnixServer,
+    process_identity,
+    process_identity_is_alive,
     require_fields,
 )
 from tool_resource.telemetry_protocol import (
@@ -28,8 +31,8 @@ from tool_resource.telemetry_protocol import (
     TelemetryProtocolError,
 )
 
-DEFAULT_SESSION_TTL_S = 900.0
 DEFAULT_OBSERVATION_TTL_S = 900.0
+_LOG = logging.getLogger("tool_resource.telemetryd")
 _LEASE_IDEMPOTENT_OPERATIONS = frozenset({"AttachTarget", "RegisterCall"})
 CollectorFactory = Callable[..., Any]
 
@@ -57,6 +60,7 @@ class _Call:
     observation_id: str
     finished_summary: dict[str, Any] | None = None
     finish_result: dict[str, Any] | None = None
+    collector_ready: bool = True
 
 
 @dataclass
@@ -65,6 +69,8 @@ class _Session:
     trace_id: str
     collector: Any
     artifact_path: Path
+    owner_identity: tuple[int, int]
+    attached_monotonic_ns: int
     calls: dict[str, _Call] = field(default_factory=dict)
     observations: dict[str, dict[str, Any]] = field(default_factory=dict)
     acknowledged: set[str] = field(default_factory=set)
@@ -85,16 +91,12 @@ class TelemetryService:
         container_executable: str | None = None,
         collector_factory: CollectorFactory = _collector_factory,
         state_dir: str | Path | None = None,
-        session_ttl_s: float = DEFAULT_SESSION_TTL_S,
         observation_ttl_s: float = DEFAULT_OBSERVATION_TTL_S,
     ) -> None:
-        if not math.isfinite(session_ttl_s) or session_ttl_s <= 0:
-            raise ValueError("session_ttl_s must be finite and positive")
         if not math.isfinite(observation_ttl_s) or observation_ttl_s <= 0:
             raise ValueError("observation_ttl_s must be finite and positive")
         self.container_executable = container_executable
         self.collector_factory = collector_factory
-        self.session_ttl_s = session_ttl_s
         self.observation_ttl_s = observation_ttl_s
         self._state_tmp = (
             tempfile.TemporaryDirectory(prefix="telemetryd-")
@@ -116,6 +118,7 @@ class TelemetryService:
         operation: str,
         payload: Mapping[str, Any],
         request_identity: tuple[int, str] | None = None,
+        peer_pid: int | None = None,
     ) -> dict[str, Any]:
         payload_identity = None
         if request_identity is not None:
@@ -142,7 +145,6 @@ class TelemetryService:
         handlers = {
             "Ping": self._ping,
             "Capabilities": self._capabilities,
-            "AttachTarget": self._attach_target,
             "RegisterCall": self._register_call,
             "FinishCall": self._finish_call,
             "RecordSafetyGuardBlock": self._record_safety_guard_block,
@@ -151,13 +153,21 @@ class TelemetryService:
             "FetchFinalizedObservation": self._fetch_observation,
             "AcknowledgeObservation": self._acknowledge_observation,
         }
-        try:
-            handler = handlers[operation]
-        except KeyError as exc:
-            raise TelemetryProtocolError(
-                f"unsupported telemetry operation {operation!r}"
-            ) from exc
-        result = handler(payload)
+        if operation == "AttachTarget":
+            result = self._attach_target(
+                payload,
+                owner_identity=process_identity(
+                    os.getpid() if peer_pid is None else peer_pid
+                ),
+            )
+        else:
+            try:
+                handler = handlers[operation]
+            except KeyError as exc:
+                raise TelemetryProtocolError(
+                    f"unsupported telemetry operation {operation!r}"
+                ) from exc
+            result = handler(payload)
         if (
             payload_identity is not None
             and request_identity is not None
@@ -205,7 +215,12 @@ class TelemetryService:
             "raw_events_exposed": False,
         }
 
-    def _attach_target(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+    def _attach_target(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        owner_identity: tuple[int, int],
+    ) -> dict[str, Any]:
         require_fields(
             payload,
             required={
@@ -215,7 +230,6 @@ class TelemetryService:
                 "container_id",
                 "workspace_scope",
             },
-            optional={"runner_pid"},
             error_type=TelemetryProtocolError,
         )
         run_id = _string(payload, "run_id")
@@ -232,13 +246,6 @@ class TelemetryService:
             raise TelemetryProtocolError(
                 "container runtime differs from telemetryd configuration"
             )
-        runner_pid = payload.get("runner_pid")
-        if runner_pid is not None and (
-            not isinstance(runner_pid, int)
-            or isinstance(runner_pid, bool)
-            or runner_pid <= 0
-        ):
-            raise TelemetryProtocolError("runner_pid must be a positive integer")
         token = uuid.uuid4().hex
         artifact_path = self.state_dir / f"{token}.json"
         collector = self.collector_factory(
@@ -248,16 +255,31 @@ class TelemetryService:
             artifact_path=artifact_path,
             source_actions=(),
         )
-        session = _Session(run_id, trace_id, collector, artifact_path)
+        session = _Session(
+            run_id,
+            trace_id,
+            collector,
+            artifact_path,
+            owner_identity,
+            time.monotonic_ns(),
+        )
         with self._lock:
             self._sessions[token] = session
+        target_status = (
+            "available"
+            if getattr(collector, "state", None) == "active"
+            else "unavailable"
+        )
+        _LOG.info(
+            "attached target run_id=%s trace_id=%s call_id=- status=%s reason=%s",
+            run_id,
+            trace_id,
+            target_status,
+            getattr(collector, "_disabled_reason", None) or "-",
+        )
         return {
             "telemetry_session_token": token,
-            "target_status": (
-                "available"
-                if getattr(collector, "state", None) == "active"
-                else "unavailable"
-            ),
+            "target_status": target_status,
             "resolved_target": {
                 "init_pid": int(getattr(collector, "init_pid", 0)),
                 "cgroup_id": int(getattr(collector, "cgroup_id", 0)),
@@ -272,6 +294,7 @@ class TelemetryService:
                 "telemetry_session_token",
                 "call_id",
                 "command_digest",
+                "call_started_monotonic_ns",
                 "static_call_plan",
             },
             error_type=TelemetryProtocolError,
@@ -279,18 +302,25 @@ class TelemetryService:
         session = self._session(payload)
         call_id = _string(payload, "call_id")
         command_digest = _sha256(payload, "command_digest")
+        started_ns = _positive_integer(payload, "call_started_monotonic_ns")
         plan = _static_plan(payload["static_call_plan"])
         with session.lock:
             self._require_open(session)
             if any(call.call_id == call_id for call in session.calls.values()):
                 raise TelemetryProtocolError(f"duplicate call_id {call_id!r}")
-            collector_token = session.collector.begin_tool_call(
-                call_id,
-                plan["canonical_command"],
-                static_plan=plan["parsed"],
-                source_tool_call_id=plan["source_tool_call_id"],
-                source_command=plan["source_command"],
-                source_tool_result=plan["source_tool_result"],
+            collector_ready = started_ns >= session.attached_monotonic_ns
+            collector_token = (
+                session.collector.begin_tool_call(
+                    call_id,
+                    plan["canonical_command"],
+                    static_plan=plan["parsed"],
+                    source_tool_call_id=plan["source_tool_call_id"],
+                    source_command=plan["source_command"],
+                    source_tool_result=plan["source_tool_result"],
+                    started_ns=started_ns,
+                )
+                if collector_ready
+                else None
             )
             call_token = uuid.uuid4().hex
             session.calls[call_token] = _Call(
@@ -299,9 +329,23 @@ class TelemetryService:
                 plan,
                 collector_token,
                 uuid.uuid4().hex,
+                collector_ready=collector_ready,
             )
             session.last_used = time.monotonic()
-        return {"telemetry_call_token": call_token, "telemetry_status": "registered"}
+        _LOG.info(
+            "registered call run_id=%s trace_id=%s call_id=%s",
+            session.run_id,
+            session.trace_id,
+            call_id,
+        )
+        return {
+            "telemetry_call_token": call_token,
+            "telemetry_status": (
+                "registered"
+                if collector_ready
+                else "unavailable:collector_not_ready"
+            ),
+        }
 
     def _finish_call(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         require_fields(
@@ -311,6 +355,7 @@ class TelemetryService:
                 "telemetry_call_token",
                 "workload_result",
                 "end_timestamp",
+                "call_ended_monotonic_ns",
             },
             error_type=TelemetryProtocolError,
         )
@@ -320,13 +365,31 @@ class TelemetryService:
         if result is not None and not isinstance(result, Mapping):
             raise TelemetryProtocolError("workload_result must be an object or null")
         _finite_number(payload, "end_timestamp")
+        ended_ns = _positive_integer(payload, "call_ended_monotonic_ns")
         with session.lock:
             self._require_open(session)
             if call.finish_result is not None:
                 return call.finish_result
-            summary = session.collector.finish_tool_call(
-                call.collector_token,
-                replay_response=result,
+            summary = (
+                session.collector.finish_tool_call(
+                    call.collector_token,
+                    replay_response=result,
+                    ended_ns=ended_ns,
+                )
+                if call.collector_ready
+                else {
+                    "tool_call_id": call.call_id,
+                    "command": call.plan["canonical_command"],
+                    "telemetry_quality": "unavailable",
+                    "eligible_for_kb": False,
+                    "invalid_reasons": [
+                        {
+                            "kind": "collector_not_ready",
+                            "detail": "target attachment completed after call start",
+                        }
+                    ],
+                    "clauses": [],
+                }
             )
             if not isinstance(summary, Mapping):
                 raise TelemetryProtocolError("collector returned an invalid call")
@@ -339,7 +402,15 @@ class TelemetryService:
                 ),
             }
             session.last_used = time.monotonic()
-            return call.finish_result
+            finish_result = call.finish_result
+        _LOG.info(
+            "finished call run_id=%s trace_id=%s call_id=%s status=%s",
+            session.run_id,
+            session.trace_id,
+            call.call_id,
+            finish_result["telemetry_status"],
+        )
+        return finish_result
 
     def _record_safety_guard_block(
         self,
@@ -450,7 +521,17 @@ class TelemetryService:
                 "observation_ids": list(session.observations),
             }
             session.last_used = session.finalized_at
-            return session.final_result
+            final_result = session.final_result
+        _LOG.info(
+            "finalized session run_id=%s trace_id=%s call_id=- "
+            "collector_health=%s eligible_calls=%s withheld_calls=%s",
+            session.run_id,
+            session.trace_id,
+            final_result["session_summary"]["collector_health"],
+            final_result["session_summary"]["eligible_call_count"],
+            final_result["session_summary"]["withheld_call_count"],
+        )
+        return final_result
 
     def _abort_session(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         require_fields(
@@ -482,6 +563,12 @@ class TelemetryService:
                 "session_summary": session.summary,
                 "observation_ids": [],
             }
+        _LOG.info(
+            "aborted session run_id=%s trace_id=%s call_id=- reason=%s",
+            session.run_id,
+            session.trace_id,
+            reason,
+        )
         return {"aborted": True, "session_summary": session.summary}
 
     def _fetch_observation(self, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -525,21 +612,27 @@ class TelemetryService:
         with self._lock:
             sessions = list(self._sessions.items())
         for token, session in sessions:
-            cutoff = (
-                session.finalized_at + self.observation_ttl_s
-                if session.finalized_at is not None
-                else session.last_used + self.session_ttl_s
-            )
-            if now < cutoff:
-                continue
             if session.finalized_at is None:
-                with suppress(Exception):
+                if process_identity_is_alive(session.owner_identity):
+                    continue
+                _LOG.warning(
+                    "telemetry owner exited run_id=%s trace_id=%s call_id=- "
+                    "owner_pid=%d",
+                    session.run_id,
+                    session.trace_id,
+                    session.owner_identity[0],
+                )
+                try:
                     self._abort_session(
                         {
                             "telemetry_session_token": token,
-                            "reason": "session lease expired",
+                            "reason": "telemetry client exited",
                         }
                     )
+                except Exception:
+                    continue
+            elif now < session.finalized_at + self.observation_ttl_s:
+                continue
             with self._lock:
                 self._sessions.pop(token, None)
                 self._operation_results = {
@@ -619,6 +712,13 @@ def _finite_number(payload: Mapping[str, Any], name: str) -> float:
     ):
         raise TelemetryProtocolError(f"{name} must be finite")
     return float(value)
+
+
+def _positive_integer(payload: Mapping[str, Any], name: str) -> int:
+    value = payload.get(name)
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise TelemetryProtocolError(f"{name} must be a positive integer")
+    return value
 
 
 def _static_plan(value: Any) -> dict[str, Any]:
@@ -837,14 +937,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--socket-mode", type=_parse_mode, default=0o660)
     parser.add_argument("--container-runtime", choices=["docker", "podman"])
     parser.add_argument("--state-dir", type=Path)
-    parser.add_argument("--session-ttl", type=float, default=DEFAULT_SESSION_TTL_S)
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging.",
+    )
     args = parser.parse_args(argv)
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
     if args.allowed_uid < 0:
         raise ValueError("allowed UID must be non-negative")
     service = TelemetryService(
         container_executable=args.container_runtime,
         state_dir=args.state_dir,
-        session_ttl_s=args.session_ttl,
     )
     with TelemetryServer(
         args.socket,
@@ -872,7 +979,6 @@ if __name__ == "__main__":
 
 __all__ = [
     "DEFAULT_OBSERVATION_TTL_S",
-    "DEFAULT_SESSION_TTL_S",
     "TelemetryServer",
     "TelemetryService",
     "main",

@@ -118,7 +118,8 @@ Requirements:
 - bounded message size, finite timeout, request/response ID matching;
 - `SO_PEERCRED` validation and socket owner/group/mode enforcement;
 - idempotent request handling where a retry can repeat a completed operation;
-- bounded session lease/TTL and deterministic `Finalize`/`Abort` semantics;
+- active session ownership by reuse-safe local process identity, bounded
+  retention after finalization, and deterministic `Finalize`/`Abort` semantics;
 - no TCP listener in the canonical host-local deployment;
 - after complete migration, no dual protocol or legacy operation aliases.
 
@@ -174,11 +175,14 @@ OpenTraceRequest
   trace_id
   container_runtime
   container_id
-  runner_pid (when available)
   repo/workspace metadata
 ```
 
-`resource-agentd` converts this into an `AttachTargetRequest` to `telemetryd`.
+`resource-agentd` validates the trace and queues an `AttachTargetRequest` to
+`telemetryd`. It does not wait for collector attachment on the online client
+path. Formal replay joins that asynchronous setup at an explicit pre-workload
+`AwaitTraceReady` barrier, before replay timing or tool execution begins. No
+Begin/End call waits for telemetry.
 
 ### Begin call
 
@@ -192,9 +196,17 @@ BeginCallRequest
   query_timestamp
 ```
 
-`resource-agentd` parses and canonicalizes the command, queries the pinned KB,
-and registers the resulting static call plan with `telemetryd` immediately
-before workload execution.
+`resource-agentd` parses and canonicalizes the command and queries the pinned
+KB synchronously. It queues the resulting static call plan for `telemetryd`
+before workload execution, but does not wait for registration or collection.
+The per-trace bounded FIFO preserves AttachTarget, RegisterCall, and FinishCall
+order. Begin and End record host-monotonic call boundaries before returning;
+`telemetryd` uses those boundaries rather than later RPC arrival times when it
+slices buffered eBPF events. A call that starts before target attachment is
+ready is withheld, never reconstructed from missing events. Formal replay uses
+the pre-workload readiness barrier; callers that skip it retain non-blocking
+workload behavior but cannot claim evidence for calls that race collector
+attachment.
 
 Output:
 
@@ -208,7 +220,7 @@ BeginCallResponse
   evidence_count and recency
   pinned_snapshot_id
   canonicalizer_version
-  telemetry_status
+  telemetry_status                  # pending until trace settlement
 ```
 
 ### End call
@@ -227,17 +239,19 @@ Output:
 ```text
 EndCallResponse
   workload_result                  # unchanged
-  finalized_call_observation
-  telemetry_status
-  ingest_status and rejection reasons
+  finalized_call_observation       # provisional until trace settlement
+  telemetry_status                 # pending/unavailable
+  ingest_status = pending_trace_finalization
 ```
 
 ### Close trace/run
 
-Closing a trace finalizes collector health, loss, cleanup, call coverage, and
-formal completeness. Closing a run reports workload and evidence validity
-separately and exports the run manifest required to identify its pinned
-snapshot and result-affecting configuration.
+After workload execution has ended, closing a trace drains its telemetry FIFO,
+then finalizes collector health, loss, cleanup, call coverage, and formal
+completeness. Queue overflow or an RPC failure withholds the affected call and
+never blocks or changes workload execution. Closing a run reports already
+settled workload and evidence validity separately and exports the run manifest
+required to identify its pinned snapshot and result-affecting configuration.
 
 ## Telemetry Protocol
 
@@ -258,9 +272,10 @@ AcknowledgeObservation
 `AttachTargetRequest` identifies the run/trace and live container. The response
 contains an opaque telemetry session token and resolved target diagnostics.
 
-`RegisterCallRequest` contains a call ID, command digest, and static clause plan
-constructed by `resource-agentd`. It does not give `telemetryd` a KB or bucket
-configuration.
+`RegisterCallRequest` contains a call ID, command digest, host-monotonic start
+boundary, and static clause plan constructed by `resource-agentd`.
+`FinishCallRequest` contains the matching host-monotonic end boundary. They do
+not give `telemetryd` a KB or bucket configuration.
 
 `FinalizedCallObservation` contains:
 

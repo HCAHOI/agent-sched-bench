@@ -146,6 +146,7 @@ struct pending_exec_t {
     u64 seq;
     u64 argv_ptr;
     u64 argv_captured;
+    u64 filename_read_failed;
 };
 BPF_HASH(current_seq, struct task_key_t, u64);
 BPF_HASH(pending_seq, struct task_key_t, struct pending_exec_t);
@@ -372,9 +373,12 @@ static int capture_enter(const char *filename, const char *const *argv) {
         int filename_size = bpf_probe_read_user_str(
             e->arg, sizeof(e->arg), filename
         );
-        if (filename_size < 0) argv_read_failed();
-        else if (filename_size == sizeof(e->arg))
+        if (filename_size < 0) {
+            pending.filename_read_failed = 1;
+            pending_seq.update(&task_key, &pending);
+        } else if (filename_size == sizeof(e->arg)) {
             e->arg_flags = ARG_FLAG_TRUNCATED;
+        }
         events.ringbuf_submit(e, 0);
     }
     return 0;
@@ -408,6 +412,12 @@ int capture_bprm_argv(struct pt_regs *ctx) {
     bpf_probe_read_kernel(&filename, sizeof(filename), &bprm->filename);
     bpf_probe_read_kernel(&interp, sizeof(interp), &bprm->interp);
     bpf_probe_read_kernel(&argc, sizeof(argc), &bprm->argc);
+    if (filename && pending->filename_read_failed) {
+        emit_kernel_exec_meta(
+            TYPE_EXEC_META, pending->seq, filename, argc, pid_tgid
+        );
+        pending->filename_read_failed = 0;
+    }
     emit_kernel_exec_meta(
         TYPE_BPRM_META, pending->seq, filename, argc, pid_tgid
     );
@@ -458,6 +468,9 @@ static int on_exec_return(long ret) {
                 pid_tgid
             );
         } else if (!pending->argv_captured) {
+            argv_read_failed();
+        }
+        if (pending->filename_read_failed) {
             argv_read_failed();
         }
         if (ret >= 0) {
@@ -1241,10 +1254,14 @@ def _attribute(
         if event["type"] == "fork" and event.get("child_host_pid"):
             fork_records.setdefault(event["child_host_pid"], []).append(event)
     exec_boundaries_by_tid: dict[int, list[dict[str, Any]]] = {}
+    boundary_events_by_tid: dict[int, list[dict[str, Any]]] = {}
     exec_arg_start_by_tid_seq: dict[tuple[int, int], int] = {}
     for event in events:
         if event["type"] == "exec_boundary":
             exec_boundaries_by_tid.setdefault(event["host_tid"], []).append(event)
+            boundary_events_by_tid.setdefault(event["host_tid"], []).append(event)
+        elif event["type"] == "exit_boundary":
+            boundary_events_by_tid.setdefault(event["host_tid"], []).append(event)
         elif event["type"] == "exec_arg" and event["arg_index"] == 0:
             key = (event["host_tid"], event["exec_seq"])
             exec_arg_start_by_tid_seq[key] = min(
@@ -1442,10 +1459,8 @@ def _attribute(
             endpoint = min(
                 (
                     candidate
-                    for candidate in events
-                    if candidate["host_tid"] == tid
-                    and candidate["type"] in {"exec_boundary", "exit_boundary"}
-                    and candidate["ts_ns"] > ts
+                    for candidate in boundary_events_by_tid.get(tid, ())
+                    if candidate["ts_ns"] > ts
                 ),
                 key=lambda candidate: candidate["ts_ns"],
                 default=None,
@@ -1739,10 +1754,12 @@ def _fork_io_baselines(
 
 
 def _task_io_totals(
-    events: list[dict[str, Any]],
     samples: list[dict[str, Any]],
     clause: Clause,
     fork_baselines: dict[int, int],
+    *,
+    counter_events_by_pid: Mapping[int, Sequence[dict[str, Any]]],
+    counter_events_by_tid: Mapping[int, Sequence[dict[str, Any]]],
 ) -> tuple[tuple[int, int, int] | None, str, dict[str, Any]]:
     """Exact task-I/O-accounting deltas for one exec image.
 
@@ -1752,16 +1769,10 @@ def _task_io_totals(
     owned descendants remain disjoint; perf samples are diagnostic only.
     """
 
-    counter_events = [
-        event
-        for event in events
-        if event["type"] in {"perf", "exec_boundary", "exit_boundary"}
-    ]
     exec_baselines = [
         event
-        for event in counter_events
+        for event in counter_events_by_pid.get(clause.host_pid, ())
         if event["type"] == "exec_boundary"
-        and event["host_pid"] == clause.host_pid
         and event["exec_seq"] == clause.exec_seq
         and event["ts_ns"] == clause.t_exec_ns
     ]
@@ -1807,9 +1818,8 @@ def _task_io_totals(
     for tid, (baseline_ts, baseline) in baselines.items():
         endpoints = [
             event
-            for event in counter_events
-            if event["host_tid"] == tid
-            and baseline_ts < event["ts_ns"] <= clause.t_end_ns
+            for event in counter_events_by_tid.get(tid, ())
+            if baseline_ts < event["ts_ns"] <= clause.t_end_ns
             and event["type"] in {"exec_boundary", "exit_boundary"}
         ]
         if not endpoints:
@@ -1857,6 +1867,16 @@ def analyze(
         entry_pid=entry_pid,
     )
     fork_io_baselines = _fork_io_baselines(run.events, clauses, fork_parent)
+    counter_events_by_pid: dict[int, list[dict[str, Any]]] = {}
+    counter_events_by_tid: dict[int, list[dict[str, Any]]] = {}
+    exit_events_by_pid: dict[int, list[dict[str, Any]]] = {}
+    for event in run.events:
+        if event["type"] not in {"perf", "exec_boundary", "exit_boundary"}:
+            continue
+        counter_events_by_pid.setdefault(event["host_pid"], []).append(event)
+        counter_events_by_tid.setdefault(event["host_tid"], []).append(event)
+        if event["type"] == "exit_boundary":
+            exit_events_by_pid.setdefault(event["host_pid"], []).append(event)
     metrics: list[ClauseMetrics] = []
     for c in clauses:
         attributed_samples = per_clause[(c.host_pid, c.exec_seq)]
@@ -1877,31 +1897,23 @@ def analyze(
         ]
         in_window = sum(
             1
-            for e in run.events
-            if e["type"] in {"perf", "exec_boundary", "exit_boundary"}
-            and c.t_exec_ns <= e["ts_ns"] <= c.t_end_ns
-            and e["host_pid"] == c.host_pid
+            for e in counter_events_by_pid.get(c.host_pid, ())
+            if c.t_exec_ns <= e["ts_ns"] <= c.t_end_ns
         )
         peak, cpu_reason, cpu_prov = _peak_cpu_cores(samples, c, run.quota_cores)
         rss, rss_reason, rss_prov = _sampled_peak_rss(samples, c)
         io_totals, io_reason, io_prov = _task_io_totals(
-            run.events,
             samples,
             c,
             fork_io_baselines[(c.host_pid, c.exec_seq)],
+            counter_events_by_pid=counter_events_by_pid,
+            counter_events_by_tid=counter_events_by_tid,
         )
-        has_exit = any(
-            e["type"] == "exit_boundary" and e["host_pid"] == c.host_pid
-            for e in run.events
-        )
+        exits = exit_events_by_pid.get(c.host_pid, ())
+        has_exit = bool(exits)
         # Raw cumulative CPU (preserved separately, never used for the peak):
         # deterministic group sum across the terminal process's threads.
         if c.terminal:
-            exits = [
-                e
-                for e in run.events
-                if e["type"] == "exit_boundary" and e["host_pid"] == c.host_pid
-            ]
             cpu_cum = sum(e["cpu_ns"] for e in exits)
             leader = next(
                 (e for e in exits if e["host_tid"] == e["host_pid"]),
@@ -2012,7 +2024,13 @@ def _command_tree_provenance(
 ) -> tuple[int, set[int], dict[str, Any]]:
     """Identify transitive exec roots and their one observed outside parent."""
 
-    exec_pids = {metric.host_pid for metric in metrics}
+    first_exec_by_pid: dict[int, int] = {}
+    for metric in metrics:
+        first_exec_by_pid[metric.host_pid] = min(
+            first_exec_by_pid.get(metric.host_pid, metric.t_exec_ns),
+            metric.t_exec_ns,
+        )
+    exec_pids = set(first_exec_by_pid)
     ancestry: list[dict[str, Any]] = []
     roots: list[int] = []
     entry_by_root: dict[int, int] = {}
@@ -2023,9 +2041,7 @@ def _command_tree_provenance(
         nearest_exec_ancestor: int | None = None
         current = pid
         seen = {pid}
-        ancestor_ts_bound = min(
-            metric.t_exec_ns for metric in metrics if metric.host_pid == pid
-        )
+        ancestor_ts_bound = first_exec_by_pid[pid]
         while current in fork_parent or (
             fork_records is not None and current in fork_records
         ):
@@ -2523,6 +2539,7 @@ class ClauseTelemetryCollector:
         source_tool_call_id: str | None = None,
         source_command: str | None = None,
         source_tool_result: str | None = None,
+        started_ns: int | None = None,
     ) -> ToolCallToken:
         if (
             source_tool_call_id is None
@@ -2579,10 +2596,20 @@ class ClauseTelemetryCollector:
                     f"collector counter read failed: {type(exc).__name__}: {exc}",
                     tool_call_id=tool_call_id,
                 )
+        now_ns = time.monotonic_ns()
+        if started_ns is None:
+            started_ns = now_ns
+        elif (
+            not isinstance(started_ns, int)
+            or isinstance(started_ns, bool)
+            or started_ns <= 0
+            or started_ns > now_ns
+        ):
+            raise ValueError("started_ns must be a past positive monotonic timestamp")
         token = ToolCallToken(
             tool_call_id=tool_call_id,
             command=command,
-            started_ns=time.monotonic_ns(),
+            started_ns=started_ns,
             ringbuf_reserve_failures=int(counters["ringbuf_reserve_failures"]),
             perf_sample_count=int(counters["perf_sample_count"]),
             argv_read_failures=int(counters["argv_read_failures"]),
@@ -2602,6 +2629,7 @@ class ClauseTelemetryCollector:
         token: ToolCallToken,
         *,
         replay_response: Mapping[str, Any] | None = None,
+        ended_ns: int | None = None,
     ) -> dict[str, Any]:
         if token is not self._active:
             self._disable(
@@ -2609,7 +2637,16 @@ class ClauseTelemetryCollector:
                 tool_call_id=token.tool_call_id,
             )
             return self._unavailable_call(token, reason="exec delimiter desynchronized")
-        ended_ns = time.monotonic_ns()
+        now_ns = time.monotonic_ns()
+        if ended_ns is None:
+            ended_ns = now_ns
+        elif (
+            not isinstance(ended_ns, int)
+            or isinstance(ended_ns, bool)
+            or ended_ns < token.started_ns
+            or ended_ns > now_ns
+        ):
+            raise ValueError("ended_ns must be a valid past monotonic timestamp")
         self._active = None
         if self.state != "active":
             return self._unavailable_call(token)
@@ -2638,6 +2675,17 @@ class ClauseTelemetryCollector:
                     ),
                     key=lambda event: event["ts_ns"],
                 )
+                # Calls are sequential within a collector, so a later window
+                # never reaches back before this call's start. Retaining those
+                # events grew the buffer for the collector's whole lifetime and
+                # made every finish O(total events), which degraded long runs
+                # until late calls failed outright. Drop only what is provably
+                # unreachable; anything at or after this start is kept.
+                self._events = [
+                    event
+                    for event in self._events
+                    if event["ts_ns"] >= token.started_ns
+                ]
         except BaseException as exc:
             self._disable(
                 f"collector finish failed: {type(exc).__name__}: {exc}",
@@ -2994,10 +3042,16 @@ class ClauseTelemetryCollector:
             ],
             command_lookup_failure=command_lookup_failure,
             safety_guard_blocked=safety_guard_blocked,
-            allow_control_short_circuit=bool(
-                control_flow_fidelity
-                and control_flow_fidelity.get("short_circuit_eligible") is True
-            ),
+            # Short-circuit resolution answers "did this clause execute in THIS
+            # replay?", which is decided entirely by replay-side kernel evidence
+            # (the controller's normal_exit_status from task->exit_code) plus the
+            # replay's own parse tree. It does not depend on the replay matching
+            # the source trace. `control_flow_fidelity` is retained in provenance
+            # as a separate replay-quality signal; gating on it here starved
+            # stateful workloads (Terminal-Bench) of clause data whenever output
+            # diverged, while the resolver's own conservatism already fails
+            # closed on missing or contradictory runtime evidence.
+            allow_control_short_circuit=True,
             entry_pid=entry_pid,
             fork_parent=fork_parent,
             epoch_offset=self._epoch_offset_s,
@@ -3129,7 +3183,10 @@ class ClauseTelemetryCollector:
                 "reasons": reasons,
             }
         mappable = bridge.static_clause_count - len(bridge.unobserved_builtins)
-        mapped = len(bridge.bridged) + len(bridge.no_runtime_exec)
+        # Count static clauses, not bridged entries: a loop body is one static
+        # clause that yields one observation per iteration, so len(bridge.bridged)
+        # would push coverage above 1.0.
+        mapped = bridge.bridged_clause_count + len(bridge.no_runtime_exec)
         summary = {
             "version": CLAUSE_TELEMETRY_SCHEMA_VERSION,
             "tool_call_id": token.tool_call_id,

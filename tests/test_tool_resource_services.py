@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import socket
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -14,10 +16,14 @@ from typing import Any
 
 import pytest
 
-from tool_resource._uds import receive_message, send_message
+from tool_resource._uds import StrictUnixServer, receive_message, send_message
 from tool_resource.client import ResourceRun
 from tool_resource.profile import ResourceProfile
-from tool_resource.resource_agentd import ResourceServer, ResourceService
+from tool_resource.resource_agentd import (
+    ResourceServer,
+    ResourceService,
+    _clause_observations,
+)
 from tool_resource.resource_protocol import (
     RESOURCE_PROTOCOL_VERSION,
     ResourceProtocolError,
@@ -47,10 +53,83 @@ class _DirectTransport:
         *,
         request_id: str | None = None,
     ) -> dict[str, Any]:
-        del request_id
         if operation == self.fail_operation:
             raise TelemetryUnavailableError(f"{operation} {self.failure_detail}")
-        return self.service.dispatch(operation, payload or {})
+        return self.service.dispatch(
+            operation,
+            payload or {},
+            request_identity=(
+                None if request_id is None else (os.getuid(), request_id)
+            ),
+        )
+
+
+class _BlockingTransport(_DirectTransport):
+    def __init__(self, service: Any) -> None:
+        super().__init__(service)
+        self.operations: list[str] = []
+        self.block_operation: str | None = None
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def block(self, operation: str) -> None:
+        self.block_operation = operation
+        self.entered.clear()
+        self.release.clear()
+
+    def request(
+        self,
+        operation: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        self.operations.append(operation)
+        if operation == self.block_operation:
+            self.entered.set()
+            if not self.release.wait(5):
+                raise TimeoutError(f"test did not release {operation}")
+            if self.block_operation == operation:
+                self.block_operation = None
+        return super().request(operation, payload, request_id=request_id)
+
+
+class _FailSecondAcknowledgeTransport(_DirectTransport):
+    def __init__(self, service: Any) -> None:
+        super().__init__(service)
+        self.acknowledgments = 0
+
+    def request(
+        self,
+        operation: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        if operation == "AcknowledgeObservation":
+            self.acknowledgments += 1
+            if self.acknowledgments >= 2:
+                raise TelemetryUnavailableError("second acknowledgment disconnected")
+        return super().request(operation, payload, request_id=request_id)
+
+
+class _PostCommitFailureTransport(_DirectTransport):
+    def __init__(self, service: Any) -> None:
+        super().__init__(service)
+        self.post_commit_failure: str | None = None
+
+    def request(
+        self,
+        operation: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        result = super().request(operation, payload, request_id=request_id)
+        if operation == self.post_commit_failure:
+            self.post_commit_failure = None
+            raise TelemetryUnavailableError(f"{operation} response timed out")
+        return result
 
 
 class _FakeCollector:
@@ -64,6 +143,7 @@ class _FakeCollector:
         self.artifact_path = Path(kwargs["artifact_path"])
         self.calls: list[dict[str, Any]] = []
         self.errors: list[str] = []
+        self.boundaries: list[tuple[int | None, int | None]] = []
 
     def begin_tool_call(
         self,
@@ -78,8 +158,10 @@ class _FakeCollector:
         token: dict[str, Any],
         *,
         replay_response: dict[str, Any] | None = None,
+        ended_ns: int | None = None,
     ) -> dict[str, Any]:
         del replay_response
+        self.boundaries.append((token.get("started_ns"), ended_ns))
         valid = "invalid" not in token["command"]
         clause = dict(token["static_plan"]["clauses"][0])
         now = time.time()
@@ -179,8 +261,13 @@ class _MismatchedClauseCollector(_FakeCollector):
         token: dict[str, Any],
         *,
         replay_response: dict[str, Any] | None = None,
+        ended_ns: int | None = None,
     ) -> dict[str, Any]:
-        result = super().finish_tool_call(token, replay_response=replay_response)
+        result = super().finish_tool_call(
+            token,
+            replay_response=replay_response,
+            ended_ns=ended_ns,
+        )
         result["clauses"][0]["argv"] = ["different", "command"]
         return result
 
@@ -191,8 +278,13 @@ class _BuiltinOmittingCollector(_FakeCollector):
         token: dict[str, Any],
         *,
         replay_response: dict[str, Any] | None = None,
+        ended_ns: int | None = None,
     ) -> dict[str, Any]:
-        result = super().finish_tool_call(token, replay_response=replay_response)
+        result = super().finish_tool_call(
+            token,
+            replay_response=replay_response,
+            ended_ns=ended_ns,
+        )
         clause = token["static_plan"]["clauses"][-1]
         result["clauses"][0]["bin"] = clause["bin"]
         result["clauses"][0]["argv"] = clause["argv"]
@@ -241,6 +333,74 @@ def _envelope(
     }
 
 
+class _LoopIterationCollector(_FakeCollector):
+    """Report one clause per loop iteration, as real telemetry does."""
+
+    def finish_tool_call(
+        self,
+        token: dict[str, Any],
+        *,
+        replay_response: dict[str, Any] | None = None,
+        ended_ns: int | None = None,
+    ) -> dict[str, Any]:
+        result = super().finish_tool_call(
+            token,
+            replay_response=replay_response,
+            ended_ns=ended_ns,
+        )
+        template = result["clauses"][0]
+        template["in_loop"] = True
+        result["clauses"] = [
+            {**template, "latency_ms": 100.0 * (index + 1)} for index in range(3)
+        ]
+        return result
+
+
+def test_loop_iterations_are_ingested_as_separate_observations(
+    tmp_path: Path,
+) -> None:
+    # One static loop clause, three runtime iterations. The static-plan multiset
+    # check must tolerate the repeated identity instead of withholding the call.
+    service = ResourceService(
+        ObservationStore(tmp_path / "observations.sqlite3"),
+        _DirectTransport(
+            TelemetryService(
+                collector_factory=_LoopIterationCollector,
+                state_dir=tmp_path / "telemetry",
+            )
+        ),
+    )
+    run = _open_run(service)
+    trace = _open_trace(service, run["run_token"])
+    _run_call(
+        service,
+        trace["trace_token"],
+        call_id="call",
+        command="for d in 1 2 3; do curl -sS http://h/move -d $d; done",
+    )
+    closed = service.dispatch(
+        "CloseTrace",
+        {"trace_token": trace["trace_token"], "workload_status": "completed"},
+    )
+    call = closed["artifact"]["calls"][0]
+    assert call["invalid_reasons"] == []
+    assert call["eligible_for_kb"] is True
+    assert len(call["clauses"]) == 3
+    service.close()
+
+
+def test_pipeline_head_is_kb_evidence_but_sink_is_not() -> None:
+    # A downstream pipeline member blocks on its upstream, so its wall time
+    # measures the upstream's work, not its own. The head is self-determined.
+    head = _envelope("head")
+    head["normalized_measurements"][0]["pipeline_position"] = 0
+    assert [obs.bin for obs in _clause_observations("repo", head)] == ["printf"]
+
+    sink = _envelope("sink")
+    sink["normalized_measurements"][0]["pipeline_position"] = 1
+    assert _clause_observations("repo", sink) == []
+
+
 def _open_run(
     service: ResourceService,
     *,
@@ -269,8 +429,9 @@ def _open_trace(
     run_token: str,
     *,
     trace_id: str = "trace",
+    wait_for_telemetry: bool = True,
 ) -> dict[str, Any]:
-    return service.dispatch(
+    result = service.dispatch(
         "OpenTrace",
         {
             "run_token": run_token,
@@ -278,9 +439,12 @@ def _open_trace(
             "container_runtime": "docker",
             "container_id": f"container-{trace_id}",
             "repo_metadata": {},
-            "source_actions": [],
+            "expected_calls": [],
         },
     )
+    if wait_for_telemetry:
+        service._traces[result["trace_token"]].telemetry_queue.join()
+    return result
 
 
 def _run_call(
@@ -317,6 +481,49 @@ def _run_call(
 def _evict_response_cache(transport: Any, prefix: str) -> None:
     for index in range(1024):
         transport.request("Ping", request_id=f"{prefix}-{index}")
+
+
+def test_tool_resource_daemon_imports_do_not_load_trace_collect() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; import tool_resource.resource_agentd; "
+                "import tool_resource.telemetryd; "
+                "print(any(name.startswith('trace_collect') for name in sys.modules))"
+            ),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.strip() == "False"
+
+
+def test_trace_adapter_normalizes_expected_resource_calls() -> None:
+    from trace_collect.openclaw_host_runtime import _resource_expected_calls
+
+    assert _resource_expected_calls(
+        [
+            {"action_type": "llm_call", "data": {}},
+            {
+                "action_type": "tool_exec",
+                "data": {
+                    "tool_name": "exec",
+                    "tool_call_id": "call",
+                    "tool_args": '{"command":"echo ok"}',
+                    "tool_result": "ok\n\nExit code: 0",
+                },
+            },
+        ]
+    ) == [
+        {
+            "source_tool_call_id": "call",
+            "source_command": "echo ok",
+            "source_tool_result": "ok\n\nExit code: 0",
+        }
+    ]
 
 
 def test_sqlite_wal_idempotency_and_snapshot_scope(tmp_path: Path) -> None:
@@ -491,6 +698,831 @@ def test_partial_trace_ingests_only_valid_calls(tmp_path: Path) -> None:
     service.close()
 
 
+def test_valid_call_is_promoted_when_trace_lifecycle_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    telemetry = TelemetryService(
+        collector_factory=_FakeCollector,
+        state_dir=tmp_path / "telemetry",
+    )
+    transport = _DirectTransport(telemetry)
+    store = ObservationStore(tmp_path / "observations.sqlite3")
+    service = ResourceService(
+        store,
+        transport,
+    )
+    run = _open_run(service)
+    trace = _open_trace(service, run["run_token"])
+    failed = service.dispatch(
+        "BeginCall",
+        {
+            "trace_token": trace["trace_token"],
+            "call_id": "failed",
+            "command": "echo failed",
+            "query_timestamp": time.time(),
+        },
+    )
+    transport.fail_operation = "FinishCall"
+    service.dispatch(
+        "EndCall",
+        {
+            "call_token": failed["call_token"],
+            "workload_result": {"returncode": 0, "result": "ok"},
+            "end_timestamp": time.time(),
+        },
+    )
+    service._traces[trace["trace_token"]].telemetry_queue.join()
+    transport.fail_operation = None
+    _run_call(
+        service,
+        trace["trace_token"],
+        call_id="sibling",
+        command="printf ok",
+    )
+
+    closed_trace = service.dispatch(
+        "CloseTrace",
+        {"trace_token": trace["trace_token"], "workload_status": "completed"},
+    )
+    assert closed_trace["telemetry_status"] == "unavailable"
+    calls = {call["tool_call_id"]: call for call in closed_trace["artifact"]["calls"]}
+    assert calls["failed"]["eligible_for_kb"] is False
+    assert calls["failed"]["telemetry_status"].startswith("unavailable")
+    assert "service_unavailable" in {
+        reason["kind"] for reason in calls["failed"]["invalid_reasons"]
+    }
+    assert calls["sibling"]["eligible_for_kb"] is True
+    assert calls["sibling"]["telemetry_status"] == "ok"
+    assert len(store.observations_for_snapshot(store.create_snapshot(), "repo")) == 1
+    closed_run = service.dispatch(
+        "CloseRun",
+        {"run_token": run["run_token"], "workload_status": "completed"},
+    )
+    assert closed_run["telemetry_valid"] is False
+    assert closed_run["promoted_observation_count"] == 1
+    service.close()
+
+
+def test_ack_failure_preserves_finalized_call_artifact_and_evidence(
+    tmp_path: Path,
+) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite3")
+    telemetry = TelemetryService(
+        collector_factory=_FakeCollector,
+        state_dir=tmp_path / "telemetry",
+    )
+    service = ResourceService(
+        store,
+        _FailSecondAcknowledgeTransport(telemetry),
+    )
+    run = _open_run(service)
+    trace = _open_trace(service, run["run_token"])
+    _run_call(service, trace["trace_token"], call_id="first", command="echo first")
+    _run_call(service, trace["trace_token"], call_id="second", command="echo second")
+
+    closed_trace = service.dispatch(
+        "CloseTrace",
+        {"trace_token": trace["trace_token"], "workload_status": "completed"},
+    )
+    assert closed_trace["telemetry_status"] == "unavailable"
+    assert all(
+        call["eligible_for_kb"] is True and call["clauses"]
+        for call in closed_trace["artifact"]["calls"]
+    )
+    assert len(store.observations_for_snapshot(store.create_snapshot(), "repo")) == 2
+    closed_run = service.dispatch(
+        "CloseRun",
+        {"run_token": run["run_token"], "workload_status": "completed"},
+    )
+    assert closed_run["promoted_observation_count"] == 2
+    assert (
+        len(
+            store.observations_for_snapshot(
+                closed_run["run_manifest"]["resulting_snapshot_id"],
+                "repo",
+            )
+        )
+        == 2
+    )
+    service.close()
+
+
+def test_post_commit_ack_response_loss_is_recovered(
+    tmp_path: Path,
+) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite3")
+    telemetry = TelemetryService(
+        collector_factory=_FakeCollector,
+        state_dir=tmp_path / "telemetry",
+    )
+    transport = _PostCommitFailureTransport(telemetry)
+    service = ResourceService(store, transport)
+    run = _open_run(service)
+    trace = _open_trace(service, run["run_token"])
+    _run_call(service, trace["trace_token"], call_id="call", command="echo ok")
+    transport.post_commit_failure = "AcknowledgeObservation"
+
+    closed_trace = service.dispatch(
+        "CloseTrace",
+        {"trace_token": trace["trace_token"], "workload_status": "completed"},
+    )
+    call = closed_trace["artifact"]["calls"][0]
+    assert closed_trace["telemetry_status"] == "ok"
+    assert call["eligible_for_kb"] is True
+    assert call["clauses"]
+    assert len(store.observations_for_snapshot(store.create_snapshot(), "repo")) == 1
+    assert len(next(iter(telemetry._sessions.values())).acknowledged) == 1
+    service.close()
+
+
+def test_store_promotion_count_mismatch_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite3")
+    service = ResourceService(
+        store,
+        _DirectTransport(
+            TelemetryService(
+                collector_factory=_FakeCollector,
+                state_dir=tmp_path / "telemetry",
+            )
+        ),
+    )
+    run = _open_run(service)
+    trace = _open_trace(service, run["run_token"])
+    _run_call(service, trace["trace_token"], call_id="call", command="echo ok")
+    monkeypatch.setattr(store, "promote_observations", lambda _ids: 0)
+
+    with pytest.raises(ResourceProtocolError, match="store promoted 0 of 1"):
+        service.dispatch(
+            "CloseTrace",
+            {"trace_token": trace["trace_token"], "workload_status": "completed"},
+        )
+    with pytest.raises(ResourceProtocolError, match="store promoted 0 of 1"):
+        service.dispatch(
+            "CloseRun",
+            {"run_token": run["run_token"], "workload_status": "completed"},
+        )
+    assert service._runs[run["run_token"]].close_result is None
+    service.close()
+
+
+def test_promotion_failure_retains_owner_exit_retry_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite3")
+    service = ResourceService(
+        store,
+        _DirectTransport(
+            TelemetryService(
+                collector_factory=_FakeCollector,
+                state_dir=tmp_path / "telemetry",
+            )
+        ),
+    )
+    run_result = _open_run(service)
+    trace = _open_trace(service, run_result["run_token"])
+    _run_call(service, trace["trace_token"], call_id="call", command="echo ok")
+    promote = store.promote_observations
+
+    def fail_promotion(_observation_ids: set[str]) -> int:
+        raise sqlite3.OperationalError("injected promotion failure")
+
+    monkeypatch.setattr(store, "promote_observations", fail_promotion)
+    with pytest.raises(sqlite3.OperationalError, match="injected promotion failure"):
+        service.dispatch(
+            "CloseTrace",
+            {"trace_token": trace["trace_token"], "workload_status": "completed"},
+        )
+    run = service._runs[run_result["run_token"]]
+    run.owner_identity = (run.owner_identity[0], run.owner_identity[1] + 1)
+    service.expire()
+    assert run_result["run_token"] in service._runs
+    assert run.close_result is None
+
+    monkeypatch.setattr(store, "promote_observations", promote)
+    closed_run = service.dispatch(
+        "CloseRun",
+        {"run_token": run_result["run_token"], "workload_status": "incomplete"},
+    )
+    assert closed_run["evidence_valid"] is False
+    assert closed_run["promoted_observation_count"] == 1
+    service.close()
+
+
+def test_zero_peer_pid_fails_loudly(tmp_path: Path) -> None:
+    telemetry = TelemetryService(
+        collector_factory=_FakeCollector,
+        state_dir=tmp_path / "telemetry",
+    )
+    resource = ResourceService(
+        ObservationStore(tmp_path / "observations.sqlite3"),
+        _DirectTransport(telemetry),
+    )
+    with pytest.raises(ValueError, match="pid must be positive"):
+        resource.dispatch("OpenRun", {}, peer_pid=0)
+    with pytest.raises(ValueError, match="pid must be positive"):
+        telemetry.dispatch("AttachTarget", {}, peer_pid=0)
+    resource.close()
+
+
+def test_telemetry_failure_log_carries_full_call_identity(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="tool_resource.resource_agentd")
+    transport = _DirectTransport(
+        TelemetryService(
+            collector_factory=_FakeCollector,
+            state_dir=tmp_path / "telemetry",
+        )
+    )
+    service = ResourceService(
+        ObservationStore(tmp_path / "observations.sqlite3"),
+        transport,
+    )
+    run = _open_run(service, run_id="logged-run")
+    trace = _open_trace(service, run["run_token"], trace_id="logged-trace")
+    transport.fail_operation = "RegisterCall"
+    begin = service.dispatch(
+        "BeginCall",
+        {
+            "trace_token": trace["trace_token"],
+            "call_id": "logged-call",
+            "command": "echo ok",
+            "query_timestamp": time.time(),
+        },
+    )
+    service.dispatch(
+        "EndCall",
+        {
+            "call_token": begin["call_token"],
+            "workload_result": {"returncode": 0, "result": "ok"},
+            "end_timestamp": time.time(),
+        },
+    )
+    service.dispatch(
+        "CloseTrace",
+        {"trace_token": trace["trace_token"], "workload_status": "completed"},
+    )
+
+    message = next(
+        record.getMessage()
+        for record in caplog.records
+        if "telemetry call registration failed" in record.getMessage()
+    )
+    assert "run_id=logged-run" in message
+    assert "trace_id=logged-trace" in message
+    assert "call_id=logged-call" in message
+    service.close()
+
+
+def test_online_resource_calls_do_not_wait_for_telemetry(
+    tmp_path: Path,
+) -> None:
+    telemetry = TelemetryService(
+        collector_factory=_FakeCollector,
+        state_dir=tmp_path / "telemetry",
+    )
+    transport = _BlockingTransport(telemetry)
+    service = ResourceService(
+        ObservationStore(tmp_path / "observations.sqlite3"),
+        transport,
+    )
+    run = _open_run(service)
+
+    def returns_while_telemetry_is_blocked(
+        operation: str,
+        call: Any,
+    ) -> dict[str, Any]:
+        result: list[dict[str, Any]] = []
+        errors: list[BaseException] = []
+        transport.block(operation)
+
+        def invoke() -> None:
+            try:
+                result.append(call())
+            except BaseException as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=invoke)
+        thread.start()
+        try:
+            assert transport.entered.wait(1)
+            thread.join(0.2)
+            assert not thread.is_alive()
+        finally:
+            transport.release.set()
+            thread.join()
+        assert errors == []
+        return result[0]
+
+    trace = returns_while_telemetry_is_blocked(
+        "AttachTarget",
+        lambda: _open_trace(
+            service,
+            run["run_token"],
+            wait_for_telemetry=False,
+        ),
+    )
+    service._traces[trace["trace_token"]].telemetry_queue.join()
+    begin = returns_while_telemetry_is_blocked(
+        "RegisterCall",
+        lambda: service.dispatch(
+            "BeginCall",
+            {
+                "trace_token": trace["trace_token"],
+                "call_id": "call",
+                "command": "echo ok",
+                "query_timestamp": time.time(),
+            },
+        ),
+    )
+    actual = {"returncode": 0, "result": "ok"}
+    end = returns_while_telemetry_is_blocked(
+        "FinishCall",
+        lambda: service.dispatch(
+            "EndCall",
+            {
+                "call_token": begin["call_token"],
+                "workload_result": actual,
+                "end_timestamp": time.time(),
+            },
+        ),
+    )
+    assert end["workload_result"] is actual
+    closed = service.dispatch(
+        "CloseTrace",
+        {"trace_token": trace["trace_token"], "workload_status": "completed"},
+    )
+    assert closed["artifact"]["calls"][0]["eligible_for_kb"] is True
+    assert transport.operations == [
+        "AttachTarget",
+        "RegisterCall",
+        "FinishCall",
+        "FinalizeSession",
+        "FetchFinalizedObservation",
+        "AcknowledgeObservation",
+    ]
+    service.close()
+
+
+def test_preworkload_readiness_barrier_waits_for_attachment(
+    tmp_path: Path,
+) -> None:
+    transport = _BlockingTransport(
+        TelemetryService(
+            collector_factory=_FakeCollector,
+            state_dir=tmp_path / "telemetry",
+        )
+    )
+    service = ResourceService(
+        ObservationStore(tmp_path / "observations.sqlite3"),
+        transport,
+    )
+    run = _open_run(service)
+    transport.block("AttachTarget")
+    trace = _open_trace(
+        service,
+        run["run_token"],
+        wait_for_telemetry=False,
+    )
+    assert transport.entered.wait(1)
+    result: list[dict[str, Any]] = []
+    thread = threading.Thread(
+        target=lambda: result.append(
+            service.dispatch(
+                "AwaitTraceReady",
+                {"trace_token": trace["trace_token"]},
+            )
+        )
+    )
+    thread.start()
+    thread.join(0.2)
+    assert thread.is_alive()
+    transport.release.set()
+    thread.join(1)
+    assert result == [{"telemetry_status": "available"}]
+    service.dispatch(
+        "CloseTrace",
+        {"trace_token": trace["trace_token"], "workload_status": "completed"},
+    )
+    service.close()
+
+
+def test_full_telemetry_queue_is_nonblocking_and_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("tool_resource.resource_agentd._TELEMETRY_QUEUE_SIZE", 1)
+    telemetry = TelemetryService(
+        collector_factory=_FakeCollector,
+        state_dir=tmp_path / "telemetry",
+    )
+    transport = _BlockingTransport(telemetry)
+    service = ResourceService(
+        ObservationStore(tmp_path / "observations.sqlite3"),
+        transport,
+    )
+    run = _open_run(service)
+    transport.block("AttachTarget")
+    trace = _open_trace(
+        service,
+        run["run_token"],
+        wait_for_telemetry=False,
+    )
+    assert transport.entered.wait(1)
+    begin = service.dispatch(
+        "BeginCall",
+        {
+            "trace_token": trace["trace_token"],
+            "call_id": "call",
+            "command": "echo ok",
+            "query_timestamp": time.time(),
+        },
+    )
+    actual = {"returncode": 0, "result": "ok"}
+    end = service.dispatch(
+        "EndCall",
+        {
+            "call_token": begin["call_token"],
+            "workload_result": actual,
+            "end_timestamp": time.time(),
+        },
+    )
+    assert end["workload_result"] is actual
+    transport.release.set()
+    closed = service.dispatch(
+        "CloseTrace",
+        {"trace_token": trace["trace_token"], "workload_status": "completed"},
+    )
+    call = closed["artifact"]["calls"][0]
+    assert call["eligible_for_kb"] is False
+    assert {reason["kind"] for reason in call["invalid_reasons"]} >= {
+        "service_unavailable"
+    }
+    assert service.store.observations_for_snapshot(
+        service.store.create_snapshot(),
+        "repo",
+    ) == []
+    service.close()
+
+
+def test_call_started_before_attachment_is_withheld(
+    tmp_path: Path,
+) -> None:
+    telemetry = TelemetryService(
+        collector_factory=_FakeCollector,
+        state_dir=tmp_path / "telemetry",
+    )
+    transport = _BlockingTransport(telemetry)
+    service = ResourceService(
+        ObservationStore(tmp_path / "observations.sqlite3"),
+        transport,
+    )
+    run = _open_run(service)
+    transport.block("AttachTarget")
+    trace = _open_trace(
+        service,
+        run["run_token"],
+        wait_for_telemetry=False,
+    )
+    assert transport.entered.wait(1)
+    _run_call(
+        service,
+        trace["trace_token"],
+        call_id="too-early",
+        command="echo early",
+    )
+    transport.release.set()
+    closed = service.dispatch(
+        "CloseTrace",
+        {"trace_token": trace["trace_token"], "workload_status": "completed"},
+    )
+    call = closed["artifact"]["calls"][0]
+    assert call["eligible_for_kb"] is False
+    assert {reason["kind"] for reason in call["invalid_reasons"]} >= {
+        "collector_not_ready"
+    }
+    assert service.store.observations_for_snapshot(
+        service.store.create_snapshot(),
+        "repo",
+    ) == []
+    service.close()
+
+
+def test_register_failure_preserves_healthy_sibling_evidence(
+    tmp_path: Path,
+) -> None:
+    telemetry = TelemetryService(
+        collector_factory=_FakeCollector,
+        state_dir=tmp_path / "telemetry",
+    )
+    transport = _DirectTransport(telemetry)
+    service = ResourceService(
+        ObservationStore(tmp_path / "observations.sqlite3"),
+        transport,
+    )
+    run = _open_run(service)
+    trace = _open_trace(service, run["run_token"])
+    service._traces[trace["trace_token"]].telemetry_queue.join()
+    transport.fail_operation = "RegisterCall"
+    _run_call(
+        service,
+        trace["trace_token"],
+        call_id="failed",
+        command="echo failed",
+    )
+    service._traces[trace["trace_token"]].telemetry_queue.join()
+    transport.fail_operation = None
+    _run_call(
+        service,
+        trace["trace_token"],
+        call_id="sibling",
+        command="echo sibling",
+    )
+    closed = service.dispatch(
+        "CloseTrace",
+        {"trace_token": trace["trace_token"], "workload_status": "completed"},
+    )
+    calls = {call["tool_call_id"]: call for call in closed["artifact"]["calls"]}
+    assert calls["failed"]["eligible_for_kb"] is False
+    assert calls["failed"]["telemetry_status"].startswith("unavailable")
+    assert calls["sibling"]["eligible_for_kb"] is True
+    assert (
+        len(
+            service.store.observations_for_snapshot(
+                service.store.create_snapshot(),
+                "repo",
+            )
+        )
+        == 1
+    )
+    closed_run = service.dispatch(
+        "CloseRun",
+        {"run_token": run["run_token"], "workload_status": "completed"},
+    )
+    assert closed_run["promoted_observation_count"] == 1
+    service.close()
+
+
+def test_post_commit_register_response_loss_is_recovered(
+    tmp_path: Path,
+) -> None:
+    telemetry = TelemetryService(
+        collector_factory=_FakeCollector,
+        state_dir=tmp_path / "telemetry",
+    )
+    transport = _PostCommitFailureTransport(telemetry)
+    service = ResourceService(
+        ObservationStore(tmp_path / "observations.sqlite3"),
+        transport,
+    )
+    run = _open_run(service)
+    trace = _open_trace(service, run["run_token"])
+    transport.post_commit_failure = "RegisterCall"
+    _run_call(
+        service,
+        trace["trace_token"],
+        call_id="recovered",
+        command="echo recovered",
+    )
+    _run_call(
+        service,
+        trace["trace_token"],
+        call_id="sibling",
+        command="echo sibling",
+    )
+    closed = service.dispatch(
+        "CloseTrace",
+        {"trace_token": trace["trace_token"], "workload_status": "completed"},
+    )
+    assert all(call["eligible_for_kb"] for call in closed["artifact"]["calls"])
+    assert (
+        len(
+            service.store.observations_for_snapshot(
+                service.store.create_snapshot(),
+                "repo",
+            )
+        )
+        == 2
+    )
+    service.close()
+
+
+def test_delayed_telemetry_uses_online_call_boundaries(
+    tmp_path: Path,
+) -> None:
+    telemetry = TelemetryService(
+        collector_factory=_FakeCollector,
+        state_dir=tmp_path / "telemetry",
+    )
+    transport = _BlockingTransport(telemetry)
+    service = ResourceService(
+        ObservationStore(tmp_path / "observations.sqlite3"),
+        transport,
+    )
+    run = _open_run(service)
+    trace = _open_trace(service, run["run_token"])
+    service._traces[trace["trace_token"]].telemetry_queue.join()
+    transport.block("RegisterCall")
+    begin = service.dispatch(
+        "BeginCall",
+        {
+            "trace_token": trace["trace_token"],
+            "call_id": "call",
+            "command": "echo ok",
+            "query_timestamp": time.time(),
+        },
+    )
+    assert transport.entered.wait(1)
+    service.dispatch(
+        "EndCall",
+        {
+            "call_token": begin["call_token"],
+            "workload_result": {"returncode": 0, "result": "ok"},
+            "end_timestamp": time.time(),
+        },
+    )
+    processed_after = time.monotonic_ns()
+    transport.release.set()
+    closed = service.dispatch(
+        "CloseTrace",
+        {"trace_token": trace["trace_token"], "workload_status": "completed"},
+    )
+    assert closed["artifact"]["calls"][0]["eligible_for_kb"] is True
+    collector = next(iter(telemetry._sessions.values())).collector
+    [(started_ns, ended_ns)] = collector.boundaries
+    assert isinstance(started_ns, int)
+    assert isinstance(ended_ns, int)
+    assert started_ns <= ended_ns <= processed_after
+    service.close()
+
+
+def test_trace_settlement_does_not_block_other_resource_requests(
+    tmp_path: Path,
+) -> None:
+    telemetry = TelemetryService(
+        collector_factory=_FakeCollector,
+        state_dir=tmp_path / "telemetry",
+    )
+    telemetry_transport = _BlockingTransport(telemetry)
+    service = ResourceService(
+        ObservationStore(tmp_path / "observations.sqlite3"),
+        telemetry_transport,
+    )
+    socket_path = tmp_path / "resource.sock"
+    server = ResourceServer(
+        socket_path,
+        service=service,
+        allowed_uids={os.getuid()},
+    )
+    server_thread = threading.Thread(target=server.serve_forever)
+    server_thread.start()
+    client = ResourceUnixTransport(socket_path)
+    try:
+        run = client.request(
+            "OpenRun",
+            {
+                "run_id": "run",
+                "workspace_scope": "repo",
+                "snapshot": "latest_at_run_start",
+                "latency_bucket_edges_ms": [100.0],
+                "update_policy": "causal",
+                "telemetry_requirement": "required_for_valid_evidence",
+                "behavior": "observe_predict_learn",
+            },
+        )
+        trace = client.request(
+            "OpenTrace",
+            {
+                "run_token": run["run_token"],
+                "trace_id": "trace",
+                "container_runtime": "docker",
+                "container_id": "container",
+                "repo_metadata": {},
+                "expected_calls": [],
+            },
+        )
+        service._traces[trace["trace_token"]].telemetry_queue.join()
+        begin = client.request(
+            "BeginCall",
+            {
+                "trace_token": trace["trace_token"],
+                "call_id": "call",
+                "command": "echo ok",
+                "query_timestamp": time.time(),
+            },
+        )
+        client.request(
+            "EndCall",
+            {
+                "call_token": begin["call_token"],
+                "workload_result": {"returncode": 0, "result": "ok"},
+                "end_timestamp": time.time(),
+            },
+        )
+        telemetry_transport.block("FinalizeSession")
+        close_result: list[dict[str, Any]] = []
+        close_thread = threading.Thread(
+            target=lambda: close_result.append(
+                client.request(
+                    "CloseTrace",
+                    {
+                        "trace_token": trace["trace_token"],
+                        "workload_status": "completed",
+                    },
+                )
+            )
+        )
+        close_thread.start()
+        assert telemetry_transport.entered.wait(1)
+        ping_result: list[dict[str, Any]] = []
+        ping_thread = threading.Thread(
+            target=lambda: ping_result.append(
+                ResourceUnixTransport(socket_path).ping()
+            )
+        )
+        ping_thread.start()
+        try:
+            ping_thread.join(0.2)
+            assert not ping_thread.is_alive()
+            assert ping_result == [
+                {"protocol_version": RESOURCE_PROTOCOL_VERSION}
+            ]
+        finally:
+            telemetry_transport.release.set()
+            ping_thread.join()
+            close_thread.join()
+        assert close_result[0]["telemetry_status"] == "ok"
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join()
+
+
+def test_concurrent_identical_request_is_dispatched_once(tmp_path: Path) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    calls = 0
+
+    def dispatch(
+        _operation: str,
+        _payload: Any,
+        _identity: tuple[int, str],
+        _peer_pid: int,
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        entered.set()
+        assert release.wait(1)
+        return {"value": 1}
+
+    server = StrictUnixServer(
+        tmp_path / "idempotent.sock",
+        protocol_version=1,
+        protocol_error=ResourceProtocolError,
+        dispatch=dispatch,
+        allowed_uids={os.getuid()},
+    )
+    request = {
+        "protocol_version": 1,
+        "request_id": "same",
+        "operation": "Test",
+        "payload": {},
+    }
+    responses: list[dict[str, Any]] = []
+    first = threading.Thread(
+        target=lambda: responses.append(
+            server.handle_request_message(os.getpid(), os.getuid(), request)
+        )
+    )
+    second = threading.Thread(
+        target=lambda: responses.append(
+            server.handle_request_message(os.getpid(), os.getuid(), request)
+        )
+    )
+    try:
+        first.start()
+        assert entered.wait(1)
+        second.start()
+        second.join(0.1)
+        assert second.is_alive()
+        assert calls == 1
+        release.set()
+        first.join()
+        second.join()
+        assert calls == 1
+        assert responses[0] == responses[1]
+    finally:
+        release.set()
+        first.join()
+        second.join()
+        server.server_close()
+
+
 def test_duplicate_external_run_ids_do_not_cross_promote(tmp_path: Path) -> None:
     store = ObservationStore(tmp_path / "observations.sqlite3")
     service = ResourceService(
@@ -530,14 +1562,6 @@ def test_duplicate_external_run_ids_do_not_cross_promote(tmp_path: Path) -> None
         "CloseTrace",
         {"trace_token": first_trace["trace_token"], "workload_status": "completed"},
     )
-    service.dispatch(
-        "CloseTrace",
-        {"trace_token": second_trace["trace_token"], "workload_status": "completed"},
-    )
-    service.dispatch(
-        "CloseRun",
-        {"run_token": first_run["run_token"], "workload_status": "completed"},
-    )
     with store._lock:
         visible_ids = {
             row[0]
@@ -546,6 +1570,25 @@ def test_duplicate_external_run_ids_do_not_cross_promote(tmp_path: Path) -> None
             )
         }
     assert visible_ids == {first_closed["artifact"]["calls"][0]["observation_id"]}
+    second_closed = service.dispatch(
+        "CloseTrace",
+        {"trace_token": second_trace["trace_token"], "workload_status": "completed"},
+    )
+    with store._lock:
+        visible_ids = {
+            row[0]
+            for row in store._connection.execute(
+                "SELECT observation_id FROM observations WHERE visible=1"
+            )
+        }
+    assert visible_ids == {
+        first_closed["artifact"]["calls"][0]["observation_id"],
+        second_closed["artifact"]["calls"][0]["observation_id"],
+    }
+    service.dispatch(
+        "CloseRun",
+        {"run_token": first_run["run_token"], "workload_status": "completed"},
+    )
     service.dispatch(
         "CloseRun",
         {"run_token": second_run["run_token"], "workload_status": "completed"},
@@ -653,7 +1696,7 @@ def test_unobserved_builtin_does_not_block_valid_external_clause(
 
 @pytest.mark.parametrize(
     "failure",
-    ["disconnect", "timeout", "ack_disconnect", "loss", "cleanup"],
+    ["disconnect", "timeout", "loss", "cleanup"],
 )
 def test_telemetry_failures_preserve_workload_and_block_ingestion(
     tmp_path: Path,
@@ -696,8 +1739,6 @@ def test_telemetry_failures_preserve_workload_and_block_ingestion(
         },
     )
     assert end["workload_result"] is actual
-    if failure == "ack_disconnect":
-        transport.fail_operation = "AcknowledgeObservation"
     closed = service.dispatch(
         "CloseTrace",
         {"trace_token": trace["trace_token"], "workload_status": "completed"},
@@ -822,7 +1863,7 @@ def test_protocol_validation_and_two_client_isolation(tmp_path: Path) -> None:
                 "container_runtime": "docker",
                 "container_id": "one",
                 "repo_metadata": {},
-                "source_actions": [],
+                "expected_calls": [],
             },
         )
         trace2 = second.request(
@@ -833,7 +1874,7 @@ def test_protocol_validation_and_two_client_isolation(tmp_path: Path) -> None:
                 "container_runtime": "docker",
                 "container_id": "two",
                 "repo_metadata": {},
-                "source_actions": [],
+                "expected_calls": [],
             },
         )
         assert trace1["trace_token"] != trace2["trace_token"]
@@ -909,7 +1950,7 @@ def test_stateful_retries_survive_response_cache_eviction(tmp_path: Path) -> Non
             "container_runtime": "docker",
             "container_id": "container",
             "repo_metadata": {},
-            "source_actions": [],
+            "expected_calls": [],
         }
         trace = transport.request(
             "OpenTrace",
@@ -943,8 +1984,16 @@ def test_stateful_retries_survive_response_cache_eviction(tmp_path: Path) -> Non
         )
         assert len(resource_service._runs) == 1
         assert len(resource_service._traces) == 1
+        resource_run = next(iter(resource_service._runs.values()))
+        assert resource_run.owner_identity[0] == os.getpid()
         assert len(next(iter(resource_service._traces.values())).calls) == 1
-        next(iter(resource_service._runs.values())).last_used = 0.0
+        resource_run.last_used = 0.0
+        resource_service.expire()
+        assert len(resource_service._runs) == 1
+        resource_run.owner_identity = (
+            resource_run.owner_identity[0],
+            resource_run.owner_identity[1] + 1,
+        )
         resource_service.expire()
         assert resource_service._runs == {}
         assert resource_service._traces == {}
@@ -987,6 +2036,7 @@ def test_stateful_retries_survive_response_cache_eviction(tmp_path: Path) -> Non
             "telemetry_session_token": session["telemetry_session_token"],
             "call_id": "stable-call",
             "command_digest": "a" * 64,
+            "call_started_monotonic_ns": time.monotonic_ns(),
             "static_call_plan": {
                 "canonical_command": "printf stable",
                 "parsed": {
@@ -1024,8 +2074,16 @@ def test_stateful_retries_survive_response_cache_eviction(tmp_path: Path) -> Non
             == call
         )
         assert len(telemetry_service._sessions) == 1
-        assert len(next(iter(telemetry_service._sessions.values())).calls) == 1
-        next(iter(telemetry_service._sessions.values())).last_used = 0.0
+        telemetry_session = next(iter(telemetry_service._sessions.values()))
+        assert telemetry_session.owner_identity[0] == os.getpid()
+        assert len(telemetry_session.calls) == 1
+        telemetry_session.last_used = 0.0
+        telemetry_service.expire()
+        assert len(telemetry_service._sessions) == 1
+        telemetry_session.owner_identity = (
+            telemetry_session.owner_identity[0],
+            telemetry_session.owner_identity[1] + 1,
+        )
         telemetry_service.expire()
         assert telemetry_service._sessions == {}
         assert telemetry_service._operation_results == {}
@@ -1159,7 +2217,7 @@ tool_resource:
         token = trace.begin_tool_call("call", "echo ok")
         actual = {"returncode": 0, "result": "ok"}
         call = trace.finish_tool_call(token, replay_response=actual)
-        assert call["telemetry_quality"] == "ok"
+        assert call["eligible_for_kb"] is False
         assert trace.finalize(replay_execution="completed") is None
         assert trace.final_artifact is not None
         assert "runtime_invocations" not in json.dumps(trace.final_artifact)
@@ -1180,6 +2238,59 @@ tool_resource:
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+def test_thin_client_recovers_post_commit_close_trace_response_loss(
+    tmp_path: Path,
+) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite3")
+    service = ResourceService(
+        store,
+        _DirectTransport(
+            TelemetryService(
+                collector_factory=_FakeCollector,
+                state_dir=tmp_path / "telemetry",
+            )
+        ),
+    )
+    transport = _PostCommitFailureTransport(service)
+    profile = ResourceProfile(
+        endpoint="unix:///unused.sock",
+        behavior="observe_predict_learn",
+        update_policy="causal",
+        snapshot="latest_at_run_start",
+        telemetry_requirement="required_for_valid_evidence",
+        latency_bucket_edges_ms=(100,),
+    )
+    resource_run = ResourceRun.open(
+        profile,
+        run_id="post-commit-close",
+        workspace_scope="repo",
+        manifest_path=tmp_path / "run.json",
+        transport=transport,
+    )
+    trace = resource_run.open_trace(
+        trace_id="trace",
+        container_runtime="docker",
+        container_id="container",
+        artifact_path=tmp_path / "trace.json",
+    )
+    service._traces[trace._trace_token].telemetry_queue.join()
+    token = trace.begin_tool_call("call", "echo ok")
+    trace.finish_tool_call(
+        token,
+        replay_response={"returncode": 0, "result": "ok"},
+    )
+    transport.post_commit_failure = "CloseTrace"
+
+    assert trace.finalize(replay_execution="completed") is None
+    artifact = json.loads((tmp_path / "trace.json").read_text(encoding="utf-8"))
+    assert artifact["calls"][0]["eligible_for_kb"] is True
+    assert resource_run.finalize(workload_status="completed") is None
+    assert resource_run.result is not None
+    assert resource_run.result["promoted_observation_count"] == 1
+    assert len(store.observations_for_snapshot(store.create_snapshot(), "repo")) == 1
+    service.close()
 
 
 def test_thin_client_run_spans_traces_for_causal_visibility(tmp_path: Path) -> None:
@@ -1213,6 +2324,7 @@ def test_thin_client_run_spans_traces_for_causal_visibility(tmp_path: Path) -> N
         container_id="first",
         artifact_path=tmp_path / "first.json",
     )
+    service._traces[first._trace_token].telemetry_queue.join()
     first_token = first.begin_tool_call("first-call", "echo learned")
     first.finish_tool_call(
         first_token,
@@ -1226,6 +2338,7 @@ def test_thin_client_run_spans_traces_for_causal_visibility(tmp_path: Path) -> N
         container_id="second",
         artifact_path=tmp_path / "second.json",
     )
+    service._traces[second._trace_token].telemetry_queue.join()
     second_token = second.begin_tool_call("second-call", "echo learned")
     assert second_token.prediction is not None
     assert second_token.prediction["prediction"]["bucket_id"] == 1
@@ -1321,7 +2434,10 @@ def test_best_effort_run_preserves_invalid_telemetry_as_valid_evidence_policy(
     )
     token = trace.begin_tool_call("call", "echo ok")
     actual = {"returncode": 0, "result": "ok"}
-    assert trace.finish_tool_call(token, replay_response=actual)["eligible_for_kb"]
+    assert (
+        trace.finish_tool_call(token, replay_response=actual)["eligible_for_kb"]
+        is False
+    )
     assert trace.finalize(replay_execution="completed") is not None
     assert resource_run.finalize(workload_status="completed") is None
     assert resource_run.result is not None
@@ -1387,6 +2503,85 @@ def test_observing_run_without_traces_is_not_telemetry_valid(
         {"run_token": run["run_token"], "workload_status": "failed"},
     )
     assert closed["telemetry_valid"] is False
+    assert closed["evidence_valid"] is False
+    service.close()
+
+
+def test_owner_liveness_not_idle_time_controls_run_cleanup(
+    tmp_path: Path,
+) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite3")
+    service = ResourceService(
+        store,
+        _DirectTransport(
+            TelemetryService(
+                collector_factory=_FakeCollector,
+                state_dir=tmp_path / "telemetry",
+            )
+        ),
+    )
+    queued = _open_run(service, run_id="queued", scope="queued")
+    completed = _open_run(service, run_id="completed")
+    trace = _open_trace(service, completed["run_token"])
+    _run_call(service, trace["trace_token"], call_id="valid", command="echo ok")
+    service.dispatch(
+        "CloseTrace",
+        {"trace_token": trace["trace_token"], "workload_status": "completed"},
+    )
+
+    queued_run = service._runs[queued["run_token"]]
+    completed_run = service._runs[completed["run_token"]]
+    queued_run.last_used = 0.0
+    completed_run.last_used = 0.0
+    service.expire()
+
+    assert queued["run_token"] in service._runs
+    assert completed["run_token"] in service._runs
+    assert len(store.observations_for_snapshot(store.create_snapshot(), "repo")) == 1
+
+    for run in (queued_run, completed_run):
+        run.owner_identity = (
+            run.owner_identity[0],
+            run.owner_identity[1] + 1,
+        )
+    service.expire()
+
+    assert service._runs == {}
+    assert service._traces == {}
+    assert len(store.observations_for_snapshot(store.create_snapshot(), "repo")) == 1
+    service.close()
+
+
+def test_trace_owner_exit_aborts_only_its_collector(
+    tmp_path: Path,
+) -> None:
+    telemetry = TelemetryService(
+        collector_factory=_FakeCollector,
+        state_dir=tmp_path / "telemetry",
+    )
+    service = ResourceService(
+        ObservationStore(tmp_path / "observations.sqlite3"),
+        _DirectTransport(telemetry),
+    )
+    run = _open_run(service)
+    trace_result = _open_trace(service, run["run_token"])
+    trace = service._traces[trace_result["trace_token"]]
+    trace.owner_identity = (
+        trace.owner_identity[0],
+        trace.owner_identity[1] + 1,
+    )
+
+    service.expire()
+
+    assert run["run_token"] in service._runs
+    assert trace.close_result is not None
+    assert trace.close_result["telemetry_status"] == "unavailable"
+    session = next(iter(telemetry._sessions.values()))
+    assert session.final_result is not None
+    closed = service.dispatch(
+        "CloseRun",
+        {"run_token": run["run_token"], "workload_status": "failed"},
+    )
     assert closed["evidence_valid"] is False
     service.close()
 
@@ -1565,10 +2760,13 @@ def test_live_service_chain_produces_one_eligible_observation(
                                 "container_runtime": "docker",
                                 "container_id": container_id,
                                 "repo_metadata": {},
-                                "source_actions": [],
-                                "runner_pid": os.getpid(),
+                                "expected_calls": [],
                             },
                         )
+                        assert transport.request(
+                            "AwaitTraceReady",
+                            {"trace_token": trace["trace_token"]},
+                        ) == {"telemetry_status": "available"}
                         begun = transport.request(
                             "BeginCall",
                             {
@@ -1665,3 +2863,36 @@ def test_live_service_chain_produces_one_eligible_observation(
             )
         assert not resource_socket.exists()
         assert not telemetry_socket.exists()
+
+
+def test_heavy_telemetry_operations_get_their_own_timeout() -> None:
+    # AttachTarget loads the eBPF program and FinalizeSession serializes the
+    # whole trace artifact; both outlast a timeout sized for cheap RPCs. Timing
+    # them out discarded evidence the collector had gathered correctly, so they
+    # carry their own longer timeout while every other operation keeps the
+    # default. This changes no gate and accepts no invalid evidence.
+    transport = TelemetryUnixTransport("/tmp/does-not-exist.sock")
+    assert transport.operation_timeouts_s["AttachTarget"] > transport.timeout_s
+    assert transport.operation_timeouts_s["FinalizeSession"] > transport.timeout_s
+    assert "Ping" not in transport.operation_timeouts_s
+
+
+def test_resource_close_timeouts_outlast_telemetry_finalize() -> None:
+    # The explicit pre-workload barrier and CloseTrace can wait on telemetryd's
+    # heavy operations. OpenTrace only queues attachment and must retain the
+    # short online-path timeout.
+    from tool_resource.resource_protocol import RESOURCE_OPERATION_TIMEOUTS_S
+    from tool_resource.telemetry_protocol import TELEMETRY_OPERATION_TIMEOUTS_S
+
+    assert (
+        RESOURCE_OPERATION_TIMEOUTS_S["CloseTrace"]
+        > TELEMETRY_OPERATION_TIMEOUTS_S["FinalizeSession"]
+    )
+    assert (
+        RESOURCE_OPERATION_TIMEOUTS_S["AwaitTraceReady"]
+        > TELEMETRY_OPERATION_TIMEOUTS_S["AttachTarget"]
+    )
+    transport = ResourceUnixTransport("/tmp/does-not-exist.sock")
+    assert transport.operation_timeouts_s["CloseRun"] > transport.timeout_s
+    assert "OpenTrace" not in transport.operation_timeouts_s
+    assert "Ping" not in transport.operation_timeouts_s

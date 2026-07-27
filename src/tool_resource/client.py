@@ -122,8 +122,7 @@ class ResourceRun:
         container_runtime: str,
         container_id: str,
         artifact_path: str | Path,
-        source_actions: Sequence[Mapping[str, Any]] = (),
-        runner_pid: int | None = None,
+        expected_calls: Sequence[Mapping[str, str]] = (),
     ) -> ResourceTrace:
         if self._transport is None or self._run_token is None:
             trace = ResourceTrace(
@@ -140,8 +139,7 @@ class ResourceRun:
                 container_runtime=container_runtime,
                 container_id=container_id,
                 artifact_path=artifact_path,
-                source_actions=source_actions,
-                runner_pid=runner_pid,
+                expected_calls=expected_calls,
                 transport=self._transport,
             )
         self._traces.append(trace)
@@ -290,8 +288,7 @@ class ResourceTrace:
         container_runtime: str,
         container_id: str,
         artifact_path: str | Path,
-        source_actions: Sequence[Mapping[str, Any]] = (),
-        runner_pid: int | None = None,
+        expected_calls: Sequence[Mapping[str, str]] = (),
         transport: ResourceTransport | None = None,
     ) -> ResourceTrace:
         resolved = (
@@ -310,8 +307,7 @@ class ResourceTrace:
                     "container_runtime": canonical_runtime,
                     "container_id": container_id,
                     "repo_metadata": {},
-                    "source_actions": [dict(action) for action in source_actions],
-                    **({"runner_pid": runner_pid} if runner_pid is not None else {}),
+                    "expected_calls": [dict(call) for call in expected_calls],
                 },
             )
             _require_response_fields(
@@ -390,6 +386,28 @@ class ResourceTrace:
         except Exception as exc:  # noqa: BLE001 - workload continues
             error = self._record_error("begin", exc)
             return ResourceCallToken(call_id, command, None, None, error)
+
+    def wait_ready(self) -> str | None:
+        """Wait before workload start until trace instrumentation is settled."""
+
+        if self._transport is None or self._trace_token is None:
+            return self._open_error or "resource-agentd is unavailable"
+        try:
+            result = self._transport.request(
+                "AwaitTraceReady",
+                {"trace_token": self._trace_token},
+            )
+            _require_response_fields(
+                result,
+                {"telemetry_status"},
+                "AwaitTraceReady",
+            )
+            status = result.get("telemetry_status")
+            if status not in {"available", "not_requested"}:
+                raise RuntimeError(f"telemetry setup ended with status {status!r}")
+            return None
+        except Exception as exc:  # noqa: BLE001 - workload must still start
+            return self._record_error("setup", exc)
 
     def finish_tool_call(
         self,
@@ -533,47 +551,54 @@ class ResourceTrace:
                     "workload_status": replay_execution,
                 },
             )
-            _require_response_fields(
-                trace_result,
-                {
-                    "telemetry_status",
-                    "formal_completeness",
-                    "collection_validity",
-                    "call_coverage",
-                    "artifact",
-                    "errors",
-                },
-                "CloseTrace",
-            )
-            artifact = trace_result.get("artifact")
-            if not isinstance(artifact, Mapping):
-                raise RuntimeError("resource-agentd returned no trace artifact")
-            self._final_artifact = dict(artifact)
-            calls = artifact.get("calls")
-            if isinstance(calls, list) and all(
-                isinstance(call, Mapping) for call in calls
-            ):
-                self._calls = [dict(call) for call in calls]
-            _write_json(self.artifact_path, self._final_artifact)
-            if trace_result.get("telemetry_status") not in {
-                "ok",
-                "not_requested",
-            }:
-                errors = trace_result.get("errors")
-                if isinstance(errors, list):
-                    self._errors.extend(str(error) for error in errors)
-                return self._errors[0] if self._errors else "telemetry unavailable"
-            return None
+            return self._consume_trace_result(trace_result, operation="CloseTrace")
         except Exception as exc:  # noqa: BLE001 - workload already completed
-            error = self._record_error("finalize", exc)
+            error = f"resource finalize failed: {type(exc).__name__}: {exc}"
             try:
-                self._transport.request(
+                trace_result = self._transport.request(
                     "AbortTrace",
                     {"trace_token": self._trace_token, "reason": error},
                 )
+                return self._consume_trace_result(
+                    trace_result,
+                    operation="AbortTrace",
+                )
             except Exception:
-                pass
-            return error
+                return self._record_error("finalize", exc)
+
+    def _consume_trace_result(
+        self,
+        trace_result: Mapping[str, Any],
+        *,
+        operation: str,
+    ) -> str | None:
+        expected = {
+            "telemetry_status",
+            "formal_completeness",
+            "collection_validity",
+            "call_coverage",
+            "artifact",
+            "errors",
+        }
+        if operation == "AbortTrace":
+            expected.add("aborted")
+        _require_response_fields(trace_result, expected, operation)
+        if operation == "AbortTrace" and trace_result.get("aborted") is not True:
+            raise RuntimeError("resource-agentd did not abort the trace")
+        artifact = trace_result.get("artifact")
+        if not isinstance(artifact, Mapping):
+            raise RuntimeError("resource-agentd returned no trace artifact")
+        self._final_artifact = dict(artifact)
+        calls = artifact.get("calls")
+        if isinstance(calls, list) and all(isinstance(call, Mapping) for call in calls):
+            self._calls = [dict(call) for call in calls]
+        _write_json(self.artifact_path, self._final_artifact)
+        if trace_result.get("telemetry_status") not in {"ok", "not_requested"}:
+            errors = trace_result.get("errors")
+            if isinstance(errors, list):
+                self._errors.extend(str(error) for error in errors)
+            return self._errors[0] if self._errors else "telemetry unavailable"
+        return None
 
     def _failure_call(
         self,

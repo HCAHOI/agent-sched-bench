@@ -91,6 +91,9 @@ _NOEXEC_BUILTINS = frozenset(
         "break",
         "continue",
         "trap",
+        "command",
+        "type",
+        "hash",
     }
 )
 # `source` is a bash-ism: the ONLY _NOEXEC_BUILTINS member a real POSIX sh
@@ -237,6 +240,10 @@ class BridgeResult:
     transition_graph: list[dict[str, Any]] = field(default_factory=list)
     candidate_rejections: list[dict[str, Any]] = field(default_factory=list)
     static_clauses: list[dict[str, Any]] = field(default_factory=list)
+    # Distinct static clauses that produced at least one bridged observation.
+    # This is NOT len(bridged): a loop body is one static clause owning one
+    # bridged entry per iteration, so coverage math must use this instead.
+    bridged_clause_count: int = 0
 
     @property
     def observations(self) -> list[ClauseObservation]:
@@ -601,6 +608,48 @@ def _pathname_match(value: str, pattern: str) -> bool:
     )
 
 
+def _parameter_segments(intent: Mapping[str, Any]) -> tuple[str, ...] | None:
+    """Split a word's cooked text at its parameter expansions.
+
+    The cooked form carries each parameter's source text verbatim (``$d`` stays
+    ``$d``), so the text between expansions is already the literal anchor to
+    match against a runtime word. Returns ``None`` when the word cannot be
+    segmented, which fails the alignment closed.
+    """
+
+    cooked = str(intent["cooked"])
+    segments: list[str] = []
+    position = 0
+    for component in intent["components"]:
+        if component.get("kind") != "parameter":
+            continue
+        source = str(component.get("source") or "")
+        found = cooked.find(source, position) if source else -1
+        if found < 0:
+            return None
+        segments.append(cooked[position:found])
+        position = found + len(source)
+    segments.append(cooked[position:])
+    return tuple(segments)
+
+
+def _parameter_match(word: str, segments: Sequence[str]) -> bool:
+    """Literal anchors must appear in order and cover both ends of the word."""
+
+    if len(segments) == 1:
+        return word == segments[0]
+    if not word.startswith(segments[0]):
+        return False
+    position = len(segments[0])
+    for segment in segments[1:-1]:
+        found = word.find(segment, position)
+        if found < 0:
+            return False
+        position = found + len(segment)
+    suffix = segments[-1]
+    return len(word) - len(suffix) >= position and word.endswith(suffix)
+
+
 def _alignment_evidence(
     clause: Mapping[str, Any],
     initial: ExecImageRecord,
@@ -625,19 +674,35 @@ def _alignment_evidence(
             if runtime == static
             else (None, "word_intent_unavailable")
         )
+    # A loop body is emitted once by the parser but runs once per iteration with
+    # its parameters expanded, so its clause identity can never match runtime
+    # argv exactly. Relax only there; every other clause keeps strict matching.
+    allow_parameter = clause.get("in_loop") is True
+    segments_by_word: list[tuple[str, ...] | None] = []
     for intent in intents:
         components = intent.get("components")
         if not isinstance(components, list):
             return None, "word_intent_unavailable"
         kinds = {component.get("kind") for component in components}
-        if kinds - {"literal", "pathname_expansion"}:
+        unsupported = kinds - {"literal", "pathname_expansion"}
+        if unsupported and not (allow_parameter and unsupported == {"parameter"}):
             return None, "unsupported_dynamic_expansion"
+        if "parameter" in kinds and "pathname_expansion" in kinds:
+            # One word both globbing and expanding has no unique arity; refuse.
+            return None, "mixed_expansion_word"
         if any(
             component.get("kind") == "pathname_expansion"
             and (component.get("quoted") or component.get("escaped"))
             for component in components
         ):
             return None, "invalid_quoted_pathname_expansion"
+        if "parameter" in kinds:
+            segments = _parameter_segments(intent)
+            if segments is None:
+                return None, "unsupported_dynamic_expansion"
+            segments_by_word.append(segments)
+        else:
+            segments_by_word.append(None)
 
     alignments: list[tuple[tuple[int, int], ...]] = []
 
@@ -654,6 +719,20 @@ def _alignment_evidence(
             return
         intent = intents[static_index]
         components = intent["components"]
+        expansion_segments = segments_by_word[static_index]
+        if expansion_segments is not None:
+            # A parameter expansion yields exactly one runtime word. An unquoted
+            # expansion could word-split, but guessing a span would invent
+            # alignments, so refuse those by consuming one word only.
+            if runtime_index < len(runtime) and _parameter_match(
+                runtime[runtime_index], expansion_segments
+            ):
+                align(
+                    static_index + 1,
+                    runtime_index + 1,
+                    (*spans, (runtime_index, runtime_index + 1)),
+                )
+            return
         is_glob = any(
             component["kind"] == "pathname_expansion"
             for component in components
@@ -686,6 +765,10 @@ def _alignment_evidence(
             if alignments
             else "no_full_argv_alignment",
         )
+    if any(segments is not None for segments in segments_by_word):
+        # Distinct label so loop-expansion mappings stay auditable and can be
+        # excluded downstream without touching exact or glob mappings.
+        return "loop_iteration_expansion", "ok"
     expanded = any(end - start != 1 for start, end in alignments[0])
     return (
         "initial_invocation_unique_expansion"
@@ -862,8 +945,13 @@ def _assign(
     dict[int, str],
     set[int],
     list[dict[str, Any]],
+    dict[int, list[int]],
 ]:
-    """Return (static_idx -> chain_pid, evidence, ambiguous static indices)."""
+    """Return (static_idx -> chain_pid, evidence, ambiguous, rejections, loops).
+
+    ``loops`` maps a loop-body static index to the several chains it owns, one
+    per iteration; those indices never appear in the 1:1 ``assigned`` map.
+    """
 
     candidates: dict[tuple[int, int], str] = {}
     rejections: list[dict[str, Any]] = []
@@ -909,11 +997,33 @@ def _assign(
                 evidence[si] = candidates[(si, pid)]
                 changed = True
 
+    # A loop body is ONE static clause that runs once per iteration, so it
+    # legitimately owns many chains. Claim them only when this clause is the
+    # sole claimant of every chain it matches; any competition falls through to
+    # the exchangeability pass below and then to `ambiguous`.
+    loop_assigned: dict[int, list[int]] = {}
+    for si, clause in statics.items():
+        if si in assigned or clause.get("in_loop") is not True:
+            continue
+        opts = [pid for pid in chains if pid not in used and (si, pid) in candidates]
+        if len(opts) < 2:
+            continue
+        if any(
+            sj != si and sj not in assigned and (sj, pid) in candidates
+            for pid in opts
+            for sj in statics
+        ):
+            continue
+        loop_assigned[si] = sorted(opts)
+        evidence[si] = candidates[(si, opts[0])]
+        used.update(opts)
+
     ambiguous: set[int] = set()
     rem_statics = [
         si
         for si in statics
         if si not in assigned
+        and si not in loop_assigned
         and any(pid not in used and (si, pid) in candidates for pid in chains)
     ]
     rem_chains = [pid for pid in chains if pid not in used]
@@ -938,7 +1048,7 @@ def _assign(
                 evidence[si] = "interchangeable_identical"
         else:
             ambiguous.update(cs)
-    return assigned, evidence, ambiguous, rejections
+    return assigned, evidence, ambiguous, rejections, loop_assigned
 
 
 # --------------------------------------------------------------------------
@@ -1038,10 +1148,11 @@ def bridge_command(
     candidate_chains = {
         pid: chain for pid, chain in chains.items() if not is_shell(pid)
     }
-    assigned, evidence, ambiguous, candidate_rejections = _assign(
+    assigned, evidence, ambiguous, candidate_rejections, loop_assigned = _assign(
         statics, candidate_chains, parsed["control_edges"]
     )
-    mapped_roots = set(assigned.values())
+    loop_pids = {pid for pids in loop_assigned.values() for pid in pids}
+    mapped_roots = set(assigned.values()) | loop_pids
     failed_by_identity: dict[tuple[str, tuple[str, ...]], list[FailedExecAttempt]] = {}
     for attempt in failed_exec_attempts:
         normalized = tuple(attempt.argv)
@@ -1053,6 +1164,7 @@ def bridge_command(
     for si, identity in static_identities.items():
         if (
             si not in assigned
+            and si not in loop_assigned
             and si not in ambiguous
             and identity[0] not in _NOEXEC_BUILTINS
         ):
@@ -1073,6 +1185,7 @@ def bridge_command(
             for si, clause in enumerate(static)
             if clause.get("argv")
             if si not in assigned
+            and si not in loop_assigned
             and si not in ambiguous
             and si not in failed_assigned
             and clause["argv"][0] == command_lookup_failure.executable_head
@@ -1112,6 +1225,9 @@ def bridge_command(
                 *failed_assigned,
                 *lookup_assigned,
                 *guard_assigned,
+                # A loop clause did run; it must never be resolved as
+                # short-circuited even though it is absent from `assigned`.
+                *loop_assigned,
             },
         )
         if allow_control_short_circuit
@@ -1119,6 +1235,7 @@ def bridge_command(
     )
 
     bridged: list[BridgedClause] = []
+    bridged_indices: set[int] = set()
     no_runtime_exec: list[NoRuntimeExec] = []
     gaps: list[MappingGap] = list(control_gaps)
     unobserved: list[str] = []
@@ -1139,6 +1256,7 @@ def bridge_command(
                     )
                 )
             else:
+                bridged_indices.add(si)
                 bridged.append(
                     _aggregate(
                         repo,
@@ -1155,6 +1273,55 @@ def bridge_command(
                         ),
                     )
                 )
+        elif si in loop_assigned:
+            # One static loop body, one observation per iteration, each with its
+            # own latency. Every iteration must have a causal end or the clause
+            # fails closed as a whole.
+            iterations = [
+                (pid, _owned_pids(pid, children, mapped_roots))
+                for pid in loop_assigned[si]
+            ]
+            iteration_images = [
+                (
+                    owned_pids,
+                    [img for pid in owned_pids for img in chains.get(pid, [])],
+                )
+                for _, owned_pids in iterations
+            ]
+            for owned_pids, _ in iteration_images:
+                owned_all.update(owned_pids)
+            if any(
+                not img.has_causal_end
+                for _, owned_images in iteration_images
+                for img in owned_images
+            ):
+                gaps.append(
+                    MappingGap(
+                        "no_causal_end",
+                        f"clause {si} bin={cbin!r}: an owned exec image has no "
+                        "real exit/causal end; withheld from KB",
+                    )
+                )
+            else:
+                bridged_indices.add(si)
+                for owned_pids, owned_images in iteration_images:
+                    bridged.append(
+                        _aggregate(
+                            repo,
+                            clause,
+                            owned_pids,
+                            owned_images,
+                            evidence[si],
+                            epoch_offset,
+                            protocol_timeout_terminated=(
+                                protocol_timeout
+                                and any(
+                                    image.exit_signal is not None
+                                    for image in owned_images
+                                )
+                            ),
+                        )
+                    )
         elif si in ambiguous:
             gaps.append(
                 MappingGap(
@@ -1209,7 +1376,7 @@ def bridge_command(
                 )
             )
 
-    used_pids = set(assigned.values())
+    used_pids = set(assigned.values()) | loop_pids
     # A chain is "unmatched_exec_image" only if it had NO candidate static clause;
     # a chain that matched but lost to ambiguity is already covered by the
     # ambiguous static-clause gap and must not be double-reported.
@@ -1237,7 +1404,7 @@ def bridge_command(
 
     mapping_anchors = {
         (pid, chains[pid][0].exec_seq)
-        for pid in assigned.values()
+        for pid in (*assigned.values(), *loop_pids)
     }
     owned_exec_images = {
         image
@@ -1303,6 +1470,7 @@ def bridge_command(
         transition_graph=transition_graph,
         candidate_rejections=candidate_rejections,
         static_clauses=[dict(clause) for clause in static],
+        bridged_clause_count=len(bridged_indices),
     )
 
 

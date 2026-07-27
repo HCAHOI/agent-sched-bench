@@ -2568,6 +2568,148 @@ def test_coverage_gaps_builtins_and_unmatched() -> None:
     assert not result.observations
 
 
+def test_command_probe_builtin_does_not_block_valid_clause() -> None:
+    # `command -v X && X ...` is the standard availability probe in
+    # Terminal-Bench agent commands. `command` is a POSIX builtin that never
+    # execs, so it must land in unobserved_builtins rather than raising
+    # unmatched_static_clause and discarding the whole call.
+    images = [
+        _img(
+            101,
+            0,
+            "lean",
+            0,
+            5 * _MS,
+            terminal=True,
+            cores=0.1,
+            argv=("lean", "--version"),
+        ),
+    ]
+    result = bridge_command(
+        "r1",
+        "command -v lean && lean --version",
+        images,
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+    assert "command" in result.unobserved_builtins
+    assert not result.coverage_gaps
+    assert [obs.bin for obs in result.observations] == ["lean"]
+
+
+def _loop_curl_images(directions: tuple[int, ...]) -> list[ExecImageRecord]:
+    return [
+        _img(
+            100 + index,
+            0,
+            "curl",
+            index * 10 * _MS,
+            (index * 10 + 2 + index) * _MS,
+            terminal=True,
+            cores=0.1,
+            argv=("curl", "-sS", "http://h/move", "-d", f'{{"direction":{value}}}'),
+        )
+        for index, value in enumerate(directions)
+    ]
+
+
+_LOOP_CURL = (
+    'for d in 2 1 2; do curl -sS http://h/move -d "{\\"direction\\":$d}"; done'
+)
+
+
+def test_loop_body_owns_one_chain_per_iteration() -> None:
+    # The parser emits a loop body once with `$d` unexpanded; the runtime shows
+    # one chain per iteration. Each iteration is its own observation.
+    result = bridge_command(
+        "r1",
+        _LOOP_CURL,
+        _loop_curl_images((2, 1, 2)),
+        entry_pid=99,
+        fork_parent={100: 99, 101: 99, 102: 99},
+    )
+    assert not result.coverage_gaps
+    assert result.data_valid
+    assert result.bridged_clause_count == 1
+    assert [bc.mapping_evidence for bc in result.bridged] == [
+        "loop_iteration_expansion"
+    ] * 3
+    latencies = sorted(obs.latency_ms for obs in result.observations)
+    assert latencies == [2.0, 3.0, 4.0]
+    assert all(obs.in_loop for obs in result.observations)
+
+
+def test_loop_body_quoted_expansion_consumes_one_word() -> None:
+    command = 'for f in /a/p1.lean /a/p2.lean; do lake env lean "$f"; done'
+    images = [
+        _img(
+            100 + index,
+            0,
+            "lake",
+            index * 10 * _MS,
+            (index * 10 + 7) * _MS,
+            terminal=True,
+            cores=0.1,
+            argv=("lake", "env", "lean", path),
+        )
+        for index, path in enumerate(("/a/p1.lean", "/a/p2.lean"))
+    ]
+    result = bridge_command(
+        "r1", command, images, entry_pid=99, fork_parent={100: 99, 101: 99}
+    )
+    assert not result.coverage_gaps
+    assert len(result.observations) == 2
+
+
+def test_loop_expansion_still_requires_literal_anchors_to_match() -> None:
+    # `http://h/move` is a literal anchor; a chain that does not carry it is not
+    # an iteration of this clause.
+    images = [
+        _img(
+            100,
+            0,
+            "curl",
+            0,
+            5 * _MS,
+            terminal=True,
+            cores=0.1,
+            argv=("curl", "-sS", "http://h/OTHER", "-d", '{"direction":2}'),
+        ),
+        _img(
+            101,
+            0,
+            "curl",
+            10 * _MS,
+            15 * _MS,
+            terminal=True,
+            cores=0.1,
+            argv=("curl", "-sS", "http://h/move", "-d", '{"direction":1}'),
+        ),
+    ]
+    result = bridge_command(
+        "r1", _LOOP_CURL, images, entry_pid=99, fork_parent={100: 99, 101: 99}
+    )
+    # Only one chain matched, so the 1:N pre-pass does not fire and the
+    # non-matching chain is reported rather than silently absorbed.
+    assert any(gap.kind == "unmatched_exec_image" for gap in result.coverage_gaps)
+
+
+def test_parameter_expansion_is_refused_outside_a_loop() -> None:
+    # Regression guard: relaxing identity must not leak to non-loop clauses.
+    images = [
+        _img(100, 0, "curl", 0, 5 * _MS, terminal=True, cores=0.1,
+             argv=("curl", "http://h/a")),
+    ]
+    result = bridge_command(
+        "r1", "curl $url", images, entry_pid=99, fork_parent={100: 99}
+    )
+    assert not result.data_valid
+    assert any(
+        gap.kind == "unmatched_static_clause" for gap in result.coverage_gaps
+    )
+    assert not result.observations
+
+
 def test_insufficient_coverage_isolated_per_target() -> None:
     images = [
         _img(

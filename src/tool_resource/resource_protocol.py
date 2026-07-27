@@ -8,7 +8,7 @@ from typing import Any, Protocol
 
 from tool_resource._uds import DEFAULT_TIMEOUT_S, UnixTransport
 
-RESOURCE_PROTOCOL_VERSION = 1
+RESOURCE_PROTOCOL_VERSION = 2
 
 
 class ResourceError(RuntimeError):
@@ -33,6 +33,16 @@ class ResourceTransport(Protocol):
     ) -> dict[str, Any]: ...
 
 
+#: AwaitTraceReady is a pre-workload instrumentation barrier, CloseTrace is the
+#: post-workload settlement barrier, and CloseRun settles the store. Online
+#: OpenTrace, BeginCall, and EndCall retain the short default timeout.
+RESOURCE_OPERATION_TIMEOUTS_S = {
+    "AwaitTraceReady": 300.0,
+    "CloseTrace": 300.0,
+    "CloseRun": 300.0,
+}
+
+
 class ResourceUnixTransport(UnixTransport):
     def __init__(
         self,
@@ -47,6 +57,7 @@ class ResourceUnixTransport(UnixTransport):
             error_type=ResourceProtocolError,
             unavailable_type=ResourceUnavailableError,
             timeout_s=timeout_s,
+            operation_timeouts_s=RESOURCE_OPERATION_TIMEOUTS_S,
             expected_peer_uids=(
                 None if expected_peer_uid is None else {expected_peer_uid}
             ),

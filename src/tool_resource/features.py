@@ -9,11 +9,10 @@ import heapq
 import math
 import random
 import re
-from typing import Any, Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
 
 import numpy as np
 
-from tool_resource.labels import ResourceCallSample
 from tool_resource.metrics import ecdf_quantile
 from tool_resource.mvdan_client import (
     PARSER_NAME,
@@ -23,6 +22,9 @@ from tool_resource.mvdan_client import (
 )
 from tool_time.command import make_row_command_prefix_keys, shell_command_segments
 from tool_time.prior import LatencyPrior, latency_prior_hierarchy
+
+if TYPE_CHECKING:
+    from tool_resource.labels import ResourceCallSample
 
 
 _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")

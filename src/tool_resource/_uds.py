@@ -87,6 +87,35 @@ def peer_credentials(connection: socket.socket) -> tuple[int, int, int]:
     )
 
 
+def process_identity(pid: int) -> tuple[int, int]:
+    """Return ``(pid, start_time)`` for reuse-safe local process ownership."""
+
+    if pid <= 0:
+        raise ValueError("pid must be positive")
+    raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    _comm, separator, suffix = raw.rpartition(")")
+    fields = suffix.split()
+    if not separator or len(fields) < 20:
+        raise RuntimeError(f"/proc/{pid}/stat is malformed")
+    return pid, int(fields[19])
+
+
+def process_identity_is_alive(identity: tuple[int, int]) -> bool:
+    pid, start_time = identity
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        _comm, separator, suffix = raw.rpartition(")")
+        fields = suffix.split()
+        return (
+            bool(separator)
+            and len(fields) >= 20
+            and fields[0] not in {"X", "Z"}
+            and int(fields[19]) == start_time
+        )
+    except (OSError, ValueError):
+        return False
+
+
 def validate_envelope(
     message: Mapping[str, Any],
     *,
@@ -137,12 +166,16 @@ class UnixTransport:
         error_type: type[RuntimeError],
         unavailable_type: type[RuntimeError],
         timeout_s: float = DEFAULT_TIMEOUT_S,
+        operation_timeouts_s: Mapping[str, float] | None = None,
         max_message_bytes: int = MAX_MESSAGE_BYTES,
         expected_peer_uids: set[int] | None = None,
         expected_peer_socket_owner: bool = False,
     ) -> None:
         if not math.isfinite(timeout_s) or timeout_s <= 0:
             raise ValueError("timeout_s must be finite and positive")
+        for name, value in (operation_timeouts_s or {}).items():
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"timeout for {name!r} must be finite and positive")
         if max_message_bytes <= 0:
             raise ValueError("max_message_bytes must be positive")
         self.socket_path = Path(socket_path)
@@ -150,6 +183,13 @@ class UnixTransport:
         self.error_type = error_type
         self.unavailable_type = unavailable_type
         self.timeout_s = float(timeout_s)
+        # Some operations do real work behind the RPC (eBPF program load,
+        # artifact serialization) and legitimately outlast a timeout sized for
+        # cheap calls. A timeout there discards valid evidence; it never accepts
+        # invalid evidence, so the fail-closed gates are unchanged.
+        self.operation_timeouts_s = {
+            name: float(value) for name, value in (operation_timeouts_s or {}).items()
+        }
         self.max_message_bytes = max_message_bytes
         self.expected_peer_uids = expected_peer_uids
         self.expected_peer_socket_owner = expected_peer_socket_owner
@@ -170,7 +210,9 @@ class UnixTransport:
         }
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-                connection.settimeout(self.timeout_s)
+                connection.settimeout(
+                    self.operation_timeouts_s.get(operation, self.timeout_s)
+                )
                 connection.connect(str(self.socket_path))
                 expected_peer_uids = self.expected_peer_uids
                 if self.expected_peer_socket_owner:
@@ -224,7 +266,7 @@ class _RequestHandler(socketserver.BaseRequestHandler):
         request_id = ""
         operation = ""
         try:
-            _pid, peer_uid, _gid = peer_credentials(self.request)
+            peer_pid, peer_uid, _gid = peer_credentials(self.request)
             if peer_uid not in server.allowed_uids:
                 raise server.protocol_error(f"peer uid {peer_uid} is not allowed")
             request = receive_message(
@@ -236,7 +278,7 @@ class _RequestHandler(socketserver.BaseRequestHandler):
                 protocol_version=server.protocol_version,
                 error_type=server.protocol_error,
             )
-            response = server.handle_request_message(peer_uid, request)
+            response = server.handle_request_message(peer_pid, peer_uid, request)
         except Exception as exc:  # noqa: BLE001 - protocol boundary
             response = {
                 "protocol_version": server.protocol_version,
@@ -269,7 +311,7 @@ class StrictUnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServe
         protocol_version: int,
         protocol_error: type[RuntimeError],
         dispatch: Callable[
-            [str, Mapping[str, Any], tuple[int, str]], dict[str, Any]
+            [str, Mapping[str, Any], tuple[int, str], int], dict[str, Any]
         ],
         allowed_uids: set[int],
         request_timeout_s: float = DEFAULT_TIMEOUT_S,
@@ -299,8 +341,9 @@ class StrictUnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServe
         self._responses: OrderedDict[
             tuple[int, str], tuple[str, str, dict[str, Any]]
         ] = OrderedDict()
-        # ponytail: serialize requests until service throughput warrants
-        # per-request in-flight coordination.
+        self._pending: dict[
+            tuple[int, str], tuple[str, str, threading.Event]
+        ] = {}
         self._request_lock = threading.Lock()
         socket_dir_missing = not self.socket_path.parent.exists()
         self.socket_path.parent.mkdir(
@@ -330,6 +373,7 @@ class StrictUnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServe
 
     def handle_request_message(
         self,
+        peer_pid: int,
         peer_uid: int,
         request: Mapping[str, Any],
     ) -> dict[str, Any]:
@@ -346,18 +390,41 @@ class StrictUnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServe
             separators=(",", ":"),
             sort_keys=True,
         )
-        with self._request_lock:
-            cached = self._responses.get(key)
-            if cached is not None:
-                cached_operation, cached_payload, response = cached
-                if cached_operation != operation or cached_payload != payload_identity:
+        while True:
+            with self._request_lock:
+                cached = self._responses.get(key)
+                if cached is not None:
+                    cached_operation, cached_payload, response = cached
+                    if (
+                        cached_operation != operation
+                        or cached_payload != payload_identity
+                    ):
+                        raise self.protocol_error(
+                            "request_id was already used for a different request"
+                        )
+                    self._responses.move_to_end(key)
+                    return response
+                pending = self._pending.get(key)
+                if pending is None:
+                    completed = threading.Event()
+                    self._pending[key] = (
+                        operation,
+                        payload_identity,
+                        completed,
+                    )
+                    break
+                pending_operation, pending_payload, completed = pending
+                if (
+                    pending_operation != operation
+                    or pending_payload != payload_identity
+                ):
                     raise self.protocol_error(
                         "request_id was already used for a different request"
                     )
-                self._responses.move_to_end(key)
-                return response
+            completed.wait()
+        try:
             try:
-                result = self.dispatch(operation, payload, key)
+                result = self.dispatch(operation, payload, key, peer_pid)
                 response_payload: dict[str, Any] = {"ok": True, "result": result}
             except Exception as exc:  # noqa: BLE001 - protocol error data
                 response_payload = {
@@ -370,11 +437,17 @@ class StrictUnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServe
                 "operation": operation,
                 "payload": response_payload,
             }
-            self._responses[key] = (operation, payload_identity, response)
-            self._responses.move_to_end(key)
-            while len(self._responses) > self.response_cache_size:
-                self._responses.popitem(last=False)
-        return response
+            with self._request_lock:
+                self._responses[key] = (operation, payload_identity, response)
+                self._responses.move_to_end(key)
+                while len(self._responses) > self.response_cache_size:
+                    self._responses.popitem(last=False)
+            return response
+        finally:
+            with self._request_lock:
+                pending = self._pending.pop(key, None)
+                if pending is not None:
+                    pending[2].set()
 
     def server_close(self) -> None:
         super().server_close()
@@ -390,5 +463,7 @@ __all__ = [
     "receive_message",
     "require_fields",
     "send_message",
+    "process_identity",
+    "process_identity_is_alive",
     "validate_envelope",
 ]

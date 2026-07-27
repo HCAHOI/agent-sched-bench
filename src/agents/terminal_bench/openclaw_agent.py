@@ -289,7 +289,6 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
                     container_runtime=Path(container_executable).name,
                     container_id=container_id,
                     artifact_path=log_dir / "resource_observations.json",
-                    runner_pid=os.getpid(),
                 )
             provider = UnifiedProvider(
                 api_key=self._api_key,

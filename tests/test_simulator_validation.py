@@ -1219,6 +1219,7 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
         ),
         task_output_dir=tmp_path / "task-output",
     )
+    worker_timeouts: list[float] = []
 
     async def fake_worker_process(
         *,
@@ -1227,7 +1228,7 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
         stderr_path: Path,
         timeout_s: float,
     ) -> int:
-        del timeout_s
+        worker_timeouts.append(timeout_s)
         request = json.loads(request_path.read_text(encoding="utf-8"))
         assert request["task_instance_id"] == "fc_openclaw_failed_replay"
         assert request["source_action_agent_id"] == "cli:oc-failed"
@@ -1329,6 +1330,7 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
     assert summary["source_action_agent_id"] == "cli:oc-failed"
     assert summary["worker_returncode"] == 7
     assert summary["worker_error"] is None
+    assert worker_timeouts == [602.0]
     assert summary["replay_execution"] == "failed"
     assert summary["telemetry_quality"] == "ok"
     assert summary["formal_completeness"] == "partial"

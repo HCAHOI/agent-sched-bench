@@ -71,10 +71,11 @@ def _openclaw_worker_timeout_s(
     *,
     replay_speed: float,
     command_timeout_s: float,
+    setup_timeout_s: float = 0.0,
 ) -> float:
     action_count = max(1, len(loaded.actions))
     if not loaded.actions:
-        return command_timeout_s + 120.0
+        return command_timeout_s + setup_timeout_s + 120.0
     bounds = [
         _coerce_action_bounds(action, source_trace=loaded.source_trace)
         for action in loaded.actions
@@ -84,8 +85,11 @@ def _openclaw_worker_timeout_s(
         1 for action in loaded.actions if action.get("action_type") == "tool_exec"
     )
     return max(
-        command_timeout_s + 120.0,
-        source_span_s / replay_speed + (tool_count + 2) * command_timeout_s + 120.0,
+        command_timeout_s + setup_timeout_s + 120.0,
+        source_span_s / replay_speed
+        + (tool_count + 2) * command_timeout_s
+        + setup_timeout_s
+        + 120.0,
         action_count * 5.0,
     )
 
@@ -180,6 +184,13 @@ async def _run_openclaw_replay_session(
     resource_run_token = resource_run_tokens.get(resource_scope)
     if resource_run_token is not None and not isinstance(resource_run_token, str):
         raise ValueError("tool-resource run token must be a string")
+    resource_setup_timeout_s = 0.0
+    if resource_enabled:
+        from tool_resource.resource_protocol import RESOURCE_OPERATION_TIMEOUTS_S
+
+        resource_setup_timeout_s = RESOURCE_OPERATION_TIMEOUTS_S[
+            "AwaitTraceReady"
+        ]
     request = {
         "source_trace": str(loaded.source_trace),
         "source_actions": loaded.actions,
@@ -232,6 +243,7 @@ async def _run_openclaw_replay_session(
             loaded,
             replay_speed=replay_speed,
             command_timeout_s=command_timeout_s,
+            setup_timeout_s=resource_setup_timeout_s,
         ),
     )
     if status_path.exists():

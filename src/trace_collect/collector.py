@@ -1156,7 +1156,6 @@ async def _run_openclaw_in_task_container(
                 container_runtime=container_executable,
                 container_id=container_id,
                 artifact_path=ctx.attempt_dir / "resource_observations.json",
-                runner_pid=os.getpid(),
             )
 
         async def _patch_extractor(

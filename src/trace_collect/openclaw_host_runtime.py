@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -67,6 +68,39 @@ def _replayable_source_actions(
         for action in source_actions
         if action.get("action_type") in {"llm_call", "tool_exec"}
     ]
+
+
+def _resource_expected_calls(
+    source_actions: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    expected = []
+    for action in source_actions:
+        data = action.get("data")
+        if (
+            action.get("action_type") != "tool_exec"
+            or not isinstance(data, dict)
+            or data.get("tool_name") != "exec"
+        ):
+            continue
+        raw_args = data.get("tool_args")
+        try:
+            args = (
+                raw_args
+                if isinstance(raw_args, dict)
+                else json.loads(str(raw_args or "{}"))
+            )
+        except json.JSONDecodeError:
+            args = {}
+        expected.append(
+            {
+                "source_tool_call_id": str(data.get("tool_call_id") or ""),
+                "source_command": str(args.get("command") or ""),
+                "source_tool_result": str(
+                    data.get("tool_result", data.get("result", "")) or ""
+                ),
+            }
+        )
+    return expected
 
 
 def _action_matches_source(
@@ -997,6 +1031,23 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
         finally:
             resource_trace_finalized = True
 
+    if tool_resource_profile:
+        from tool_resource.client import ResourceTrace
+
+        resource_trace = ResourceTrace.open(
+            tool_resource_profile,
+            run_token=tool_resource_run_token or "",
+            trace_id=run_instance_id,
+            container_runtime=Path(container_executable).name,
+            container_id=container_id,
+            artifact_path=Path(request["resource_artifact_path"]),
+            expected_calls=_resource_expected_calls(source_actions),
+        )
+        setup_error = await asyncio.to_thread(resource_trace.wait_ready)
+        if setup_error is not None:
+            telemetry_errors.append(setup_error)
+            resource_trace.add_integrity_error(setup_error)
+
     wall_start = time.time()
     try:
         await agent.start()
@@ -1007,19 +1058,6 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             expected_workdir=container_workdir,
         )
         runtime_label = container_runtime_label(proof)
-        if tool_resource_profile:
-            from tool_resource.client import ResourceTrace
-
-            resource_trace = ResourceTrace.open(
-                tool_resource_profile,
-                run_token=tool_resource_run_token or "",
-                trace_id=run_instance_id,
-                container_runtime=Path(container_executable).name,
-                container_id=container_id,
-                artifact_path=Path(request["resource_artifact_path"]),
-                source_actions=source_actions,
-                runner_pid=os.getpid(),
-            )
         provider = OpenClawReplayProvider(
             llm_actions=llm_actions,
             replay_speed=replay_speed,

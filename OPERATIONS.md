@@ -252,6 +252,175 @@ traces:
     docker_image: custom/image:tag
 ```
 
+## Tool-resource telemetry replay
+
+Tool-resource replay uses two long-lived services. `resource-telemetryd` is the
+only root process; `resource-agentd`, the replay, and the SQLite database run as
+the invoking user. Use separate socket directories so the root-owned telemetry
+socket can be group-readable without making the resource socket root-owned.
+Both services derive client ownership from Unix-socket peer credentials, so an
+idle queued task remains live while its coordinator process exists; no
+heartbeat or active-session TTL is required. Runs follow the coordinator peer;
+each trace separately follows the worker peer that opened it, so a killed
+worker aborts only its own collector.
+
+The following setup reproduces the exact task cohort from a prior Terminal-Bench
+baseline while reloading task metadata through the benchmark plugin. It does not
+construct `tasks.json` rows by hand.
+
+```bash
+export BASELINE="$PWD/traces/terminal-bench/tb-dev20-c1-ladder-20260727-r4"
+export RUN_INPUT="/tmp/tb-call-promotion-input"
+export TRACE_SOURCE="$PWD/traces/terminal-bench/tb-all/canonical"
+test ! -e "$RUN_INPUT" || {
+  echo "refusing to reuse RUN_INPUT: $RUN_INPUT" >&2
+  exit 1
+}
+mkdir -p "$RUN_INPUT"
+
+PYTHONPATH=src:. uv run python - <<'PY'
+import json
+import os
+from pathlib import Path
+
+import yaml
+
+from agents.benchmarks import get_benchmark_class
+from agents.benchmarks.base import BenchmarkConfig
+from trace_collect.simulate_manifest import SIMULATE_MANIFEST_SCHEMA_VERSION
+
+baseline = Path(os.environ["BASELINE"])
+output = Path(os.environ["RUN_INPUT"])
+config = BenchmarkConfig.from_yaml(Path("configs/benchmarks/terminal-bench.yaml"))
+benchmark = get_benchmark_class(config.slug)(config)
+tasks = {task["instance_id"]: task for task in benchmark.load_tasks()}
+rows = json.loads((baseline / "throughput_summary.json").read_text())["tasks"]
+selected = [tasks[row["run_instance_id"]] for row in rows]
+traces = [
+    {
+        "trace": str(
+            (Path(os.environ["TRACE_SOURCE"]) / task["instance_id"] / "trace.jsonl")
+            .resolve()
+        ),
+        "label": f"tb-dev20-{task['instance_id']}",
+    }
+    for task in selected
+]
+missing = [row["trace"] for row in traces if not Path(row["trace"]).is_file()]
+if missing:
+    raise SystemExit(f"missing canonical traces: {missing}")
+(output / "tasks.json").write_text(
+    json.dumps(selected, ensure_ascii=False, indent=2) + "\n",
+    encoding="utf-8",
+)
+(output / "manifest.yaml").write_text(
+    yaml.safe_dump(
+        {
+            "version": SIMULATE_MANIFEST_SCHEMA_VERSION,
+            "defaults": {"task_source": str((output / "tasks.json").resolve())},
+            "traces": traces,
+        },
+        sort_keys=False,
+    ),
+    encoding="utf-8",
+)
+PY
+```
+
+Create fresh service state and start both daemons with logs redirected to durable
+files. The example bucket edges reproduce the development diagnostic baseline;
+they are not authoritative latency boundaries and must not be used for a
+claim-bearing run.
+
+```bash
+export RUN_STATE="/tmp/tb-call-promotion-state"
+export OUTPUT_DIR="$PWD/traces/terminal-bench/tb-call-promotion-c1-50x"
+export USER_UID="$(id -u)"
+export USER_GID="$(id -g)"
+export TELEMETRY_RUNTIME="$RUN_STATE/telemetry-runtime"
+export TELEMETRY_SOCKET="$TELEMETRY_RUNTIME/telemetry.sock"
+export RESOURCE_SOCKET="$RUN_STATE/resource.sock"
+for path in "$RUN_STATE" "$OUTPUT_DIR"; do
+  test ! -e "$path" || {
+    echo "refusing to reuse run state or output: $path" >&2
+    exit 1
+  }
+done
+mkdir -p "$RUN_STATE"
+sudo -n install -d -m 0750 -o root -g "$USER_GID" "$TELEMETRY_RUNTIME"
+
+cat >"$RUN_STATE/resource.yaml" <<YAML
+tool_resource:
+  endpoint: unix://$RESOURCE_SOCKET
+  behavior: observe_predict_learn
+  update_policy: causal
+  snapshot: latest_at_run_start
+  telemetry_requirement: required_for_valid_evidence
+  latency_bucket_edges_ms: [10, 100, 1000]
+YAML
+
+sudo -n env PYTHONPATH="$PWD/src:/usr/lib/python3/dist-packages" \
+  "$PWD/.venv/bin/python" \
+  -m tool_resource.telemetryd \
+  --socket "$TELEMETRY_SOCKET" \
+  --allowed-uid "$USER_UID" \
+  --socket-gid "$USER_GID" \
+  --container-runtime docker \
+  --state-dir "$TELEMETRY_RUNTIME/state" \
+  >"$RUN_STATE/telemetryd.log" 2>&1 &
+TELEMETRY_PID=$!
+
+PYTHONPATH=src "$PWD/.venv/bin/python" -m tool_resource.resource_agentd \
+  --socket "$RESOURCE_SOCKET" \
+  --database "$RUN_STATE/observations.sqlite3" \
+  --telemetry-socket "$TELEMETRY_SOCKET" \
+  --allowed-uid "$USER_UID" \
+  >"$RUN_STATE/resource-agentd.log" 2>&1 &
+RESOURCE_PID=$!
+
+for _ in $(seq 1 100); do
+  test -S "$TELEMETRY_SOCKET" -a -S "$RESOURCE_SOCKET" && break
+  sleep 0.1
+done
+test -S "$TELEMETRY_SOCKET"
+test -S "$RESOURCE_SOCKET"
+```
+
+Run the serial 50x replay and read the evidence gates. Deliberately omit
+`--cleanup-images`: the simulator globally prefetches and prebuilds the full
+20-task image set before starting replay instead of pulling and deleting images
+per task. Any call-level failure can now be joined across daemon logs by
+`(run_id, trace_id, call_id)`, and each `resource_observations.json` call records
+its resource-agentd `telemetry_status`. The runner joins asynchronous collector
+attachment before replay time zero; OpenTrace and every online Begin/End call
+remain non-blocking with respect to telemetry.
+
+```bash
+PYTHONPATH=src:. uv run python -m trace_collect.cli simulate \
+  --manifest "$RUN_INPUT/manifest.yaml" \
+  --container docker \
+  --concurrency 1 \
+  --workers 1 \
+  --prep-concurrency 1 \
+  --replay-speed 50 \
+  --tool-resource-profile "$RUN_STATE/resource.yaml" \
+  --output-dir "$OUTPUT_DIR"
+
+PYTHONPATH=src:. uv run python scripts/evaluation/report_clause_coverage.py \
+  "$OUTPUT_DIR" --baseline "$BASELINE"
+```
+
+Stop the services after the run. The trace output and SQLite database are
+evidence; remove only sockets and temporary collector state.
+
+```bash
+kill "$RESOURCE_PID"
+sudo -n kill "$TELEMETRY_PID"
+wait "$RESOURCE_PID" || true
+wait "$TELEMETRY_PID" || true
+sudo -n rm -r "$TELEMETRY_RUNTIME"
+```
+
 ## Gantt Viewer
 
 ### Serve

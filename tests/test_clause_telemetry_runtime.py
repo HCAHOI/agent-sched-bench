@@ -160,13 +160,20 @@ def test_argv_capture_flags_cover_truncation_cap_and_short_argv() -> None:
     assert short.argv_capture_flags == 0
 
 
-def test_successful_exec_captures_cold_original_argv_before_script_rewrite() -> None:
+def test_successful_exec_recovers_cold_filename_and_original_argv() -> None:
     payload = """import ctypes,mmap,tempfile
 script=tempfile.NamedTemporaryFile(delete=False)
 script.write(b'#!/bin/sh\\nrm -- "$0"\\nexit 0\\n')
 script.flush()
 script.close()
 __import__("os").chmod(script.name,0o755)
+path_file=tempfile.TemporaryFile()
+path_file.write(script.name.encode()+b"\\0")
+path_file.truncate(mmap.PAGESIZE)
+path_file.flush()
+path_map=mmap.mmap(path_file.fileno(),mmap.PAGESIZE,access=mmap.ACCESS_COPY)
+path_address=ctypes.addressof(ctypes.c_char.from_buffer(path_map))
+path_map.madvise(mmap.MADV_DONTNEED)
 f=tempfile.TemporaryFile()
 f.write(b"cold-page-argument\\0")
 f.truncate(mmap.PAGESIZE)
@@ -179,7 +186,7 @@ argv[0]=b"original-argv0"
 argv[1]=ctypes.c_char_p(address)
 envp=(ctypes.c_char_p*1)()
 libc=ctypes.CDLL(None,use_errno=True)
-libc.execve(script.name.encode(),argv,envp)
+libc.execve(ctypes.c_char_p(path_address),argv,envp)
 raise OSError(ctypes.get_errno())"""
     run = collect_case(
         f"{shlex.quote(sys.executable)} -c {shlex.quote(payload)}",
@@ -199,6 +206,25 @@ raise OSError(ctypes.get_errno())"""
     assert script_metric.exact_argc == 2
     assert script_metric.bprm_filename == script_metric.requested_executable_path
     assert script_metric.bprm_interp == "/bin/sh"
+
+
+def test_unrecoverable_exec_filename_still_counts_loss() -> None:
+    payload = """import ctypes
+argv=(ctypes.c_char_p*2)()
+argv[0]=b"invalid-filename"
+envp=(ctypes.c_char_p*1)()
+libc=ctypes.CDLL(None,use_errno=True)
+result=libc.execve(ctypes.c_void_p(1),argv,envp)
+raise SystemExit(0 if result == -1 and ctypes.get_errno() == 14 else 1)"""
+    run = collect_case(
+        f"{shlex.quote(sys.executable)} -c {shlex.quote(payload)}",
+        "invalid_exec_filename",
+    )
+
+    assert run.status == 0
+    assert run.argv_read_failures == 1
+    assert run.argv_boundary_read_failures == 0
+    assert run.ringbuf_reserve_failures == 0
 
 
 def test_normal_exec_exit_status_is_decoded_from_kernel_wait_status() -> None:

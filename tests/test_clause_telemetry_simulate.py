@@ -1047,6 +1047,126 @@ def test_short_circuit_source_replay_disagreement_invalidates_only_telemetry(
     assert call["mapping"]["gaps"][0]["kind"] == "unmatched_static_clause"
 
 
+def _mapped_control_events(exit_status: int) -> list[dict[str, Any]]:
+    # Same shape as _control_events, but argv[0] matches the static head so the
+    # controller clause actually maps and can supply a normal exit status.
+    return [
+        _event("fork", 110, 50, child=100),
+        _event("exec_arg", 120, 100, seq=0, arg="left"),
+        _event(
+            "exec_boundary",
+            130,
+            100,
+            seq=0,
+            parent=50,
+            cpu_ns=1,
+            rss_pages=1,
+            mm_ptr=10,
+        ),
+        _event(
+            "exit_boundary",
+            220,
+            100,
+            seq=0,
+            parent=50,
+            cpu_ns=2,
+            rss_pages=1,
+            mm_ptr=10,
+            exit_code=exit_status << 8,
+        ),
+    ]
+
+
+def _finish_control_call(
+    monkeypatch: pytest.MonkeyPatch, exit_status: int
+) -> dict[str, Any]:
+    collector = _collector_without_bpf()
+    token = ToolCallToken(
+        "call-control",
+        "left && right",
+        100,
+        0,
+        0,
+        source_tool_call_id="source-control",
+        source_command="left && right",
+        source_tool_result="source success\n\nExit code: 0",
+    )
+    collector._active = token
+    collector._bpf = object()
+    collector._events_lock = Lock()
+    collector._events = _mapped_control_events(exit_status)
+    collector.calls = []
+    collector._integrity_errors = []
+    monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
+    monkeypatch.setattr("tool_resource.telemetry.time.sleep", lambda *_: None)
+    collector.finish_tool_call(
+        token,
+        # Replay output deliberately differs from the source, so
+        # tool_result_exact and short_circuit_eligible are both False.
+        replay_response={"ok": True, "result": "replay failure", "returncode": 1},
+    )
+    return collector.calls[0]
+
+
+def test_short_circuit_resolves_without_byte_exact_replay_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Whether a clause executed in THIS replay is decided by replay-side kernel
+    # evidence, not by the replay reproducing the source trace byte-for-byte.
+    # Stateful workloads (Terminal-Bench) rarely reproduce output exactly.
+    call = _finish_control_call(monkeypatch, exit_status=1)
+    fidelity = call["provenance"]["source_replay_control_flow_fidelity"]
+    assert fidelity["tool_result_exact"] is False
+    assert fidelity["short_circuit_eligible"] is False
+    assert [
+        (item["bin"], item["provenance"]["evidence_kind"])
+        for item in call["no_runtime_exec"]
+    ] == [("right", "shell_control_short_circuit")]
+    assert call["mapping"]["gaps"] == []
+    assert call["eligible_for_kb"] is True
+
+
+def test_consumed_events_are_pruned_after_each_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The ring-buffer callback appends every event and nothing used to remove
+    # them, so the buffer grew for the collector's whole lifetime and each
+    # finish rescanned all of it. Long runs degraded until late calls failed.
+    collector = _collector_without_bpf()
+    token = ToolCallToken("call-prune", "left && right", 100, 0, 0)
+    collector._active = token
+    collector._bpf = object()
+    collector._events_lock = Lock()
+    # One event from a previous call (ts below this call's start) plus this
+    # call's own events. Only the stale one is unreachable by any later window.
+    stale = dict(_mapped_control_events(1)[0], ts_ns=10)
+    collector._events = [stale, *_mapped_control_events(1)]
+    collector.calls = []
+    collector._integrity_errors = []
+    monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
+    monkeypatch.setattr("tool_resource.telemetry.time.sleep", lambda *_: None)
+
+    collector.finish_tool_call(
+        token, replay_response={"ok": True, "result": "ok", "returncode": 0}
+    )
+
+    assert stale not in collector._events
+    assert all(event["ts_ns"] >= token.started_ns for event in collector._events)
+
+
+def test_short_circuit_fails_closed_when_controller_succeeded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Controller exited 0, so the `&&` right operand SHOULD have run. Its
+    # absence is unexplained and must still withhold the call.
+    call = _finish_control_call(monkeypatch, exit_status=0)
+    assert call["no_runtime_exec"] == []
+    assert [gap["kind"] for gap in call["mapping"]["gaps"]] == [
+        "unmatched_static_clause"
+    ]
+    assert call["eligible_for_kb"] is False
+
+
 def test_relevant_gap_fails_integrity() -> None:
     collector = _collector_without_bpf()
     events = _clean_events()

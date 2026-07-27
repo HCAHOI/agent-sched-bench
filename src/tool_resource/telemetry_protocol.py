@@ -8,7 +8,7 @@ from typing import Any, Protocol
 
 from tool_resource._uds import DEFAULT_TIMEOUT_S, UnixTransport
 
-TELEMETRY_PROTOCOL_VERSION = 1
+TELEMETRY_PROTOCOL_VERSION = 2
 
 
 class TelemetryError(RuntimeError):
@@ -33,6 +33,16 @@ class TelemetryTransport(Protocol):
     ) -> dict[str, Any]: ...
 
 
+#: AttachTarget loads and verifies the eBPF program for a new target;
+#: FinalizeSession tears it down and serializes the whole trace artifact. Both
+#: routinely outlast a timeout sized for cheap RPCs, and timing them out
+#: discards evidence the collector gathered correctly.
+TELEMETRY_OPERATION_TIMEOUTS_S = {
+    "AttachTarget": 120.0,
+    "FinalizeSession": 120.0,
+}
+
+
 class TelemetryUnixTransport(UnixTransport):
     def __init__(
         self,
@@ -47,6 +57,7 @@ class TelemetryUnixTransport(UnixTransport):
             error_type=TelemetryProtocolError,
             unavailable_type=TelemetryUnavailableError,
             timeout_s=timeout_s,
+            operation_timeouts_s=TELEMETRY_OPERATION_TIMEOUTS_S,
             expected_peer_uids={expected_peer_uid},
         )
 
