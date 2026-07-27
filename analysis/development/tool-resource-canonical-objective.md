@@ -133,6 +133,31 @@ development-exposed baseline. The exact-cohort direct comparison for the
 call-scoped promotion correction is
 `traces/terminal-bench/tb-dev20-c1-ladder-20260727-r4`.
 
+### 2026-07-27 — command-scoped best-effort attribution
+
+The dev-20 r9 replay and targeted kernel, make-mips, Lean, and FMRI diagnostics
+were visible before this amendment. They showed complete failed `execve`
+attempts, uniquely identifying capped argv prefixes, and ambiguous runtime
+occurrences whose downstream clause observations were identical.
+
+Within one tool call's command only, attribution now admits three additional
+evidence forms:
+
+- complete failed attempts whose errno values are all `ENOENT`, or exact
+  source/replay shell lookup failures with direct status 127 or a zero status
+  proven to come from an in-command `|| true`, produce explicit zero
+  target-program latency, CPU, memory, and disk observations;
+- a collector-capped argv with no truncated captured word may match through its
+  complete captured prefix; and
+- equal-cardinality ambiguous candidates may be paired deterministically when
+  their downstream observation identity is identical, including the fields
+  that control KB eligibility.
+
+No evidence is matched across commands or tool calls. No tolerance for
+different downstream identities is defined by this amendment; adding one
+requires an explicit result-affecting threshold. These rules can raise yield,
+so pre/post attribution results are not directly comparable.
+
 ## Runtime architecture lock
 
 The canonical runtime architecture is specified in

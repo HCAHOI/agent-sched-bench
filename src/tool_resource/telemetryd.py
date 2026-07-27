@@ -793,6 +793,7 @@ def _normalized_clauses(summary: Mapping[str, Any]) -> list[dict[str, Any]]:
         "pipeline_position",
         "disk_io",
         "availability",
+        "mapping_evidence",
         "telemetry_quality",
         "eligible_for_kb",
     }

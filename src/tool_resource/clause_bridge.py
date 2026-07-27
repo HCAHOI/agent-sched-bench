@@ -31,16 +31,18 @@ If a profile is missing/incompatible for an owned image, the target is returned
 ``unavailable`` — never a scalar-max fallback. Per-image scalar peaks are kept
 only as diagnostics.
 
-**Full-proof, ambiguity-preserving mapping.** Only a runtime chain's initial
-invocation may match a static clause. Its executable and complete argv must
-align uniquely with the static word intents; later same-PID execs and forked
-descendants are ownership transitions. Runtime order, argv prefixes, wrapper
-subsequences, and bin-only identity never break ties. Any incomplete or
-ambiguous proof withholds every observation from that tool call.
+**Command-scoped, evidence-preserving mapping.** Only a runtime chain's initial
+invocation may match a static clause; later same-PID execs and forked
+descendants are ownership transitions. A fully captured argv aligns against
+static word intents. A complete collector-capped prefix may also align when the
+candidate graph resolves it within this command. Ambiguous occurrences are
+exchangeable only when every static candidate has the same downstream
+observation identity. Other incomplete or ambiguous evidence stays withheld.
 """
 
 from __future__ import annotations
 
+import errno
 import math
 import re
 from dataclasses import dataclass, field, replace
@@ -54,8 +56,6 @@ from tool_resource.runtime_kb import ClauseObservation
 _WINDOW_NS = 500_000_000
 _MIN_ELIGIBLE_SPAN_NS = 1_000_000_000  # resource_timeline: clause >= 1 s
 _MIN_WINDOW_SPAN_NS = 100_000_000
-_MAX_CAPTURED_ARGS = 16
-
 _SHELL_BINS = frozenset({"sh", "dash", "bash", "ash", "zsh"})
 _SHELL_LOOKUP_DIAGNOSTIC = re.compile(
     r"^(?:/[^:\n]+|(?:ba|da|a|z)?sh): "
@@ -389,6 +389,7 @@ def parse_shell_lookup_diagnostic(line: str) -> str | None:
 
 def _lookup_exit_semantics(
     static: Sequence[Mapping[str, Any]],
+    control_edges: Sequence[Mapping[str, Any]],
     executable_head: str,
     exit_code: int,
 ) -> str | None:
@@ -405,16 +406,23 @@ def _lookup_exit_semantics(
         return None
     index = candidates[0]
     clause = static[index]
-    if index + 1 >= len(static) or not clause.get("in_pipe"):
-        return None
-    next_clause = static[index + 1]
-    if (
-        not next_clause.get("in_pipe")
-        or int(next_clause.get("pipeline_position", -1))
-        != int(clause.get("pipeline_position", -1)) + 1
+    if clause.get("in_pipe") and index + 1 < len(static):
+        next_clause = static[index + 1]
+        if (
+            next_clause.get("in_pipe")
+            and int(next_clause.get("pipeline_position", -1))
+            == int(clause.get("pipeline_position", -1)) + 1
+        ):
+            return "nonfinal_pipeline_masked_0"
+    if any(
+        edge.get("operator") == "||"
+        and edge.get("lhs", {}).get("clause_indices") == [index]
+        and len(edge.get("rhs", {}).get("clause_indices", [])) == 1
+        and static[edge["rhs"]["clause_indices"][0]].get("argv") == ["true"]
+        for edge in control_edges
     ):
-        return None
-    return "nonfinal_pipeline_masked_0"
+        return "or_true_masked_0"
+    return None
 
 
 def shell_lookup_exit_semantics(
@@ -427,18 +435,25 @@ def shell_lookup_exit_semantics(
     parsed = parse_command_clauses(command)
     if parsed["parse_failed"]:
         return None
-    return _lookup_exit_semantics(parsed["clauses"], executable_head, exit_code)
+    return _lookup_exit_semantics(
+        parsed["clauses"],
+        parsed["control_edges"],
+        executable_head,
+        exit_code,
+    )
 
 
 def _valid_lookup_failure(
     evidence: ShellCommandLookupFailure,
     command: str,
     static: Sequence[Mapping[str, Any]],
+    control_edges: Sequence[Mapping[str, Any]],
 ) -> bool:
     source_head = parse_shell_lookup_diagnostic(evidence.source_diagnostic)
     replay_head = parse_shell_lookup_diagnostic(evidence.replay_diagnostic)
     expected_semantics = _lookup_exit_semantics(
         static,
+        control_edges,
         evidence.executable_head,
         evidence.source_exit_code,
     )
@@ -482,7 +497,7 @@ def _resolve_control_short_circuits(
         chain = chains[pid]
         terminal = chain[-1]
         if (
-            evidence.get(clause_index) != "interchangeable_identical"
+            evidence.get(clause_index) != "interchangeable_consumer_identity"
             and terminal.terminal
             and terminal.has_causal_end
             and terminal.exit_signal is None
@@ -656,9 +671,10 @@ def _alignment_evidence(
     clause: Mapping[str, Any],
     initial: ExecImageRecord,
 ) -> tuple[str | None, str]:
-    """Prove one full static-word to initial-runtime-argv alignment."""
+    """Prove a static-word to initial-runtime-argv alignment."""
 
-    if _incomplete_capture(initial):
+    capped_prefix = _complete_capped_prefix(initial)
+    if _incomplete_capture(initial) and not capped_prefix:
         return None, "runtime_argv_incomplete"
     runtime = tuple(initial.argv)
     static = tuple(str(word) for word in clause["argv"])
@@ -672,8 +688,16 @@ def _alignment_evidence(
     intents = clause.get("word_intents")
     if not isinstance(intents, list) or len(intents) != len(static):
         return (
-            ("initial_invocation_exact", "ok")
-            if runtime == static
+            (
+                (
+                    "initial_invocation_capped_prefix"
+                    if capped_prefix
+                    else "initial_invocation_exact"
+                ),
+                "ok",
+            )
+            if runtime == static[: len(runtime)]
+            and (capped_prefix or len(runtime) == len(static))
             else (None, "word_intent_unavailable")
         )
     in_loop = clause.get("in_loop") is True
@@ -723,6 +747,16 @@ def _alignment_evidence(
     ) -> None:
         if len(alignments) > 1:
             return
+        if capped_prefix and runtime_index == len(runtime):
+            if static_index < len(intents) or (
+                static_index
+                and any(
+                    component["kind"] == "pathname_expansion"
+                    for component in intents[static_index - 1]["components"]
+                )
+            ):
+                alignments.append(spans)
+            return
         if static_index == len(intents):
             if runtime_index == len(runtime):
                 alignments.append(spans)
@@ -768,6 +802,12 @@ def _alignment_evidence(
                 )
 
     align(0, 0, ())
+    if capped_prefix:
+        return (
+            ("initial_invocation_capped_prefix", "ok")
+            if alignments
+            else (None, "no_capped_argv_prefix_alignment")
+        )
     if len(alignments) != 1:
         return (
             None,
@@ -798,6 +838,19 @@ def _incomplete_capture(image: ExecImageRecord) -> bool:
         or image.truncated_words
         or image.requested_executable_path_truncated
         or image.bprm_evidence_truncated
+    )
+
+
+def _complete_capped_prefix(image: ExecImageRecord) -> bool:
+    """True when argv has only a complete, collector-capped tail."""
+
+    return bool(
+        image.argv_capped
+        and image.exact_argc is not None
+        and image.exact_argc > len(image.argv)
+        and not image.truncated_words
+        and not image.requested_executable_path_truncated
+        and not image.bprm_evidence_truncated
     )
 
 
@@ -838,121 +891,22 @@ def _components(
     return comps
 
 
-def _static_exchange_identity(clause: Mapping[str, Any]) -> tuple[object, ...]:
-    intents = clause.get("word_intents")
-    word_identity = (
-        tuple(
-            (
-                intent.get("cooked"),
-                intent.get("source"),
-                bool(intent.get("quoted")),
-                bool(intent.get("escaped")),
-                tuple(
-                    (
-                        component.get("kind"),
-                        component.get("source"),
-                        bool(component.get("quoted")),
-                        bool(component.get("escaped")),
-                    )
-                    for component in intent.get("components", ())
-                ),
-            )
-            for intent in intents
-        )
-        if isinstance(intents, list)
-        else ()
-    )
+def _consumer_identity(clause: Mapping[str, Any]) -> tuple[object, ...]:
+    """Fields that can change the downstream KB observation."""
+
     return (
+        str(clause["bin"]),
         tuple(clause["argv"]),
-        str(clause.get("original", "")),
         bool(clause.get("in_loop")),
         bool(clause.get("in_pipe")),
         bool(clause.get("in_subst")),
         int(clause.get("pipeline_position", -1)),
-        tuple(clause.get("structural_context", ())),
-        word_identity,
-    )
-
-
-def _exchange_context_supported(clause: Mapping[str, Any]) -> bool:
-    contexts = clause.get("structural_context")
-    if not isinstance(contexts, list):
-        return False
-    for context in contexts:
-        parts = str(context).split(":")
-        if len(parts) != 3 or parts[0] != "binary":
-            return False
-        operator, side = parts[1:]
-        if operator in {"&&", "||"}:
-            continue
-        if operator in {"|", "|&"} and side == "rhs":
-            continue
-        return False
-    return True
-
-
-def _control_consumer_identity(
-    clause_index: int,
-    statics: Mapping[int, Mapping[str, Any]],
-    edges: Sequence[Mapping[str, Any]],
-) -> tuple[object, ...]:
-    edge_by_id = {int(edge["id"]): edge for edge in edges}
-    referenced = {
-        int(operand["index"])
-        for edge in edges
-        for operand in (edge["lhs"], edge["rhs"])
-        if operand["kind"] == "edge"
-    }
-
-    def operand_identity(operand: Mapping[str, Any]) -> tuple[object, ...]:
-        if operand["kind"] == "edge":
-            value = edge_identity(edge_by_id[int(operand["index"])])
-        elif operand["kind"] == "clause":
-            index = int(operand["index"])
-            value = (
-                ("target",)
-                if index == clause_index
-                else ("clause", _static_exchange_identity(statics[index]))
-            )
-        else:
-            value = tuple(
-                ("target",)
-                if int(index) == clause_index
-                else ("clause", _static_exchange_identity(statics[int(index)]))
-                for index in operand["clause_indices"]
-            )
-        return (
-            str(operand["kind"]),
-            bool(operand["negated"]),
-            bool(operand["contains_pipeline"]),
-            bool(operand["contains_subshell"]),
-            value,
-        )
-
-    def edge_identity(edge: Mapping[str, Any]) -> tuple[object, ...]:
-        return (
-            str(edge["operator"]),
-            operand_identity(edge["lhs"]),
-            operand_identity(edge["rhs"]),
-        )
-
-    return tuple(
-        edge_identity(edge)
-        for edge in edges
-        if int(edge["id"]) not in referenced
-        and clause_index
-        in {
-            int(index)
-            for operand in (edge["lhs"], edge["rhs"])
-            for index in operand["clause_indices"]
-        }
     )
 
 
 def _assign(
     statics: Mapping[int, Mapping[str, Any]],
     chains: Mapping[int, list[ExecImageRecord]],
-    control_edges: Sequence[Mapping[str, Any]],
 ) -> tuple[
     dict[int, int],
     dict[int, str],
@@ -1041,24 +995,22 @@ def _assign(
     ]
     rem_chains = [pid for pid in chains if pid not in used]
     for cs, cp in _components(rem_statics, rem_chains, candidates):
-        identities = {
-            (
-                _static_exchange_identity(statics[si]),
-                _control_consumer_identity(si, statics, control_edges),
-            )
-            for si in cs
-        }
-        if (
-            len(identities) == 1
-            and len(cs) == len(cp)
-            and all(_exchange_context_supported(statics[si]) for si in cs)
-        ):
+        identities = {_consumer_identity(statics[si]) for si in cs}
+        if len(identities) == 1 and len(cs) == len(cp):
             # Pairing is serialization only: semantic exchangeability, not PID
             # or runtime order, is the proof that every pairing is equivalent.
-            for si, pid in zip(sorted(cs), sorted(cp), strict=False):
+            ordered_pids = sorted(
+                cp,
+                key=lambda pid: (
+                    chains[pid][0].t_exec_ns,
+                    chains[pid][0].exec_seq,
+                    pid,
+                ),
+            )
+            for si, pid in zip(sorted(cs), ordered_pids, strict=True):
                 assigned[si] = pid
                 used.add(pid)
-                evidence[si] = "interchangeable_identical"
+                evidence[si] = "interchangeable_consumer_identity"
         else:
             ambiguous.update(cs)
     return assigned, evidence, ambiguous, rejections, loop_assigned
@@ -1085,6 +1037,7 @@ def bridge_command(
     loss_count: int = 0,
     attribution_gap_count: int = 0,
     protocol_timeout: bool = False,
+    call_end_ns: int | None = None,
 ) -> BridgeResult:
     """Map exec images to static mvdan clauses and aggregate per clause.
 
@@ -1162,7 +1115,7 @@ def bridge_command(
         pid: chain for pid, chain in chains.items() if not is_shell(pid)
     }
     assigned, evidence, ambiguous, candidate_rejections, loop_assigned = _assign(
-        statics, candidate_chains, parsed["control_edges"]
+        statics, candidate_chains
     )
     loop_pids = {pid for pids in loop_assigned.values() for pid in pids}
     mapped_roots = set(assigned.values()) | loop_pids
@@ -1182,16 +1135,22 @@ def bridge_command(
             and identity[0] not in _NOEXEC_BUILTINS
         ):
             failed_static_candidates.setdefault(identity, []).append(si)
-    failed_assigned = {
-        indices[0]: tuple(failed_by_identity[identity])
-        for identity, indices in failed_static_candidates.items()
-        if len(indices) == 1 and identity in failed_by_identity
-    }
+    failed_zero: dict[int, tuple[FailedExecAttempt, ...]] = {}
+    failed_assigned: dict[int, tuple[FailedExecAttempt, ...]] = {}
+    for identity, indices in failed_static_candidates.items():
+        attempts = tuple(failed_by_identity.get(identity, ()))
+        if not attempts:
+            continue
+        if all(attempt.errno == errno.ENOENT for attempt in attempts):
+            failed_zero.update(dict.fromkeys(indices, attempts))
+        elif len(indices) == 1:
+            failed_assigned[indices[0]] = attempts
     lookup_assigned: dict[int, ShellCommandLookupFailure] = {}
     if command_lookup_failure is not None and _valid_lookup_failure(
         command_lookup_failure,
         command,
         static,
+        parsed["control_edges"],
     ):
         lookup_candidates = [
             si
@@ -1201,6 +1160,7 @@ def bridge_command(
             and si not in loop_assigned
             and si not in ambiguous
             and si not in failed_assigned
+            and si not in failed_zero
             and clause["argv"][0] == command_lookup_failure.executable_head
             and str(clause["bin"])
             not in (_NOEXEC_BUILTINS - _DIALECT_DEPENDENT_BUILTINS)
@@ -1236,6 +1196,7 @@ def bridge_command(
             {
                 *ambiguous,
                 *failed_assigned,
+                *failed_zero,
                 *lookup_assigned,
                 *guard_assigned,
                 # A loop clause did run; it must never be resolved as
@@ -1343,6 +1304,16 @@ def bridge_command(
                     "has multiple equally-valid runtime chains",
                 )
             )
+        elif si in failed_zero:
+            bridged_indices.add(si)
+            bridged.append(
+                _missing_exec_zero(
+                    repo,
+                    clause,
+                    failed_zero[si],
+                    epoch_offset,
+                )
+            )
         elif si in failed_assigned:
             no_runtime_exec.append(
                 NoRuntimeExec(
@@ -1353,14 +1324,31 @@ def bridge_command(
                 )
             )
         elif si in lookup_assigned:
-            no_runtime_exec.append(
-                NoRuntimeExec(
-                    bin=cbin,
-                    argv=tuple(clause["argv"]),
-                    mapping_evidence="shell_command_lookup_failure_exact_head",
-                    command_lookup_failure=lookup_assigned[si],
+            lookup_evidence = lookup_assigned[si]
+            if call_end_ns is not None:
+                bridged_indices.add(si)
+                bridged.append(
+                    _zero_observation(
+                        repo,
+                        clause,
+                        timestamp_ns=call_end_ns,
+                        epoch_offset=epoch_offset,
+                        mapping_evidence="shell_command_lookup_failure_zero",
+                        execution_outcome="command_not_found",
+                        evidence={
+                            "command_lookup_failure": lookup_evidence.__dict__
+                        },
+                    )
                 )
-            )
+            else:
+                no_runtime_exec.append(
+                    NoRuntimeExec(
+                        bin=cbin,
+                        argv=tuple(clause["argv"]),
+                        mapping_evidence="shell_command_lookup_failure_exact_head",
+                        command_lookup_failure=lookup_evidence,
+                    )
+                )
         elif si in guard_assigned:
             no_runtime_exec.append(
                 NoRuntimeExec(
@@ -1419,6 +1407,16 @@ def bridge_command(
         (pid, chains[pid][0].exec_seq)
         for pid in (*assigned.values(), *loop_pids)
     }
+    accepted_capped_prefixes = {
+        (pid, chains[pid][0].exec_seq)
+        for si, pid in assigned.items()
+        if evidence[si] == "initial_invocation_capped_prefix"
+    } | {
+        (pid, chains[pid][0].exec_seq)
+        for si, pids in loop_assigned.items()
+        if evidence[si] == "initial_invocation_capped_prefix"
+        for pid in pids
+    }
     owned_exec_images = {
         image
         for clause in bridged
@@ -1434,6 +1432,7 @@ def bridge_command(
         for image in exec_images
         if _incomplete_capture(image)
         and (image.host_pid, image.exec_seq) not in ownership_only_images
+        and (image.host_pid, image.exec_seq) not in accepted_capped_prefixes
     ]
     gaps.extend(incomplete_capture_gaps)
     transition_graph = [
@@ -1503,6 +1502,81 @@ def _owned_pids(
                     nxt.append(child)
         frontier = nxt
     return tuple(owned)
+
+
+def _missing_exec_zero(
+    repo: str,
+    clause: Mapping[str, Any],
+    attempts: Sequence[FailedExecAttempt],
+    epoch_offset: float,
+) -> BridgedClause:
+    """Represent an observed ENOENT attempt as zero target-program demand."""
+
+    return _zero_observation(
+        repo,
+        clause,
+        timestamp_ns=min(attempt.ts_ns for attempt in attempts),
+        epoch_offset=epoch_offset,
+        mapping_evidence="failed_exec_enoent_zero",
+        execution_outcome="enoent",
+        evidence={
+            "failed_exec_attempts": [
+                {
+                    "host_pid": attempt.host_pid,
+                    "exec_seq": attempt.exec_seq,
+                    "ts_ns": attempt.ts_ns,
+                    "errno": attempt.errno,
+                }
+                for attempt in attempts
+            ]
+        },
+    )
+
+
+def _zero_observation(
+    repo: str,
+    clause: Mapping[str, Any],
+    *,
+    timestamp_ns: int,
+    epoch_offset: float,
+    mapping_evidence: str,
+    execution_outcome: str,
+    evidence: Mapping[str, Any],
+) -> BridgedClause:
+    """Represent a proven non-execution as zero target-program demand."""
+
+    timestamp = epoch_offset + timestamp_ns / 1e9
+    observation = ClauseObservation(
+        repo=repo,
+        bin=str(clause["bin"]),
+        argv=tuple(clause["argv"]),
+        ts_start=timestamp,
+        ts_end=timestamp,
+        latency_ms=0.0,
+        peak_cpu_cores=0.0,
+        sampled_peak_rss_mb=0.0,
+        cpu_ns_cumulative=0,
+        in_loop=bool(clause.get("in_loop", False)),
+        in_pipe=bool(clause.get("in_pipe", False)),
+        in_subst=bool(clause.get("in_subst", False)),
+        pipeline_position=int(clause.get("pipeline_position", -1)),
+    )
+    return BridgedClause(
+        observation=observation,
+        owned_pids=(),
+        owned_exec_images=(),
+        mapping_evidence=mapping_evidence,
+        disk_read_bytes_total=0,
+        disk_write_bytes_total=0,
+        disk_cancelled_write_bytes_total=0,
+        availability=dict.fromkeys(("latency", "cpu", "memory", "disk_io"), "ok"),
+        provenance={
+            "mapping_evidence": mapping_evidence,
+            "execution_outcome": execution_outcome,
+            "boundary_coverage": {"has_exec": False, "has_exit": False},
+            **evidence,
+        },
+    )
 
 
 def _aggregate(

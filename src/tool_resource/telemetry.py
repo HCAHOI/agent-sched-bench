@@ -3052,6 +3052,7 @@ class ClauseTelemetryCollector:
             loss_count=loss,
             attribution_gap_count=len(relevant_gaps),
             protocol_timeout=protocol_timeout,
+            call_end_ns=ended_ns,
         )
         mapping_gaps = [
             {"kind": gap.kind, "detail": gap.detail} for gap in bridge.coverage_gaps

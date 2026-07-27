@@ -189,6 +189,7 @@ class _FakeCollector:
                     "in_pipe": False,
                     "in_subst": False,
                     "pipeline_position": -1,
+                    "mapping_evidence": "fixture_exact",
                     "availability": {
                         "latency": "ok",
                         "cpu": "ok",
@@ -2286,6 +2287,7 @@ def test_thin_client_recovers_post_commit_close_trace_response_loss(
     assert trace.finalize(replay_execution="completed") is None
     artifact = json.loads((tmp_path / "trace.json").read_text(encoding="utf-8"))
     assert artifact["calls"][0]["eligible_for_kb"] is True
+    assert artifact["calls"][0]["clauses"][0]["mapping_evidence"] == "fixture_exact"
     assert resource_run.finalize(workload_status="completed") is None
     assert resource_run.result is not None
     assert resource_run.result["promoted_observation_count"] == 1

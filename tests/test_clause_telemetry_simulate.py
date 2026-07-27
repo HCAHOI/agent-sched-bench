@@ -1318,7 +1318,7 @@ def test_repeated_fork_generation_gap_keeps_command_relation_evidence() -> None:
     ]
 
 
-def test_failed_exec_is_target_unavailable_without_mapping_gap() -> None:
+def test_failed_exec_enoent_is_zero_without_mapping_gap() -> None:
     collector = _collector_without_bpf()
     summary, violations = collector._summarize_call(
         token=ToolCallToken(
@@ -1338,17 +1338,16 @@ def test_failed_exec_is_target_unavailable_without_mapping_gap() -> None:
         "static_clause_count": 2,
         "mappable_clause_count": 1,
         "mapped_clause_count": 1,
-        "observation_clause_count": 0,
-        "no_runtime_exec_count": 1,
+        "observation_clause_count": 1,
+        "no_runtime_exec_count": 0,
         "coverage": 1.0,
         "gaps": [],
         "unobserved_builtins": ["cd"],
     }
-    assert summary["clauses"] == []
-    assert summary["no_runtime_exec"][0]["errno"] == [2]
-    assert summary["target_availability"]["latency"]["reasons"] == {
-        "unknown:no_runtime_exec": 1
-    }
+    assert summary["no_runtime_exec"] == []
+    assert summary["clauses"][0]["latency_ms"] == 0.0
+    assert summary["clauses"][0]["mapping_evidence"] == "failed_exec_enoent_zero"
+    assert summary["target_availability"]["latency"]["reasons"] == {"ok": 1}
 
 
 def test_unmatched_static_without_failed_exec_evidence_remains_fatal() -> None:
@@ -1376,7 +1375,7 @@ def test_unmatched_static_without_failed_exec_evidence_remains_fatal() -> None:
     assert violations == ["call-unmatched: mapping gaps=unmatched_static_clause"]
 
 
-def test_direct_command_not_found_is_separate_target_unavailable_evidence() -> None:
+def test_direct_command_not_found_is_zero_target_evidence() -> None:
     command = "cd /testbed && python -m pytest"
     diagnostic = "/bin/sh: 1: python: not found"
     evidence = shell_command_lookup_failure_evidence(
@@ -1407,29 +1406,15 @@ def test_direct_command_not_found_is_separate_target_unavailable_evidence() -> N
         command_lookup_failure=evidence,
     )
     assert violations == []
-    assert summary["clauses"] == []
-    row = summary["no_runtime_exec"][0]
-    assert row["attempt_count"] == 0
-    assert "errno" not in row
-    assert row["provenance"] == {
-        "evidence_kind": "shell_command_lookup_failure",
-        "parser": "anchored_shell_command_not_found_v1",
-        "command": command,
-        "executable_head": "python",
-        "exit_code_semantics": "direct_command_not_found_127",
-        "source": {
-            "tool_call_id": "source-1",
-            "exit_code": 127,
-            "channel": "source_tool_result",
-            "diagnostic": diagnostic,
-        },
-        "replay": {
-            "tool_call_id": "replay-1",
-            "exit_code": 127,
-            "channel": "raw_stderr",
-            "diagnostic": diagnostic,
-        },
-    }
+    assert summary["no_runtime_exec"] == []
+    row = summary["clauses"][0]
+    assert row["latency_ms"] == 0.0
+    assert row["mapping_evidence"] == "shell_command_lookup_failure_zero"
+    assert row["provenance"]["command_lookup_failure"]["executable_head"] == "python"
+    assert (
+        row["provenance"]["command_lookup_failure"]["exit_code_semantics"]
+        == "direct_command_not_found_127"
+    )
 
 
 def test_pipeline_masked_command_not_found_uses_anchored_tool_result() -> None:
@@ -1535,7 +1520,7 @@ def test_command_not_found_path_heads_must_agree_exactly() -> None:
 
 @pytest.mark.parametrize(
     "command",
-    ["python || true", "python; true", "python; echo ok"],
+    ["python; true", "python; echo ok"],
 )
 def test_exit_zero_command_not_found_requires_pipeline_masking(command: str) -> None:
     diagnostic = "/bin/sh: 1: python: not found"
@@ -1552,6 +1537,23 @@ def test_exit_zero_command_not_found_requires_pipeline_masking(command: str) -> 
         )
         is None
     )
+
+
+def test_exit_zero_command_not_found_accepts_explicit_or_true() -> None:
+    command = "python || true"
+    diagnostic = "/bin/sh: 1: python: not found"
+    evidence = shell_command_lookup_failure_evidence(
+        command=command,
+        source_tool_call_id="source-1",
+        replay_tool_call_id="replay-1",
+        source_command=command,
+        source_tool_result=f"{diagnostic}\n\nExit code: 0",
+        replay_result=diagnostic,
+        replay_stderr=diagnostic,
+        replay_exit_code=0,
+    )
+    assert evidence is not None
+    assert evidence.exit_code_semantics == "or_true_masked_0"
 
 
 def test_command_not_found_requires_both_tool_call_ids() -> None:

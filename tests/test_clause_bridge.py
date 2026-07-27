@@ -10,6 +10,7 @@ from tool_resource.clause_bridge import (
     SafetyGuardBlockEvidence,
     ShellCommandLookupFailure,
     bridge_command,
+    shell_lookup_exit_semantics,
 )
 from tool_resource.runtime_kb import ClauseObservation
 
@@ -62,6 +63,8 @@ def _img(
     disk_cancelled: int | None = 0,
     disk_io_reason: str = "ok",
     argv_capture_flags: int = 0,
+    exact_argc: int | None = None,
+    argv_capped: bool | None = None,
     requested_path_truncated: bool = False,
     bprm_filename: str | None = None,
     bprm_interp: str | None = None,
@@ -100,8 +103,16 @@ def _img(
             argv[0] if argv is not None else bin_
         ),
         requested_executable_path_truncated=requested_path_truncated,
-        exact_argc=len(argv if argv is not None else (bin_,)),
-        argv_capped=bool(argv_capture_flags & (1 << 16)),
+        exact_argc=(
+            exact_argc
+            if exact_argc is not None
+            else len(argv if argv is not None else (bin_,))
+        ),
+        argv_capped=(
+            argv_capped
+            if argv_capped is not None
+            else bool(argv_capture_flags & (1 << 16))
+        ),
         truncated_words=tuple(
             index
             for index in range(16)
@@ -151,11 +162,12 @@ def _lookup_failure(
         source_channel="source_tool_result",
         replay_channel="raw_stderr" if exit_code else "tool_result",
         parser="anchored_shell_command_not_found_v1",
-        exit_code_semantics=(
-            "direct_command_not_found_127"
-            if exit_code == 127
-            else "nonfinal_pipeline_masked_0"
-        ),
+        exit_code_semantics=shell_lookup_exit_semantics(
+            command,
+            "python",
+            exit_code,
+        )
+        or "invalid",
     )
 
 
@@ -990,6 +1002,32 @@ def test_capped_argv_cannot_disambiguate_unseen_argument() -> None:
     }
 
 
+def test_unique_complete_capped_prefix_maps_clause() -> None:
+    result = bridge_command(
+        "r1",
+        "grep needle *.c",
+        [
+            _img(
+                101,
+                0,
+                "grep",
+                0,
+                _S,
+                terminal=True,
+                argv=("grep", "needle", "a.c"),
+                exact_argc=5,
+                argv_capped=True,
+            )
+        ],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert result.data_valid
+    assert result.coverage_gaps == []
+    assert result.bridged[0].mapping_evidence == "initial_invocation_capped_prefix"
+
+
 def test_protocol_timeout_killed_owned_child_excludes_root_clause_from_kb() -> None:
     result = bridge_command(
         "r1",
@@ -1326,7 +1364,7 @@ def test_B_background_descendant_maps_without_leakage() -> None:
     )
 
 
-def test_failed_exec_exactly_resolves_one_static_clause_without_observation() -> None:
+def test_failed_exec_enoent_produces_zero_observation() -> None:
     failed = FailedExecAttempt(
         host_pid=101,
         exec_seq=1,
@@ -1342,16 +1380,14 @@ def test_failed_exec_exactly_resolves_one_static_clause_without_observation() ->
         entry_pid=100,
         fork_parent={101: 100},
     )
-    assert result.observations == []
+    assert len(result.observations) == 1
+    assert result.observations[0].latency_ms == 0.0
+    assert result.observations[0].peak_cpu_cores == 0.0
+    assert result.observations[0].sampled_peak_rss_mb == 0.0
     assert result.coverage_gaps == []
-    assert len(result.no_runtime_exec) == 1
-    assert result.no_runtime_exec[0].attempts == (failed,)
-    assert result.no_runtime_exec[0].availability == {
-        "latency": "unknown:no_runtime_exec",
-        "cpu": "unknown:no_runtime_exec",
-        "memory": "unknown:no_runtime_exec",
-        "disk_io": "unknown:no_runtime_exec",
-    }
+    assert result.no_runtime_exec == []
+    assert result.bridged[0].mapping_evidence == "failed_exec_enoent_zero"
+    assert result.bridged[0].owned_exec_images == ()
 
 
 def test_exact_safety_guard_rejection_resolves_external_clauses_without_runtime() -> (
@@ -1434,7 +1470,7 @@ def test_failed_exec_with_truncated_argv_does_not_resolve_static_clause() -> Non
     assert [gap.kind for gap in result.coverage_gaps] == ["unmatched_static_clause"]
 
 
-def test_failed_exec_does_not_resolve_ambiguous_repeated_static_clauses() -> None:
+def test_failed_exec_enoent_resolves_repeated_static_clauses() -> None:
     result = bridge_command(
         "r1",
         "missing; missing",
@@ -1444,10 +1480,24 @@ def test_failed_exec_does_not_resolve_ambiguous_repeated_static_clauses() -> Non
         fork_parent={101: 100},
     )
     assert result.no_runtime_exec == []
-    assert [gap.kind for gap in result.coverage_gaps] == [
-        "unmatched_static_clause",
-        "unmatched_static_clause",
-    ]
+    assert result.coverage_gaps == []
+    assert [observation.latency_ms for observation in result.observations] == [0.0, 0.0]
+
+
+def test_failed_exec_non_enoent_remains_unknown() -> None:
+    failed = FailedExecAttempt(101, 1, 10, ("denied",), 13)
+    result = bridge_command(
+        "r1",
+        "denied",
+        [],
+        failed_exec_attempts=[failed],
+        entry_pid=100,
+        fork_parent={101: 100},
+    )
+
+    assert result.observations == []
+    assert result.coverage_gaps == []
+    assert result.no_runtime_exec[0].attempts == (failed,)
 
 
 def test_shell_lookup_failure_resolves_one_exact_static_head_without_observation() -> (
@@ -1514,7 +1564,7 @@ def test_shell_lookup_failure_does_not_choose_between_repeated_static_heads() ->
     ]
 
 
-def test_exit_zero_lookup_failure_requires_nonfinal_pipeline_clause() -> None:
+def test_exit_zero_lookup_failure_accepts_explicit_or_true_within_command() -> None:
     command = "python || true"
     result = bridge_command(
         "r1",
@@ -1523,9 +1573,14 @@ def test_exit_zero_lookup_failure_requires_nonfinal_pipeline_clause() -> None:
         command_lookup_failure=_lookup_failure(0, command),
         entry_pid=100,
         fork_parent={},
+        call_end_ns=10,
     )
     assert result.no_runtime_exec == []
-    assert [gap.kind for gap in result.coverage_gaps] == ["unmatched_static_clause"]
+    assert result.coverage_gaps == []
+    assert result.observations[0].latency_ms == 0.0
+    assert result.bridged[0].mapping_evidence == (
+        "shell_command_lookup_failure_zero"
+    )
 
 
 def test_bridge_rejects_internally_inconsistent_lookup_evidence() -> None:
@@ -2071,7 +2126,7 @@ def test_outer_control_resolves_the_fixed_image_smoke_pipeline() -> None:
     } == {(0, 1, 2)}
 
 
-def test_shell_control_mapping_ambiguity_stays_fatal() -> None:
+def test_exchangeable_control_mapping_does_not_infer_exit_status() -> None:
     result = bridge_command(
         "r1",
         "left x && left x && right",
@@ -2103,7 +2158,9 @@ def test_shell_control_mapping_ambiguity_stays_fatal() -> None:
     )
 
     assert result.no_runtime_exec == []
-    assert any(gap.kind == "ambiguous" for gap in result.coverage_gaps)
+    assert {gap.kind for gap in result.coverage_gaps} == {
+        "unmatched_static_clause"
+    }
 
 
 @pytest.mark.parametrize(
@@ -2468,12 +2525,12 @@ def test_identical_pipeline_consumers_are_exchangeable() -> None:
     assert result.data_valid
     assert len(heads) == 3
     assert {clause.mapping_evidence for clause in heads} == {
-        "interchangeable_identical"
+        "interchangeable_consumer_identity"
     }
     assert len(result.observations) == 6
 
 
-def test_different_control_consumers_prevent_exchange() -> None:
+def test_same_kb_identity_is_exchangeable_across_control_contexts() -> None:
     images = [
         _img(201, 0, "probe", 0, 1200 * _MS, terminal=True, argv=("probe",)),
         _img(202, 0, "fallback", 0, 1200 * _MS, terminal=True, argv=("fallback",)),
@@ -2487,12 +2544,12 @@ def test_different_control_consumers_prevent_exchange() -> None:
         entry_pid=100,
         fork_parent={pid: 100 for pid in range(201, 205)},
     )
-    assert not result.data_valid
-    assert result.observations == []
-    assert {gap.kind for gap in result.coverage_gaps} == {"ambiguous"}
+    assert result.data_valid
+    assert result.coverage_gaps == []
+    assert len(result.observations) == 4
 
 
-def test_different_word_intents_prevent_exchange() -> None:
+def test_same_kb_identity_is_exchangeable_across_word_intents() -> None:
     images = [
         _img(201, 0, "probe", 0, 1200 * _MS, terminal=True, argv=("probe",)),
         _img(202, 0, "probe", 10, 1200 * _MS, terminal=True, argv=("probe",)),
@@ -2504,9 +2561,32 @@ def test_different_word_intents_prevent_exchange() -> None:
         entry_pid=100,
         fork_parent={201: 100, 202: 100},
     )
-    assert not result.data_valid
-    assert result.observations == []
-    assert {gap.kind for gap in result.coverage_gaps} == {"ambiguous"}
+    assert result.data_valid
+    assert result.coverage_gaps == []
+    assert len(result.observations) == 2
+
+
+def test_here_doc_consumers_share_one_exchangeable_kb_identity() -> None:
+    images = [
+        _img(201, 0, "cat", 0, _S, terminal=True, argv=("cat",)),
+        _img(202, 0, "cat", _S, 2 * _S, terminal=True, argv=("cat",)),
+        _img(203, 0, "cat", 2 * _S, 3 * _S, terminal=True, argv=("cat",)),
+    ]
+    result = bridge_command(
+        "r1",
+        "cat > a <<'EOF'\na\nEOF\n"
+        "cat > b <<'EOF'\nb\nEOF\n"
+        "cat > c <<'EOF'\nc\nEOF",
+        images,
+        entry_pid=100,
+        fork_parent={201: 100, 202: 100, 203: 100},
+    )
+
+    assert result.data_valid
+    assert result.coverage_gaps == []
+    assert {clause.mapping_evidence for clause in result.bridged} == {
+        "interchangeable_consumer_identity"
+    }
 
 
 @pytest.mark.parametrize(
@@ -2520,7 +2600,9 @@ def test_different_word_intents_prevent_exchange() -> None:
         "coproc probe; probe",
     ),
 )
-def test_unproven_structural_context_prevents_exchange(command: str) -> None:
+def test_structural_context_does_not_block_same_consumer_exchange(
+    command: str,
+) -> None:
     bin_ = "head" if "head" in command else "probe"
     argv = (bin_, "-10") if bin_ == "head" else (bin_,)
     images = [
@@ -2541,9 +2623,9 @@ def test_unproven_structural_context_prevents_exchange(command: str) -> None:
         entry_pid=100,
         fork_parent={image.host_pid: 100 for image in images},
     )
-    assert not result.data_valid
-    assert result.observations == []
-    assert {gap.kind for gap in result.coverage_gaps} == {"ambiguous"}
+    assert result.data_valid
+    assert result.coverage_gaps == []
+    assert len(result.observations) == len(images)
 
 
 # --------------------------------------------------------------------------
