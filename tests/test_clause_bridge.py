@@ -196,7 +196,7 @@ def test_W_exec_chain_becomes_one_clause_headed_by_env() -> None:
     images = [
         _img(
             101,
-            0,
+            3,
             "env",
             0,
             1000,
@@ -252,7 +252,8 @@ def test_W_exec_chain_becomes_one_clause_headed_by_env() -> None:
     assert obs.bin == "env"
     assert "workload" in obs.argv
     assert obs.peak_cpu_cores == pytest.approx(1.0, abs=0.05)
-    assert result.bridged[0].owned_exec_images == ((101, 0), (101, 1), (101, 2))
+    # Per-CPU sequence IDs are unique but not globally chronological.
+    assert result.bridged[0].owned_exec_images == ((101, 3), (101, 1), (101, 2))
     assert (
         result.bridged[0].disk_read_bytes_total,
         result.bridged[0].disk_write_bytes_total,
@@ -2694,8 +2695,9 @@ def test_loop_expansion_still_requires_literal_anchors_to_match() -> None:
     assert any(gap.kind == "unmatched_exec_image" for gap in result.coverage_gaps)
 
 
-def test_parameter_expansion_is_refused_outside_a_loop() -> None:
-    # Regression guard: relaxing identity must not leak to non-loop clauses.
+def test_unanchored_parameter_expansion_is_refused_outside_a_loop() -> None:
+    # A complete runtime word still cannot identify an entirely dynamic static
+    # word without any literal boundary evidence.
     images = [
         _img(100, 0, "curl", 0, 5 * _MS, terminal=True, cores=0.1,
              argv=("curl", "http://h/a")),
@@ -2708,6 +2710,84 @@ def test_parameter_expansion_is_refused_outside_a_loop() -> None:
         gap.kind == "unmatched_static_clause" for gap in result.coverage_gaps
     )
     assert not result.observations
+
+
+def test_anchored_command_substitution_maps_unique_invocation() -> None:
+    images = [
+        _img(
+            100,
+            0,
+            "nproc",
+            0,
+            2 * _MS,
+            terminal=True,
+            cores=0.1,
+            argv=("nproc",),
+        ),
+        _img(
+            101,
+            0,
+            "make",
+            3 * _MS,
+            20 * _MS,
+            terminal=True,
+            cores=0.1,
+            argv=("make", "-j168", "bzImage"),
+        ),
+    ]
+    result = bridge_command(
+        "r1",
+        "make -j$(nproc) bzImage",
+        images,
+        entry_pid=99,
+        fork_parent={100: 99, 101: 99},
+    )
+
+    assert result.data_valid
+    assert not result.coverage_gaps
+    make = next(
+        clause for clause in result.bridged if clause.observation.bin == "make"
+    )
+    assert make.mapping_evidence == "initial_invocation_unique_expansion"
+
+
+def test_anchored_arithmetic_expansion_maps_loop_iterations() -> None:
+    images = [
+        _img(
+            100 + index,
+            0,
+            "objdump",
+            index * 10 * _MS,
+            (index * 10 + 5) * _MS,
+            terminal=True,
+            cores=0.1,
+            argv=(
+                "objdump",
+                f"--start-address={address}",
+                f"--stop-address={address + 4}",
+                "image",
+            ),
+        )
+        for index, address in enumerate((4096, 8192))
+    ]
+    result = bridge_command(
+        "r1",
+        (
+            "for a in 4096 8192; do "
+            "objdump --start-address=$((a)) --stop-address=$((a+4)) image; "
+            "done"
+        ),
+        images,
+        entry_pid=99,
+        fork_parent={100: 99, 101: 99},
+    )
+
+    assert result.data_valid
+    assert not result.coverage_gaps
+    assert len(result.bridged) == 2
+    assert {
+        clause.mapping_evidence for clause in result.bridged
+    } == {"loop_iteration_expansion"}
 
 
 def test_insufficient_coverage_isolated_per_target() -> None:

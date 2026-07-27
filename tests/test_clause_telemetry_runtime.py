@@ -279,8 +279,8 @@ def test_process_free_bounds_lifecycle_maps() -> None:
     assert run.lifecycle_map_entries == {"current_seq": 0, "pending_seq": 0}
 
 
-def test_parallel_exec_burst_exceeds_ring_capacity_without_loss() -> None:
-    exec_count = 2048
+def test_parallel_exec_burst_exceeds_old_sequence_pool_without_loss() -> None:
+    exec_count = 8200
     run = collect_case(
         f"seq 1 {exec_count} | xargs -P64 -I{{}} /bin/true",
         "parallel_exec_burst",
@@ -305,9 +305,9 @@ def test_parallel_exec_burst_exceeds_ring_capacity_without_loss() -> None:
         "argv_boundary_read_failures": 0,
     }
     assert true_boundaries == exec_count
-    # A 632-byte event plus the 8-byte ring header gives the 4 MiB production
-    # ring room for 6,553 records; this run requires active draining.
-    assert len(run.events) > 8_000
+    # This exceeds both the ring's instantaneous capacity and the removed
+    # 8,192-entry one-shot sequence queue.
+    assert len(run.events) > 32_000
 
 
 def test_fork_reinitializes_child_slot_before_first_exec(

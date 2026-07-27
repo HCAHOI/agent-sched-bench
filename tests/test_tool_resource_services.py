@@ -2866,13 +2866,12 @@ def test_live_service_chain_produces_one_eligible_observation(
 
 
 def test_heavy_telemetry_operations_get_their_own_timeout() -> None:
-    # AttachTarget loads the eBPF program and FinalizeSession serializes the
-    # whole trace artifact; both outlast a timeout sized for cheap RPCs. Timing
-    # them out discarded evidence the collector had gathered correctly, so they
-    # carry their own longer timeout while every other operation keeps the
-    # default. This changes no gate and accepts no invalid evidence.
+    # AttachTarget loads eBPF, FinishCall analyzes the event slice, and
+    # FinalizeSession serializes the trace. They run behind resource-agentd's
+    # non-blocking FIFO but may outlast the cheap-RPC timeout.
     transport = TelemetryUnixTransport("/tmp/does-not-exist.sock")
     assert transport.operation_timeouts_s["AttachTarget"] > transport.timeout_s
+    assert transport.operation_timeouts_s["FinishCall"] > transport.timeout_s
     assert transport.operation_timeouts_s["FinalizeSession"] > transport.timeout_s
     assert "Ping" not in transport.operation_timeouts_s
 

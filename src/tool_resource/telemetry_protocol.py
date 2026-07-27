@@ -33,12 +33,12 @@ class TelemetryTransport(Protocol):
     ) -> dict[str, Any]: ...
 
 
-#: AttachTarget loads and verifies the eBPF program for a new target;
-#: FinalizeSession tears it down and serializes the whole trace artifact. Both
-#: routinely outlast a timeout sized for cheap RPCs, and timing them out
-#: discards evidence the collector gathered correctly.
+#: AttachTarget loads eBPF, FinishCall analyzes a bounded call event slice, and
+#: FinalizeSession tears the collector down. These background operations can
+#: outlast a timeout sized for cheap RPCs without blocking the online caller.
 TELEMETRY_OPERATION_TIMEOUTS_S = {
     "AttachTarget": 120.0,
+    "FinishCall": 120.0,
     "FinalizeSession": 120.0,
 }
 

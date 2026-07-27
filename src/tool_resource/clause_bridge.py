@@ -608,20 +608,22 @@ def _pathname_match(value: str, pattern: str) -> bool:
     )
 
 
-def _parameter_segments(intent: Mapping[str, Any]) -> tuple[str, ...] | None:
-    """Split a word's cooked text at its parameter expansions.
+def _dynamic_segments(intent: Mapping[str, Any]) -> tuple[str, ...] | None:
+    """Split a word's cooked text at supported dynamic expansions.
 
-    The cooked form carries each parameter's source text verbatim (``$d`` stays
-    ``$d``), so the text between expansions is already the literal anchor to
-    match against a runtime word. Returns ``None`` when the word cannot be
-    segmented, which fails the alignment closed.
+    The cooked form carries expansion source text verbatim, so text between
+    expansions is the literal anchor to match against one runtime word.
     """
 
     cooked = str(intent["cooked"])
     segments: list[str] = []
     position = 0
     for component in intent["components"]:
-        if component.get("kind") != "parameter":
+        if component.get("kind") not in {
+            "parameter",
+            "command_substitution",
+            "arithmetic_expansion",
+        }:
             continue
         source = str(component.get("source") or "")
         found = cooked.find(source, position) if source else -1
@@ -674,20 +676,28 @@ def _alignment_evidence(
             if runtime == static
             else (None, "word_intent_unavailable")
         )
-    # A loop body is emitted once by the parser but runs once per iteration with
-    # its parameters expanded, so its clause identity can never match runtime
-    # argv exactly. Relax only there; every other clause keeps strict matching.
-    allow_parameter = clause.get("in_loop") is True
+    in_loop = clause.get("in_loop") is True
     segments_by_word: list[tuple[str, ...] | None] = []
     for intent in intents:
         components = intent.get("components")
         if not isinstance(components, list):
             return None, "word_intent_unavailable"
         kinds = {component.get("kind") for component in components}
-        unsupported = kinds - {"literal", "pathname_expansion"}
-        if unsupported and not (allow_parameter and unsupported == {"parameter"}):
+        dynamic = kinds & {
+            "parameter",
+            "command_substitution",
+            "arithmetic_expansion",
+        }
+        unsupported = kinds - {
+            "literal",
+            "pathname_expansion",
+            "parameter",
+            "command_substitution",
+            "arithmetic_expansion",
+        }
+        if unsupported:
             return None, "unsupported_dynamic_expansion"
-        if "parameter" in kinds and "pathname_expansion" in kinds:
+        if dynamic and "pathname_expansion" in kinds:
             # One word both globbing and expanding has no unique arity; refuse.
             return None, "mixed_expansion_word"
         if any(
@@ -696,9 +706,9 @@ def _alignment_evidence(
             for component in components
         ):
             return None, "invalid_quoted_pathname_expansion"
-        if "parameter" in kinds:
-            segments = _parameter_segments(intent)
-            if segments is None:
+        if dynamic:
+            segments = _dynamic_segments(intent)
+            if segments is None or (not in_loop and not any(segments)):
                 return None, "unsupported_dynamic_expansion"
             segments_by_word.append(segments)
         else:
@@ -766,9 +776,12 @@ def _alignment_evidence(
             else "no_full_argv_alignment",
         )
     if any(segments is not None for segments in segments_by_word):
-        # Distinct label so loop-expansion mappings stay auditable and can be
-        # excluded downstream without touching exact or glob mappings.
-        return "loop_iteration_expansion", "ok"
+        return (
+            "loop_iteration_expansion"
+            if in_loop
+            else "initial_invocation_unique_expansion",
+            "ok",
+        )
     expanded = any(end - start != 1 for start, end in alignments[0])
     return (
         "initial_invocation_unique_expansion"
@@ -1108,7 +1121,7 @@ def bridge_command(
     for img in exec_images:
         chains.setdefault(img.host_pid, []).append(img)
     for chain in chains.values():
-        chain.sort(key=lambda r: r.exec_seq)
+        chain.sort(key=lambda r: (r.t_exec_ns, r.exec_seq))
 
     children: dict[int, list[int]] = {}
     for child, parent in fork_parent.items():

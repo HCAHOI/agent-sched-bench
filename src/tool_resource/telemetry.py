@@ -135,8 +135,7 @@ BPF_ARRAY(ringbuf_reserve_failures, u64, 1);
 BPF_ARRAY(argv_read_failures, u64, 1);
 BPF_ARRAY(argv_boundary_read_failures, u64, 1);
 BPF_ARRAY(perf_sample_count, u64, 1);
-BPF_QUEUE(exec_sequences, u64, 65536);
-BPF_ARRAY(sequence_ready, u32, 1);
+BPF_PERCPU_ARRAY(next_exec_sequence, u64, 1);
 struct task_key_t {
     u32 tid;
     u32 pad;
@@ -343,11 +342,14 @@ static void emit_kernel_exec_meta(
  * valid cold pages; failed exec argv remains available on return. */
 static int capture_enter(const char *filename, const char *const *argv) {
     u32 zero = 0;
-    u32 *ready = sequence_ready.lookup(&zero);
-    if (!ready || !*ready) return 0;
     if (!wanted()) return 0;
-    u64 seq = 0;
-    if (exec_sequences.pop(&seq)) return 0;
+    u64 *next_sequence = next_exec_sequence.lookup(&zero);
+    if (!next_sequence) return 0;
+    u64 local_sequence = *next_sequence;
+    *next_sequence = local_sequence + 1;
+    u64 seq =
+        ((u64)bpf_get_smp_processor_id() << 48)
+        | (local_sequence & 0x0000ffffffffffffULL);
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 tid = pid_tgid;
     struct task_key_t task_key = {
@@ -900,10 +902,6 @@ def collect_case(command: str, tag: str, *, marker: str = "") -> RawRun:
     bpf.attach_kprobe(
         event="bprm_change_interp", fn_name="capture_interp_change"
     )
-    q = bpf["exec_sequences"]
-    for seq in range(8192):
-        q.push(ctypes.c_ulonglong(seq))
-    bpf["sequence_ready"][ctypes.c_int(0)] = ctypes.c_uint(1)
     bpf["target_cgroup"][ctypes.c_int(0)] = ctypes.c_ulonglong(cgroup_id)
 
     events: list[dict[str, Any]] = []
@@ -2382,10 +2380,6 @@ class ClauseTelemetryCollector:
             self._bpf.attach_kprobe(
                 event="bprm_change_interp", fn_name="capture_interp_change"
             )
-            queue = self._bpf["exec_sequences"]
-            for sequence in range(8192):
-                queue.push(ctypes.c_ulonglong(sequence))
-            self._bpf["sequence_ready"][ctypes.c_int(0)] = ctypes.c_uint(1)
             self._bpf["target_cgroup"][ctypes.c_int(0)] = ctypes.c_ulonglong(
                 self.cgroup_id
             )
