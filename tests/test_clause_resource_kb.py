@@ -5,6 +5,7 @@ import json
 import pytest
 
 from tool_resource.runtime_kb import (
+    CANONICAL_LATENCY_BUCKET_EDGES_MS,
     ClauseObservation,
     ClauseResourceKB,
     LatencyBuckets,
@@ -42,17 +43,27 @@ def _clauses(*specs: tuple[str, list[str]]) -> list[dict]:
     return [{"bin": bin_, "argv": argv} for bin_, argv in specs]
 
 
-def test_latency_buckets_are_right_open_and_final_extends_to_infinity() -> None:
+def test_latency_buckets_match_strict_threshold_decisions() -> None:
     buckets = LatencyBuckets((100.0, 1000.0))
 
     assert [buckets.bucket_id(value) for value in (0.0, 99.999, 100.0)] == [
         0,
         0,
-        1,
+        0,
     ]
     assert buckets.bucket_id(999.999) == 1
-    assert buckets.bucket_id(1000.0) == 2
+    assert buckets.bucket_id(1000.0) == 1
     assert buckets.bucket_id(1e12) == 2
+    assert CANONICAL_LATENCY_BUCKET_EDGES_MS == (
+        500.0,
+        1000.0,
+        2000.0,
+        4000.0,
+        8000.0,
+        16000.0,
+        32000.0,
+        64000.0,
+    )
 
 
 @pytest.mark.parametrize(
@@ -90,13 +101,12 @@ def test_cold_clause_uses_public_bin_and_modal_bucket() -> None:
         "r1", "pytest", ("pytest", "tests/x.py"), LatencyBuckets((100.0,))
     )
 
-    assert prediction.bucket_id == 1
     assert prediction.probability_by_bucket == pytest.approx((1 / 3, 2 / 3))
     assert prediction.scope == "public"
     assert prediction.key_kind == "bin"
 
 
-def test_modal_bucket_tie_is_deterministically_lowest() -> None:
+def test_empirical_pmf_preserves_tied_bucket_mass() -> None:
     kb = _fit(
         _obs("pub", "pytest", ("pytest", "-q"), 0.0, 1.0, latency_ms=50.0),
         _obs("pub", "pytest", ("pytest", "-x"), 1.0, 2.0, latency_ms=150.0),
@@ -107,7 +117,6 @@ def test_modal_bucket_tie_is_deterministically_lowest() -> None:
     )
 
     assert prediction.probability_by_bucket == (0.5, 0.5)
-    assert prediction.bucket_id == 0
 
 
 def test_causal_exact_clause_becomes_available_strictly_after_end() -> None:
@@ -127,7 +136,7 @@ def test_causal_exact_clause_becomes_available_strictly_after_end() -> None:
     assert same_end is not None and same_end.scope == "public"
     assert after_end is not None and after_end.scope == "repo"
     assert after_end.key_kind == "exact_clause"
-    assert after_end.bucket_id == 2
+    assert after_end.probability_by_bucket == (0.0, 0.0, 1.0)
 
 
 def test_repo_prefix_backoff_and_isolation() -> None:
@@ -146,9 +155,9 @@ def test_repo_prefix_backoff_and_isolation() -> None:
 
     assert prefix is not None and prefix.scope == "repo"
     assert prefix.key_kind == "argv_prefix_depth_2"
-    assert prefix.bucket_id == 1
+    assert prefix.probability_by_bucket == (0.0, 1.0)
     assert other is not None and other.scope == "public"
-    assert other.bucket_id == 0
+    assert other.probability_by_bucket == (1.0, 0.0)
 
 
 def test_leading_cd_command_is_still_compound_and_not_composed() -> None:
@@ -181,7 +190,7 @@ def test_external_clauses_advance_state_and_backdated_queries_fail() -> None:
     warm = kb.predict_command_latency_bucket_from_clauses(
         "r1", _clauses(("x", ["x"])), 13.0, buckets
     ).prediction
-    assert warm is not None and warm.bucket_id == 1
+    assert warm is not None and warm.probability_by_bucket == (0.0, 1.0)
     with pytest.raises(ValueError, match="backdated query"):
         kb.predict_command_latency_bucket_from_clauses(
             "r1", _clauses(("x", ["x"])), 5.0, buckets
@@ -206,7 +215,7 @@ def test_cpu_and_rss_measurements_are_preserved_but_not_in_latency_output() -> N
         "r1", "runner", ("runner",), LatencyBuckets((1000.0,))
     )
 
-    assert prediction.bucket_id == 0
+    assert prediction.probability_by_bucket == (1.0, 0.0)
     assert kb._public["peak_cpu_cores"][("bin", "runner")] == (3.0,)
     assert kb._public["sampled_peak_rss_mb"][("bin", "runner")] == (700.0,)
 

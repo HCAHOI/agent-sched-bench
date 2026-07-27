@@ -16,8 +16,9 @@
   失败 **44.5% vs 1.4%**(heredoc 占 TB 行的 44.7%、循环 38.4%);bin 命中
   (pop≥20)**48.7% vs 98.3%**,OOV 集中在 shell 内建(printf/set/test/…)。
   结论:fresh-277 的深前缀高覆盖是 SWE agent 模板记忆,不是可迁移结构。
-- `k_arbitration_diag.py` / `k_arbitration_diag_output.txt` — k=1(现冠军
-  规则)vs k=5(拟议 R1)的 exploratory 对比,任务聚类 CI,**非确认读数**:
+- `k_arbitration_diag_output.txt` — 已删除的 legacy BackoffLattice
+  executable 所留下的冻结输出;k=1(现冠军规则)vs k=5(拟议 R1)的
+  exploratory 对比,任务聚类 CI,**非确认读数**:
   latency skill −0.013 [−0.093,+0.056],mem −0.074 [−0.275,+0.068],
   cpu-peak **−0.195 [−0.419,+0.001]**。位置分桶显示机制:TB 每任务中位仅
   10 个调用,k=5 使 pos4–5 的 repo 使用率从 ~55% 降到 0%、pos6+ 从 76% 降到

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import heapq
 import math
-from bisect import bisect_right
+from bisect import bisect_left
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -54,7 +54,7 @@ def _nodes_from_json(
 # Clause latency bucket predictor
 # ==========================================================================
 
-_CLAUSE_SCHEMA = "runtime_clause_resource_kb_v4"
+_CLAUSE_SCHEMA = "runtime_clause_resource_kb_v5"
 _CLAUSE_MAX_DEPTH = 4  # frozen ordered argv-prefix depth budget
 _DELIM = "\x00"  # argv tokens may contain spaces; NUL cannot collide
 
@@ -114,7 +114,7 @@ class ClauseObservation:
 
 @dataclass(frozen=True)
 class LatencyBuckets:
-    """Explicit positive boundaries for right-open latency buckets."""
+    """Positive boundaries for ``T > boundary`` latency decisions."""
 
     edges_ms: tuple[float, ...]
 
@@ -140,18 +140,30 @@ class LatencyBuckets:
         return len(self.edges_ms) + 1
 
     def bucket_id(self, latency_ms: float) -> int:
-        """Return i for [b_i, b_{i+1}); the final bucket extends to +inf."""
+        """Return i for [0, b_0], then (b_{i-1}, b_i], and the final tail."""
 
         if not math.isfinite(latency_ms) or latency_ms < 0.0:
             raise ValueError("latency_ms must be finite and non-negative")
-        return bisect_right(self.edges_ms, latency_ms)
+        return bisect_left(self.edges_ms, latency_ms)
+
+
+CANONICAL_LATENCY_BUCKET_EDGES_MS = (
+    500.0,
+    1000.0,
+    2000.0,
+    4000.0,
+    8000.0,
+    16000.0,
+    32000.0,
+    64000.0,
+)
+CANONICAL_LATENCY_BUCKETS = LatencyBuckets(CANONICAL_LATENCY_BUCKET_EDGES_MS)
 
 
 @dataclass(frozen=True)
 class ClauseLatencyBucketPrediction:
     """Empirical latency-bucket prediction for one clause."""
 
-    bucket_id: int
     probability_by_bucket: tuple[float, ...]
     scope: str
     key_kind: str
@@ -247,7 +259,7 @@ class ClauseResourceKB:
                 for key in keys:
                     acc[source].setdefault(key, []).append(value)
         if not acc[_LATENCY_MS].get(("global", "")):
-            raise ValueError("fit corpus has no clause latency (wall_ns) evidence")
+            raise ValueError("fit corpus has no clause latency evidence")
         kb = cls()
         kb._public = {
             source: {key: tuple(values) for key, values in nodes.items()}
@@ -300,7 +312,7 @@ class ClauseResourceKB:
         argv: Sequence[str],
         buckets: LatencyBuckets,
     ) -> ClauseLatencyBucketPrediction:
-        """Predict the modal empirical latency bucket for one clause."""
+        """Predict the empirical latency-bucket PMF for one clause."""
 
         selected = self._select(repo, _LATENCY_MS, bin_, argv)
         if selected is None:
@@ -309,9 +321,7 @@ class ClauseResourceKB:
         counts = [0] * buckets.bucket_count
         for value in values:
             counts[buckets.bucket_id(value)] += 1
-        predicted = max(range(buckets.bucket_count), key=lambda i: (counts[i], -i))
         return ClauseLatencyBucketPrediction(
-            bucket_id=predicted,
             probability_by_bucket=tuple(count / len(values) for count in counts),
             scope=scope,
             key_kind=kind,
@@ -427,8 +437,6 @@ class ClauseResourceKB:
             }
             for source in _CLAUSE_SOURCES
         }
-        if not kb._public[_LATENCY_MS].get(("global", "")):
-            raise ValueError("snapshot has no public clause latency global node")
         kb._repo = {
             repo: {
                 source: {
@@ -449,6 +457,8 @@ class ClauseResourceKB:
 
 
 __all__ = [
+    "CANONICAL_LATENCY_BUCKETS",
+    "CANONICAL_LATENCY_BUCKET_EDGES_MS",
     "ClauseLatencyBucketPrediction",
     "ClauseObservation",
     "ClauseResourceKB",

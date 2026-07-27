@@ -1,117 +1,173 @@
-# Tool-Resource Prediction — Canonical Objective Lock
+# Tool-Resource Latency Prediction — Canonical Objective and Implementation Lock
 
-**Effective 2026-07-26.** This correction is authoritative. It replaces the
-stale three-binary-label, 3500/5000 ms balanced-accuracy, and boolean clause-OR
-objective. Historical artifacts remain evidence about what was run; they are
-not instructions for current optimization.
+**Effective 2026-07-27.** This document is authoritative for current KB and
+predictor work. It replaces the earlier CPU/memory objective, the stale
+3500/5000 ms binary objective, boolean clause composition, and separate offline
+model paths. Historical artifacts remain evidence of what ran; they are not
+current implementation or evaluation contracts.
 
-## Final predictor family and current scope
+## 1. Current objective
 
-The final predictor family is **log-spaced bucket prediction** for command
-latency, peak CPU, and peak memory.
+Predict command latency as one probability mass function over fixed ordered
+buckets. Current scope is **latency only**. CPU and memory are not current
+prediction or acceptance targets.
 
-The current scope implements and evaluates **latency buckets only** while the
-new canonical resource-telemetry run finishes. CPU and memory buckets are
-intentionally deferred, not removed from the final objective. Do not derive
-current CPU or memory bucket claims from legacy `pacct`, cgroup peaks, or
-whole-container sampled memory.
-
-## Bucket contract
-
-For an ordered boundary sequence
+The fixed boundaries are, in milliseconds:
 
 ```text
-0 = b_0 < b_1 < ... < b_k
+500, 1000, 2000, 4000, 8000, 16000, 32000, 64000
 ```
 
-bucket `i < k` is the right-open interval `[b_i, b_{i+1})`, and bucket `k` is
-`[b_k, +inf)`. The intervals are mutually exclusive and exhaustive for
-non-negative latency. A value exactly equal to `b_i` belongs to bucket `i`.
-
-The positive boundaries `b_1 ... b_k` must be:
-
-- finite, strictly increasing, and expressed in milliseconds;
-- explicitly supplied to the current API/evaluator, with no implicit default;
-- frozen before any claim-bearing evaluation; and
-- log-spaced according to an advisor-approved rule recorded with the run.
-
-No authoritative numeric latency boundaries currently exist in this
-repository. The deleted historical bucket prototype derived ad hoc thresholds
-from KV profiles and used the incompatible interval convention
-`(b_i, b_{i+1}]`; it is not a boundary specification. Choosing the exact
-boundaries and log-spacing rule is therefore a required decision before
-claim-bearing evaluation.
-
-Until that decision is recorded, tests may use explicit fixture boundaries to
-validate plumbing and boundary semantics, and development-exposed traces may
-be used only for diagnostics. Do not optimize or report the old 3500/5000 ms
-balanced accuracy as a success criterion.
-
-## Current latency path
-
-The current path predicts a latency bucket ID before command execution using
-only causally available history. Bucket IDs are categorical interval labels:
-they cannot be ORed, added, maximized, or otherwise composed as if they were
-independent boolean flags.
-
-Parser, clause identity, causal KB lookup, clause bridge, mapping evidence,
-and telemetry-integrity work remain useful. Clause-level latency history may
-serve as auxiliary evidence. A compound-command bucket composer is not part of
-this scope: sequential clauses may accumulate while pipeline members overlap,
-so any future composer requires its own explicit physical contract and
-evaluation.
-
-The former per-clause three-valued boolean OR and its latency-long targets are
-historical diagnostic code only. They are not the current latency API or
-evaluation contract.
-
-## Telemetry and evidence boundary
-
-Canonical clause telemetry remains the source for the eventual latency, CPU,
-and memory bucket family. Preserve its collector, bridge, attribution,
-availability, mapping, loss, and cleanup gates. Do not interrupt or modify an
-active telemetry run or its artifacts.
-
-Telemetry validity is call-granular. Attempt artifacts report workload
-execution, collector health, and formal mapping completeness separately. A
-healthy attempt with withheld calls is `partial`: downstream consumers use
-only calls with `eligible_for_kb=true` and never discard its valid calls or
-treat withheld clauses as negative observations. Collector failure, loss, or
-cleanup failure remains `unavailable` and contributes no KB evidence.
-
-The legacy SWE `pacct` / bash-xtrace replay and fresh-277 segment timeline are
-development-exposed diagnostic proxies. They may exercise plumbing, but they
-cannot support canonical resource claims. SWE-100/fresh-277 are
-development-exposed; the untouched Terminal-Bench confirmation attempts must
-remain untouched.
-
-## Runtime architecture lock
-
-The canonical runtime architecture is specified in
-[`tool-resource-service-architecture.md`](tool-resource-service-architecture.md).
-It defines two independently deployed modules with fixed privilege boundaries:
-
-- privileged `telemetryd` owns cgroup resolution, eBPF lifecycle, attribution,
-  loss/cleanup checks, and finalized normalized observations;
-- unprivileged `resource-agentd` owns parser/canonicalization, prediction, KB
-  persistence, snapshot pinning, causal update, and telemetry orchestration.
-
-These are modules, not permission modes. Trace clients connect only to
-`resource-agentd`; raw eBPF events never leave `telemetryd`. After migration,
-per-worker privileged auto-start, in-process KB ownership, direct telemetry
-observer APIs, and compatibility aliases are deleted unless a current caller is
-proved to require them.
-
-## Task contract
-
-Every task that changes tool-resource data, prediction, evaluation, or
-scheduler integration must include this lock:
+To match the scheduler questions `T > b`, the buckets are:
 
 ```text
-Final family = log-spaced latency/CPU/memory buckets.
-Current scope = latency buckets only; CPU/memory buckets are deferred.
-Intervals = [b_i, b_{i+1}), final bucket [b_k, +inf).
-Numeric latency boundaries have no default and must be frozen before claims.
-Bucket IDs are not composed with boolean OR.
-Legacy binary and proxy results are noncanonical diagnostics.
+[0, 500]
+(500, 1000]
+(1000, 2000]
+(2000, 4000]
+(4000, 8000]
+(8000, 16000]
+(16000, 32000]
+(32000, 64000]
+(64000, +inf)
+```
+
+The predictor returns one normalized bucket PMF. For every boundary `b_i`,
+
+```text
+P(T > b_i) = sum(probability of buckets strictly above b_i)
+predicted(T > b_i) = P(T > b_i) > 0.5
+ground_truth(T > b_i) = observed_latency_ms > b_i
+```
+
+The sole prediction score is classification accuracy at each fixed boundary:
+
+```text
+accuracy_i = correct(T > b_i) / eligible_examples
+```
+
+Reports include `eligible_examples`, positive count, and positive rate so raw
+accuracy is interpretable. They are counts, not additional acceptance metrics.
+Do not add balanced accuracy, precision/recall, Brier/NLL, bucket MAE, q-error,
+or legacy 3500/5000 ms metrics unless the human explicitly changes this lock.
+There is no hidden aggregate across boundaries.
+
+## 2. One implementation for offline and online
+
+There is one predictor/KB algorithm. Offline replay and online serving differ
+only in their event source and metric sink.
+
+The canonical core exposes the equivalent of:
+
+```python
+predict(repo, clauses, ts_start, runtime_context) -> bucket PMF + provenance
+observe(completed_clause_observations) -> None
+```
+
+Offline chronological replay calls the same `predict` and `observe` methods as
+`resource-agentd`. It must not reimplement lookup, canonicalization,
+arbitration, update, or bucket semantics. An observation becomes visible only
+to a query with `observation.ts_end < query.ts_start`; overlapping calls must be
+buffered accordingly, and backdated queries must be rejected.
+Causal observations become eligible only after successful trace finalization.
+
+A fitted public state is frozen for one evaluation/deployment version. Repo or
+workspace-local state updates causally. Raw eligible observations remain in the
+existing store for provenance; the serving state may use bucket counts as its
+sufficient statistics.
+
+## 3. Canonical current architecture
+
+```text
+externally parsed clauses
+        ↓
+generic canonical clause representation
+        ↓
+one ClauseResourceKB / predictor core
+        ├── frozen cross-repo public bucket counts
+        └── causal repo-local bucket counts
+        ↓
+support-aware distribution arbitration
+        ↓
+bucket PMF + derived P(T > boundary) + provenance
+```
+
+`resource-agentd` owns parsing/canonicalization, prediction, KB persistence,
+snapshot pinning, causal update, and telemetry orchestration. `telemetryd` owns
+privileged collection and finalized normalized observations. Clients never
+implement prediction logic.
+
+Compound-command bucket composition is out of scope. Sequential clauses can
+accumulate while pipeline members overlap; until a physical composition
+contract is separately approved, compound commands return an explicit
+unavailable result rather than ORing, adding, or maximizing bucket IDs.
+
+## 4. Evidence boundary
+
+Canonical telemetry validity remains call-granular. Downstream consumers use
+only calls marked eligible for KB ingestion. Withheld or missing observations
+are never negative labels or zero-valued targets.
+
+Legacy SWE-100 and fresh-277 traces are development-exposed diagnostic proxies.
+They may be used to implement, replay, and compare this mechanism but cannot
+support a canonical resource claim. Untouched Terminal-Bench confirmation data
+must remain untouched until the implementation and criterion are frozen.
+
+## 5. Implementation sequence
+
+### P0 — one executable core
+
+1. Keep the current `ClauseResourceKB` path as the canonical algorithm; avoid a
+   rename-only refactor.
+2. Make online `resource-agentd` and the offline latency evaluator call that
+   same core and semantics.
+3. Remove executable legacy predictor/evaluator/CLI paths and their dedicated
+   tests once current callers are audited. Preserve historical result artifacts.
+4. Add one golden test that feeds an identical timestamped event stream through
+   offline and online adapters and asserts identical PMFs, provenance, causal
+   visibility, and restored state.
+5. Correct two real runtime problems: public evidence must be genuinely
+   cross-repo rather than prefiltered to the active workspace, and the KB must
+   be constructed once per run/snapshot rather than rebuilt from all visible
+   observations for every query.
+
+Stop and review after P0. Do not begin a long SWE replay in P0.
+
+### P1 — frozen development baseline
+
+Run the canonical core on the development-exposed SWE fit/replay corpora with
+these exact boundaries. Report per-boundary accuracy and the required counts.
+This is a diagnostic baseline, not confirmation.
+
+### P2 — representation and arbitration
+
+Retain the trie only as a cheap candidate/backoff index. Introduce the minimum
+generic canonical signature justified by P1 diagnostics, then replace hard
+single-node repo-first selection with support-aware public/repo distribution
+shrinkage. Do not add ANN retrieval, a second model, or target-specific
+similarity while latency is the only target.
+
+### Deferred
+
+- Bin-specific plugins are added only when frequency × residual loss × semantic
+  extractability justifies them. Plugins extract semantics; they never encode
+  resource predictions.
+- Neural/MLP predictors are not parallel production paths. If later evidence
+  justifies one, it replaces the core scoring mechanism and must still use the
+  same offline/online API and causal replay.
+- Delta compaction, decay, reindexing, and atomic snapshot swaps wait for
+  measured storage or latency pressure. Bucket counts do not require KLL or
+  t-digest sketches.
+
+## 6. Task contract
+
+Every result-affecting KB/predictor task must preserve:
+
+```text
+Target = latency bucket PMF only.
+Boundaries_ms = [500, 1000, 2000, 4000, 8000, 16000, 32000, 64000].
+Threshold truth = latency_ms > boundary; prediction = cumulative PMF > 0.5.
+Score = per-boundary classification accuracy; include n and positive count/rate.
+Offline and online use one predictor implementation and identical causal updates.
+No compound composition, legacy binary objective, CPU/memory target, or TB confirmation access.
 ```

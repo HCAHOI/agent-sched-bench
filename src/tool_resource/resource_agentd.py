@@ -30,7 +30,12 @@ from tool_resource.resource_protocol import (
     RESOURCE_PROTOCOL_VERSION,
     ResourceProtocolError,
 )
-from tool_resource.runtime_kb import ClauseObservation, ClauseResourceKB, LatencyBuckets
+from tool_resource.runtime_kb import (
+    CANONICAL_LATENCY_BUCKETS,
+    ClauseObservation,
+    ClauseResourceKB,
+    LatencyBuckets,
+)
 from tool_resource.store import STORE_SCHEMA_VERSION, ObservationStore
 from tool_resource.telemetry_protocol import (
     TelemetryTransport,
@@ -82,8 +87,7 @@ class _Run:
     update_policy: str
     telemetry_requirement: str
     behavior: str
-    base_observations: list[ClauseObservation]
-    overlay_observations: list[ClauseObservation] = field(default_factory=list)
+    kb: ClauseResourceKB
     trace_tokens: set[str] = field(default_factory=set)
     trace_ids: set[str] = field(default_factory=set)
     aborted: bool = False
@@ -221,6 +225,10 @@ class ResourceService:
             buckets = LatencyBuckets(tuple(edges))
         except (TypeError, ValueError) as exc:
             raise ResourceProtocolError(str(exc)) from exc
+        if buckets != CANONICAL_LATENCY_BUCKETS:
+            raise ResourceProtocolError(
+                "latency_bucket_edges_ms must match the canonical boundaries"
+            )
         update_policy = _choice(payload, "update_policy", {"frozen", "causal"})
         requirement = _choice(
             payload,
@@ -238,14 +246,23 @@ class ResourceService:
             else snapshot
         )
         try:
-            envelopes = self.store.observations_for_snapshot(snapshot_id, scope)
+            envelopes = self.store.observations_for_snapshot(snapshot_id)
             observations = [
                 observation
                 for envelope in envelopes
-                for observation in _clause_observations(scope, envelope)
+                for observation in _clause_observations(envelope)
             ]
         except ValueError as exc:
             raise ResourceProtocolError(str(exc)) from exc
+        public = [
+            observation
+            for observation in observations
+            if observation.repo != scope and observation.latency_ms is not None
+        ]
+        kb = ClauseResourceKB.fit_public(public) if public else ClauseResourceKB()
+        for observation in observations:
+            if observation.repo == scope:
+                kb.observe_completed_clause(observation)
         run_token = uuid.uuid4().hex
         with self._lock:
             self._runs[run_token] = _Run(
@@ -256,7 +273,7 @@ class ResourceService:
                 update_policy,
                 requirement,
                 behavior,
-                observations,
+                kb,
             )
         return {
             "run_token": run_token,
@@ -790,12 +807,8 @@ class ResourceService:
                         for envelope in ingested_envelopes:
                             if envelope["ingest_eligible"] is not True:
                                 continue
-                            run.overlay_observations.extend(
-                                _clause_observations(
-                                    run.workspace_scope,
-                                    envelope,
-                                )
-                            )
+                            for observation in _clause_observations(envelope):
+                                run.kb.observe_completed_clause(observation)
                 trace.close_result = _trace_result(
                     run,
                     trace,
@@ -943,34 +956,16 @@ class ResourceService:
         parsed: Mapping[str, Any],
         query_timestamp: float,
     ) -> tuple[Any | None, str | None]:
-        with run.lock:
-            visible = [
-                observation
-                for observation in [
-                    *run.base_observations,
-                    *(
-                        run.overlay_observations
-                        if run.update_policy == "causal"
-                        else []
-                    ),
-                ]
-                if observation.repo == run.workspace_scope
-                and observation.ts_end < query_timestamp
-            ]
         try:
-            if not visible:
-                raise ValueError("pinned snapshot has no causally visible evidence")
-            kb = ClauseResourceKB.fit_public(visible)
-            for observation in visible:
-                kb.observe_completed_clause(observation)
-            prediction = kb.predict_command_latency_bucket_from_clauses(
-                run.workspace_scope,
-                parsed["clauses"],
-                query_timestamp,
-                run.buckets,
-                command=command,
-                parse_failed=bool(parsed["parse_failed"]),
-            )
+            with run.lock:
+                prediction = run.kb.predict_command_latency_bucket_from_clauses(
+                    run.workspace_scope,
+                    parsed["clauses"],
+                    query_timestamp,
+                    run.buckets,
+                    command=command,
+                    parse_failed=bool(parsed["parse_failed"]),
+                )
             return prediction, None
         except Exception as exc:
             return None, f"{type(exc).__name__}: {exc}"
@@ -1309,12 +1304,17 @@ def _prediction_payload(prediction: Any | None) -> dict[str, Any]:
 
 
 def _clause_observations(
-    workspace_scope: str,
     envelope: Mapping[str, Any],
 ) -> list[ClauseObservation]:
+    workspace_scope = envelope.get("workspace_scope")
     interval = envelope.get("observation_interval")
     rows = envelope.get("normalized_measurements")
-    if not isinstance(interval, Mapping) or not isinstance(rows, list):
+    if (
+        not isinstance(workspace_scope, str)
+        or not workspace_scope
+        or not isinstance(interval, Mapping)
+        or not isinstance(rows, list)
+    ):
         return []
     observations: list[ClauseObservation] = []
     for row in rows:
