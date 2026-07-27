@@ -566,7 +566,7 @@ async def _run_scaffold_tasks(
             index: int,
             task: dict[str, Any],
             attempt: int,
-        ) -> tuple[int, CollectedTaskResult, str | None, str | None]:
+        ) -> tuple[int, CollectedTaskResult]:
             async with semaphore:
                 instance_id = task["instance_id"]
                 logger.info(
@@ -605,7 +605,12 @@ async def _run_scaffold_tasks(
                             run_attempt(attempt_ctx, **run_attempt_kwargs)
                         )
 
-                    result = await asyncio.to_thread(run_attempt_sync)
+                    worker = asyncio.create_task(asyncio.to_thread(run_attempt_sync))
+                    try:
+                        result = await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        await asyncio.gather(worker, return_exceptions=True)
+                        raise
                 except Exception as exc:
                     logger.exception("FAILED %s", instance_id)
                     collected = CollectedTaskResult(
@@ -636,22 +641,22 @@ async def _run_scaffold_tasks(
                         collected.success,
                         collected.elapsed_s,
                     )
-                return index, collected, source_image, attempt_ctx.fixed_image
+                finally:
+                    _cleanup_task_images(
+                        instance_id=instance_id,
+                        source_image=source_image,
+                        fixed_image=attempt_ctx.fixed_image,
+                        keep_source_image=None,
+                        container_executable=container_executable,
+                        run_dir=run_dir,
+                    )
+                return index, collected
 
         task_results = await asyncio.gather(
             *(run_scheduled(index, task, attempt) for index, task, attempt in scheduled)
         )
-        for _, collected, _, _ in sorted(task_results, key=lambda item: item[0]):
+        for _, collected in sorted(task_results, key=lambda item: item[0]):
             results.append(collected)
-        for _, collected, source_image, fixed_image in task_results:
-            _cleanup_task_images(
-                instance_id=collected.instance_id,
-                source_image=source_image,
-                fixed_image=fixed_image,
-                keep_source_image=None,
-                container_executable=container_executable,
-                run_dir=run_dir,
-            )
         write_merged_results_jsonl(
             tasks, prior_results, results, run_dir / "results.jsonl"
         )

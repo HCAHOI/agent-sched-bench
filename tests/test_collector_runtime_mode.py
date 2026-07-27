@@ -182,6 +182,153 @@ def test_run_scaffold_tasks_runs_host_controller_tasks_concurrently(
     assert '"instance_id": "task-3"' in results[2]
 
 
+def test_concurrent_tasks_clean_images_as_each_finishes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    trace_path = tmp_path / "trace-source" / "trace.jsonl"
+    _write_trace(trace_path)
+    slow_started = threading.Event()
+    fast_cleaned = threading.Event()
+    slow_finished = threading.Event()
+    slow_saw_fast_cleanup: list[bool] = []
+    cleanups: list[str] = []
+
+    benchmark = SimpleNamespace(
+        execution_environment="container",
+        config=SimpleNamespace(
+            slug="swe-rebench",
+            harness_split="filtered",
+            trace_root=tmp_path / "traces",
+            default_prompt_template="cc_aligned",
+        ),
+        runtime_mode_for=lambda scaffold: "task_container_agent",
+        image_name_for=lambda task: task["image_name"],
+    )
+
+    monkeypatch.setattr(
+        "trace_collect.collector.ensure_source_image",
+        lambda source_image, *, container_executable: None,
+    )
+
+    async def fake_run_attempt(
+        ctx,
+        *,
+        inner,
+        min_free_disk_gb,
+        container_executable,
+    ) -> AttemptResult:
+        if ctx.instance_id == "slow":
+            slow_started.set()
+            slow_saw_fast_cleanup.append(fast_cleaned.wait(timeout=1.0))
+            slow_finished.set()
+        else:
+            assert slow_started.wait(timeout=1.0)
+        ctx.fixed_image = f"fixed-{ctx.instance_id}"
+        return AttemptResult(success=True, exit_status="ok", trace_path=trace_path)
+
+    def fake_cleanup(*, instance_id: str, **kwargs) -> None:
+        cleanups.append(instance_id)
+        if instance_id == "fast":
+            assert not slow_finished.is_set()
+            fast_cleaned.set()
+
+    monkeypatch.setattr("trace_collect.collector.run_attempt", fake_run_attempt)
+    monkeypatch.setattr("trace_collect.collector._cleanup_task_images", fake_cleanup)
+
+    asyncio.run(
+        _run_scaffold_tasks(
+            benchmark=benchmark,
+            tasks=[
+                {"instance_id": "slow", "image_name": "slow-image"},
+                {"instance_id": "fast", "image_name": "fast-image"},
+            ],
+            run_dir=tmp_path / "run",
+            model="gpt-5.6-sol",
+            scaffold="openclaw",
+            container_executable="docker",
+            prompt_template=None,
+            min_free_disk_gb=0.001,
+            inner_factory=lambda task: lambda ctx: None,
+            concurrency=2,
+        )
+    )
+
+    assert slow_saw_fast_cleanup == [True]
+    assert cleanups.count("fast") == cleanups.count("slow") == 1
+
+
+def test_concurrent_cleanup_waits_for_cancelled_worker(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    worker_started = threading.Event()
+    finish_worker = threading.Event()
+    cleanups: list[str] = []
+
+    benchmark = SimpleNamespace(
+        execution_environment="container",
+        config=SimpleNamespace(
+            slug="swe-rebench",
+            harness_split="filtered",
+            trace_root=tmp_path / "traces",
+            default_prompt_template="cc_aligned",
+        ),
+        runtime_mode_for=lambda scaffold: "task_container_agent",
+        image_name_for=lambda task: task["image_name"],
+    )
+
+    monkeypatch.setattr(
+        "trace_collect.collector.ensure_source_image",
+        lambda source_image, *, container_executable: None,
+    )
+
+    async def fake_run_attempt(
+        ctx,
+        *,
+        inner,
+        min_free_disk_gb,
+        container_executable,
+    ) -> AttemptResult:
+        worker_started.set()
+        assert finish_worker.wait(timeout=1.0)
+        raise RuntimeError("worker failed")
+
+    monkeypatch.setattr("trace_collect.collector.run_attempt", fake_run_attempt)
+    monkeypatch.setattr(
+        "trace_collect.collector._cleanup_task_images",
+        lambda *, instance_id, **kwargs: cleanups.append(instance_id),
+    )
+
+    async def cancel_while_worker_runs() -> None:
+        collection = asyncio.create_task(
+            _run_scaffold_tasks(
+                benchmark=benchmark,
+                tasks=[{"instance_id": "task", "image_name": "task-image"}],
+                run_dir=tmp_path / "run",
+                model="gpt-5.6-sol",
+                scaffold="openclaw",
+                container_executable="docker",
+                prompt_template=None,
+                min_free_disk_gb=0.001,
+                inner_factory=lambda task: lambda ctx: None,
+                concurrency=2,
+            )
+        )
+        while not worker_started.is_set():
+            await asyncio.sleep(0)
+        collection.cancel()
+        await asyncio.sleep(0.05)
+        assert cleanups == []
+        finish_worker.set()
+        with pytest.raises(asyncio.CancelledError):
+            await collection
+
+    asyncio.run(cancel_while_worker_runs())
+
+    assert cleanups == ["task"]
+
+
 @pytest.mark.parametrize(
     ("existing_attempt_dirs", "expected_attempt_dir"),
     [([], "attempt_1"), (["attempt_1"], "attempt_2")],
