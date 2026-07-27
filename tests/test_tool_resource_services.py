@@ -537,13 +537,18 @@ def test_tool_resource_package_is_self_contained() -> None:
         "torch",
     )
     package_dir = Path(tool_resource.__file__).parent
+    # Recursive so a future subpackage cannot slip past this boundary check.
+    # bcc is a root-only distro package; telemetry defers that import.
     submodules = sorted(
-        path.stem
-        for path in package_dir.glob("*.py")
-        if path.stem != "__init__"
-        # bcc is a root-only distro package; telemetry defers that import.
+        ".".join(
+            path.parent.relative_to(package_dir).parts
+            + (() if path.stem == "__init__" else (path.stem,))
+        )
+        for path in package_dir.rglob("*.py")
+        if "__pycache__" not in path.parts
+        and (path.stem != "__init__" or path.parent != package_dir)
     )
-    assert "telemetry" in submodules and "resource_agentd" in submodules
+    assert {"telemetry", "resource_agentd", "_mvdan_adapter"} <= set(submodules)
     program = (
         "import sys\n"
         "import tool_resource\n"

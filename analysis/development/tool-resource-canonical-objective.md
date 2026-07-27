@@ -111,6 +111,19 @@ snapshot pinning, causal update, and telemetry orchestration. `telemetryd` owns
 privileged collection and finalized normalized observations. Clients never
 implement prediction logic.
 
+`analysis/development/tool-resource-service-architecture.md` remains in force
+for everything this section does not restate: the fixed privilege boundary
+(a runtime flag must never change which process is privileged), the one-way
+dependency that keeps the daemon import graph free of `trace_collect`, the
+bounded per-trace telemetry FIFO with `CloseTrace` as the settlement barrier,
+and fail-closed backpressure that withholds evidence without delaying or
+changing the workload. Read both documents before changing the runtime.
+
+`src/tool_resource/` is a self-contained directory that imports nothing from
+this repository, so it can be copied out and used on its own. The offline lane
+that reads this repository's trace formats lives outside it, in
+`src/tool_resource_eval/`.
+
 Compound-command bucket composition is out of scope. Sequential clauses can
 accumulate while pipeline members overlap; until a physical composition
 contract is separately approved, compound commands return an explicit
