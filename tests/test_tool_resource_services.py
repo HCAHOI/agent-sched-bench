@@ -17,7 +17,11 @@ import pytest
 from tool_resource._uds import receive_message, send_message
 from tool_resource.client import ResourceRun
 from tool_resource.profile import ResourceProfile
-from tool_resource.resource_agentd import ResourceServer, ResourceService
+from tool_resource.resource_agentd import (
+    ResourceServer,
+    ResourceService,
+    _clause_observations,
+)
 from tool_resource.resource_protocol import (
     RESOURCE_PROTOCOL_VERSION,
     ResourceProtocolError,
@@ -244,6 +248,22 @@ def _envelope(
     }
 
 
+def test_clause_observation_ingests_nested_disk_total_and_marks_null_policy() -> None:
+    envelope = _envelope("resource-fields", latency_ms=1000.0)
+    row = envelope["normalized_measurements"][0]
+    row["peak_cpu_cores"] = 3.0
+    row["sampled_peak_rss_mb"] = 700.0
+    row["disk_io"] = {"read_write_bytes_total": 200 * 1024 * 1024}
+
+    observations = _clause_observations(envelope)
+
+    assert len(observations) == 1
+    assert observations[0].peak_cpu_cores == 3.0
+    assert observations[0].sampled_peak_rss_mb == 700.0
+    assert observations[0].disk_read_write_bytes_total == 200 * 1024 * 1024
+    assert observations[0].impute_short_null_resources_as_light is True
+
+
 def _open_run(
     service: ResourceService,
     *,
@@ -380,6 +400,12 @@ def test_snapshot_strict_causal_boundary_and_cross_scope(tmp_path: Path) -> None
             )
         ),
     )
+    assert service.dispatch("Capabilities", {})["prediction_targets"] == [
+        "latency_bucket",
+        "peak_cpu_cores_heavy_light",
+        "sampled_peak_rss_mb_heavy_light",
+        "disk_read_write_bytes_total_heavy_light",
+    ]
     run = _open_run(
         service,
         behavior="predict",
@@ -398,6 +424,18 @@ def test_snapshot_strict_causal_boundary_and_cross_scope(tmp_path: Path) -> None
     )
     assert at_boundary["prediction"]["prediction"]["scope"] == "public"
     assert at_boundary["evidence_count"] == 1
+    resource_predictions = at_boundary["resource_classifications"]["classifications"]
+    assert set(resource_predictions) == {
+        "peak_cpu_cores",
+        "sampled_peak_rss_mb",
+        "disk_read_write_bytes_total",
+    }
+    assert all(
+        prediction["label"] == "light" for prediction in resource_predictions.values()
+    )
+    assert all(
+        prediction["scope"] == "public" for prediction in resource_predictions.values()
+    )
     after_boundary = service.dispatch(
         "BeginCall",
         {
@@ -410,6 +448,12 @@ def test_snapshot_strict_causal_boundary_and_cross_scope(tmp_path: Path) -> None
     assert after_boundary["prediction"]["prediction"]["scope"] == "repo"
     assert after_boundary["prediction"]["prediction"]["probability_by_bucket"][0] == 1.0
     assert after_boundary["evidence_count"] == 1
+    assert all(
+        prediction["scope"] == "repo"
+        for prediction in after_boundary["resource_classifications"][
+            "classifications"
+        ].values()
+    )
     service.close()
 
 

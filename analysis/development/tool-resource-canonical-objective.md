@@ -1,4 +1,4 @@
-# Tool-Resource Latency Prediction — Canonical Objective and Implementation Lock
+# Tool-Resource Prediction — Canonical Objective and Implementation Lock
 
 **Effective 2026-07-27.** This document is authoritative for current KB and
 predictor work. It replaces the earlier CPU/memory objective, the stale
@@ -8,9 +8,9 @@ current implementation or evaluation contracts.
 
 ## 1. Current objective
 
-Predict command latency as one probability mass function over fixed ordered
-buckets. Current scope is **latency only**. CPU and memory are not current
-prediction or acceptance targets.
+Predict clause latency as one probability mass function over fixed ordered
+buckets, plus clause CPU peak, sampled RSS, and Disk I/O as independent
+Heavy/Light classifications.
 
 The fixed boundaries are, in milliseconds:
 
@@ -53,6 +53,21 @@ Do not add balanced accuracy, precision/recall, Brier/NLL, bucket MAE, q-error,
 or legacy 3500/5000 ms metrics unless the human explicitly changes this lock.
 There is no hidden aggregate across boundaries.
 
+The Heavy thresholds are fixed and strict:
+
+```text
+peak_cpu_cores > 2.0 cores
+sampled_peak_rss_mb > 500 decimal MB
+disk_read_write_bytes_total > 104857600 bytes (100 MiB)
+```
+
+For these resource targets only, an explicitly policy-marked observation with a
+null value and `latency_ms < 500` is an imputed Light label. A null at or above
+500 ms remains unavailable. Reports must separate observed Heavy, observed
+Light, short-null-imputed Light, and null-unavailable counts. Primary resource
+diagnostics include eligible count, Heavy count/rate, TP/TN/FP/FN, accuracy,
+and the majority-Light baseline.
+
 ## 2. One implementation for offline and online
 
 There is one predictor/KB algorithm. Offline replay and online serving differ
@@ -82,15 +97,13 @@ sufficient statistics.
 ```text
 externally parsed clauses
         ↓
-generic canonical clause representation
-        ↓
 one ClauseResourceKB / predictor core
-        ├── frozen cross-repo public bucket counts
-        └── causal repo-local bucket counts
+        ├── frozen cross-repo public binary/global evidence
+        └── causal repo exact/prefix/binary evidence
         ↓
-support-aware distribution arbitration
+hard repo-first deepest-nonempty backoff
         ↓
-bucket PMF + derived P(T > boundary) + provenance
+latency bucket PMF or resource P(Heavy) + provenance
 ```
 
 `resource-agentd` owns parsing/canonicalization, prediction, KB persistence,
@@ -107,7 +120,8 @@ unavailable result rather than ORing, adding, or maximizing bucket IDs.
 
 Canonical telemetry validity remains call-granular. Downstream consumers use
 only calls marked eligible for KB ingestion. Withheld or missing observations
-are never negative labels or zero-valued targets.
+are never negative labels or zero-valued targets, except for the explicit,
+per-observation short-null resource-label policy above.
 
 Legacy SWE-100 and fresh-277 traces are development-exposed diagnostic proxies.
 They may be used to implement, replay, and compare this mechanism but cannot
@@ -124,6 +138,14 @@ The local-vs-frozen-public counterfactual gate also failed: pooled local
 support `n <= 4` lost by `1.17 pp` in one exposed orientation and tied in the
 other. Do not implement fixed support-aware shrinkage from this evidence; no
 runtime arbitration change is selected.
+
+**2026-07-28 resource-class amendment:** the human selected the three thresholds
+above and the short-null label policy. The implementation reuses the exact
+latency KB hierarchy, strict trace-close visibility, and empirical first-hit
+node; no second model was added. The first two development-exposed SWE
+orientations show no stable gain over majority-Light (Disk improves only in
+one orientation). These results validate plumbing, not predictive skill or a
+confirmation claim.
 
 ## 5. Implementation sequence
 
@@ -185,10 +207,12 @@ similarity while latency is the only target.
 Every result-affecting KB/predictor task must preserve:
 
 ```text
-Target = latency bucket PMF only.
+Targets = latency bucket PMF plus CPU peak, sampled RSS, and Disk I/O Heavy/Light.
 Boundaries_ms = [500, 1000, 2000, 4000, 8000, 16000, 32000, 64000].
 Threshold truth = latency_ms > boundary; prediction = cumulative PMF > 0.5.
-Score = per-boundary classification accuracy; include n and positive count/rate.
+Resource truth = CPU > 2 cores; RSS > 500 decimal MB; Disk read+write > 100 MiB.
+Short-null resource policy = Light only when explicitly marked and latency_ms < 500.
+Scores include n, positive rate, TP/TN/FP/FN, accuracy, and majority-Light baseline.
 Offline and online use one predictor implementation and identical causal updates.
-No compound composition, legacy binary objective, CPU/memory target, or TB confirmation access.
+No compound composition, legacy predictor path, or TB confirmation access.
 ```

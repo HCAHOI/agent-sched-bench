@@ -195,7 +195,12 @@ class ResourceService:
     def _capabilities(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         require_fields(payload, required=set(), error_type=ResourceProtocolError)
         return {
-            "prediction_targets": ["latency_bucket"],
+            "prediction_targets": [
+                "latency_bucket",
+                "peak_cpu_cores_heavy_light",
+                "sampled_peak_rss_mb_heavy_light",
+                "disk_read_write_bytes_total_heavy_light",
+            ],
             "canonicalizer_version": CANONICALIZER_VERSION,
             "store_schema_version": STORE_SCHEMA_VERSION,
             "raw_events_exposed": False,
@@ -429,6 +434,9 @@ class ResourceService:
             prediction, prediction_error = self._predict(
                 run, command, parsed, query_timestamp
             )
+            resource_predictions = self._predict_resources(
+                run, command, parsed, query_timestamp
+            )
             telemetry_call_token = None
             telemetry_status = trace.telemetry_status
             if trace.telemetry_session_token is not None:
@@ -477,6 +485,7 @@ class ResourceService:
         return {
             "call_token": call_token,
             "prediction": prediction_payload,
+            "resource_classifications": resource_predictions,
             "probability_by_bucket": selected.get("probability_by_bucket"),
             "selected_scope": selected.get("scope"),
             "fallback_path": selected.get("fallback_path"),
@@ -970,6 +979,54 @@ class ResourceService:
         except Exception as exc:
             return None, f"{type(exc).__name__}: {exc}"
 
+    def _predict_resources(
+        self,
+        run: _Run,
+        command: str,
+        parsed: Mapping[str, Any],
+        query_timestamp: float,
+    ) -> dict[str, Any]:
+        clauses = list(parsed["clauses"])
+        reason = None
+        if parsed["parse_failed"]:
+            reason = "parse_failed"
+        elif len(clauses) != 1:
+            reason = "compound_command_uncomposed"
+        if reason is not None:
+            return {
+                "command": command,
+                "clause_bins": [str(clause["bin"]) for clause in clauses],
+                "classifications": {},
+                "unavailable_reason": reason,
+            }
+        clause = clauses[0]
+        try:
+            with run.lock:
+                predictions = run.kb.predict_clause_resource_classes(
+                    run.workspace_scope,
+                    str(clause["bin"]),
+                    tuple(clause["argv"]),
+                    ts_start=query_timestamp,
+                )
+            return {
+                "command": command,
+                "clause_bins": [str(clause["bin"])],
+                "classifications": {
+                    resource: (
+                        None if prediction is None else dataclasses.asdict(prediction)
+                    )
+                    for resource, prediction in predictions.items()
+                },
+                "unavailable_reason": None,
+            }
+        except Exception as exc:  # noqa: BLE001 - latency prediction remains usable
+            return {
+                "command": command,
+                "clause_bins": [str(clause["bin"])],
+                "classifications": {},
+                "unavailable_reason": f"{type(exc).__name__}: {exc}",
+            }
+
     def _ingest_observation(
         self,
         run: _Run,
@@ -1324,6 +1381,12 @@ def _clause_observations(
         if not isinstance(availability, Mapping) or availability.get("latency") != "ok":
             continue
         try:
+            disk_io = row.get("disk_io")
+            disk_total = (
+                disk_io.get("read_write_bytes_total")
+                if isinstance(disk_io, Mapping)
+                else None
+            )
             observations.append(
                 ClauseObservation(
                     repo=workspace_scope,
@@ -1342,6 +1405,10 @@ def _clause_observations(
                         if row.get("sampled_peak_rss_mb") is None
                         else float(row["sampled_peak_rss_mb"])
                     ),
+                    disk_read_write_bytes_total=(
+                        None if disk_total is None else float(disk_total)
+                    ),
+                    impute_short_null_resources_as_light=True,
                     cpu_ns_cumulative=(
                         None
                         if row.get("cpu_ns_cumulative") is None

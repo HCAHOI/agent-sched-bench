@@ -1,0 +1,109 @@
+{
+  "artifact_type": "development_exposed_serialized_virtual_resource_classification",
+  "claim_bearing": false,
+  "eval": {
+    "path": "/tmp/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+    "repo_count": 93,
+    "row_count": 4458,
+    "task_count": 99
+  },
+  "fit": {
+    "path": "/tmp/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl",
+    "repo_count": 213,
+    "row_count": 13766,
+    "task_count": 277
+  },
+  "label_policy": {
+    "cpu_unit": "cores",
+    "disk_unit": "read_plus_write_bytes_from_linux_task_io_accounting",
+    "heavy_is_strictly_greater_than_threshold": true,
+    "long_null": "unavailable",
+    "memory_unit": "decimal_MB",
+    "short_null_light_max_latency_ms_exclusive": 500.0
+  },
+  "metrics": {
+    "disk_read_write_bytes_total": {
+      "accuracy": 0.9777478084962913,
+      "eligible_n": 4449,
+      "fn": 98,
+      "fp": 1,
+      "heavy_count": 99,
+      "heavy_rate": 0.022252191503708697,
+      "label_source_counts": {
+        "null_unavailable": 9,
+        "observed_heavy": 99,
+        "observed_light": 4350
+      },
+      "majority_light_accuracy": 0.9777478084962913,
+      "prediction_unavailable": 0,
+      "provenance_counts": {
+        "public:bin": 3957,
+        "public:global": 14,
+        "repo:argv_prefix_depth_2": 130,
+        "repo:argv_prefix_depth_3": 41,
+        "repo:argv_prefix_depth_4": 3,
+        "repo:bin": 166,
+        "repo:exact_clause": 138
+      },
+      "threshold": 104857600.0,
+      "tn": 4349,
+      "tp": 1
+    },
+    "peak_cpu_cores": {
+      "accuracy": 0.9529229177444387,
+      "eligible_n": 3866,
+      "fn": 153,
+      "fp": 29,
+      "heavy_count": 167,
+      "heavy_rate": 0.043197102948784274,
+      "label_source_counts": {
+        "null_unavailable": 592,
+        "observed_heavy": 167,
+        "observed_light": 460,
+        "short_null_imputed_light": 3239
+      },
+      "majority_light_accuracy": 0.9568028970512157,
+      "prediction_unavailable": 0,
+      "provenance_counts": {
+        "public:bin": 3438,
+        "public:global": 15,
+        "repo:argv_prefix_depth_2": 128,
+        "repo:argv_prefix_depth_3": 32,
+        "repo:argv_prefix_depth_4": 2,
+        "repo:bin": 147,
+        "repo:exact_clause": 104
+      },
+      "threshold": 2.0,
+      "tn": 3670,
+      "tp": 14
+    },
+    "sampled_peak_rss_mb": {
+      "accuracy": 0.9897310513447433,
+      "eligible_n": 4090,
+      "fn": 42,
+      "fp": 0,
+      "heavy_count": 42,
+      "heavy_rate": 0.010268948655256724,
+      "label_source_counts": {
+        "null_unavailable": 368,
+        "observed_heavy": 42,
+        "observed_light": 2116,
+        "short_null_imputed_light": 1932
+      },
+      "majority_light_accuracy": 0.9897310513447433,
+      "prediction_unavailable": 0,
+      "provenance_counts": {
+        "public:bin": 3641,
+        "public:global": 14,
+        "repo:argv_prefix_depth_2": 130,
+        "repo:argv_prefix_depth_3": 41,
+        "repo:argv_prefix_depth_4": 3,
+        "repo:bin": 153,
+        "repo:exact_clause": 108
+      },
+      "threshold": 500.0,
+      "tn": 4048,
+      "tp": 0
+    }
+  }
+}

@@ -24,6 +24,8 @@ def _obs(
     latency_ms: float | None = 100.0,
     cpu: float | None = None,
     rss: float | None = None,
+    disk: float | None = None,
+    impute_short_null: bool = False,
 ) -> ClauseObservation:
     return ClauseObservation(
         repo=repo,
@@ -34,6 +36,8 @@ def _obs(
         latency_ms=latency_ms,
         peak_cpu_cores=cpu,
         sampled_peak_rss_mb=rss,
+        disk_read_write_bytes_total=disk,
+        impute_short_null_resources_as_light=impute_short_null,
     )
 
 
@@ -318,6 +322,87 @@ def test_cpu_and_rss_measurements_are_preserved_but_not_in_latency_output() -> N
     assert kb._public["sampled_peak_rss_mb"][("bin", "runner")] == (700.0,)
 
 
+def test_resource_classes_reuse_backoff_and_impute_only_strictly_short_nulls() -> None:
+    mib = 1024 * 1024
+    kb = _fit(
+        _obs(
+            "pub",
+            "runner",
+            ("runner", "heavy-a"),
+            0.0,
+            1.0,
+            latency_ms=1000.0,
+            cpu=3.0,
+            rss=700.0,
+            disk=200 * mib,
+        ),
+        _obs(
+            "pub",
+            "runner",
+            ("runner", "heavy-b"),
+            1.0,
+            2.0,
+            latency_ms=1000.0,
+            cpu=4.0,
+            rss=800.0,
+            disk=300 * mib,
+        ),
+        _obs(
+            "pub",
+            "runner",
+            ("runner", "short-null"),
+            2.0,
+            2.499,
+            latency_ms=499.0,
+            impute_short_null=True,
+        ),
+        _obs(
+            "pub",
+            "runner",
+            ("runner", "boundary-null"),
+            3.0,
+            3.5,
+            latency_ms=500.0,
+            impute_short_null=True,
+        ),
+    )
+
+    public = kb.predict_clause_resource_classes(
+        "repo", "runner", ("runner", "new"), ts_start=10.0
+    )
+    assert set(public) == {
+        "peak_cpu_cores",
+        "sampled_peak_rss_mb",
+        "disk_read_write_bytes_total",
+    }
+    for prediction in public.values():
+        assert prediction is not None
+        assert prediction.label == "heavy"
+        assert prediction.probability_heavy == pytest.approx(2 / 3)
+        assert prediction.evidence_count == 3
+
+    kb.observe_completed_clause(
+        _obs(
+            "repo",
+            "runner",
+            ("runner", "new"),
+            11.0,
+            12.0,
+            latency_ms=100.0,
+            impute_short_null=True,
+        )
+    )
+    at_end = kb.predict_clause_heavy_light(
+        "repo", "runner", ("runner", "new"), "peak_cpu_cores", ts_start=12.0
+    )
+    after_end = kb.predict_clause_heavy_light(
+        "repo", "runner", ("runner", "new"), "peak_cpu_cores", ts_start=12.1
+    )
+    assert at_end is not None and at_end.scope == "public"
+    assert after_end is not None and after_end.scope == "repo"
+    assert after_end.label == "light" and after_end.evidence_count == 1
+
+
 def test_serialization_round_trip_preserves_latency_predictions_and_pending() -> None:
     buckets = LatencyBuckets((1000.0,))
     kb = _fit(_obs("pub", "pytest", ("pytest", "-q"), 0.0, 1.0))
@@ -338,6 +423,11 @@ def test_serialization_round_trip_preserves_latency_predictions_and_pending() ->
         "r1", "pytest -q", 31.0, buckets
     ).prediction
     assert late is not None and late.evidence_count == 2
+
+
+def test_v5_snapshot_requires_refit_for_resource_labels() -> None:
+    with pytest.raises(ValueError, match="refit the snapshot"):
+        ClauseResourceKB.from_json_obj({"schema": "runtime_clause_resource_kb_v5"})
 
 
 def test_parse_failure_is_explicitly_unavailable() -> None:

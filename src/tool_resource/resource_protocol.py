@@ -8,7 +8,7 @@ from typing import Any, Protocol
 
 from tool_resource._uds import DEFAULT_TIMEOUT_S, UnixTransport
 
-RESOURCE_PROTOCOL_VERSION = 1
+RESOURCE_PROTOCOL_VERSION = 2
 
 
 class ResourceError(RuntimeError):
