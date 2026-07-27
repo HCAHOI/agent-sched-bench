@@ -11,6 +11,7 @@ import pytest
 
 from scripts.evaluation.evaluate_clause_latency_buckets import (
     ProxyCall,
+    _argmax_bucket,
     ScoredRow,
     _fit_public_kbs,
     _metrics,
@@ -18,6 +19,8 @@ from scripts.evaluation.evaluate_clause_latency_buckets import (
     _proxy_latency_observations,
     _score,
     _serialize_virtual_deployment,
+    _telemetry_metrics,
+    _telemetry_scored_rows,
     _trace_finalization_timestamp,
     _validate_partition,
     evaluate,
@@ -31,6 +34,7 @@ from tests.test_tool_resource_services import (
     _open_trace,
     _run_call,
 )
+from scripts.evaluation.evaluate_clause_resource_classes import load_rows
 from tool_resource_eval.labels import ResourceCallSample
 from tool_resource.resource_agentd import ResourceService
 from tool_resource.runtime_kb import ClauseResourceKB
@@ -1082,3 +1086,161 @@ def test_censored_proxy_call_produces_no_latency_observation() -> None:
         )
         == []
     )
+
+
+def _telemetry_record(
+    task_id: str,
+    manifest_index: int,
+    clauses: tuple[tuple[str, tuple[str, ...], float], ...],
+) -> str:
+    return json.dumps(
+        {
+            "data": {
+                "task_instance_id": task_id,
+                "manifest_index": manifest_index,
+                "clause_telemetry": {
+                    "eligible_for_kb": True,
+                    "clauses": [
+                        {
+                            "eligible_for_kb": True,
+                            "bin": bin_,
+                            "argv": list(argv),
+                            "latency_ms": latency_ms,
+                        }
+                        for bin_, argv, latency_ms in clauses
+                    ],
+                },
+            }
+        }
+    )
+
+
+def _write_telemetry(path: Path, lines: list[str]) -> Path:
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def test_clause_telemetry_path_is_causal_and_reports_bucket_semantics(
+    tmp_path: Path,
+) -> None:
+    # Public prior says `sleep` is fast; the evaluated repo is actually slow.
+    fit = _write_telemetry(
+        tmp_path / "fit.jsonl",
+        [
+            _telemetry_record(
+                "owner__fitrepo-1", 0, (("sleep", ("sleep", "0"), 100.0),) * 3
+            )
+        ],
+    )
+    evaluation = _write_telemetry(
+        tmp_path / "eval.jsonl",
+        [
+            # Two identical clauses inside ONE task: neither may learn from the other.
+            _telemetry_record(
+                "owner__evalrepo-1", 0, (("sleep", ("sleep", "9"), 3000.0),) * 2
+            ),
+            # A later task may use what the earlier task settled.
+            _telemetry_record(
+                "owner__evalrepo-2",
+                1,
+                (("sleep", ("sleep", "9"), 3000.0), ("sleep", ("sleep", "1"), 500.0)),
+            ),
+        ],
+    )
+    rows = _telemetry_scored_rows(load_rows(fit), load_rows(evaluation))
+
+    assert len(rows) == 4
+    first_task = [row for row in rows if row.task_id == "owner__evalrepo-1"]
+    # No intra-task leakage: both clauses still fall back to the public prior.
+    assert [row.layer for row in first_task] == ["public", "public"]
+    assert [_argmax_bucket(row) for row in first_task] == [0, 0]
+    assert [row.label_bucket for row in first_task] == [3, 3]
+
+    second_task = {row.command: row for row in rows if row.task_id.endswith("-2")}
+    learned = second_task["sleep 9"]
+    # The earlier task settled before this one queried, so repo evidence wins.
+    assert learned.layer == "repo"
+    assert _argmax_bucket(learned) == 3
+    assert learned.evidence_count == 2
+    # 500 ms sits exactly on the first edge and belongs to the lower bucket.
+    assert second_task["sleep 1"].label_bucket == 0
+
+    metrics = _telemetry_metrics(rows)
+    assert metrics["eligible_examples"] == 4
+    assert metrics["exact_bucket_accuracy"] == 0.25
+    assert metrics["majority_bucket"] == 3
+    assert metrics["majority_bucket_baseline_accuracy"] == 0.75
+    assert sum(sum(row) for row in metrics["confusion_label_by_prediction"]) == 4
+    assert metrics["confusion_label_by_prediction"][3][0] == 2
+    assert metrics["per_bucket"][3]["label_count"] == 3
+    assert metrics["per_bucket"][3]["recall"] == pytest.approx(1 / 3)
+    assert set(metrics["scope_counts"]) == {"public", "repo"}
+    assert metrics["fallback_path_counts"]
+
+
+def test_clause_telemetry_path_backs_off_to_global_and_reports_the_path(
+    tmp_path: Path,
+) -> None:
+    fit = _write_telemetry(
+        tmp_path / "fit.jsonl",
+        [_telemetry_record("owner__fitrepo-1", 0, (("sleep", ("sleep", "0"), 10.0),))],
+    )
+    evaluation = _write_telemetry(
+        tmp_path / "eval.jsonl",
+        [_telemetry_record("owner__evalrepo-1", 0, (("pytest", ("pytest",), 10.0),))],
+    )
+    # An unseen bin backs off to the pooled global node - real fit evidence, not a
+    # synthesized PMF - and the path it took stays visible in the row.
+    (row,) = _telemetry_scored_rows(load_rows(fit), load_rows(evaluation))
+
+    assert (row.layer, row.key_kind) == ("public", "global")
+    assert row.fallback_path == ("repo:exact_clause", "repo:bin", "public:bin", "public:global")
+    assert row.evidence_count == 1
+
+
+def test_clause_telemetry_path_fails_when_the_fit_corpus_has_no_latency(
+    tmp_path: Path,
+) -> None:
+    fit = tmp_path / "fit.jsonl"
+    fit.write_text(
+        json.dumps(
+            {
+                "data": {
+                    "task_instance_id": "owner__fitrepo-1",
+                    "manifest_index": 0,
+                    "clause_telemetry": {
+                        "eligible_for_kb": True,
+                        "clauses": [
+                            {
+                                "eligible_for_kb": True,
+                                "bin": "sleep",
+                                "argv": ["sleep"],
+                                "latency_ms": None,
+                            }
+                        ],
+                    },
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    evaluation = _write_telemetry(
+        tmp_path / "eval.jsonl",
+        [_telemetry_record("owner__evalrepo-1", 0, (("sleep", ("sleep",), 10.0),))],
+    )
+    # No usable fit evidence must stop the run, never produce a default PMF.
+    with pytest.raises(ValueError, match="no eligible clause telemetry rows"):
+        _telemetry_scored_rows(load_rows(fit), load_rows(evaluation))
+
+
+def test_clause_telemetry_path_rejects_a_corpus_with_no_eligible_clauses(
+    tmp_path: Path,
+) -> None:
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text(
+        json.dumps({"data": {"clause_telemetry": {"eligible_for_kb": False}}}) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="no eligible clause telemetry rows"):
+        load_rows(empty)
