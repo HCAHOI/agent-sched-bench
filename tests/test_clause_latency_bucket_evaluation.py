@@ -189,6 +189,20 @@ def test_metrics_use_cumulative_pmf_at_each_fixed_boundary() -> None:
     assert "mean_abs_bucket_error" not in metrics
 
 
+def test_exact_bucket_metrics_use_lowest_argmax_on_ties() -> None:
+    tie = replace(
+        _row(1, 0),
+        probability_by_bucket=(0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    )
+
+    exact = _metrics([tie, _row(2, 2), _row(2, None, "unavailable")])["exact_bucket"]
+
+    assert exact == {
+        "exact_bucket_accuracy": 0.5,
+        "eligible_examples": 2,
+    }
+
+
 def test_partition_overlap_fails_closed() -> None:
     with pytest.raises(ValueError, match="fit/eval task overlap"):
         _validate_partition(["owner__repo-1"], ["owner__repo-1"])

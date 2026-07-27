@@ -448,6 +448,23 @@ def _metrics(rows: Sequence[ScoredRow]) -> dict[str, Any]:
                 CANONICAL_LATENCY_BUCKETS.edges_ms
             )
         ],
+        "exact_bucket": _exact_bucket_metrics(known),
+    }
+
+
+def _exact_bucket_metrics(rows: Sequence[ScoredRow]) -> dict[str, Any]:
+    bucket_count = CANONICAL_LATENCY_BUCKETS.bucket_count
+    correct = 0
+    for row in rows:
+        assert row.probability_by_bucket is not None
+        predicted = max(
+            range(bucket_count),
+            key=row.probability_by_bucket.__getitem__,
+        )
+        correct += predicted == row.label_bucket
+    return {
+        "exact_bucket_accuracy": correct / len(rows) if rows else None,
+        "eligible_examples": len(rows),
     }
 
 

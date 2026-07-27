@@ -141,6 +141,9 @@ these exact boundaries. Report per-boundary accuracy and the required counts.
 This is a diagnostic baseline, not confirmation.
 P1 scores each mapped non-structural clause against its aligned segment latency;
 outer command bucket composition remains out of scope.
+After P1 was visible, the human requested mutually exclusive exact-bucket
+classification as development-exploratory presentation; it is not a canonical
+acceptance score unless later promoted by the human.
 Use manifest task order as a serialized virtual deployment: predict every call
 in one source trace before successful finalization releases its observations,
 preserve repository state across later traces, and use synthetic monotonic
