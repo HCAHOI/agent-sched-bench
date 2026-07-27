@@ -21,6 +21,7 @@ from scripts.evaluation.evaluate_clause_latency_buckets import (
     _trace_finalization_timestamp,
     _validate_partition,
     evaluate,
+    evaluate_local_vs_public,
     evaluate_representation,
 )
 from tests.test_tool_resource_services import (
@@ -504,6 +505,80 @@ def test_representation_diagnostic_reuses_signature_without_repo_leakage() -> No
     }
 
 
+def test_local_vs_public_uses_frozen_public_and_current_local_support() -> None:
+    def call(
+        sample_id: str,
+        task_id: str,
+        latency_ms: float,
+        start: float,
+        trace: str,
+        closed_at: float,
+    ) -> ProxyCall:
+        return _call(
+            sample_id,
+            task_id,
+            start=start,
+            end=start + latency_ms / 1000.0,
+            command="a x",
+            clauses=({"bin": "a", "argv": ["a", "x"]},),
+            segments=((0.0, latency_ms),),
+            trace_finalized_at=closed_at,
+            source_trace=trace,
+        )
+
+    fit_calls = [call("fit", "other__repo-1", 50.0, -2.0, "fit", -1.0)]
+    eval_calls = [
+        call("learn", "eval__repo-1", 750.0, 0.0, "first", 1.0),
+        call("support-1-wrong", "eval__repo-1", 50.0, 2.0, "second", 4.0),
+        call("support-1-correct", "eval__repo-1", 750.0, 2.5, "second", 4.0),
+        call("support-3", "eval__repo-1", 750.0, 5.0, "third", 6.0),
+    ]
+
+    result = evaluate_local_vs_public(fit_calls, eval_calls, {"fixture": True})
+
+    assert result["row_identity"] == {
+        "identical_mapped_row_ids_labels_and_eligibility": True,
+        "mapped_row_count": 4,
+        "eligible_row_count": 4,
+        "repo_selected_row_count": 3,
+    }
+    assert result["claim_bearing"] is False
+    assert result["overall"]["eligible_examples"] == 3
+    assert result["overall"]["local_exact_bucket_accuracy"] == pytest.approx(2 / 3)
+    assert result["overall"]["public_only_exact_bucket_accuracy"] == pytest.approx(
+        1 / 3
+    )
+    assert result["overall"]["public_minus_local_percentage_points"] == pytest.approx(
+        -100 / 3
+    )
+    assert result["overall"]["local_selected_key_kind_counts"] == {"exact_clause": 3}
+    assert result["overall"]["public_counterfactual_provenance_counts"] == {
+        "public:bin": 3
+    }
+    assert result["overall"]["paired_exact_transitions"] == {
+        "local_correct_public_correct": 0,
+        "local_correct_public_wrong": 2,
+        "local_wrong_public_correct": 1,
+        "local_wrong_public_wrong": 0,
+    }
+    assert result["by_local_evidence_count"]["1"]["eligible_examples"] == 2
+    assert result["by_local_evidence_count"]["2-4"]["eligible_examples"] == 1
+    assert result["by_local_evidence_count"]["5+"] == {
+        "eligible_examples": 0,
+        "local_exact_bucket_accuracy": None,
+        "public_only_exact_bucket_accuracy": None,
+        "public_minus_local_percentage_points": None,
+        "paired_exact_transitions": {
+            "local_correct_public_correct": 0,
+            "local_correct_public_wrong": 0,
+            "local_wrong_public_correct": 0,
+            "local_wrong_public_wrong": 0,
+        },
+        "local_selected_key_kind_counts": {},
+        "public_counterfactual_provenance_counts": {},
+    }
+
+
 def test_serialized_virtual_deployment_uses_input_trace_order() -> None:
     raw = [
         _call(
@@ -976,6 +1051,10 @@ def test_evaluator_scores_each_mapped_clause_without_composition() -> None:
 def test_cli_has_no_bucket_override() -> None:
     with pytest.raises(SystemExit):
         _parser().parse_args(["--bucket-edges-ms", "100,1000"])
+    with pytest.raises(SystemExit):
+        _parser().parse_args(
+            ["--representation-diagnostic", "--local-vs-public-diagnostic"]
+        )
 
 
 def test_censored_proxy_call_produces_no_latency_observation() -> None:

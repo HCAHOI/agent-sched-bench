@@ -319,6 +319,7 @@ def _score(
     kb_by_repo: Mapping[str, ClauseResourceKB],
     calls: Sequence[ProxyCall],
     *,
+    absorb_eval_local_observations: bool = True,
     public_signatures: _SignatureIndex | None = None,
     public_signature_keys: _ClauseKeyHelper = _clause_repo_keys,
     public_signature_layer: str = "public_raw_argv",
@@ -340,6 +341,8 @@ def _score(
     processed_calls: Counter[tuple[str, str]] = Counter()
 
     def close_trace(trace: tuple[str, str]) -> None:
+        if not absorb_eval_local_observations:
+            return
         for observation in trace_observations[trace]:
             kb_by_repo[trace[0]].observe_completed_clause(observation)
 
@@ -559,19 +562,20 @@ def _metrics(rows: Sequence[ScoredRow]) -> dict[str, Any]:
 
 
 def _exact_bucket_metrics(rows: Sequence[ScoredRow]) -> dict[str, Any]:
-    bucket_count = CANONICAL_LATENCY_BUCKETS.bucket_count
-    correct = 0
-    for row in rows:
-        assert row.probability_by_bucket is not None
-        predicted = max(
-            range(bucket_count),
-            key=row.probability_by_bucket.__getitem__,
-        )
-        correct += predicted == row.label_bucket
+    correct = sum(_exact_bucket_correct(row) for row in rows)
     return {
         "exact_bucket_accuracy": correct / len(rows) if rows else None,
         "eligible_examples": len(rows),
     }
+
+
+def _exact_bucket_correct(row: ScoredRow) -> bool:
+    assert row.probability_by_bucket is not None
+    predicted = max(
+        range(CANONICAL_LATENCY_BUCKETS.bucket_count),
+        key=row.probability_by_bucket.__getitem__,
+    )
+    return predicted == row.label_bucket
 
 
 def _diagnostics(
@@ -717,18 +721,8 @@ def _paired_exact_bucket_transitions(
             and candidate_row.layer != candidate_hit_layer
         ):
             continue
-        bin_correct = (
-            public_binary.probability_by_bucket.index(
-                max(public_binary.probability_by_bucket)
-            )
-            == public_binary.label_bucket
-        )
-        candidate_correct = (
-            candidate_row.probability_by_bucket.index(
-                max(candidate_row.probability_by_bucket)
-            )
-            == candidate_row.label_bucket
-        )
+        bin_correct = _exact_bucket_correct(public_binary)
+        candidate_correct = _exact_bucket_correct(candidate_row)
         transitions[
             f"bin_{'correct' if bin_correct else 'wrong'}_candidate_"
             f"{'correct' if candidate_correct else 'wrong'}"
@@ -964,6 +958,114 @@ def evaluate_representation(
     }
 
 
+def _local_vs_public_summary(
+    pairs: Sequence[tuple[ScoredRow, ScoredRow]],
+) -> dict[str, Any]:
+    transitions = Counter(
+        {
+            f"local_{local}_public_{public}": 0
+            for local in ("correct", "wrong")
+            for public in ("correct", "wrong")
+        }
+    )
+    local_correct = public_correct = 0
+    for local, public in pairs:
+        local_is_correct = _exact_bucket_correct(local)
+        public_is_correct = _exact_bucket_correct(public)
+        local_correct += local_is_correct
+        public_correct += public_is_correct
+        transitions[
+            f"local_{'correct' if local_is_correct else 'wrong'}_"
+            f"public_{'correct' if public_is_correct else 'wrong'}"
+        ] += 1
+    count = len(pairs)
+    local_accuracy = local_correct / count if count else None
+    public_accuracy = public_correct / count if count else None
+    return {
+        "eligible_examples": count,
+        "local_exact_bucket_accuracy": local_accuracy,
+        "public_only_exact_bucket_accuracy": public_accuracy,
+        "public_minus_local_percentage_points": (
+            None
+            if local_accuracy is None or public_accuracy is None
+            else 100.0 * (public_accuracy - local_accuracy)
+        ),
+        "paired_exact_transitions": dict(sorted(transitions.items())),
+        "local_selected_key_kind_counts": dict(
+            sorted(Counter(local.key_kind for local, _ in pairs).items())
+        ),
+        "public_counterfactual_provenance_counts": dict(
+            sorted(
+                Counter(
+                    f"{public.layer}:{public.key_kind}" for _, public in pairs
+                ).items()
+            )
+        ),
+    }
+
+
+def evaluate_local_vs_public(
+    fit_calls: Sequence[ProxyCall],
+    eval_calls: Sequence[ProxyCall],
+    provenance: Mapping[str, Any],
+) -> dict[str, Any]:
+    current_kbs, observations = _fit_public_kbs(fit_calls, eval_calls)
+    current = _score(current_kbs, eval_calls)
+    public_only_kbs, _ = _fit_public_kbs(fit_calls, eval_calls)
+    public_only = _score(
+        public_only_kbs,
+        eval_calls,
+        absorb_eval_local_observations=False,
+    )
+    current_alignment = [
+        (row.sample_id, row.label_bucket, row.probability_by_bucket is not None)
+        for row in current
+    ]
+    if current_alignment != [
+        (row.sample_id, row.label_bucket, row.probability_by_bucket is not None)
+        for row in public_only
+    ]:
+        raise ValueError(
+            "current/public-only row identity, labels, or eligibility differ"
+        )
+
+    pairs = [
+        (local, public)
+        for local, public in zip(current, public_only, strict=True)
+        if local.layer == "repo"
+    ]
+    bands = {
+        "1": [pair for pair in pairs if pair[0].evidence_count == 1],
+        "2-4": [pair for pair in pairs if 2 <= pair[0].evidence_count <= 4],
+        "5+": [pair for pair in pairs if pair[0].evidence_count >= 5],
+    }
+    return {
+        "status": "development_exposed_local_vs_public_diagnostic",
+        "claim_bearing": False,
+        "objective": "clause_latency_bucket_local_vs_public_arbitration",
+        "bucket_edges_ms": list(CANONICAL_LATENCY_BUCKETS.edges_ms),
+        "fit_clause_observation_count": len(observations),
+        "eval_exec_call_count": len(eval_calls),
+        "arms": {
+            "current": "frozen public binary/global plus trace-close repo updates",
+            "public_only": "same frozen public binary/global without eval-local updates",
+        },
+        "row_identity": {
+            "identical_mapped_row_ids_labels_and_eligibility": True,
+            "mapped_row_count": len(current),
+            "eligible_row_count": sum(
+                row.probability_by_bucket is not None for row in current
+            ),
+            "repo_selected_row_count": len(pairs),
+        },
+        "overall": _local_vs_public_summary(pairs),
+        "by_local_evidence_count": {
+            band: _local_vs_public_summary(bands[band]) for band in ("1", "2-4", "5+")
+        },
+        "provenance": dict(provenance),
+    }
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--fit-root", type=Path, default=_FIT_ROOT)
@@ -971,7 +1073,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--fit-manifest", type=Path, default=_FIT_MANIFEST)
     parser.add_argument("--eval-manifest", type=Path, default=_EVAL_MANIFEST)
     parser.add_argument("--limit-eval-tasks", type=int)
-    parser.add_argument("--representation-diagnostic", action="store_true")
+    diagnostics = parser.add_mutually_exclusive_group()
+    diagnostics.add_argument("--representation-diagnostic", action="store_true")
+    diagnostics.add_argument("--local-vs-public-diagnostic", action="store_true")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--dump-rows", type=Path)
     return parser
@@ -1015,6 +1119,9 @@ def main() -> None:
     }
     if args.representation_diagnostic:
         result = evaluate_representation(fit_calls, eval_calls, provenance)
+        rows = []
+    elif args.local_vs_public_diagnostic:
+        result = evaluate_local_vs_public(fit_calls, eval_calls, provenance)
         rows = []
     else:
         result, rows = evaluate(fit_calls, eval_calls, provenance)

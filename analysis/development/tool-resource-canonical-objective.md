@@ -120,6 +120,11 @@ from cross-repo keys and preserves numeric order of magnitude. Both versions
 remain non-confirmatory diagnostics; the production public layer remains
 binary/global until a candidate and criterion are frozen.
 
+The local-vs-frozen-public counterfactual gate also failed: pooled local
+support `n <= 4` lost by `1.17 pp` in one exposed orientation and tied in the
+other. Do not implement fixed support-aware shrinkage from this evidence; no
+runtime arbitration change is selected.
+
 ## 5. Implementation sequence
 
 ### P0 — one executable core

@@ -1,0 +1,144 @@
+{
+  "arms": {
+    "current": "frozen public binary/global plus trace-close repo updates",
+    "public_only": "same frozen public binary/global without eval-local updates"
+  },
+  "bucket_edges_ms": [
+    500.0,
+    1000.0,
+    2000.0,
+    4000.0,
+    8000.0,
+    16000.0,
+    32000.0,
+    64000.0
+  ],
+  "by_local_evidence_count": {
+    "1": {
+      "eligible_examples": 941,
+      "local_exact_bucket_accuracy": 0.8841657810839533,
+      "local_selected_key_kind_counts": {
+        "argv_prefix_depth_2": 207,
+        "argv_prefix_depth_3": 141,
+        "argv_prefix_depth_4": 60,
+        "bin": 119,
+        "exact_clause": 414
+      },
+      "paired_exact_transitions": {
+        "local_correct_public_correct": 806,
+        "local_correct_public_wrong": 26,
+        "local_wrong_public_correct": 29,
+        "local_wrong_public_wrong": 80
+      },
+      "public_counterfactual_provenance_counts": {
+        "public:bin": 919,
+        "public:global": 22
+      },
+      "public_minus_local_percentage_points": 0.31880977683315104,
+      "public_only_exact_bucket_accuracy": 0.8873538788522848
+    },
+    "2-4": {
+      "eligible_examples": 850,
+      "local_exact_bucket_accuracy": 0.8152941176470588,
+      "local_selected_key_kind_counts": {
+        "argv_prefix_depth_2": 164,
+        "argv_prefix_depth_3": 72,
+        "argv_prefix_depth_4": 35,
+        "bin": 225,
+        "exact_clause": 354
+      },
+      "paired_exact_transitions": {
+        "local_correct_public_correct": 681,
+        "local_correct_public_wrong": 12,
+        "local_wrong_public_correct": 30,
+        "local_wrong_public_wrong": 127
+      },
+      "public_counterfactual_provenance_counts": {
+        "public:bin": 847,
+        "public:global": 3
+      },
+      "public_minus_local_percentage_points": 2.117647058823524,
+      "public_only_exact_bucket_accuracy": 0.8364705882352941
+    },
+    "5+": {
+      "eligible_examples": 1044,
+      "local_exact_bucket_accuracy": 0.7758620689655172,
+      "local_selected_key_kind_counts": {
+        "argv_prefix_depth_2": 271,
+        "argv_prefix_depth_3": 204,
+        "argv_prefix_depth_4": 17,
+        "bin": 311,
+        "exact_clause": 241
+      },
+      "paired_exact_transitions": {
+        "local_correct_public_correct": 794,
+        "local_correct_public_wrong": 16,
+        "local_wrong_public_correct": 38,
+        "local_wrong_public_wrong": 196
+      },
+      "public_counterfactual_provenance_counts": {
+        "public:bin": 1036,
+        "public:global": 8
+      },
+      "public_minus_local_percentage_points": 2.1072796934865856,
+      "public_only_exact_bucket_accuracy": 0.7969348659003831
+    }
+  },
+  "claim_bearing": false,
+  "eval_exec_call_count": 8976,
+  "fit_clause_observation_count": 3926,
+  "objective": "clause_latency_bucket_local_vs_public_arbitration",
+  "overall": {
+    "eligible_examples": 2835,
+    "local_exact_bucket_accuracy": 0.8236331569664903,
+    "local_selected_key_kind_counts": {
+      "argv_prefix_depth_2": 642,
+      "argv_prefix_depth_3": 417,
+      "argv_prefix_depth_4": 112,
+      "bin": 655,
+      "exact_clause": 1009
+    },
+    "paired_exact_transitions": {
+      "local_correct_public_correct": 2281,
+      "local_correct_public_wrong": 54,
+      "local_wrong_public_correct": 97,
+      "local_wrong_public_wrong": 403
+    },
+    "public_counterfactual_provenance_counts": {
+      "public:bin": 2802,
+      "public:global": 33
+    },
+    "public_minus_local_percentage_points": 1.5167548500881867,
+    "public_only_exact_bucket_accuracy": 0.8388007054673722
+  },
+  "provenance": {
+    "deployment_semantics": "serialized_virtual_deployment",
+    "edge_source": "canonical_objective",
+    "eval_manifest": "/home/chiyu/workspace/agent-sched-bench-kb/configs/corpora/swe-277.json",
+    "eval_parse_failures": 0,
+    "eval_repo_count": 213,
+    "eval_root": "/home/chiyu/workspace/agent-sched-bench/traces/fresh-277-segtimeline",
+    "eval_task_count": 277,
+    "fit_manifest": "/home/chiyu/workspace/agent-sched-bench-kb/configs/corpora/swe-100.json",
+    "fit_parse_failures": 0,
+    "fit_repo_count": 94,
+    "fit_root": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/offline-gated-confirm-100-v2-pacct-perbin",
+    "fit_task_count": 100,
+    "proxy_adapter": "legacy bash-xtrace exact-bin segment latency only; no proxy CPU/RSS",
+    "repo_overlap_count": 36,
+    "scoring_unit": "mapped_non_structural_clause",
+    "task_order": "manifest task_ids order; no shuffle",
+    "task_overlap_count": 0,
+    "trace_order": "one source trace per task in manifest order",
+    "trace_update": "predict every mapped clause in all calls without intra-trace learning, then successful CloseTrace before the next trace",
+    "virtual_clock": "deterministic monotonic shift preserving source call order and durations; not historical concurrency or a historical close timestamp",
+    "virtual_trace_gap_s": 1.0
+  },
+  "row_identity": {
+    "eligible_row_count": 12617,
+    "identical_mapped_row_ids_labels_and_eligibility": true,
+    "mapped_row_count": 12617,
+    "repo_selected_row_count": 2835
+  },
+  "status": "development_exposed_local_vs_public_diagnostic"
+}

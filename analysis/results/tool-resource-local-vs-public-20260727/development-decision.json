@@ -1,0 +1,51 @@
+{
+  "claim_bearing": false,
+  "date": "2026-07-27",
+  "decision": {
+    "fixed_support_aware_shrinkage": "no_go",
+    "next_action": "stop_without_runtime_change",
+    "reason": [
+      "the pooled local-evidence-count <=4 gate does not pass in both exposed orientations",
+      "public advantage does not decrease with local support, contradicting the sparse-local-noise hypothesis",
+      "the implied whole-system exact-bucket ceiling is only 0.34 and 0.08 percentage points"
+    ],
+    "skipped": "key_kind by evidence_count recut; add only if diagnosing the small layer-selection effect becomes necessary"
+  },
+  "gate": "pooled local evidence count <=4: local exact-bucket accuracy is lower than frozen public-only in both development-exposed orientations",
+  "gate_result": "failed",
+  "results_by_orientation": {
+    "swe100-fit-swe277-eval": {
+      "overall_repo_selected": {
+        "eligible_examples": 2835,
+        "local_exact_bucket_accuracy": 0.8236331569664903,
+        "public_minus_local_percentage_points": 1.5167548500881867,
+        "public_only_exact_bucket_accuracy": 0.8388007054673722
+      },
+      "pooled_local_evidence_count_le_4": {
+        "eligible_examples": 1791,
+        "local_exact_bucket_accuracy": 0.8514796203238414,
+        "public_minus_local_percentage_points": 1.1725293132328307,
+        "public_only_exact_bucket_accuracy": 0.8632049134561698
+      },
+      "repo_selected_fraction_of_eligible": 0.22469683759927082,
+      "whole_system_implied_public_only_gain_percentage_points": 0.34081001822937307
+    },
+    "swe277-fit-swe100-eval": {
+      "overall_repo_selected": {
+        "eligible_examples": 363,
+        "local_exact_bucket_accuracy": 0.8567493112947658,
+        "public_minus_local_percentage_points": 0.8264462809917328,
+        "public_only_exact_bucket_accuracy": 0.8650137741046832
+      },
+      "pooled_local_evidence_count_le_4": {
+        "eligible_examples": 290,
+        "local_exact_bucket_accuracy": 0.8827586206896552,
+        "public_minus_local_percentage_points": 0.0,
+        "public_only_exact_bucket_accuracy": 0.8827586206896552
+      },
+      "repo_selected_fraction_of_eligible": 0.0924605196128375,
+      "whole_system_implied_public_only_gain_percentage_points": 0.07641365257259297
+    }
+  },
+  "status": "development_exposed_local_vs_public_decision"
+}
