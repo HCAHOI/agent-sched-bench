@@ -112,6 +112,7 @@ class TelemetryService:
             tuple[int, str], tuple[str, str, dict[str, Any], str]
         ] = {}
         self._lock = threading.Lock()
+        self._attach_lock = threading.Lock()
 
     def dispatch(
         self,
@@ -248,13 +249,15 @@ class TelemetryService:
             )
         token = uuid.uuid4().hex
         artifact_path = self.state_dir / f"{token}.json"
-        collector = self.collector_factory(
-            container_id=container_id,
-            container_executable=runtime,
-            repo=workspace_scope,
-            artifact_path=artifact_path,
-            source_actions=(),
-        )
+        # libbcc collector construction is not thread-safe within one process.
+        with self._attach_lock:
+            collector = self.collector_factory(
+                container_id=container_id,
+                container_executable=runtime,
+                repo=workspace_scope,
+                artifact_path=artifact_path,
+                source_actions=(),
+            )
         session = _Session(
             run_id,
             trace_id,

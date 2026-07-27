@@ -929,6 +929,48 @@ def test_zero_peer_pid_fails_loudly(tmp_path: Path) -> None:
     resource.close()
 
 
+def test_telemetry_serializes_collector_construction(tmp_path: Path) -> None:
+    active = False
+    overlap = False
+    guard = threading.Lock()
+
+    def collector_factory(**kwargs: Any) -> _FakeCollector:
+        nonlocal active, overlap
+        with guard:
+            overlap |= active
+            active = True
+        time.sleep(0.05)
+        with guard:
+            active = False
+        return _FakeCollector(**kwargs)
+
+    telemetry = TelemetryService(
+        collector_factory=collector_factory,
+        state_dir=tmp_path / "telemetry",
+    )
+    barrier = threading.Barrier(2)
+
+    def attach(trace_id: str) -> dict[str, Any]:
+        barrier.wait()
+        return telemetry.dispatch(
+            "AttachTarget",
+            {
+                "run_id": "run",
+                "trace_id": trace_id,
+                "container_runtime": "docker",
+                "container_id": f"container-{trace_id}",
+                "workspace_scope": "repo",
+            },
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(attach, ("one", "two")))
+
+    assert not overlap
+    assert all(result["target_status"] == "available" for result in results)
+    telemetry.close()
+
+
 def test_telemetry_failure_log_carries_full_call_identity(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
