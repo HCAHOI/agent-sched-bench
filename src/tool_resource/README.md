@@ -31,11 +31,12 @@ Clients connect only to `resource-agentd`; they never start either service or
 import the collector.
 
 ```console
-sudo resource-telemetryd \
+sudo -n env PYTHONPATH="$PWD/src:/usr/lib/python3/dist-packages" \
+  "$PWD/.venv/bin/python" -m tool_resource.telemetryd \
   --socket /tmp/tool-resource/telemetry.sock \
   --allowed-uid "$(id -u)" --socket-gid "$(id -g)"
 
-resource-agentd \
+PYTHONPATH="$PWD/src" "$PWD/.venv/bin/python" -m tool_resource.resource_agentd \
   --socket /tmp/tool-resource/resource.sock \
   --database /tmp/tool-resource/tool-resource.sqlite3 \
   --telemetry-socket /tmp/tool-resource/telemetry.sock

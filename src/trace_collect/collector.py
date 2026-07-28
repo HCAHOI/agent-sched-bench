@@ -187,8 +187,26 @@ def build_run_dir(benchmark: "Benchmark", model: str) -> Path:
 _RESUME_TERMINAL_STATUSES = frozenset({"completed", "exhausted"})
 
 
-def _is_resume_terminal_manifest(manifest: dict[str, Any]) -> bool:
-    return manifest.get("status") in _RESUME_TERMINAL_STATUSES
+def _is_accepted_terminal_attempt(
+    attempt_dir: Path,
+    manifest: dict[str, Any],
+) -> bool:
+    if manifest.get("status") not in _RESUME_TERMINAL_STATUSES:
+        return False
+    resource_path = attempt_dir / "resource_observations.json"
+    if not resource_path.exists():
+        return True
+    try:
+        resource = json.loads(resource_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(resource, dict):
+        return False
+    return (
+        resource.get("telemetry_quality") == "ok"
+        and resource.get("collection_validity") == "valid"
+        and resource.get("cleanup") == "ok"
+    )
 
 
 def load_completed_ids(run_dir: Path) -> set[str]:
@@ -213,7 +231,7 @@ def load_completed_ids(run_dir: Path) -> set[str]:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
-            if _is_resume_terminal_manifest(manifest):
+            if _is_accepted_terminal_attempt(attempt_dir, manifest):
                 completed.add(instance_dir.name)
                 break
     return completed
@@ -255,7 +273,7 @@ def load_terminal_results(run_dir: Path) -> dict[str, CollectedTaskResult]:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
-            if not _is_resume_terminal_manifest(manifest):
+            if not _is_accepted_terminal_attempt(attempt_dir, manifest):
                 continue
             results_path = attempt_dir / "results.json"
             try:

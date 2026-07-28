@@ -52,6 +52,19 @@ def _write_manifest(
     )
 
 
+def _write_resource_evidence(run_dir: Path, instance_id: str, *, valid: bool) -> None:
+    (run_dir / instance_id / "attempt_1" / "resource_observations.json").write_text(
+        json.dumps(
+            {
+                "telemetry_quality": "ok" if valid else "unavailable",
+                "collection_validity": "valid" if valid else "invalid",
+                "cleanup": "ok" if valid else "not_started",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_load_completed_ids_treats_exhausted_as_resume_terminal(
     tmp_path: Path,
 ) -> None:
@@ -101,6 +114,23 @@ def test_load_completed_ids_does_not_treat_error_manifests_as_terminal(
     )
 
     assert load_completed_ids(run_dir) == set()
+
+
+def test_resume_rejects_terminal_attempt_with_invalid_resource_evidence(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    _write_manifest(run_dir, "task-invalid", status="completed")
+    _write_resource_evidence(run_dir, "task-invalid", valid=False)
+    _write_manifest(run_dir, "task-valid", status="completed")
+    _write_resource_evidence(run_dir, "task-valid", valid=True)
+    _write_manifest(run_dir, "task-malformed", status="completed")
+    (
+        run_dir / "task-malformed" / "attempt_1" / "resource_observations.json"
+    ).write_text("null", encoding="utf-8")
+
+    assert load_completed_ids(run_dir) == {"task-valid"}
+    assert set(load_terminal_results(run_dir)) == {"task-valid"}
 
 
 def test_resume_rebuilds_and_merges_complete_results_index(tmp_path: Path) -> None:
