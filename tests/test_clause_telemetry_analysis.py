@@ -280,7 +280,14 @@ def test_pre_exec_sample_inherits_active_exec_once() -> None:
     assert inherited["owner_host_pid"] == 100
     assert inherited["owner_exec_seq"] == 0
     assert inherited["fork_ancestry"] == [200, 100, 50]
-    assert inherited["fork_ts_ns"] == inherited["fork_chain_records"][0]["ts_ns"]
+    # Against the fixture's own fork timestamps, not against the chain the
+    # resolver derived these from -- comparing a derived field to its source
+    # would restate the derivation rather than test it.
+    assert inherited["fork_chain_records"] == [
+        {"child_id": 200, "parent_pid": 100, "ts_ns": 100_000_000},
+        {"child_id": 100, "parent_pid": 50, "ts_ns": 10},
+    ]
+    assert inherited["fork_ts_ns"] == 100_000_000
 
 
 def test_new_thread_pre_exec_sample_inherits_active_tgid_image() -> None:

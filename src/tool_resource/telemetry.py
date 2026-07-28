@@ -2012,10 +2012,15 @@ def analyze(
             ).append(event)
         if event["type"] == "exit_boundary":
             exit_events_by_pid.setdefault(event["host_pid"], []).append(event)
-    # Sort by timestamp so the per-clause lookups below can bisect. The sort is
+    # Sort by timestamp so the per-clause lookups below can bisect, and make the
+    # in-window count independent of the order the caller supplied. The sort is
     # stable, so events sharing a timestamp keep their original relative order
-    # and the "first match" tie-break is unchanged; sorting here also keeps the
-    # result independent of the caller's event ordering, as the scans were.
+    # and the endpoint "first match" tie-break is unchanged.
+    #
+    # That tie-break is order-dependent, and was before this change too: two
+    # boundaries on one tid at the same timestamp resolve to whichever the
+    # caller listed first, so `analyze` is not order-canonical. Preserving that
+    # is the point here -- the scans this replaced behaved identically.
     for events_on_pid in counter_events_by_pid.values():
         events_on_pid.sort(key=lambda event: event["ts_ns"])
     for events_on_tid in boundary_events_by_tid.values():
@@ -2411,6 +2416,13 @@ class EventRow(Mapping):
     dicts. ``arg``/``arg_raw`` stay genuinely absent when the kernel did not
     supply them, matching the dict this replaces -- ``event.get("arg", "")``
     must still yield ``""`` and not ``None``.
+
+    One known divergence, with no consumer today: ``copy.deepcopy`` rebuilds the
+    absent-field sentinel as a fresh object, so absent fields come back present
+    holding it. Nothing deep-copies ring events; if that changes, give the
+    sentinel a stable identity across pickling rather than working around it at
+    the call site. ``copy.copy`` and JSON output are unaffected -- events reach
+    the artifact only through ``{**event, ...}`` splats, never raw.
     """
 
     __slots__ = (*_EVENT_FIELDS, "arg", "arg_raw")
@@ -2427,7 +2439,12 @@ class EventRow(Mapping):
         object.__setattr__(self, "arg_raw", arg_raw)
 
     def __getitem__(self, key: str) -> Any:
-        value = getattr(self, key, _UNSET)
+        # Membership first: `getattr` alone would answer `row["get"]` with the
+        # bound method and raise TypeError rather than KeyError for a non-string
+        # key, neither of which a dict does.
+        if key not in self.__slots__:
+            raise KeyError(key)
+        value = getattr(self, key)
         if value is _UNSET:
             raise KeyError(key)
         return value
