@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,10 @@ from tool_resource.resource_protocol import (
 )
 from tool_resource.runtime_kb import (
     CANONICAL_LATENCY_BUCKET_EDGES_MS,
+    CANONICAL_LATENCY_BUCKETS,
+    GENERIC_ARGV_CANONICALIZER_VERSION,
+    STRUCTURED_ARGV_REPRESENTATION,
+    ClauseResourceKB,
 )
 from tool_resource.store import ObservationStore
 from tool_resource.telemetry_protocol import (
@@ -704,6 +709,100 @@ def test_snapshot_strict_causal_boundary_and_cross_scope(tmp_path: Path) -> None
             "classifications"
         ].values()
     )
+    service.close()
+
+
+def test_structured_online_offline_golden_stream_and_restore(tmp_path: Path) -> None:
+    envelopes = [
+        _envelope(
+            f"public-{index}",
+            scope=f"fit-{index}",
+            command=f"runner deploy --mode=fast /tmp/public-{index}",
+            end=float(index + 1),
+            latency_ms=100.0,
+        )
+        for index in range(3)
+    ]
+    envelopes.append(
+        _envelope(
+            "local",
+            scope="repo",
+            command="runner deploy --mode=slow /tmp/local",
+            end=10.0,
+            latency_ms=3000.0,
+        )
+    )
+    observations = [
+        observation
+        for envelope in envelopes
+        for observation in _clause_observations(envelope)
+    ]
+    public = [observation for observation in observations if observation.repo != "repo"]
+    local = [observation for observation in observations if observation.repo == "repo"]
+    offline = ClauseResourceKB.fit_public(
+        public,
+        representation=STRUCTURED_ARGV_REPRESENTATION,
+    )
+    for observation in local:
+        offline.observe_completed_clause(observation)
+    restored = ClauseResourceKB.from_json_obj(
+        json.loads(json.dumps(offline.to_json_obj()))
+    )
+
+    store = ObservationStore(tmp_path / "golden.sqlite3")
+    for envelope in envelopes:
+        store.insert_observation(envelope)
+    store.promote_observations({str(envelope["observation_id"]) for envelope in envelopes})
+    snapshot = store.create_snapshot()
+    service = ResourceService(
+        store,
+        _DirectTransport(
+            TelemetryService(
+                collector_factory=_FakeCollector,
+                state_dir=tmp_path / "telemetry",
+            )
+        ),
+        kb_representation=STRUCTURED_ARGV_REPRESENTATION,
+    )
+    run = _open_run(
+        service,
+        behavior="predict",
+        snapshot=snapshot,
+        scope="repo",
+    )
+    trace = _open_trace(service, run["run_token"])
+    command = "runner deploy --mode=slow /tmp/local"
+
+    for index, query_ts in enumerate((10.0, 10.1)):
+        online = service.dispatch(
+            "BeginCall",
+            {
+                "trace_token": trace["trace_token"],
+                "call_id": f"golden-{index}",
+                "command": command,
+                "query_timestamp": query_ts,
+            },
+        )["prediction"]["prediction"]
+        offline_prediction = offline.predict_clause_latency_bucket(
+            "repo",
+            "runner",
+            tuple(command.split()),
+            CANONICAL_LATENCY_BUCKETS,
+            ts_start=query_ts,
+        )
+        restored_prediction = restored.predict_clause_latency_bucket(
+            "repo",
+            "runner",
+            tuple(command.split()),
+            CANONICAL_LATENCY_BUCKETS,
+            ts_start=query_ts,
+        )
+        assert online == asdict(offline_prediction)
+        assert restored_prediction == offline_prediction
+        assert online["canonicalizer_version"] == GENERIC_ARGV_CANONICALIZER_VERSION
+
+    assert offline_prediction.scope == "repo"
+    assert offline_prediction.key_kind == "exact_clause"
     service.close()
 
 

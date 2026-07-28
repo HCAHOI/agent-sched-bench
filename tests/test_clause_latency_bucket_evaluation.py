@@ -8,6 +8,7 @@ import pytest
 from scripts.evaluation.evaluate_clause_latency_buckets import (
     ScoredRow,
     _argmax_bucket,
+    _bounded_node_oracle_candidates,
     _exact_bucket_metrics,
     _parser,
     _telemetry_metrics,
@@ -15,7 +16,12 @@ from scripts.evaluation.evaluate_clause_latency_buckets import (
     _validate_partition,
     evaluate_clause_telemetry,
 )
-from scripts.evaluation.evaluate_clause_resource_classes import load_rows
+from scripts.evaluation.evaluate_clause_resource_classes import (
+    Row,
+    evaluate as evaluate_resources,
+    load_rows,
+)
+from tool_resource.runtime_kb import ClauseLatencyBucketPrediction
 
 
 def _scored(label_bucket: int, probability_by_bucket: tuple[float, ...]) -> ScoredRow:
@@ -30,6 +36,7 @@ def _scored(label_bucket: int, probability_by_bucket: tuple[float, ...]) -> Scor
         key_kind="bin",
         evidence_count=1,
         fallback_path=("repo:bin",),
+        canonicalizer_version="raw-argv-prefix-v1",
         unavailable_reason=None,
         mapping_evidence="canonical_clause_telemetry",
     )
@@ -51,6 +58,27 @@ def test_exact_bucket_metrics_use_lowest_argmax_on_ties() -> None:
         "three_class_accuracy": 0.5,
         "eligible_examples": 2,
     }
+
+
+def test_node_oracle_excludes_raw_prefix_candidates() -> None:
+    prefix = ClauseLatencyBucketPrediction(
+        probability_by_bucket=(1.0, 0.0, 0.0),
+        scope="repo",
+        key_kind="argv_prefix_depth_3",
+        evidence_count=1,
+        fallback_path=("repo:exact_clause", "repo:argv_prefix_depth_3"),
+        canonicalizer_version="raw-argv-prefix-v1",
+    )
+    exact = ClauseLatencyBucketPrediction(
+        probability_by_bucket=(0.0, 1.0, 0.0),
+        scope="repo",
+        key_kind="exact_clause",
+        evidence_count=1,
+        fallback_path=("repo:exact_clause",),
+        canonicalizer_version="raw-argv-prefix-v1",
+    )
+
+    assert _bounded_node_oracle_candidates((prefix, exact)) == (exact,)
 
 
 def test_cli_has_no_bucket_override() -> None:
@@ -191,7 +219,14 @@ def test_clause_telemetry_path_is_causal_and_reports_bucket_semantics(
         "public_only",
         "local_only_diagnostic",
     }
-    assert set(result["oracles"]) == {"current_public", "current_nodes"}
+    assert set(result["candidates"]) == {
+        "candidate_r_public_only",
+        "candidate_r",
+    }
+    assert set(result["oracles"]) == {
+        "current_public",
+        "current_and_candidate_nodes",
+    }
     current = result["baselines"]["current"]["three_class_accuracy"]
     public = result["baselines"]["public_only"]["three_class_accuracy"]
     assert current is not None and public is not None
@@ -199,10 +234,18 @@ def test_clause_telemetry_path_is_causal_and_reports_bucket_semantics(
         current,
         public,
     )
-    assert result["oracles"]["current_nodes"]["three_class_accuracy"] >= result[
-        "oracles"
-    ]["current_public"]["three_class_accuracy"]
-    assert result["oracles"]["current_nodes"]["oracle"] is True
+    assert result["oracles"]["current_and_candidate_nodes"][
+        "three_class_accuracy"
+    ] >= result["oracles"]["current_public"]["three_class_accuracy"]
+    assert result["oracles"]["current_and_candidate_nodes"]["oracle"] is True
+    candidate = result["candidates"]["candidate_r"]
+    assert candidate["prediction_unavailable"] == 0
+    assert candidate["canonicalizer_version_counts"] == {
+        "generic-argv-v3-role": 4
+    }
+    bootstrap = result["uncertainty"]["candidate_r_vs_best_baseline"]
+    assert bootstrap["cluster_unit"] == "repository"
+    assert bootstrap["draws"] == 2000
     local = result["baselines"]["local_only_diagnostic"]
     assert local["selection_forbidden"] is True
     assert local["prediction_coverage"] == 0.5
@@ -275,3 +318,71 @@ def test_clause_telemetry_path_rejects_a_corpus_with_no_eligible_clauses(
     )
     with pytest.raises(ValueError, match="no eligible clause telemetry rows"):
         load_rows(empty)
+
+
+def test_resource_evaluator_compares_candidate_on_identical_label_rows() -> None:
+    mib = 1024 * 1024
+    fit = [
+        Row(
+            task_id=f"owner__fit-{index}",
+            repo=f"owner__fit-{index}",
+            manifest_index=index,
+            bin="runner",
+            argv=("runner", "deploy", "--mode=fast", f"/tmp/{index}"),
+            latency_ms=1000.0,
+            peak_cpu_cores=3.0,
+            sampled_peak_rss_mb=100.0,
+            disk_read_write_bytes_total=200 * mib,
+        )
+        for index in range(3)
+    ]
+    evaluation = [
+        Row(
+            task_id="owner__eval-1",
+            repo="owner__eval",
+            manifest_index=0,
+            bin="runner",
+            argv=("runner", "deploy", "--mode=slow", "/tmp/eval"),
+            latency_ms=1000.0,
+            peak_cpu_cores=3.0,
+            sampled_peak_rss_mb=100.0,
+            disk_read_write_bytes_total=200 * mib,
+        ),
+        Row(
+            task_id="owner__eval-2",
+            repo="owner__eval",
+            manifest_index=1,
+            bin="runner",
+            argv=("runner", "deploy", "--mode=slow", "/tmp/eval"),
+            latency_ms=1000.0,
+            peak_cpu_cores=1.0,
+            sampled_peak_rss_mb=600.0,
+            disk_read_write_bytes_total=10 * mib,
+        ),
+        Row(
+            task_id="owner__eval-3",
+            repo="owner__eval",
+            manifest_index=2,
+            bin="runner",
+            argv=("runner", "deploy", "--mode=slow", "/tmp/null"),
+            latency_ms=600.0,
+            peak_cpu_cores=None,
+            sampled_peak_rss_mb=None,
+            disk_read_write_bytes_total=None,
+        ),
+    ]
+
+    result = evaluate_resources(fit, evaluation)
+
+    assert result["row_identity"] == {
+        "identical_label_rows_across_arms": True,
+        "fit_eval_task_overlap_count": 0,
+    }
+    assert result["candidate_r"]["representation"] == "generic-argv-v3-role"
+    for resource, current in result["metrics"].items():
+        candidate = result["candidates"]["candidate_r"]["metrics"][resource]
+        assert current["eligible_n"] == candidate["eligible_n"] == 2
+        assert current["null_unavailable"] == candidate["null_unavailable"] == 1
+        assert current["prediction_unavailable"] == 0
+        assert candidate["prediction_unavailable"] == 0
+        assert candidate["current_accuracy"] == current["accuracy"]

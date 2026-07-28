@@ -1,16 +1,19 @@
 """Causal clause latency and resource-class knowledge base.
 
 Public and repo layers intentionally use different key granularity because
-they encode different environment assumptions:
+they encode different environment assumptions. The default representation
+preserves the reviewed raw-prefix hierarchy; the development-only structured
+representation replaces raw prefixes with one role-aware argv signature:
 
-- **Public layer** (frozen after fitting): heterogeneous repositories, so it
-  holds only coarse per-binary and global cold-start knowledge.
+- **Public layer** (frozen after fitting): heterogeneous repositories, so the
+  default holds coarse per-binary/global knowledge while the structured arm
+  may additionally hold its privacy-preserving argv signature.
 - **Repo layer** (accumulated causally online): same workspace, recurring
   command templates, so it may key by exact clause and ordered argument
   prefixes before backing off to the local binary.
 
-Backoff order for a query in repo R (hard repo-first, deepest non-empty node
-wins):
+Default backoff order for a query in repo R (hard repo-first, deepest non-empty
+node wins):
 
 1. repo exact clause
 2. repo ordered argument prefix, deepest to shallowest
@@ -60,7 +63,13 @@ def _nodes_from_json(
 _CLAUSE_SCHEMA = "runtime_clause_resource_kb_v6"
 _CLAUSE_MAX_DEPTH = 4  # frozen ordered argv-prefix depth budget
 _DELIM = "\x00"  # argv tokens may contain spaces; NUL cannot collide
-GENERIC_ARGV_CANONICALIZER_VERSION = "generic-argv-v2-shape"
+RAW_ARGV_REPRESENTATION = "raw-argv-prefix-v1"
+GENERIC_ARGV_CANONICALIZER_VERSION = "generic-argv-v3-role"
+STRUCTURED_ARGV_REPRESENTATION = GENERIC_ARGV_CANONICALIZER_VERSION
+_SUPPORTED_REPRESENTATIONS = {
+    RAW_ARGV_REPRESENTATION,
+    STRUCTURED_ARGV_REPRESENTATION,
+}
 _ENV_ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", re.DOTALL)
 _NUMBER = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
 _UUID = re.compile(
@@ -72,6 +81,8 @@ _URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://.+")
 _LONG_OPTION = re.compile(r"--[A-Za-z][A-Za-z0-9_-]*")
 _SHORT_OPTION = re.compile(r"-[A-Za-z]")
 _SHORT_ATTACHED_VALUE = re.compile(r"(-[A-Za-z])(.+)", re.DOTALL)
+_STABLE_SUBCOMMAND = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,31}")
+_STABLE_SUBCOMMAND_MIN_REPOS = 3
 
 # Aggregated clause-observation value sources. Each is a per-clause
 # MEASURED metric (see ``tool_resource.clause_bridge``), not an eBPF exit field:
@@ -195,6 +206,7 @@ class ClauseLatencyBucketPrediction:
     key_kind: str
     evidence_count: int
     fallback_path: tuple[str, ...]
+    canonicalizer_version: str
 
 
 @dataclass(frozen=True)
@@ -209,6 +221,7 @@ class ClauseHeavyLightPrediction:
     key_kind: str
     evidence_count: int
     fallback_path: tuple[str, ...]
+    canonicalizer_version: str
 
 
 @dataclass(frozen=True)
@@ -323,56 +336,155 @@ def _canonical_dynamic_value(value: str) -> str:
     return "<ARG>"
 
 
-def _generic_argv_tokens(bin_: str, argv: Sequence[str]) -> tuple[str, ...]:
-    tokens = [bin_]
+def _option_name(token: str) -> str | None:
+    if _LONG_OPTION.fullmatch(token) or _SHORT_OPTION.fullmatch(token):
+        return token
+    return None
+
+
+def _structured_argv_parts(
+    argv: Sequence[str],
+) -> tuple[str | None, list[str], list[str]]:
+    """Return the possible subcommand, option multiset, and positional shapes.
+
+    Generic option arity is unknowable without binary-specific schemas. A
+    standalone option conservatively consumes one immediately following
+    non-option as its shaped value. This can miss a subcommand after a boolean
+    flag, but it cannot promote an option value into a raw public subcommand,
+    and reordered option/value pairs remain invariant without per-binary rules.
+    """
+
+    subcommand: str | None = None
+    options: list[str] = []
+    positionals: list[str] = []
     operands_only = False
-    for token in argv[1:]:
+    tail = list(argv[1:])
+    index = 0
+    while index < len(tail):
+        token = tail[index]
         if token == "--":
-            tokens.append(token)
+            positionals.append("boundary:--")
             operands_only = True
+            index += 1
             continue
         assignment = _ENV_ASSIGNMENT.fullmatch(token)
-        if assignment:
-            tokens.append(
+        if assignment and not operands_only:
+            options.append(
+                "env:"
                 f"{assignment.group(1)}={_canonical_dynamic_value(assignment.group(2))}"
             )
+            index += 1
             continue
         if operands_only:
-            tokens.append(_canonical_dynamic_value(token))
+            positionals.append(_canonical_dynamic_value(token))
+            index += 1
             continue
         if token.startswith("--") and "=" in token:
             flag, value = token.split("=", 1)
             name = flag if _LONG_OPTION.fullmatch(flag) else "<OPT>"
-            tokens.append(f"{name}={_canonical_dynamic_value(value)}")
-            continue
-        if _NUMBER.fullmatch(token):
-            tokens.append(_canonical_dynamic_value(token))
-            continue
-        if _LONG_OPTION.fullmatch(token) or _SHORT_OPTION.fullmatch(token):
-            tokens.append(token)
+            options.append(f"{name}={_canonical_dynamic_value(value)}")
+            index += 1
             continue
         attached = _SHORT_ATTACHED_VALUE.fullmatch(token)
-        if attached:
-            tokens.append(
+        if attached and not _SHORT_OPTION.fullmatch(token):
+            options.append(
                 f"{attached.group(1)}={_canonical_dynamic_value(attached.group(2))}"
             )
+            index += 1
             continue
-        tokens.append(
-            "<OPT>" if token.startswith("-") else _canonical_dynamic_value(token)
-        )
-    return tuple(tokens)
+        option = _option_name(token)
+        if option is not None:
+            if index + 1 < len(tail):
+                following = tail[index + 1]
+                if following != "--" and (
+                    not following.startswith("-")
+                    or _NUMBER.fullmatch(following) is not None
+                ):
+                    options.append(
+                        f"{option}={_canonical_dynamic_value(following)}"
+                    )
+                    index += 2
+                    continue
+            options.append(option)
+            index += 1
+            continue
+        if _NUMBER.fullmatch(token):
+            if subcommand is None:
+                subcommand = token
+            else:
+                positionals.append(_canonical_dynamic_value(token))
+            index += 1
+            continue
+        if token.startswith("-"):
+            if index + 1 < len(tail):
+                following = tail[index + 1]
+                if following != "--" and (
+                    not following.startswith("-")
+                    or _NUMBER.fullmatch(following) is not None
+                ):
+                    options.append(
+                        f"<OPT>={_canonical_dynamic_value(following)}"
+                    )
+                    index += 2
+                    continue
+            options.append("<OPT>")
+            index += 1
+            continue
+        if subcommand is None:
+            subcommand = token
+        else:
+            positionals.append(_canonical_dynamic_value(token))
+        index += 1
+    return subcommand, options, positionals
 
 
-def generic_argv_keys(bin_: str, argv: Sequence[str]) -> list[NodeKey]:
-    """Development-only generic canonical exact/prefix clause keys."""
+def _structured_argv_tokens(
+    bin_: str,
+    argv: Sequence[str],
+    stable_subcommands: frozenset[tuple[str, str]],
+) -> tuple[str, ...]:
+    subcommand, options, positionals = _structured_argv_parts(argv)
+    if subcommand is None:
+        subcommand_token = "<NONE>"
+    elif (bin_, subcommand) in stable_subcommands:
+        subcommand_token = subcommand
+    else:
+        subcommand_token = _canonical_dynamic_value(subcommand)
+    return (
+        f"bin:{bin_}",
+        f"subcommand:{subcommand_token}",
+        *(f"option:{option}" for option in sorted(options)),
+        "positionals:",
+        *positionals,
+    )
 
-    tokens = _generic_argv_tokens(bin_, argv)
-    keys: list[NodeKey] = [("exact_clause", _DELIM.join(tokens))]
-    depth = min(len(tokens), _CLAUSE_MAX_DEPTH)
-    for length in range(depth, 1, -1):
-        keys.append((f"argv_prefix_depth_{length}", _DELIM.join(tokens[:length])))
-    keys.append(("bin", bin_))
-    return keys
+
+def _fit_stable_subcommands(
+    observations: Iterable[ClauseObservation],
+) -> frozenset[tuple[str, str]]:
+    repositories: dict[tuple[str, str], set[str]] = {}
+    for obs in observations:
+        candidate, _, _ = _structured_argv_parts(obs.argv)
+        if candidate is None or _STABLE_SUBCOMMAND.fullmatch(candidate) is None:
+            continue
+        repositories.setdefault((obs.bin, candidate), set()).add(obs.repo)
+    return frozenset(
+        key
+        for key, repos in repositories.items()
+        if len(repos) >= _STABLE_SUBCOMMAND_MIN_REPOS
+    )
+
+
+def generic_argv_keys(
+    bin_: str,
+    argv: Sequence[str],
+    *,
+    stable_subcommands: frozenset[tuple[str, str]] = frozenset(),
+) -> list[NodeKey]:
+    """Development-only role-aware signature and binary backoff keys."""
+
+    tokens = _structured_argv_tokens(bin_, argv, stable_subcommands)
+    return [("structured_argv", _DELIM.join(tokens)), ("bin", bin_)]
 
 
 @lru_cache(maxsize=8192)
@@ -417,11 +529,23 @@ def _clause_public_keys(bin_: str) -> tuple[NodeKey, ...]:
 class ClauseResourceKB:
     """Causal clause history with latency and resource-class APIs.
 
-    Public bin priors are frozen after construction; repo clause/prefix nodes
-    accumulate causally under a monotonic-query guard.
+    Public priors are frozen after construction; repo nodes accumulate causally
+    under a monotonic-query guard. ``representation`` selects either the
+    reviewed raw-prefix hierarchy or the frozen Candidate R structured arm.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        representation: str = RAW_ARGV_REPRESENTATION,
+        stable_subcommands: frozenset[tuple[str, str]] = frozenset(),
+    ) -> None:
+        if representation not in _SUPPORTED_REPRESENTATIONS:
+            raise ValueError(f"unsupported clause representation {representation!r}")
+        if representation == RAW_ARGV_REPRESENTATION and stable_subcommands:
+            raise ValueError("raw argv representation cannot carry subcommand vocabulary")
+        self._representation = representation
+        self._stable_subcommands = stable_subcommands
         self._public: dict[str, dict[NodeKey, tuple[float, ...]]] = {
             source: {} for source in _CLAUSE_SOURCES
         }
@@ -434,14 +558,26 @@ class ClauseResourceKB:
     def fit_public(
         cls,
         observations: Iterable[ClauseObservation],
+        *,
+        representation: str = RAW_ARGV_REPRESENTATION,
     ) -> ClauseResourceKB:
-        """Fit frozen public bin/global priors from historical clauses."""
+        """Fit frozen public priors and any label-free fit vocabulary."""
 
+        if representation == STRUCTURED_ARGV_REPRESENTATION:
+            materialized = list(observations)
+            stable_subcommands = _fit_stable_subcommands(materialized)
+            observations = materialized
+        else:
+            stable_subcommands = frozenset()
+        kb = cls(
+            representation=representation,
+            stable_subcommands=stable_subcommands,
+        )
         acc: dict[str, dict[NodeKey, list[float]]] = {
             source: {} for source in _CLAUSE_SOURCES
         }
         for obs in observations:
-            keys = _clause_public_keys(obs.bin)
+            keys = kb._public_keys(obs.bin, obs.argv)
             for source in _CLAUSE_SOURCES:
                 value = _clause_value(obs, source)
                 if value is None:
@@ -452,13 +588,41 @@ class ClauseResourceKB:
                     acc[source].setdefault(key, []).append(value)
         if not acc[_LATENCY_MS].get(("global", "")):
             raise ValueError("fit corpus has no clause latency evidence")
-        kb = cls()
         # Nodes are held sorted so predictions are binary searches, not scans.
         kb._public = {
             source: {key: tuple(_ordered_node(values)) for key, values in nodes.items()}
             for source, nodes in acc.items()
         }
         return kb
+
+    @property
+    def representation(self) -> str:
+        return self._representation
+
+    @property
+    def canonicalizer_version(self) -> str:
+        return self._representation
+
+    def _repo_keys(self, bin_: str, argv: Sequence[str]) -> tuple[NodeKey, ...]:
+        if self._representation == RAW_ARGV_REPRESENTATION:
+            return _clause_repo_keys(bin_, argv)
+        structured, binary = generic_argv_keys(
+            bin_,
+            argv,
+            stable_subcommands=self._stable_subcommands,
+        )
+        exact = ("exact_clause", _DELIM.join(_clause_tokens(bin_, argv)))
+        return (exact, structured, binary)
+
+    def _public_keys(self, bin_: str, argv: Sequence[str]) -> tuple[NodeKey, ...]:
+        if self._representation == RAW_ARGV_REPRESENTATION:
+            return _clause_public_keys(bin_)
+        structured, binary = generic_argv_keys(
+            bin_,
+            argv,
+            stable_subcommands=self._stable_subcommands,
+        )
+        return (structured, binary, ("global", ""))
 
     def observe_completed_clause(self, obs: ClauseObservation) -> None:
         """Buffer a completed clause; visible only once strictly causally prior.
@@ -482,7 +646,7 @@ class ClauseResourceKB:
             repo_sources = self._repo.setdefault(
                 obs.repo, {source: {} for source in _CLAUSE_SOURCES}
             )
-            keys = _clause_repo_keys(obs.bin, obs.argv)
+            keys = self._repo_keys(obs.bin, obs.argv)
             for source in _CLAUSE_SOURCES:
                 value = _clause_value(obs, source)
                 if value is None:
@@ -500,12 +664,12 @@ class ClauseResourceKB:
         repo_nodes = self._repo.get(repo, {}).get(source, {})
         public_nodes = self._public[source]
         path: list[str] = []
-        for key in _clause_repo_keys(bin_, argv):
+        for key in self._repo_keys(bin_, argv):
             path.append(f"repo:{key[0]}")
             values = repo_nodes.get(key)
             if values:
                 yield values, "repo", key[0], tuple(path)
-        for key in _clause_public_keys(bin_):
+        for key in self._public_keys(bin_, argv):
             path.append(f"public:{key[0]}")
             values = public_nodes.get(key)
             if values:
@@ -516,8 +680,8 @@ class ClauseResourceKB:
     ) -> tuple[Sequence[float], str, str, tuple[str, ...]] | None:
         return next(self._candidate_nodes(repo, source, bin_, argv), None)
 
-    @staticmethod
     def _latency_prediction(
+        self,
         selected: tuple[Sequence[float], str, str, tuple[str, ...]],
         buckets: LatencyBuckets,
     ) -> ClauseLatencyBucketPrediction:
@@ -540,6 +704,7 @@ class ClauseResourceKB:
             key_kind=kind,
             evidence_count=len(values),
             fallback_path=path,
+            canonicalizer_version=self.canonicalizer_version,
         )
 
     def predict_clause_latency_bucket(
@@ -618,6 +783,7 @@ class ClauseResourceKB:
             key_kind=kind,
             evidence_count=len(values),
             fallback_path=path,
+            canonicalizer_version=self.canonicalizer_version,
         )
 
     def predict_clause_resource_classes(
@@ -714,6 +880,12 @@ class ClauseResourceKB:
         return {
             "schema": _CLAUSE_SCHEMA,
             "max_prefix_depth": _CLAUSE_MAX_DEPTH,
+            "representation": self._representation,
+            "canonicalizer_version": self.canonicalizer_version,
+            "stable_subcommands": [
+                [bin_, subcommand]
+                for bin_, subcommand in sorted(self._stable_subcommands)
+            ],
             "public": {
                 source: _nodes_to_json(nodes) for source, nodes in self._public.items()
             },
@@ -740,7 +912,20 @@ class ClauseResourceKB:
             raise ValueError(f"unsupported clause schema {obj.get('schema')!r}")
         if obj.get("max_prefix_depth") != _CLAUSE_MAX_DEPTH:
             raise ValueError("snapshot prefix depth differs from module depth")
-        kb = cls()
+        representation = str(obj.get("representation", RAW_ARGV_REPRESENTATION))
+        canonicalizer_version = str(
+            obj.get("canonicalizer_version", representation)
+        )
+        if canonicalizer_version != representation:
+            raise ValueError("snapshot representation and canonicalizer differ")
+        stable_subcommands = frozenset(
+            (str(row[0]), str(row[1]))
+            for row in obj.get("stable_subcommands", [])
+        )
+        kb = cls(
+            representation=representation,
+            stable_subcommands=stable_subcommands,
+        )
         # Re-sort on load: a snapshot written before nodes were held sorted, or
         # hand-edited, must still satisfy the binary-search invariant. Latency
         # values are revalidated here for the same reason they are validated on
@@ -782,7 +967,9 @@ __all__ = [
     "CANONICAL_LATENCY_BUCKET_EDGES_MS",
     "CANONICAL_RESOURCE_HEAVY_THRESHOLDS",
     "GENERIC_ARGV_CANONICALIZER_VERSION",
+    "RAW_ARGV_REPRESENTATION",
     "SHORT_NULL_LIGHT_MAX_LATENCY_MS",
+    "STRUCTURED_ARGV_REPRESENTATION",
     "ClauseHeavyLightPrediction",
     "ClauseLatencyBucketPrediction",
     "ClauseObservation",

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
@@ -29,6 +30,7 @@ from scripts.evaluation.evaluate_clause_resource_classes import (  # noqa: E402
 from tool_resource_eval.labels import repo_of  # noqa: E402
 from tool_resource.runtime_kb import (  # noqa: E402
     CANONICAL_LATENCY_BUCKETS,
+    STRUCTURED_ARGV_REPRESENTATION,
     ClauseLatencyBucketPrediction,
     ClauseResourceKB,
 )
@@ -46,6 +48,7 @@ class ScoredRow:
     key_kind: str | None
     evidence_count: int
     fallback_path: tuple[str, ...] | None
+    canonicalizer_version: str | None
     unavailable_reason: str | None
     mapping_evidence: str
 
@@ -133,6 +136,9 @@ def _scored_row(
         key_kind=None if prediction is None else prediction.key_kind,
         evidence_count=0 if prediction is None else prediction.evidence_count,
         fallback_path=None if prediction is None else prediction.fallback_path,
+        canonicalizer_version=(
+            None if prediction is None else prediction.canonicalizer_version
+        ),
         unavailable_reason=unavailable_reason,
         mapping_evidence="canonical_clause_telemetry",
     )
@@ -155,6 +161,20 @@ def _oracle_prediction(
     )
 
 
+def _bounded_node_oracle_candidates(
+    *groups: Sequence[ClauseLatencyBucketPrediction],
+) -> tuple[ClauseLatencyBucketPrediction, ...]:
+    """Keep only the exact/structured/bin/global nodes fixed by the contract."""
+
+    allowed = {"exact_clause", "structured_argv", "bin", "global"}
+    return tuple(
+        candidate
+        for group in groups
+        for candidate in group
+        if candidate.key_kind in allowed
+    )
+
+
 def _telemetry_scored_arms(
     fit_rows: Sequence[Row], eval_rows: Sequence[Row]
 ) -> dict[str, list[ScoredRow]]:
@@ -173,6 +193,13 @@ def _telemetry_scored_arms(
         )
         for repo in sorted(eval_repos)
     }
+    candidate_kb_by_repo = {
+        repo: ClauseResourceKB.fit_public(
+            (row.observation(0.0, 1.0) for row in fit_rows if row.repo != repo),
+            representation=STRUCTURED_ARGV_REPRESENTATION,
+        )
+        for repo in sorted(eval_repos)
+    }
     by_task: dict[tuple[int, str], list[Row]] = defaultdict(list)
     for row in eval_rows:
         by_task[(row.manifest_index, row.task_id)].append(row)
@@ -182,6 +209,8 @@ def _telemetry_scored_arms(
             "current",
             "public_only",
             "local_only",
+            "candidate_r_public_only",
+            "candidate_r",
             "current_public_oracle",
             "node_oracle",
         )
@@ -193,17 +222,17 @@ def _telemetry_scored_arms(
         query_ts = float(task_ordinal * 2 + 1)
         settle_ts = query_ts + 1.0
         for clause_index, row in enumerate(rows):
+            current_kb = kb_by_repo[row.repo]
+            candidate_kb = candidate_kb_by_repo[row.repo]
             # Raises when no evidence node exists; never falls back to synthetic.
-            prediction = kb_by_repo[row.repo].predict_clause_latency_bucket(
+            prediction = current_kb.predict_clause_latency_bucket(
                 row.repo,
                 row.bin,
                 row.argv,
                 CANONICAL_LATENCY_BUCKETS,
                 ts_start=query_ts,
             )
-            candidates = kb_by_repo[
-                row.repo
-            ].diagnostic_clause_latency_candidates(
+            candidates = current_kb.diagnostic_clause_latency_candidates(
                 row.repo,
                 row.bin,
                 row.argv,
@@ -220,6 +249,28 @@ def _telemetry_scored_arms(
             )
             local = next(
                 (item for item in candidates if item.scope == "repo"),
+                None,
+            )
+            candidate_prediction = candidate_kb.predict_clause_latency_bucket(
+                row.repo,
+                row.bin,
+                row.argv,
+                CANONICAL_LATENCY_BUCKETS,
+                ts_start=query_ts,
+            )
+            candidate_nodes = candidate_kb.diagnostic_clause_latency_candidates(
+                row.repo,
+                row.bin,
+                row.argv,
+                CANONICAL_LATENCY_BUCKETS,
+                ts_start=query_ts,
+            )
+            if not candidate_nodes or candidate_nodes[0] != candidate_prediction:
+                raise AssertionError(
+                    "Candidate R diagnostic nodes differ from runtime prediction"
+                )
+            candidate_public = next(
+                (item for item in candidate_nodes if item.scope == "public"),
                 None,
             )
             label = CANONICAL_LATENCY_BUCKETS.bucket_id(row.latency_ms)
@@ -240,6 +291,21 @@ def _telemetry_scored_arms(
                     None if local is not None else "no_local_evidence",
                 )
             )
+            scored["candidate_r_public_only"].append(
+                _scored_row(
+                    row,
+                    clause_index,
+                    candidate_public,
+                    (
+                        None
+                        if candidate_public is not None
+                        else "no_structured_public_evidence"
+                    ),
+                )
+            )
+            scored["candidate_r"].append(
+                _scored_row(row, clause_index, candidate_prediction)
+            )
             current_public = [prediction]
             if public is not None and public != prediction:
                 current_public.append(public)
@@ -254,13 +320,20 @@ def _telemetry_scored_arms(
                 _scored_row(
                     row,
                     clause_index,
-                    _oracle_prediction(candidates, label, prediction),
+                    _oracle_prediction(
+                        _bounded_node_oracle_candidates(
+                            candidates,
+                            candidate_nodes,
+                        ),
+                        label,
+                        prediction,
+                    ),
                 )
             )
         for row in rows:
-            kb_by_repo[row.repo].observe_completed_clause(
-                row.observation(query_ts, settle_ts)
-            )
+            observation = row.observation(query_ts, settle_ts)
+            kb_by_repo[row.repo].observe_completed_clause(observation)
+            candidate_kb_by_repo[row.repo].observe_completed_clause(observation)
     if not scored["current"]:
         raise ValueError("no eligible clause telemetry observations to score")
     return scored
@@ -361,6 +434,90 @@ def _telemetry_metrics(
         "fallback_path_counts": dict(
             sorted(Counter(":".join(row.fallback_path or ()) for row in known).items())
         ),
+        "canonicalizer_version_counts": dict(
+            sorted(Counter(row.canonicalizer_version for row in known).items())
+        ),
+    }
+
+
+def _percentile(values: Sequence[float], probability: float) -> float:
+    ordered = sorted(values)
+    position = probability * (len(ordered) - 1)
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
+def _paired_repo_cluster_bootstrap(
+    current: Sequence[ScoredRow],
+    candidate: Sequence[ScoredRow],
+    *,
+    seed: int = 0,
+    draws: int = 2000,
+) -> dict[str, Any]:
+    """Paired repository-cluster uncertainty for Candidate R's exact score."""
+
+    identity = [(row.sample_id, row.label_bucket, row.repo) for row in current]
+    if identity != [
+        (row.sample_id, row.label_bucket, row.repo) for row in candidate
+    ]:
+        raise AssertionError("bootstrap arms have different rows or labels")
+    if any(
+        row.probability_by_bucket is None for row in (*current, *candidate)
+    ):
+        raise ValueError("bootstrap refuses unavailable predictions")
+    indices_by_repo: dict[str, list[int]] = defaultdict(list)
+    for index, row in enumerate(current):
+        indices_by_repo[row.repo].append(index)
+    repositories = sorted(indices_by_repo)
+    rng = random.Random(seed)
+
+    def statistic(indices: Sequence[int]) -> float:
+        current_correct = sum(
+            _argmax_bucket(current[index]) == current[index].label_bucket
+            for index in indices
+        )
+        candidate_correct = sum(
+            _argmax_bucket(candidate[index]) == candidate[index].label_bucket
+            for index in indices
+        )
+        labels = Counter(current[index].label_bucket for index in indices)
+        majority_count = max(labels.values())
+        denominator = len(indices)
+        return candidate_correct / denominator - max(
+            current_correct / denominator,
+            majority_count / denominator,
+        )
+
+    point = statistic(range(len(current)))
+    samples = []
+    for _ in range(draws):
+        sampled_repositories = [
+            repositories[rng.randrange(len(repositories))]
+            for _ in range(len(repositories))
+        ]
+        sampled_indices = [
+            index
+            for repo in sampled_repositories
+            for index in indices_by_repo[repo]
+        ]
+        samples.append(statistic(sampled_indices))
+    lower = _percentile(samples, 0.025)
+    median = _percentile(samples, 0.5)
+    upper = _percentile(samples, 0.975)
+    return {
+        "method": "paired_repository_cluster_percentile_bootstrap",
+        "cluster_unit": "repository",
+        "seed": seed,
+        "draws": draws,
+        "statistic": "candidate_r_accuracy_minus_max_current_same_resample_majority",
+        "point_estimate": point,
+        "median": median,
+        "interval_95": [lower, upper],
+        "positive_draw_fraction": sum(value > 0.0 for value in samples) / draws,
+        "sign_positive": median > 0.0,
+        "confirmatory": False,
     }
 
 
@@ -382,6 +539,10 @@ def evaluate_clause_telemetry(
     current_metrics = _telemetry_metrics(rows)
     current_accuracy = current_metrics["three_class_accuracy"]
     assert current_accuracy is not None
+    candidate_metrics = _telemetry_metrics(
+        arms["candidate_r"],
+        current_accuracy=current_accuracy,
+    )
     majority = {
         "class": current_metrics["majority_class"],
         "class_id": current_metrics["majority_class_id"],
@@ -416,6 +577,16 @@ def evaluate_clause_telemetry(
                     "selection_forbidden": True,
                 },
             },
+            "candidates": {
+                "candidate_r_public_only": {
+                    **_telemetry_metrics(
+                        arms["candidate_r_public_only"],
+                        current_accuracy=current_accuracy,
+                    ),
+                    "representation_only_diagnostic": True,
+                },
+                "candidate_r": candidate_metrics,
+            },
             "oracles": {
                 "current_public": {
                     **_telemetry_metrics(
@@ -425,7 +596,7 @@ def evaluate_clause_telemetry(
                     "oracle": True,
                     "deployable": False,
                 },
-                "current_nodes": {
+                "current_and_candidate_nodes": {
                     **_telemetry_metrics(
                         arms["node_oracle"],
                         current_accuracy=current_accuracy,
@@ -433,10 +604,17 @@ def evaluate_clause_telemetry(
                     "oracle": True,
                     "deployable": False,
                     "candidate_nodes": (
-                        "repo exact/prefix/bin and public bin/global; "
-                        "structured Candidate R is not implemented yet"
+                        "deployable current prediction as the non-oracle fallback; "
+                        "hindsight choice is limited to repo exact/structured/bin "
+                        "and public structured/bin/global"
                     ),
                 },
+            },
+            "uncertainty": {
+                "candidate_r_vs_best_baseline": _paired_repo_cluster_bootstrap(
+                    arms["current"],
+                    arms["candidate_r"],
+                )
             },
             "metrics": current_metrics,
             "provenance": dict(provenance),
@@ -483,6 +661,21 @@ def _run_clause_telemetry(args: argparse.Namespace) -> None:
         ),
         "scoring_unit": "kb_eligible_clause",
         "public_prior": "leave_one_repo_out over the fit corpus",
+        "candidate_r": {
+            "representation": STRUCTURED_ARGV_REPRESENTATION,
+            "stable_subcommand_min_distinct_fit_repositories": 3,
+            "stable_subcommand_uses_labels": False,
+            "repo_hierarchy": "raw exact, structured argv, bin",
+            "public_hierarchy": "structured argv, bin, global",
+            "arbitration": "same hard first-nonempty selection as current",
+        },
+        "bootstrap": {
+            "seed": 0,
+            "draws": 2000,
+            "cluster_unit": "repository",
+            "interval": "95% percentile",
+            "positive_sign_rule": "bootstrap median > 0",
+        },
         "task_order": "(manifest_index, task_id) ascending",
         "trace_update": (
             "predict every clause of a task before any of that task's observations "

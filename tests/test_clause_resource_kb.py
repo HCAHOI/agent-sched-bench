@@ -7,6 +7,7 @@ import pytest
 from tool_resource.runtime_kb import (
     CANONICAL_LATENCY_BUCKET_EDGES_MS,
     GENERIC_ARGV_CANONICALIZER_VERSION,
+    STRUCTURED_ARGV_REPRESENTATION,
     ClauseObservation,
     ClauseResourceKB,
     LatencyBuckets,
@@ -79,12 +80,13 @@ def test_generic_argv_collapses_opaque_values_and_has_explicit_version() -> None
         ),
     )
 
-    assert GENERIC_ARGV_CANONICALIZER_VERSION == "generic-argv-v2-shape"
+    assert GENERIC_ARGV_CANONICALIZER_VERSION == "generic-argv-v3-role"
     assert first == second
     assert first.split("\x00") == [
-        "runner",
-        "<ARG>",
-        "--path=<PATH>",
+        "bin:runner",
+        "subcommand:<ARG>",
+        "option:--path=<PATH>",
+        "positionals:",
         "<URL>",
         "<ID>",
         "<ID>",
@@ -116,17 +118,18 @@ def test_generic_argv_preserves_option_shape_without_plaintext_values() -> None:
         ),
     )
 
-    assert len(keys) == 3
+    # Option order is normalized, while option identity remains distinct.
+    assert len(keys) == 2
     assert redacted.split("\x00") == [
-        "tool",
-        "HOME=<PATH>",
-        "--password=<ARG>",
-        "--api-key",
-        "<ARG>",
-        "--mode=<ARG>",
-        "-p=<ARG>",
-        "-H",
-        "<ARG>",
+        "bin:tool",
+        "subcommand:<NONE>",
+        "option:--api-key=<ARG>",
+        "option:--mode=<ARG>",
+        "option:--password=<ARG>",
+        "option:-H=<ARG>",
+        "option:-p=<ARG>",
+        "option:env:HOME=<PATH>",
+        "positionals:",
     ]
     for secret in ("private", "hunter2", "split-secret", "private-token"):
         assert secret not in redacted
@@ -139,9 +142,125 @@ def test_generic_argv_keeps_numeric_order_of_magnitude() -> None:
 
     assert small != large
     assert large == nearby
-    assert large.split("\x00") == ["tool", "-j=<NUM:+E1>", "<NUM:+E2>"]
+    assert large.split("\x00") == [
+        "bin:tool",
+        "subcommand:<NUM:+E2>",
+        "option:-j=<NUM:+E1>",
+        "positionals:",
+    ]
     assert _generic_exact("tool", ("tool", "1e1000000000000000000")).endswith(
-        "<NUM:EXTREME>"
+        "subcommand:<NUM:EXTREME>\x00positionals:"
+    )
+
+
+def test_structured_argv_uses_only_fit_approved_subcommands_and_keeps_multiplicity() -> None:
+    fit = [
+        _obs(
+            f"owner__repo-{index}",
+            "runner",
+            ("runner", "deploy", "--mode=fast", f"/tmp/build-{index}"),
+            float(index),
+            float(index) + 0.5,
+        )
+        for index in range(3)
+    ]
+    fit.extend(
+        [
+            _obs("owner__one", "runner", ("runner", "publish"), 4.0, 4.5),
+            _obs("owner__two", "runner", ("runner", "publish"), 5.0, 5.5),
+        ]
+    )
+    kb = ClauseResourceKB.fit_public(
+        fit,
+        representation=STRUCTURED_ARGV_REPRESENTATION,
+    )
+
+    snapshot = kb.to_json_obj()
+    assert snapshot["canonicalizer_version"] == GENERIC_ARGV_CANONICALIZER_VERSION
+    assert snapshot["stable_subcommands"] == [["runner", "deploy"]]
+    deploy = generic_argv_keys(
+        "runner",
+        ("runner", "deploy", "--mode=slow", "/private/opaque"),
+        stable_subcommands=frozenset({("runner", "deploy")}),
+    )[0][1]
+    publish = generic_argv_keys(
+        "runner",
+        ("runner", "publish", "--mode=slow", "/private/opaque"),
+        stable_subcommands=frozenset({("runner", "deploy")}),
+    )[0][1]
+    reordered = generic_argv_keys(
+        "runner",
+        ("runner", "deploy", "--quiet", "--mode=slow"),
+        stable_subcommands=frozenset({("runner", "deploy")}),
+    )[0][1]
+    same_reordered = generic_argv_keys(
+        "runner",
+        ("runner", "deploy", "--mode=slow", "--quiet"),
+        stable_subcommands=frozenset({("runner", "deploy")}),
+    )[0][1]
+    repeated = generic_argv_keys(
+        "runner",
+        ("runner", "deploy", "--quiet", "--quiet", "--mode=slow"),
+        stable_subcommands=frozenset({("runner", "deploy")}),
+    )[0][1]
+
+    assert "subcommand:deploy" in deploy
+    assert "publish" not in publish
+    assert reordered == same_reordered
+    assert repeated != reordered
+    assert "private" not in deploy and "opaque" not in deploy
+
+
+def test_structured_argv_keeps_explicit_operand_boundary_and_positional_order() -> None:
+    stable = frozenset({("runner", "deploy")})
+    first = generic_argv_keys(
+        "runner",
+        ("runner", "deploy", "--", "5", "/tmp/a"),
+        stable_subcommands=stable,
+    )[0][1]
+    second = generic_argv_keys(
+        "runner",
+        ("runner", "deploy", "--", "/tmp/b", "5"),
+        stable_subcommands=stable,
+    )[0][1]
+
+    assert first != second
+    assert "boundary:--" in first.split("\x00")
+
+
+def test_structured_standalone_option_values_are_consumed_and_order_invariant() -> None:
+    stable = frozenset({("tool", "deploy")})
+    first = generic_argv_keys(
+        "tool",
+        ("tool", "deploy", "--count", "10", "--file", "opaque-a"),
+        stable_subcommands=stable,
+    )[0][1]
+    reordered = generic_argv_keys(
+        "tool",
+        ("tool", "deploy", "--file", "opaque-b", "--count", "10"),
+        stable_subcommands=stable,
+    )[0][1]
+    fit = [
+        _obs(
+            f"repo-{index}",
+            "tool",
+            ("tool", "--token", "production"),
+            float(index),
+            float(index) + 0.5,
+        )
+        for index in range(3)
+    ]
+    kb = ClauseResourceKB.fit_public(
+        fit,
+        representation=STRUCTURED_ARGV_REPRESENTATION,
+    )
+
+    assert first == reordered
+    assert "production" not in first
+    assert kb.to_json_obj()["stable_subcommands"] == []
+    assert all(
+        "production" not in key
+        for _, key, _ in kb.to_json_obj()["public"]["latency_ms"]
     )
 
 
@@ -621,6 +740,56 @@ def test_serialization_round_trip_preserves_latency_predictions_and_pending() ->
         "r1", "pytest -q", 31.0, buckets
     ).prediction
     assert late is not None and late.evidence_count == 2
+
+
+def test_structured_snapshot_restores_vocabulary_state_and_provenance() -> None:
+    fit = [
+        _obs(
+            f"fit-{index}",
+            "runner",
+            ("runner", "deploy", f"--path=/tmp/{index}"),
+            float(index),
+            float(index) + 0.5,
+        )
+        for index in range(3)
+    ]
+    kb = ClauseResourceKB.fit_public(
+        fit,
+        representation=STRUCTURED_ARGV_REPRESENTATION,
+    )
+    kb.observe_completed_clause(
+        _obs(
+            "repo",
+            "runner",
+            ("runner", "deploy", "--path=/tmp/local"),
+            10.0,
+            12.0,
+            latency_ms=3000.0,
+        )
+    )
+    expected = kb.predict_clause_latency_bucket(
+        "repo",
+        "runner",
+        ("runner", "deploy", "--path=/another/value"),
+        LatencyBuckets((2000.0, 8000.0)),
+        ts_start=13.0,
+    )
+
+    snapshot = json.loads(json.dumps(kb.to_json_obj()))
+    restored = ClauseResourceKB.from_json_obj(snapshot)
+    actual = restored.predict_clause_latency_bucket(
+        "repo",
+        "runner",
+        ("runner", "deploy", "--path=/another/value"),
+        LatencyBuckets((2000.0, 8000.0)),
+        ts_start=13.0,
+    )
+
+    assert restored.representation == STRUCTURED_ARGV_REPRESENTATION
+    assert actual == expected
+    assert actual.scope == "repo"
+    assert actual.key_kind == "structured_argv"
+    assert actual.canonicalizer_version == GENERIC_ARGV_CANONICALIZER_VERSION
 
 
 def test_v5_snapshot_requires_refit_for_resource_labels() -> None:

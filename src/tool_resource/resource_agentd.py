@@ -36,6 +36,7 @@ from tool_resource.resource_protocol import (
 )
 from tool_resource.runtime_kb import (
     CANONICAL_LATENCY_BUCKETS,
+    RAW_ARGV_REPRESENTATION,
     ClauseObservation,
     ClauseResourceKB,
     LatencyBuckets,
@@ -128,12 +129,18 @@ class ResourceService:
         telemetry_transport: TelemetryTransport,
         *,
         result_ttl_s: float = DEFAULT_RESULT_TTL_S,
+        kb_representation: str = RAW_ARGV_REPRESENTATION,
     ) -> None:
         if not math.isfinite(result_ttl_s) or result_ttl_s <= 0:
             raise ValueError("result_ttl_s must be finite and positive")
         self.store = store
         self.telemetry = telemetry_transport
         self.result_ttl_s = result_ttl_s
+        # Validation belongs to the canonical KB; constructing an empty state
+        # has no evidence or persistence side effect.
+        self.kb_representation = ClauseResourceKB(
+            representation=kb_representation
+        ).representation
         self._runs: dict[str, _Run] = {}
         self._traces: dict[str, _Trace] = {}
         self._operation_results: dict[
@@ -335,7 +342,14 @@ class ResourceService:
                 for observation in observations
                 if observation.repo != scope and observation.latency_ms is not None
             ]
-            kb = ClauseResourceKB.fit_public(public) if public else ClauseResourceKB()
+            kb = (
+                ClauseResourceKB.fit_public(
+                    public,
+                    representation=self.kb_representation,
+                )
+                if public
+                else ClauseResourceKB(representation=self.kb_representation)
+            )
             for observation in observations:
                 if observation.repo == scope:
                     kb.observe_completed_clause(observation)
@@ -1306,6 +1320,7 @@ class ResourceService:
                     "pinned_snapshot_id": run.pinned_snapshot_id,
                     "resulting_snapshot_id": resulting_snapshot,
                     "canonicalizer_version": CANONICALIZER_VERSION,
+                    "kb_canonicalizer_version": run.kb.canonicalizer_version,
                     "store_schema_version": STORE_SCHEMA_VERSION,
                     "latency_bucket_edges_ms": list(run.buckets.edges_ms),
                     "update_policy": run.update_policy,

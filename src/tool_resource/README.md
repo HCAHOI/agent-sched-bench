@@ -64,3 +64,13 @@ tool_resource:
 Latency intervals are `[0, 2000]`, `(2000, 8000]`, and `(8000, +inf)`: an
 exact boundary belongs to the lower bucket. Compound-command buckets are not
 composed.
+
+The serving default remains `raw-argv-prefix-v1`: repository exact/prefix/bin
+evidence backs off to public bin/global evidence. Development evaluation may
+construct the same `ClauseResourceKB` with `generic-argv-v3-role`. That arm
+keeps raw repository exact keys, replaces ordered prefixes with one
+privacy-preserving role signature, and adds the same signature to frozen public
+evidence. Its stable subcommand vocabulary is derived without labels from at
+least three distinct fit repositories. The selected representation and
+canonicalizer version are carried by prediction provenance and KB snapshots;
+there is no client-side predictor or per-command fallback.

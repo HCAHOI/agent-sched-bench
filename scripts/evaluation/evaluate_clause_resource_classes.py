@@ -18,6 +18,7 @@ from tool_resource_eval.labels import repo_of  # noqa: E402
 from tool_resource.runtime_kb import (  # noqa: E402
     CANONICAL_RESOURCE_HEAVY_THRESHOLDS,
     SHORT_NULL_LIGHT_MAX_LATENCY_MS,
+    STRUCTURED_ARGV_REPRESENTATION,
     ClauseObservation,
     ClauseResourceKB,
 )
@@ -122,14 +123,83 @@ def _label(row: Row, resource: str) -> tuple[bool | None, str]:
     return None, "null_unavailable"
 
 
+def _empty_confusion() -> dict[str, Any]:
+    return {
+        "provenance_counts": Counter(),
+        "tp": 0,
+        "tn": 0,
+        "fp": 0,
+        "fn": 0,
+        "prediction_unavailable": 0,
+    }
+
+
+def _finalize_resource_metric(
+    raw: dict[str, Any],
+    label_source_counts: Counter[str],
+) -> dict[str, Any]:
+    tp, tn, fp, fn = (raw[key] for key in ("tp", "tn", "fp", "fn"))
+    predicted_n = tp + tn + fp + fn
+    label_eligible_n = sum(
+        count
+        for source, count in label_source_counts.items()
+        if source != "null_unavailable"
+    )
+    if predicted_n + raw["prediction_unavailable"] != label_eligible_n:
+        raise AssertionError("resource confusion matrix does not reconcile")
+    heavy = label_source_counts["observed_heavy"]
+    return {
+        "eligible_n": label_eligible_n,
+        "prediction_available": predicted_n,
+        "observed_heavy": label_source_counts["observed_heavy"],
+        "observed_light": label_source_counts["observed_light"],
+        "short_null_imputed_light": label_source_counts[
+            "short_null_imputed_light"
+        ],
+        "null_unavailable": label_source_counts["null_unavailable"],
+        "heavy_count": heavy,
+        "heavy_rate": heavy / label_eligible_n if label_eligible_n else None,
+        "accuracy": (
+            (tp + tn) / label_eligible_n
+            if label_eligible_n and raw["prediction_unavailable"] == 0
+            else None
+        ),
+        "available_only_accuracy": (
+            (tp + tn) / predicted_n if predicted_n else None
+        ),
+        "majority_light_accuracy": (
+            1.0 - heavy / label_eligible_n if label_eligible_n else None
+        ),
+        "tp": tp,
+        "tn": tn,
+        "fp": fp,
+        "fn": fn,
+        "prediction_unavailable": raw["prediction_unavailable"],
+        "label_source_counts": dict(label_source_counts),
+        "provenance_counts": dict(raw["provenance_counts"]),
+    }
+
+
 def evaluate(fit_rows: list[Row], eval_rows: list[Row]) -> dict[str, Any]:
+    fit_tasks = {row.task_id for row in fit_rows}
+    eval_tasks = {row.task_id for row in eval_rows}
+    overlap = fit_tasks & eval_tasks
+    if overlap:
+        raise ValueError(f"fit/eval task overlap: {sorted(overlap)[:3]}")
     fit_repos = {row.repo for row in fit_rows}
     eval_repos = {row.repo for row in eval_rows}
-    kbs = {
+    current_kbs = {
         repo: ClauseResourceKB.fit_public(
             row.observation(0.0, 1.0) for row in fit_rows if row.repo != repo
         )
-        for repo in eval_repos
+        for repo in sorted(eval_repos)
+    }
+    candidate_kbs = {
+        repo: ClauseResourceKB.fit_public(
+            (row.observation(0.0, 1.0) for row in fit_rows if row.repo != repo),
+            representation=STRUCTURED_ARGV_REPRESENTATION,
+        )
+        for repo in sorted(eval_repos)
     }
     by_task: dict[tuple[int, str], list[Row]] = defaultdict(list)
     for row in eval_rows:
@@ -138,73 +208,91 @@ def evaluate(fit_rows: list[Row], eval_rows: list[Row]) -> dict[str, Any]:
     metrics = {
         resource: {
             "label_source_counts": Counter(),
-            "provenance_counts": Counter(),
-            "tp": 0,
-            "tn": 0,
-            "fp": 0,
-            "fn": 0,
-            "prediction_unavailable": 0,
+            "arms": {
+                "current": _empty_confusion(),
+                "candidate_r": _empty_confusion(),
+            },
         }
         for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS
     }
     for task_ordinal, key in enumerate(sorted(by_task)):
         rows = by_task[key]
         query_ts = float(task_ordinal * 2 + 1)
-        kb = kbs[rows[0].repo]
+        current_kb = current_kbs[rows[0].repo]
+        candidate_kb = candidate_kbs[rows[0].repo]
         for row in rows:
-            predictions = kb.predict_clause_resource_classes(
-                row.repo, row.bin, row.argv, ts_start=query_ts
-            )
-            for resource, prediction in predictions.items():
+            predictions_by_arm = {
+                "current": current_kb.predict_clause_resource_classes(
+                    row.repo, row.bin, row.argv, ts_start=query_ts
+                ),
+                "candidate_r": candidate_kb.predict_clause_resource_classes(
+                    row.repo, row.bin, row.argv, ts_start=query_ts
+                ),
+            }
+            for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS:
                 label, source = _label(row, resource)
                 metric = metrics[resource]
                 metric["label_source_counts"][source] += 1
                 if label is None:
                     continue
-                if prediction is None:
-                    metric["prediction_unavailable"] += 1
-                    continue
-                metric["provenance_counts"][
-                    f"{prediction.scope}:{prediction.key_kind}"
-                ] += 1
-                predicted = prediction.label == "heavy"
-                if label and predicted:
-                    metric["tp"] += 1
-                elif label:
-                    metric["fn"] += 1
-                elif predicted:
-                    metric["fp"] += 1
-                else:
-                    metric["tn"] += 1
+                for arm, predictions in predictions_by_arm.items():
+                    prediction = predictions[resource]
+                    arm_metric = metric["arms"][arm]
+                    if prediction is None:
+                        arm_metric["prediction_unavailable"] += 1
+                        continue
+                    arm_metric["provenance_counts"][
+                        f"{prediction.scope}:{prediction.key_kind}:"
+                        f"{prediction.canonicalizer_version}"
+                    ] += 1
+                    predicted = prediction.label == "heavy"
+                    if label and predicted:
+                        arm_metric["tp"] += 1
+                    elif label:
+                        arm_metric["fn"] += 1
+                    elif predicted:
+                        arm_metric["fp"] += 1
+                    else:
+                        arm_metric["tn"] += 1
         close_ts = query_ts + 0.5
         for row in rows:
-            kb.observe_completed_clause(row.observation(query_ts, close_ts))
+            observation = row.observation(query_ts, close_ts)
+            current_kb.observe_completed_clause(observation)
+            candidate_kb.observe_completed_clause(observation)
 
-    output_metrics: dict[str, Any] = {}
+    current_metrics: dict[str, Any] = {}
+    candidate_metrics: dict[str, Any] = {}
     for resource, raw in metrics.items():
-        tp, tn, fp, fn = (raw[key] for key in ("tp", "tn", "fp", "fn"))
-        eligible = tp + tn + fp + fn
-        heavy = tp + fn
-        if eligible + raw["prediction_unavailable"] != sum(
-            count
-            for source, count in raw["label_source_counts"].items()
-            if source != "null_unavailable"
-        ):
-            raise AssertionError(f"{resource}: confusion matrix does not reconcile")
-        output_metrics[resource] = {
+        current = _finalize_resource_metric(
+            raw["arms"]["current"],
+            raw["label_source_counts"],
+        )
+        candidate = _finalize_resource_metric(
+            raw["arms"]["candidate_r"],
+            raw["label_source_counts"],
+        )
+        current_metrics[resource] = {
             "threshold": CANONICAL_RESOURCE_HEAVY_THRESHOLDS[resource],
-            "eligible_n": eligible,
-            "heavy_count": heavy,
-            "heavy_rate": heavy / eligible if eligible else None,
-            "accuracy": (tp + tn) / eligible if eligible else None,
-            "majority_light_accuracy": 1.0 - heavy / eligible if eligible else None,
-            "tp": tp,
-            "tn": tn,
-            "fp": fp,
-            "fn": fn,
-            "prediction_unavailable": raw["prediction_unavailable"],
-            "label_source_counts": dict(raw["label_source_counts"]),
-            "provenance_counts": dict(raw["provenance_counts"]),
+            **current,
+        }
+        candidate_metrics[resource] = {
+            "threshold": CANONICAL_RESOURCE_HEAVY_THRESHOLDS[resource],
+            **candidate,
+            "current_accuracy": current["accuracy"],
+            "accuracy_minus_current_percentage_points": (
+                None
+                if candidate["accuracy"] is None or current["accuracy"] is None
+                else 100.0 * (candidate["accuracy"] - current["accuracy"])
+            ),
+            "accuracy_minus_majority_light_percentage_points": (
+                None
+                if candidate["accuracy"] is None
+                else 100.0
+                * (
+                    candidate["accuracy"]
+                    - candidate["majority_light_accuracy"]
+                )
+            ),
         }
     return {
         "artifact_type": "development_exposed_serialized_virtual_resource_classification",
@@ -219,6 +307,10 @@ def evaluate(fit_rows: list[Row], eval_rows: list[Row]) -> dict[str, Any]:
             "task_count": len({row.task_id for row in eval_rows}),
             "repo_count": len(eval_repos),
         },
+        "row_identity": {
+            "identical_label_rows_across_arms": True,
+            "fit_eval_task_overlap_count": 0,
+        },
         "label_policy": {
             "heavy_is_strictly_greater_than_threshold": True,
             "short_null_light_max_latency_ms_exclusive": SHORT_NULL_LIGHT_MAX_LATENCY_MS,
@@ -227,7 +319,14 @@ def evaluate(fit_rows: list[Row], eval_rows: list[Row]) -> dict[str, Any]:
             "memory_unit": "decimal_MB",
             "disk_unit": "read_plus_write_bytes_from_linux_task_io_accounting",
         },
-        "metrics": output_metrics,
+        "candidate_r": {
+            "representation": STRUCTURED_ARGV_REPRESENTATION,
+            "stable_subcommand_min_distinct_fit_repositories": 3,
+            "stable_subcommand_uses_labels": False,
+            "arbitration": "same hard first-nonempty selection as current",
+        },
+        "metrics": current_metrics,
+        "candidates": {"candidate_r": {"metrics": candidate_metrics}},
     }
 
 
