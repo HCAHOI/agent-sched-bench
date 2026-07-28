@@ -27,17 +27,28 @@ required.
 from __future__ import annotations
 
 import ctypes
+import heapq
 import json
 import os
 import re
+import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping, Sequence
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    BinaryIO,
+    Callable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 
 from tool_resource.artifact_schema import (
     CLAUSE_TELEMETRY_COLLECTOR,
@@ -65,6 +76,20 @@ ARG_FLAG_ARGV_CAPPED = 2
 ARG_FLAG_CONTINUED = 4
 PAGE = os.sysconf("SC_PAGE_SIZE")
 _NPROC = os.cpu_count() or 1
+
+
+def _restore_unset() -> object:
+    return _UNSET
+
+
+class _Unset:
+    def __reduce__(
+        self,
+    ) -> tuple[Callable[[], object], tuple[Any, ...]]:
+        return _restore_unset, ()
+
+
+_UNSET = _Unset()
 LOSS_COUNTER_NAMES = (
     "ringbuf_reserve_failures",
     "argv_read_failures",
@@ -82,6 +107,7 @@ TYPE_NAMES = {
     8: "bprm_meta",
     9: "interp_meta",
 }
+TYPE_CODES = {name: code for code, name in TYPE_NAMES.items()}
 
 BPF_PROGRAM = r"""
 #include <linux/binfmts.h>
@@ -900,9 +926,7 @@ def collect_case(command: str, tag: str, *, marker: str = "") -> RawRun:
     cgroup_id = cg.stat().st_ino
     bpf = BPF(text=BPF_PROGRAM)
     bpf.attach_kprobe(event="bprm_execve", fn_name="capture_bprm_argv")
-    bpf.attach_kprobe(
-        event="bprm_change_interp", fn_name="capture_interp_change"
-    )
+    bpf.attach_kprobe(event="bprm_change_interp", fn_name="capture_interp_change")
     bpf["target_cgroup"][ctypes.c_int(0)] = ctypes.c_ulonglong(cgroup_id)
 
     events: list[dict[str, Any]] = []
@@ -1020,33 +1044,17 @@ def _captured_argv(
     dict[tuple[int, int], dict[int, str]],
     dict[tuple[int, int], int],
 ]:
-    chunks: dict[tuple[int, int], dict[int, dict[int, tuple[bytes, int]]]] = {}
+    chunks: dict[
+        tuple[int, int],
+        dict[int, dict[int, tuple[bytes, int]]],
+    ] = {}
     capture_flags: dict[tuple[int, int], int] = {}
-    for event in events:
-        if event["type"] != "exec_arg":
-            continue
-        key = (int(event["host_pid"]), int(event["exec_seq"]))
-        index = int(event["arg_index"])
-        event_flags = int(event.get("arg_flags", 0))
-        if index == MAX_ARGS and event_flags & ARG_FLAG_ARGV_CAPPED:
-            capture_flags[key] = capture_flags.get(key, 0) | (1 << MAX_ARGS)
-            continue
-        if index >= MAX_ARGS:
-            continue
-        chunk_index = int(event.get("arg_chunk_index", 0))
-        word_chunks = chunks.setdefault(key, {}).setdefault(index, {})
-        if chunk_index in word_chunks:
-            capture_flags[key] = capture_flags.get(key, 0) | (1 << index)
-        raw = event.get("arg_raw")
-        payload = (
-            bytes.fromhex(raw)
-            if isinstance(raw, str)
-            else str(event.get("arg", "")).encode()
-        )
-        word_chunks[chunk_index] = (payload, event_flags)
-
     words: dict[tuple[int, int], dict[int, str]] = {}
-    for key, by_index in chunks.items():
+
+    def finish_exec(key: tuple[int, int]) -> None:
+        by_index = chunks.pop(key, None)
+        if by_index is None:
+            return
         for index, word_chunks in by_index.items():
             ordered = sorted(word_chunks)
             flags = [word_chunks[chunk][1] for chunk in ordered]
@@ -1061,6 +1069,32 @@ def _captured_argv(
             words.setdefault(key, {})[index] = b"".join(
                 word_chunks[chunk][0] for chunk in ordered
             ).decode("utf-8", "replace")
+
+    for event in events:
+        if event["type"] in {"exec_boundary", "failed_exec_attempt"}:
+            finish_exec((int(event["host_pid"]), int(event["exec_seq"])))
+            continue
+        if event["type"] != "exec_arg":
+            continue
+        key = (int(event["host_pid"]), int(event["exec_seq"]))
+        index = int(event["arg_index"])
+        event_flags = int(event.get("arg_flags", 0))
+        if index == MAX_ARGS and event_flags & ARG_FLAG_ARGV_CAPPED:
+            capture_flags[key] = capture_flags.get(key, 0) | (1 << MAX_ARGS)
+            continue
+        if index >= MAX_ARGS:
+            continue
+        chunk_index = int(event.get("arg_chunk_index", 0))
+        word_chunks = chunks.setdefault(key, {}).setdefault(index, {})
+        if chunk_index in word_chunks:
+            capture_flags[key] = capture_flags.get(key, 0) | (1 << index)
+        payload = _event_arg_payload(event)
+        word_chunks[chunk_index] = (payload, event_flags)
+
+    # Consume each buffered exec as soon as its final words exist, so finish
+    # does not retain both raw bytes and decoded argv for the whole call.
+    for key in list(chunks):
+        finish_exec(key)
     return words, capture_flags
 
 
@@ -1111,6 +1145,7 @@ def _clauses_and_lineage(
             bprm_interpreters[key] = e.get("arg", "")
             if int(e.get("arg_flags", 0)) & ARG_FLAG_TRUNCATED:
                 bprm_truncated.add(key)
+
     def argv_of(pid: int, seq: int) -> tuple[tuple[str, ...], int]:
         words = argv_words.get((pid, seq), {})
         return (
@@ -1153,17 +1188,13 @@ def _clauses_and_lineage(
                     t_end_ns=t_end,
                     bin=Path(argv[0]).name if argv else "",
                     argv=argv,
-                    requested_executable_path=requested_paths.get(
-                        (pid, e["exec_seq"])
-                    ),
+                    requested_executable_path=requested_paths.get((pid, e["exec_seq"])),
                     requested_executable_path_truncated=(
                         (pid, e["exec_seq"]) in requested_path_truncated
                     ),
                     bprm_filename=bprm_filenames.get((pid, e["exec_seq"])),
                     bprm_interp=bprm_interpreters.get((pid, e["exec_seq"])),
-                    bprm_evidence_truncated=(
-                        (pid, e["exec_seq"]) in bprm_truncated
-                    ),
+                    bprm_evidence_truncated=((pid, e["exec_seq"]) in bprm_truncated),
                     exact_argc=exact_argc.get((pid, e["exec_seq"]), len(argv)),
                     lineage_parent_pid=fork_parent.get(pid),
                     terminal=terminal,
@@ -1248,6 +1279,7 @@ def _attribute(
     fork_parent: dict[int, int],
     *,
     entry_pid: int | None = None,
+    on_attributed: Callable[[Clause, Mapping[str, Any]], None] | None = None,
 ) -> tuple[dict[tuple[int, int], list[dict[str, Any]]], list[dict[str, Any]]]:
     """Attribute perf + boundary samples to a clause; return (per_clause, gaps)."""
 
@@ -1575,7 +1607,10 @@ def _attribute(
                 }
             )
         else:
-            per_clause[(target.host_pid, target.exec_seq)].append(attributed_event)
+            if on_attributed is None:
+                per_clause[(target.host_pid, target.exec_seq)].append(attributed_event)
+            else:
+                on_attributed(target, attributed_event)
     return per_clause, gaps
 
 
@@ -1795,6 +1830,30 @@ def _task_io_totals(
     images cost quadratic time overall.
     """
 
+    return _task_io_totals_from_state(
+        attributed_tids={event["host_tid"] for event in samples},
+        perf_sample_count=sum(event["type"] == "perf" for event in samples),
+        clause=clause,
+        fork_baselines=fork_baselines,
+        exec_baseline_index=exec_baseline_index,
+        boundary_events_by_tid=boundary_events_by_tid,
+        boundary_ts_by_tid=boundary_ts_by_tid,
+    )
+
+
+def _task_io_totals_from_state(
+    *,
+    attributed_tids: set[int],
+    perf_sample_count: int,
+    clause: Clause,
+    fork_baselines: dict[int, int],
+    exec_baseline_index: Mapping[
+        tuple[int, int, int],
+        Sequence[dict[str, Any]],
+    ],
+    boundary_events_by_tid: Mapping[int, Sequence[dict[str, Any]]],
+    boundary_ts_by_tid: Mapping[int, Sequence[int]],
+) -> tuple[tuple[int, int, int] | None, str, dict[str, Any]]:
     exec_baselines = exec_baseline_index.get(
         (clause.host_pid, clause.exec_seq, clause.t_exec_ns), ()
     )
@@ -1809,7 +1868,7 @@ def _task_io_totals(
         "exec_boundary_baseline_tids": [],
         "zero_fork_baseline_tids": sorted(fork_baselines),
         "exact_endpoint_tids": [],
-        "perf_sample_count": sum(event["type"] == "perf" for event in samples),
+        "perf_sample_count": perf_sample_count,
         "counter_regression_clamps": 0,
     }
     if len(exec_baselines) != 1:
@@ -1830,7 +1889,6 @@ def _task_io_totals(
             (ts_ns, dict.fromkeys(_IO_COUNTER_FIELDS, 0)),
         )
 
-    attributed_tids = {event["host_tid"] for event in samples}
     missing_baselines = sorted(attributed_tids - set(baselines))
     if missing_baselines:
         provenance["missing_baseline_tids"] = missing_baselines
@@ -1845,8 +1903,7 @@ def _task_io_totals(
         index = bisect_right(boundary_ts_by_tid.get(tid, ()), baseline_ts)
         endpoint = (
             boundaries[index]
-            if index < len(boundaries)
-            and boundaries[index]["ts_ns"] <= clause.t_end_ns
+            if index < len(boundaries) and boundaries[index]["ts_ns"] <= clause.t_end_ns
             else None
         )
         if endpoint is None:
@@ -1942,9 +1999,7 @@ class _AttributionTables:
             "original_exec_seq": attribution["original_exec_seq"],
             "owner_host_pid": attribution["owner_host_pid"],
             "owner_exec_seq": attribution["owner_exec_seq"],
-            "fork_chain_ref": self._fork_chain_ref(
-                attribution["fork_chain_records"]
-            ),
+            "fork_chain_ref": self._fork_chain_ref(attribution["fork_chain_records"]),
             "cpu_counter_support_ref": self._cpu_counter_support_ref(
                 attribution["cpu_counter_support"]
             ),
@@ -2178,6 +2233,457 @@ def analyze(
     return metrics, gaps
 
 
+@dataclass(slots=True)
+class _StreamingCpuSeries:
+    previous: tuple[int, int] | None = None
+    current: tuple[int, int] | None = None
+    point_count: int = 0
+    windows: dict[int, float] = field(default_factory=dict)
+    finished: bool = False
+
+    def add(self, ts_ns: int, cpu_ns: int) -> None:
+        if self.finished:
+            raise RuntimeError("CPU series received a point after finalization")
+        point = (ts_ns, cpu_ns)
+        if self.current is None:
+            self.current = point
+            self.point_count = 1
+            return
+        if ts_ns < self.current[0]:
+            raise RuntimeError("CPU points are not timestamp ordered")
+        if ts_ns == self.current[0]:
+            self.current = point
+            return
+        if self.previous is not None:
+            self._add_interval(self.previous, self.current)
+        self.previous = self.current
+        self.current = point
+        self.point_count += 1
+
+    def _add_interval(
+        self,
+        first: tuple[int, int],
+        second: tuple[int, int],
+    ) -> None:
+        t0, c0 = first
+        t1, c1 = second
+        if t1 <= t0 or c1 < c0:
+            return
+        for window, cpu_ns in _apportion(t0, t1, c1 - c0):
+            self.windows[window] = self.windows.get(window, 0.0) + cpu_ns
+
+    def finish(self) -> None:
+        if self.finished:
+            return
+        if self.previous is not None and self.current is not None:
+            self._add_interval(self.previous, self.current)
+        self.finished = True
+
+
+class _StreamingClauseAccumulator:
+    def __init__(self, clause: Clause) -> None:
+        self.clause = clause
+        self.sample_count = 0
+        self.in_window_count = 0
+        self.identity_only_samples: list[dict[str, Any]] = []
+        self.cpu_sample_count = 0
+        self.cpu_series: dict[int, _StreamingCpuSeries] = {}
+        self.cpu_support_seen: set[tuple[int, int]] = set()
+        self.rss_sample_count = 0
+        self.perf_rss_samples = 0
+        self.boundary_rss_samples = 0
+        self.rss_first_ts: int | None = None
+        self.rss_last_ts: int | None = None
+        self.rss_max_gap = 0
+        self.rss_bins: dict[tuple[int, int], int] = {}
+        self.rss_profile_bins: dict[tuple[int, int], int] = {}
+        self.mm_tids: dict[int, set[int]] = {}
+        self.attributed_tids: set[int] = set()
+        self.perf_sample_count = 0
+        self.attribution_tables = _AttributionTables()
+        self.inherited_rows: list[dict[str, Any]] = []
+
+    def add_cpu_point(self, tid: int, ts_ns: int, cpu_ns: int) -> None:
+        self.cpu_series.setdefault(tid, _StreamingCpuSeries()).add(
+            ts_ns,
+            cpu_ns,
+        )
+
+    def add(
+        self,
+        sample: Mapping[str, Any],
+    ) -> list[tuple[int, int, int]]:
+        excluded = sample.get("metric_excluded")
+        if isinstance(excluded, Mapping):
+            self.identity_only_samples.append(
+                {
+                    "type": sample["type"],
+                    "ts_ns": sample["ts_ns"],
+                    "host_pid": sample["host_pid"],
+                    "host_tid": sample["host_tid"],
+                    "exec_seq": sample["exec_seq"],
+                    **excluded,
+                }
+            )
+            return []
+
+        self.sample_count += 1
+        tid = int(sample["host_tid"])
+        ts_ns = int(sample["ts_ns"])
+        cpu_ns = int(sample["cpu_ns"])
+        support = sample.get("attribution", {}).get("cpu_counter_support")
+        support_points: list[tuple[int, int]] = []
+        if isinstance(support, Mapping):
+            for point in (support.get("baseline"), support.get("endpoint")):
+                if not isinstance(point, Mapping):
+                    continue
+                support_ts = point.get("ts_ns")
+                support_cpu = point.get("cpu_ns")
+                if isinstance(support_ts, int) and isinstance(support_cpu, int):
+                    support_points.append((support_ts, support_cpu))
+
+        for support_ts, support_cpu in support_points:
+            key = (tid, support_ts)
+            if support_ts < ts_ns and key not in self.cpu_support_seen:
+                self.cpu_support_seen.add(key)
+                self.add_cpu_point(tid, support_ts, support_cpu)
+        if cpu_ns > 0:
+            self.cpu_sample_count += 1
+            self.add_cpu_point(tid, ts_ns, cpu_ns)
+        scheduled: list[tuple[int, int, int]] = []
+        for support_ts, support_cpu in support_points:
+            key = (tid, support_ts)
+            if key in self.cpu_support_seen:
+                continue
+            self.cpu_support_seen.add(key)
+            if support_ts <= ts_ns:
+                self.add_cpu_point(tid, support_ts, support_cpu)
+            else:
+                scheduled.append((tid, support_ts, support_cpu))
+
+        rss_pages = int(sample["rss_pages"])
+        if rss_pages > 0:
+            self.rss_sample_count += 1
+            if sample["type"] == "perf":
+                self.perf_rss_samples += 1
+            else:
+                self.boundary_rss_samples += 1
+            if self.rss_last_ts is not None:
+                self.rss_max_gap = max(
+                    self.rss_max_gap,
+                    ts_ns - self.rss_last_ts,
+                )
+            else:
+                self.rss_first_ts = ts_ns
+            self.rss_last_ts = ts_ns
+            mm_ptr = int(sample["mm_ptr"])
+            bin_key = (ts_ns // ALIGN_BIN_NS, mm_ptr)
+            self.rss_bins[bin_key] = rss_pages
+            self.rss_profile_bins[bin_key] = max(
+                self.rss_profile_bins.get(bin_key, 0),
+                rss_pages,
+            )
+            self.mm_tids.setdefault(mm_ptr, set()).add(tid)
+
+        self.attributed_tids.add(tid)
+        if sample["type"] == "perf":
+            self.perf_sample_count += 1
+        attribution = sample.get("attribution")
+        if isinstance(attribution, Mapping):
+            self.inherited_rows.append(self.attribution_tables.row(attribution))
+        return scheduled
+
+    def cpu_profile(self) -> tuple[tuple[int, int], ...]:
+        combined: dict[int, float] = {}
+        for series in self.cpu_series.values():
+            series.finish()
+            for window, cpu_ns in series.windows.items():
+                combined[window] = combined.get(window, 0.0) + cpu_ns
+        return tuple(
+            (window, int(round(cpu_ns))) for window, cpu_ns in sorted(combined.items())
+        )
+
+    def cpu_result(
+        self,
+        quota: float,
+        profile: tuple[tuple[int, int], ...],
+    ) -> tuple[float | None, str, dict[str, Any]]:
+        point_count = sum(series.point_count for series in self.cpu_series.values())
+        span = self.clause.t_end_ns - self.clause.t_exec_ns
+        provenance = {
+            "cpu_sample_count": self.cpu_sample_count,
+            "cpu_counter_point_count": point_count,
+            "cpu_windows": len(profile),
+            "span_s": round(span / 1e9, 3),
+        }
+        if span < _MIN_ELIGIBLE_SPAN_NS:
+            return (
+                None,
+                "clause_shorter_than_1s_ineligible_for_peak",
+                provenance,
+            )
+        if point_count < 2 or not profile:
+            return None, "insufficient_cpu_samples", provenance
+        peak: float | None = None
+        for window, cpu_ns in profile:
+            window_start = window * WINDOW_NS
+            window_span = min(
+                self.clause.t_end_ns,
+                window_start + WINDOW_NS,
+            ) - max(self.clause.t_exec_ns, window_start)
+            if window_span < _MIN_WINDOW_SPAN_NS:
+                continue
+            rate = min(cpu_ns / window_span, quota)
+            peak = rate if peak is None else max(peak, rate)
+        if peak is None:
+            return None, "no_eligible_merged_window", provenance
+        return peak, "ok", provenance
+
+    def rss_result(
+        self,
+    ) -> tuple[float | None, str, dict[str, Any]]:
+        span = max(self.clause.t_end_ns - self.clause.t_exec_ns, 1)
+        max_gap = self.rss_max_gap
+        if self.rss_first_ts is not None and self.rss_last_ts is not None:
+            max_gap = max(
+                max_gap,
+                self.rss_first_ts - self.clause.t_exec_ns,
+                self.clause.t_end_ns - self.rss_last_ts,
+            )
+        else:
+            max_gap = span
+        provenance = {
+            "rss_sample_count": self.rss_sample_count,
+            "perf_rss_samples": self.perf_rss_samples,
+            "boundary_rss_samples": self.boundary_rss_samples,
+            "distinct_mm": len(self.mm_tids),
+            "shared_mm_tid_counts": {
+                hex(mm_ptr): len(tids)
+                for mm_ptr, tids in self.mm_tids.items()
+                if len(tids) > 1
+            },
+            "max_intersample_gap_frac": round(max_gap / span, 3),
+        }
+        if self.rss_sample_count < 2:
+            return None, "insufficient_rss_samples", provenance
+        totals: dict[int, int] = {}
+        for (bin_index, _mm_ptr), pages in self.rss_bins.items():
+            totals[bin_index] = totals.get(bin_index, 0) + pages
+        return max(totals.values()) * PAGE / 1e6, "ok", provenance
+
+    def rss_profile(self) -> tuple[tuple[int, int, float], ...]:
+        rows = tuple(
+            (bin_index, mm_ptr, pages * PAGE / 1e6)
+            for (bin_index, mm_ptr), pages in self.rss_profile_bins.items()
+        )
+        if self.rss_sample_count >= 2 and len(rows) == 1:
+            return (rows[0], rows[0])
+        return rows
+
+
+def _analyze_streaming(
+    run: RawRun,
+    *,
+    entry_pid: int | None,
+    clauses_and_lineage: tuple[list[Clause], dict[int, int]],
+) -> tuple[list[ClauseMetrics], list[dict[str, Any]]]:
+    """Analyze a stable timestamp-ordered, re-iterable event source."""
+
+    clauses, fork_parent = clauses_and_lineage
+    accumulators = {
+        (clause.host_pid, clause.exec_seq): _StreamingClauseAccumulator(clause)
+        for clause in clauses
+    }
+    clauses_by_pid: dict[int, list[Clause]] = {}
+    for clause in clauses:
+        clauses_by_pid.setdefault(clause.host_pid, []).append(clause)
+    clause_starts_by_pid: dict[int, list[int]] = {}
+    for pid, pid_clauses in clauses_by_pid.items():
+        pid_clauses.sort(key=lambda clause: clause.t_exec_ns)
+        clause_starts_by_pid[pid] = [clause.t_exec_ns for clause in pid_clauses]
+
+    exit_events_by_pid: dict[int, list[dict[str, Any]]] = {}
+    boundary_events_by_tid: dict[int, list[dict[str, Any]]] = {}
+    exec_baseline_index: dict[tuple[int, int, int], list[dict[str, Any]]] = {}
+    for event in run.events:
+        if event["type"] not in {"perf", "exec_boundary", "exit_boundary"}:
+            continue
+        pid = int(event["host_pid"])
+        ts_ns = int(event["ts_ns"])
+        pid_clauses = clauses_by_pid.get(pid, ())
+        starts = clause_starts_by_pid.get(pid, ())
+        index = bisect_right(starts, ts_ns) - 1
+        for candidate_index in (index - 1, index):
+            if not (0 <= candidate_index < len(pid_clauses)):
+                continue
+            clause = pid_clauses[candidate_index]
+            if clause.t_exec_ns <= ts_ns <= clause.t_end_ns:
+                accumulators[(clause.host_pid, clause.exec_seq)].in_window_count += 1
+        if event["type"] != "perf":
+            row = dict(event)
+            boundary_events_by_tid.setdefault(
+                int(event["host_tid"]),
+                [],
+            ).append(row)
+            if event["type"] == "exec_boundary":
+                exec_baseline_index.setdefault(
+                    (pid, int(event["exec_seq"]), ts_ns),
+                    [],
+                ).append(row)
+            if event["type"] == "exit_boundary":
+                exit_events_by_pid.setdefault(pid, []).append(row)
+    boundary_ts_by_tid = {
+        tid: [event["ts_ns"] for event in events]
+        for tid, events in boundary_events_by_tid.items()
+    }
+    fork_io_baselines = _fork_io_baselines(run.events, clauses, fork_parent)
+
+    scheduled_cpu: list[tuple[int, int, tuple[int, int], int, int]] = []
+    schedule_order = 0
+
+    def flush_cpu(until_ns: int) -> None:
+        while scheduled_cpu and scheduled_cpu[0][0] <= until_ns:
+            _ts_ns, _order, key, tid, cpu_ns = heapq.heappop(scheduled_cpu)
+            accumulators[key].add_cpu_point(tid, _ts_ns, cpu_ns)
+
+    def on_attributed(
+        clause: Clause,
+        sample: Mapping[str, Any],
+    ) -> None:
+        nonlocal schedule_order
+        flush_cpu(int(sample["ts_ns"]))
+        key = (clause.host_pid, clause.exec_seq)
+        for tid, ts_ns, cpu_ns in accumulators[key].add(sample):
+            heapq.heappush(
+                scheduled_cpu,
+                (ts_ns, schedule_order, key, tid, cpu_ns),
+            )
+            schedule_order += 1
+
+    _unused, gaps = _attribute(
+        run.events,
+        clauses,
+        fork_parent,
+        entry_pid=entry_pid,
+        on_attributed=on_attributed,
+    )
+    flush_cpu(SENTINEL)
+
+    metrics: list[ClauseMetrics] = []
+    for clause in clauses:
+        key = (clause.host_pid, clause.exec_seq)
+        accumulator = accumulators[key]
+        cpu_windows = accumulator.cpu_profile()
+        peak, cpu_reason, cpu_provenance = accumulator.cpu_result(
+            run.quota_cores,
+            cpu_windows,
+        )
+        rss, rss_reason, rss_provenance = accumulator.rss_result()
+        io_totals, io_reason, io_provenance = _task_io_totals_from_state(
+            attributed_tids=accumulator.attributed_tids,
+            perf_sample_count=accumulator.perf_sample_count,
+            clause=clause,
+            fork_baselines=fork_io_baselines[key],
+            exec_baseline_index=exec_baseline_index,
+            boundary_events_by_tid=boundary_events_by_tid,
+            boundary_ts_by_tid=boundary_ts_by_tid,
+        )
+        attribution_payload = {
+            "inherited_owner_sample_count": len(accumulator.inherited_rows),
+            "inherited_owner_samples": accumulator.inherited_rows,
+            "fork_chains": accumulator.attribution_tables.fork_chains,
+            "cpu_counter_supports": (
+                accumulator.attribution_tables.cpu_counter_supports
+            ),
+        }
+        exits = exit_events_by_pid.get(clause.host_pid, ())
+        has_exit = bool(exits)
+        if clause.terminal:
+            cpu_cumulative = sum(event["cpu_ns"] for event in exits)
+            leader = next(
+                (event for event in exits if event["host_tid"] == event["host_pid"]),
+                exits[0] if exits else None,
+            )
+            raw_exit_code = leader["exit_code"] if leader else None
+            signal = (raw_exit_code & 0x7F) if raw_exit_code is not None else 0
+            exit_signal = signal or None
+            normal_exit_status = (
+                (raw_exit_code >> 8) & 0xFF
+                if raw_exit_code is not None and signal == 0
+                else None
+            )
+        else:
+            cpu_cumulative = 0
+            exit_signal = None
+            normal_exit_status = None
+        metrics.append(
+            ClauseMetrics(
+                host_pid=clause.host_pid,
+                exec_seq=clause.exec_seq,
+                bin=clause.bin,
+                argv=clause.argv,
+                requested_executable_path=clause.requested_executable_path,
+                requested_executable_path_truncated=(
+                    clause.requested_executable_path_truncated
+                ),
+                bprm_filename=clause.bprm_filename,
+                bprm_interp=clause.bprm_interp,
+                bprm_evidence_truncated=clause.bprm_evidence_truncated,
+                exact_argc=clause.exact_argc,
+                lineage_parent_pid=clause.lineage_parent_pid,
+                terminal=clause.terminal,
+                has_causal_end=clause.has_causal_end,
+                t_exec_ns=clause.t_exec_ns,
+                t_end_ns=clause.t_end_ns,
+                wall_ns=clause.t_end_ns - clause.t_exec_ns,
+                cpu_ns_cumulative=cpu_cumulative,
+                exit_signal=exit_signal,
+                normal_exit_status=normal_exit_status,
+                peak_cpu_cores=peak,
+                peak_cpu_cores_reason=cpu_reason,
+                sampled_peak_rss_mb=rss,
+                sampled_peak_rss_reason=rss_reason,
+                disk_read_bytes_total=(io_totals[0] if io_totals is not None else None),
+                disk_write_bytes_total=(
+                    io_totals[1] if io_totals is not None else None
+                ),
+                disk_cancelled_write_bytes_total=(
+                    io_totals[2] if io_totals is not None else None
+                ),
+                disk_io_reason=io_reason,
+                cpu_windows=cpu_windows,
+                rss_bins=accumulator.rss_profile(),
+                provenance={
+                    "cadence_ns": SAMPLE_PERIOD_NS,
+                    "window_ns": WINDOW_NS,
+                    "align_bin_ns": ALIGN_BIN_NS,
+                    "attributed_samples": accumulator.sample_count,
+                    "identity_only_sample_count": len(
+                        accumulator.identity_only_samples
+                    ),
+                    "identity_only_samples": (accumulator.identity_only_samples),
+                    "attribution_coverage": round(
+                        accumulator.sample_count / max(accumulator.in_window_count, 1),
+                        3,
+                    ),
+                    "boundary_coverage": {
+                        "has_exec": True,
+                        "has_exit": has_exit,
+                    },
+                    "reserve_failures": run.loss_count,
+                    "loss_counts": run.loss_counts,
+                    "quota_cores": run.quota_cores,
+                    "cpu": cpu_provenance,
+                    "rss": rss_provenance,
+                    "disk_io": io_provenance,
+                    "sample_attribution": attribution_payload,
+                },
+                argv_capture_flags=clause.argv_capture_flags,
+            )
+        )
+    return metrics, gaps
+
+
 class ClauseTelemetryIntegrityError(RuntimeError):
     """Telemetry cannot be used without hiding a coverage or lifecycle gap."""
 
@@ -2397,19 +2903,24 @@ _EVENT_FIELDS = (
     "exit_code",
     "errno",
 )
-_UNSET = object()
+_EVENT_KEYS = frozenset((*_EVENT_FIELDS, "arg", "arg_raw"))
 
 
 class EventRow(Mapping):
     """One ring-buffer event, stored compactly.
 
-    A dict per event measured 636 bytes against 388 for this layout with
-    realistic per-event values -- the difference is the dict table, since the
+    The initial dict-to-slots change measured 636 bytes against 388 with
+    realistic per-event values -- the difference was the dict table, since the
     integer values cost the same either way. A build-heavy tool call spawns
     tens of thousands of processes and every exec emits up to MAX_ARGS *
-    MAX_ARG_CHUNKS argv events, so a single call can deliver millions of these
-    and holds them until it finishes: on a two-container collection that is
-    gigabytes of host memory, and host OOM has already stopped a run.
+    MAX_ARG_CHUNKS argv events, so a single call can deliver millions of these.
+    On a two-container collection that was gigabytes of host memory, and host
+    OOM has already stopped a run.
+
+    Arg payload is stored once as bytes. The decoded ``arg`` and hexadecimal
+    ``arg_raw`` mapping values are produced only if a consumer requests them;
+    normal collection writes the bytes directly into the event spool without
+    constructing either duplicate string.
 
     It is a Mapping so every consumer keeps working through ``[]``, ``.get()``,
     ``in`` and ``**`` splat, and so do the tests that build events as plain
@@ -2417,26 +2928,20 @@ class EventRow(Mapping):
     supply them, matching the dict this replaces -- ``event.get("arg", "")``
     must still yield ``""`` and not ``None``.
 
-    One known divergence, with no consumer today: ``copy.deepcopy`` rebuilds the
-    absent-field sentinel as a fresh object, so absent fields come back present
-    holding it. Nothing deep-copies ring events; if that changes, give the
-    sentinel a stable identity across pickling rather than working around it at
-    the call site. ``copy.copy`` and JSON output are unaffected -- events reach
-    the artifact only through ``{**event, ...}`` splats, never raw.
+    The absent-field sentinel preserves its identity across pickling because
+    runtime collection tests return rows from worker processes.
     """
 
-    __slots__ = (*_EVENT_FIELDS, "arg", "arg_raw")
+    __slots__ = (*_EVENT_FIELDS, "_arg_payload")
 
     def __init__(
         self,
         *values: Any,
-        arg: Any = _UNSET,
-        arg_raw: Any = _UNSET,
+        arg_payload: bytes | object = _UNSET,
     ) -> None:
         for name, value in zip(_EVENT_FIELDS, values, strict=True):
             object.__setattr__(self, name, value)
-        object.__setattr__(self, "arg", arg)
-        object.__setattr__(self, "arg_raw", arg_raw)
+        object.__setattr__(self, "_arg_payload", arg_payload)
 
     def __getitem__(self, key: str) -> Any:
         # Membership first: `getattr` alone would answer `row["get"]` with the
@@ -2449,15 +2954,22 @@ class EventRow(Mapping):
         # TypeError. Hashing the key restores both.
         if key not in _EVENT_KEYS:
             raise KeyError(key)
-        value = getattr(self, key)
-        if value is _UNSET:
-            raise KeyError(key)
-        return value
+        if key == "arg":
+            if self._arg_payload is _UNSET:
+                raise KeyError(key)
+            return self._arg_payload.decode("utf-8", "replace")
+        if key == "arg_raw":
+            if self._arg_payload is _UNSET or self.type != "exec_arg":
+                raise KeyError(key)
+            return self._arg_payload.hex()
+        return getattr(self, key)
 
     def __iter__(self) -> Any:
-        for name in self.__slots__:
-            if getattr(self, name) is not _UNSET:
-                yield name
+        yield from _EVENT_FIELDS
+        if self._arg_payload is not _UNSET:
+            yield "arg"
+            if self.type == "exec_arg":
+                yield "arg_raw"
 
     def __len__(self) -> int:
         return sum(1 for _ in self)
@@ -2466,20 +2978,12 @@ class EventRow(Mapping):
         return f"EventRow({dict(self)!r})"
 
 
-#: Hashed key membership for :meth:`EventRow.__getitem__`; see the note there.
-_EVENT_KEYS = frozenset(EventRow.__slots__)
-
-
 def _event_row(table: Any, data: int) -> EventRow:
     event = table.event(data)
     event_type = TYPE_NAMES[int(event.type)]
-    arg: Any = _UNSET
-    arg_raw: Any = _UNSET
+    arg_payload: bytes | object = _UNSET
     if event.type in {1, 7, 8, 9}:
-        payload = bytes(event.arg).split(b"\0", 1)[0]
-        arg = payload.decode("utf-8", "replace")
-        if event.type == 1:
-            arg_raw = payload.hex()
+        arg_payload = bytes(event.arg).split(b"\0", 1)[0]
     return EventRow(
         event_type,
         int(event.timestamp_ns),
@@ -2502,9 +3006,308 @@ def _event_row(table: Any, data: int) -> EventRow:
         int(event.arg_flags),
         int(event.exit_code),
         int(event.exit_code) if event_type == "failed_exec_attempt" else 0,
-        arg=arg,
-        arg_raw=arg_raw,
+        arg_payload=arg_payload,
     )
+
+
+def _event_arg_payload(event: Mapping[str, Any]) -> bytes:
+    payload = getattr(event, "_arg_payload", _UNSET)
+    if payload is not _UNSET:
+        return payload
+    raw = event.get("arg_raw")
+    return (
+        bytes.fromhex(raw)
+        if isinstance(raw, str)
+        else str(event.get("arg", "")).encode()
+    )
+
+
+_EVENT_SPOOL_SEGMENT_BYTES = 4 * 1024 * 1024
+_EVENT_SPOOL_MERGE_FAN_IN = 32
+# arrival, type, ten u64 counters/identities, nine u32 fields,
+# payload-size-plus-one (zero means absent), fixed payload storage.
+_EVENT_RECORD = struct.Struct(f"<QB10Q9IH{ARG_BYTES}s")
+
+
+def _pack_event_record(event: Mapping[str, Any], arrival: int) -> bytes:
+    payload = getattr(event, "_arg_payload", _UNSET)
+    if payload is _UNSET:
+        payload = (
+            _event_arg_payload(event) if "arg" in event or "arg_raw" in event else None
+        )
+    payload_marker = 0 if payload is None else len(payload) + 1
+    if payload is not None and len(payload) > ARG_BYTES:
+        raise ValueError("event payload exceeds spool record")
+    return _EVENT_RECORD.pack(
+        arrival,
+        TYPE_CODES[str(event["type"])],
+        *(int(event[name]) for name in _EVENT_FIELDS[1:11]),
+        *(int(event[name]) for name in _EVENT_FIELDS[11:20]),
+        payload_marker,
+        b"" if payload is None else payload,
+    )
+
+
+def _unpack_event_record(record: bytes) -> EventRow:
+    values = _EVENT_RECORD.unpack(record)
+    event_type = TYPE_NAMES[values[1]]
+    payload_marker = values[21]
+    payload: bytes | object = (
+        _UNSET if payload_marker == 0 else values[22][: payload_marker - 1]
+    )
+    exit_code = values[20]
+    return EventRow(
+        event_type,
+        *values[2:21],
+        exit_code if event_type == "failed_exec_attempt" else 0,
+        arg_payload=payload,
+    )
+
+
+def _event_record_key(record: bytes) -> tuple[int, int]:
+    values = _EVENT_RECORD.unpack(record)
+    return int(values[2]), int(values[0])
+
+
+def _event_record_in_window(
+    record: bytes,
+    *,
+    started_ns: int,
+    ended_ns: int,
+    cgroup_id: int,
+) -> bool:
+    values = _EVENT_RECORD.unpack(record)
+    return started_ns <= values[2] <= ended_ns and values[3] == cgroup_id
+
+
+@dataclass(slots=True)
+class _EventSpoolSegment:
+    file: BinaryIO
+    record_count: int = 0
+    byte_count: int = 0
+    min_ts_ns: int = 2**64 - 1
+    max_ts_ns: int = 0
+
+
+def _temporary_binary_file(directory: Path) -> BinaryIO:
+    return tempfile.TemporaryFile(
+        mode="w+b",
+        buffering=PAGE,
+        dir=directory,
+    )
+
+
+class _SortedEventSource:
+    """Re-iterable stable timestamp order over one private temporary run."""
+
+    def __init__(self, run: BinaryIO, record_count: int) -> None:
+        self._run = run
+        self.record_count = record_count
+
+    def __iter__(self) -> Iterator[EventRow]:
+        self._run.seek(0)
+        for _ in range(self.record_count):
+            record = self._run.read(_EVENT_RECORD.size)
+            if len(record) != _EVENT_RECORD.size:
+                raise OSError("event spool sorted run is truncated")
+            yield _unpack_event_record(record)
+        if self._run.read(1):
+            raise OSError("event spool sorted run has trailing bytes")
+
+    def __len__(self) -> int:
+        return self.record_count
+
+    def close(self) -> None:
+        self._run.close()
+
+    def __enter__(self) -> "_SortedEventSource":
+        return self
+
+    def __exit__(self, *_args: Any) -> None:
+        self.close()
+
+
+def _merge_event_runs(
+    runs: Sequence[tuple[BinaryIO, int]],
+    *,
+    directory: Path,
+) -> tuple[BinaryIO, int]:
+    output = _temporary_binary_file(directory)
+    readers: list[tuple[BinaryIO, int]] = []
+    heap: list[tuple[int, int, int, bytes]] = []
+    total = 0
+    try:
+        for index, (run, count) in enumerate(runs):
+            run.seek(0)
+            readers.append((run, count))
+            if not count:
+                continue
+            record = run.read(_EVENT_RECORD.size)
+            if len(record) != _EVENT_RECORD.size:
+                raise OSError("event spool merge input is truncated")
+            ts_ns, arrival = _event_record_key(record)
+            heapq.heappush(heap, (ts_ns, arrival, index, record))
+        consumed = [0] * len(readers)
+        while heap:
+            _ts_ns, _arrival, index, record = heapq.heappop(heap)
+            output.write(record)
+            consumed[index] += 1
+            total += 1
+            run, count = readers[index]
+            if consumed[index] < count:
+                next_record = run.read(_EVENT_RECORD.size)
+                if len(next_record) != _EVENT_RECORD.size:
+                    raise OSError("event spool merge input is truncated")
+                ts_ns, arrival = _event_record_key(next_record)
+                heapq.heappush(
+                    heap,
+                    (ts_ns, arrival, index, next_record),
+                )
+        output.flush()
+        return output, total
+    except BaseException:
+        output.close()
+        raise
+    finally:
+        for run, _count in runs:
+            run.close()
+
+
+def _sorted_event_source(
+    segments: Sequence[_EventSpoolSegment],
+    *,
+    started_ns: int,
+    ended_ns: int,
+    cgroup_id: int,
+    directory: Path,
+) -> _SortedEventSource:
+    runs: list[tuple[BinaryIO, int]] = []
+    try:
+        for segment in segments:
+            segment.file.flush()
+            segment.file.seek(0)
+            records: list[bytes] = []
+            for _ in range(segment.record_count):
+                record = segment.file.read(_EVENT_RECORD.size)
+                if len(record) != _EVENT_RECORD.size:
+                    raise OSError("event spool segment is truncated")
+                if _event_record_in_window(
+                    record,
+                    started_ns=started_ns,
+                    ended_ns=ended_ns,
+                    cgroup_id=cgroup_id,
+                ):
+                    records.append(record)
+            if segment.file.read(1):
+                raise OSError("event spool segment has trailing bytes")
+            if not records:
+                continue
+            records.sort(key=_event_record_key)
+            run = _temporary_binary_file(directory)
+            try:
+                for record in records:
+                    run.write(record)
+                run.flush()
+            except BaseException:
+                run.close()
+                raise
+            runs.append((run, len(records)))
+
+        if not runs:
+            return _SortedEventSource(_temporary_binary_file(directory), 0)
+        while len(runs) > 1:
+            merged: list[tuple[BinaryIO, int]] = []
+            try:
+                for start in range(0, len(runs), _EVENT_SPOOL_MERGE_FAN_IN):
+                    merged.append(
+                        _merge_event_runs(
+                            runs[start : start + _EVENT_SPOOL_MERGE_FAN_IN],
+                            directory=directory,
+                        )
+                    )
+            except BaseException:
+                for run, _count in merged:
+                    run.close()
+                raise
+            runs = merged
+        run, count = runs.pop()
+        return _SortedEventSource(run, count)
+    except BaseException:
+        for run, _count in runs:
+            run.close()
+        raise
+
+
+class _EventSpool:
+    """Disk-backed raw event segments; memory holds only one write page."""
+
+    def __init__(self, directory: Path) -> None:
+        directory.mkdir(parents=True, exist_ok=True)
+        self.directory = directory
+        self._segments: list[_EventSpoolSegment] = []
+        self._current = _EventSpoolSegment(_temporary_binary_file(directory))
+        self._arrival = 0
+
+    def append(self, event: Mapping[str, Any]) -> None:
+        record = _pack_event_record(event, self._arrival)
+        self._arrival += 1
+        if (
+            self._current.record_count
+            and self._current.byte_count + len(record) > _EVENT_SPOOL_SEGMENT_BYTES
+        ):
+            self._seal_current()
+        written = self._current.file.write(record)
+        if written != len(record):
+            raise OSError("short event spool write")
+        ts_ns = int(event["ts_ns"])
+        self._current.record_count += 1
+        self._current.byte_count += written
+        self._current.min_ts_ns = min(self._current.min_ts_ns, ts_ns)
+        self._current.max_ts_ns = max(self._current.max_ts_ns, ts_ns)
+
+    def _seal_current(self) -> None:
+        if self._current.record_count:
+            self._current.file.flush()
+            self._segments.append(self._current)
+        else:
+            self._current.file.close()
+        self._current = _EventSpoolSegment(_temporary_binary_file(self.directory))
+
+    def drop_before(self, started_ns: int) -> None:
+        self._seal_current()
+        retained: list[_EventSpoolSegment] = []
+        for segment in self._segments:
+            if segment.max_ts_ns < started_ns:
+                segment.file.close()
+            else:
+                retained.append(segment)
+        self._segments = retained
+
+    def snapshot(self) -> tuple[_EventSpoolSegment, ...]:
+        self._seal_current()
+        return tuple(self._segments)
+
+    def release_through(
+        self,
+        ended_ns: int,
+        snapshot: Sequence[_EventSpoolSegment],
+    ) -> None:
+        consumed = {
+            id(segment) for segment in snapshot if segment.max_ts_ns <= ended_ns
+        }
+        retained: list[_EventSpoolSegment] = []
+        for segment in self._segments:
+            if id(segment) in consumed:
+                segment.file.close()
+            else:
+                retained.append(segment)
+        self._segments = retained
+
+    def close(self) -> None:
+        for segment in self._segments:
+            segment.file.close()
+        self._segments.clear()
+        self._current.file.close()
 
 
 def _counter(bpf: Any, name: str) -> int:
@@ -2631,9 +3434,11 @@ class ClauseTelemetryCollector:
         self.quota_cores = observed_quota_cores(cgroup)
         self.repo = repo
         self.artifact_path = artifact_path
+        self.artifact_path.parent.mkdir(parents=True, exist_ok=True)
         self._epoch_offset_s = time.time() - time.monotonic()
-        self._events: list[dict[str, Any]] = []
+        self._spool = _EventSpool(self.artifact_path.parent)
         self._events_lock = threading.Lock()
+        self._poll_lock = threading.Lock()
         self._stop_poll = threading.Event()
         self._poll_error: BaseException | None = None
         self._active: ToolCallToken | None = None
@@ -2655,9 +3460,7 @@ class ClauseTelemetryCollector:
 
         self._bpf = BPF(text=BPF_PROGRAM)
         try:
-            self._bpf.attach_kprobe(
-                event="bprm_execve", fn_name="capture_bprm_argv"
-            )
+            self._bpf.attach_kprobe(event="bprm_execve", fn_name="capture_bprm_argv")
             self._bpf.attach_kprobe(
                 event="bprm_change_interp", fn_name="capture_interp_change"
             )
@@ -2667,9 +3470,13 @@ class ClauseTelemetryCollector:
             self._table = self._bpf["events"]
 
             def receive(_ctx: int, data: int, _size: int) -> int:
-                row = _event_row(self._table, data)
-                with self._events_lock:
-                    self._events.append(row)
+                try:
+                    row = _event_row(self._table, data)
+                    with self._events_lock:
+                        self._spool.append(row)
+                except BaseException as exc:
+                    self._poll_error = exc
+                    self._stop_poll.set()
                 return 0
 
             self._table.open_ring_buffer(receive)
@@ -2677,7 +3484,8 @@ class ClauseTelemetryCollector:
             def poll() -> None:
                 try:
                     while not self._stop_poll.is_set():
-                        self._bpf.ring_buffer_poll(timeout=10)
+                        with self._poll_lock:
+                            self._bpf.ring_buffer_poll(timeout=10)
                 except BaseException as exc:
                     if not self._stop_poll.is_set():
                         self._poll_error = exc
@@ -2701,7 +3509,10 @@ class ClauseTelemetryCollector:
             poller = getattr(self, "_poller", None)
             if poller is not None:
                 poller.join(timeout=2)
-            self._bpf.cleanup()
+            try:
+                self._bpf.cleanup()
+            finally:
+                self._spool.close()
             self._closed = True
             self._cleanup_status = "ok"
             raise
@@ -2727,8 +3538,9 @@ class ClauseTelemetryCollector:
         collector.repo = repo
         collector.artifact_path = artifact_path
         collector._epoch_offset_s = time.time() - time.monotonic()
-        collector._events = []
+        collector._spool = None
         collector._events_lock = threading.Lock()
+        collector._poll_lock = threading.Lock()
         collector._stop_poll = threading.Event()
         collector._poll_error = None
         collector._active = None
@@ -2757,8 +3569,6 @@ class ClauseTelemetryCollector:
             self._disabled_reason = reason
             self._first_disabled_call = tool_call_id
             self._stop_poll.set()
-            with self._events_lock:
-                self._events.clear()
         if reason not in self._integrity_errors:
             self._integrity_errors.append(reason)
 
@@ -2847,7 +3657,9 @@ class ClauseTelemetryCollector:
             self._unavailable_call(self._active, reason="exec delimiter desynchronized")
             self._active = None
         if not tool_call_id:
-            self._disable("exec tool call has no tool_call_id", tool_call_id=tool_call_id)
+            self._disable(
+                "exec tool call has no tool_call_id", tool_call_id=tool_call_id
+            )
         counters = dict.fromkeys(
             (
                 "ringbuf_reserve_failures",
@@ -2890,10 +3702,15 @@ class ClauseTelemetryCollector:
         # was retained until the next finish anyway. Container background tasks
         # keep the perf sampler firing while the agent is between tool calls, so
         # that gap accumulated events destined to be discarded.
-        with self._events_lock:
-            self._events = [
-                event for event in self._events if event["ts_ns"] >= started_ns
-            ]
+        if self._spool is not None:
+            try:
+                with self._events_lock:
+                    self._spool.drop_before(started_ns)
+            except BaseException as exc:
+                self._disable(
+                    f"collector spool prepare failed: {type(exc).__name__}: {exc}",
+                    tool_call_id=tool_call_id,
+                )
         token = ToolCallToken(
             tool_call_id=tool_call_id,
             command=command,
@@ -2901,9 +3718,7 @@ class ClauseTelemetryCollector:
             ringbuf_reserve_failures=int(counters["ringbuf_reserve_failures"]),
             perf_sample_count=int(counters["perf_sample_count"]),
             argv_read_failures=int(counters["argv_read_failures"]),
-            argv_boundary_read_failures=int(
-                counters["argv_boundary_read_failures"]
-            ),
+            argv_boundary_read_failures=int(counters["argv_boundary_read_failures"]),
             source_tool_call_id=source_tool_call_id,
             source_command=source_command,
             source_tool_result=source_tool_result,
@@ -2945,32 +3760,29 @@ class ClauseTelemetryCollector:
                 tool_call_id=token.tool_call_id,
             )
             return self._unavailable_call(token)
-        # The kernel timestamps events before ring delivery. Let the poller drain,
-        # then slice on the captured end timestamp; command timing is unchanged.
+        # The kernel timestamps events before ring delivery. Serialize one final
+        # consume with the poll thread before snapshotting so every event already
+        # published by the completed command crosses the call boundary.
         try:
-            time.sleep(0.03)
-            loss_counts = _loss_delta(self._bpf, token)
-            perf_samples = (
-                _counter(self._bpf, "perf_sample_count") - token.perf_sample_count
+            with self._poll_lock:
+                self._bpf.ring_buffer_consume()
+                if self._poll_error is not None:
+                    raise self._poll_error
+                loss_counts = _loss_delta(self._bpf, token)
+                perf_samples = (
+                    _counter(self._bpf, "perf_sample_count") - token.perf_sample_count
+                )
+                with self._events_lock:
+                    spool_snapshot = self._spool.snapshot()
+            event_source = _sorted_event_source(
+                spool_snapshot,
+                started_ns=token.started_ns,
+                ended_ns=ended_ns,
+                cgroup_id=self.cgroup_id,
+                directory=self.artifact_path.parent,
             )
             with self._events_lock:
-                events = sorted(
-                    (
-                        event
-                        for event in self._events
-                        if token.started_ns <= event["ts_ns"] <= ended_ns
-                        and event["cgroup_id"] == self.cgroup_id
-                    ),
-                    key=lambda event: event["ts_ns"],
-                )
-                # Calls are sequential within a collector. Events through this
-                # call's end are now owned by the local snapshot and cannot
-                # belong to a later window; keep only later arrivals.
-                self._events = [
-                    event
-                    for event in self._events
-                    if event["ts_ns"] > ended_ns
-                ]
+                self._spool.release_through(ended_ns, spool_snapshot)
         except BaseException as exc:
             self._disable(
                 f"collector finish failed: {type(exc).__name__}: {exc}",
@@ -3036,16 +3848,18 @@ class ClauseTelemetryCollector:
             replay_exit_code=replay_exit_code,
         )
         try:
-            summary, violations = self._summarize_call(
-                token=token,
-                ended_ns=ended_ns,
-                events=events,
-                loss_counts=loss_counts,
-                perf_samples=perf_samples,
-                command_lookup_failure=lookup_failure,
-                control_flow_fidelity=control_flow_fidelity,
-                protocol_timeout=protocol_timeout,
-            )
+            with event_source:
+                summary, violations = self._summarize_call(
+                    token=token,
+                    ended_ns=ended_ns,
+                    events=event_source,
+                    raw_event_count=len(event_source),
+                    loss_counts=loss_counts,
+                    perf_samples=perf_samples,
+                    command_lookup_failure=lookup_failure,
+                    control_flow_fidelity=control_flow_fidelity,
+                    protocol_timeout=protocol_timeout,
+                )
         except Exception as exc:
             message = (
                 f"{token.tool_call_id}: telemetry analysis failed: "
@@ -3062,9 +3876,7 @@ class ClauseTelemetryCollector:
                 "command": token.command,
                 "telemetry_quality": "invalid",
                 "eligible_for_kb": False,
-                "invalid_reasons": [
-                    {"kind": "analysis_failure", "detail": message}
-                ],
+                "invalid_reasons": [{"kind": "analysis_failure", "detail": message}],
                 "integrity": {"status": "failed", "errors": [message]},
             }
             if isinstance(exc, ClauseTelemetryIntegrityError):
@@ -3158,9 +3970,7 @@ class ClauseTelemetryCollector:
                 "command": token.command,
                 "telemetry_quality": "invalid",
                 "eligible_for_kb": False,
-                "invalid_reasons": [
-                    {"kind": "analysis_failure", "detail": message}
-                ],
+                "invalid_reasons": [{"kind": "analysis_failure", "detail": message}],
                 "integrity": {"status": "failed", "errors": [message]},
             }
             violations = [message]
@@ -3176,6 +3986,7 @@ class ClauseTelemetryCollector:
         token: ToolCallToken,
         ended_ns: int,
         events: list[dict[str, Any]],
+        raw_event_count: int | None = None,
         loss_counts: Mapping[str, int],
         perf_samples: int,
         command_lookup_failure: ShellCommandLookupFailure | None = None,
@@ -3237,11 +4048,18 @@ class ClauseTelemetryCollector:
                 fork_parent,
                 fork_records=fork_records,
             )
-        metrics, attribution_gaps = analyze(
-            run,
-            entry_pid=entry_pid,
-            clauses_and_lineage=clauses_and_lineage,
-        )
+        if isinstance(events, _SortedEventSource):
+            metrics, attribution_gaps = _analyze_streaming(
+                run,
+                entry_pid=entry_pid,
+                clauses_and_lineage=clauses_and_lineage,
+            )
+        else:
+            metrics, attribution_gaps = analyze(
+                run,
+                entry_pid=entry_pid,
+                clauses_and_lineage=clauses_and_lineage,
+            )
 
         def command_descendant(pid: int) -> bool:
             current = pid
@@ -3560,7 +4378,9 @@ class ClauseTelemetryCollector:
                 "page_size_bytes": PAGE,
                 "call_started_monotonic_ns": token.started_ns,
                 "call_ended_monotonic_ns": ended_ns,
-                "raw_event_count": len(events),
+                "raw_event_count": (
+                    len(events) if raw_event_count is None else raw_event_count
+                ),
                 "exec_image_count": len(metrics),
                 "command_tree": command_tree,
                 "source_replay_control_flow_fidelity": (
@@ -3599,9 +4419,7 @@ class ClauseTelemetryCollector:
             violations.append(f"{token.tool_call_id}: mapping gaps={','.join(kinds)}")
         invalid_reasons: list[dict[str, str]] = []
         if loss:
-            invalid_reasons.append(
-                {"kind": "telemetry_loss", "detail": violations[0]}
-            )
+            invalid_reasons.append({"kind": "telemetry_loss", "detail": violations[0]})
         if relevant_gaps:
             invalid_reasons.append(
                 {
@@ -3655,9 +4473,7 @@ class ClauseTelemetryCollector:
                 self._close_bpf()
         except BaseException as exc:
             self._cleanup_status = "failed"
-            self._disable(
-                f"collector cleanup leak: {type(exc).__name__}: {exc}"
-            )
+            self._disable(f"collector cleanup leak: {type(exc).__name__}: {exc}")
         if total_loss:
             causes = ",".join(
                 f"{name}={count}" for name, count in total_loss_counts.items() if count
@@ -3671,18 +4487,14 @@ class ClauseTelemetryCollector:
                 f"{type(self._poll_error).__name__}: {self._poll_error}"
             )
         prior_state = self.state
-        valid_count = sum(
-            call.get("telemetry_quality") == "ok" for call in self.calls
-        )
+        valid_count = sum(call.get("telemetry_quality") == "ok" for call in self.calls)
         invalid_count = sum(
             call.get("telemetry_quality") == "invalid" for call in self.calls
         )
         unavailable_count = sum(
             call.get("telemetry_quality") == "unavailable" for call in self.calls
         )
-        eligible_count = sum(
-            call.get("eligible_for_kb") is True for call in self.calls
-        )
+        eligible_count = sum(call.get("eligible_for_kb") is True for call in self.calls)
         collector_healthy = (
             prior_state == "active"
             and self._cleanup_status == "ok"
@@ -3702,11 +4514,7 @@ class ClauseTelemetryCollector:
             for error in (call.get("integrity") or {}).get("errors", [])
         }
         collector_errors = (
-            [
-                error
-                for error in self._integrity_errors
-                if error not in call_errors
-            ]
+            [error for error in self._integrity_errors if error not in call_errors]
             if collector_healthy
             else list(self._integrity_errors)
         )
@@ -3730,9 +4538,7 @@ class ClauseTelemetryCollector:
                     "collector": {
                         "state": "closed",
                         "state_before_close": prior_state,
-                        "health": (
-                            "healthy" if collector_healthy else "unavailable"
-                        ),
+                        "health": ("healthy" if collector_healthy else "unavailable"),
                         "first_disabled_call": self._first_disabled_call,
                         "disabled_reason": self._disabled_reason,
                         "valid_call_count": valid_count,
@@ -3785,16 +4591,20 @@ class ClauseTelemetryCollector:
     def _close_bpf(self) -> None:
         if self._closed:
             return
-        self._stop_poll.set()
-        self._poller.join(timeout=2)
-        if self._poller.is_alive():
-            raise RuntimeError("ring poller did not stop")
-        self._bpf.detach_perf_event(
-            ev_type=self._perf_type.SOFTWARE,
-            ev_config=self._perf_config.CPU_CLOCK,
-        )
-        self._bpf.cleanup()
-        self._closed = True
+        try:
+            self._stop_poll.set()
+            self._poller.join(timeout=2)
+            if self._poller.is_alive():
+                raise RuntimeError("ring poller did not stop")
+            self._bpf.detach_perf_event(
+                ev_type=self._perf_type.SOFTWARE,
+                ev_config=self._perf_config.CPU_CLOCK,
+            )
+            self._bpf.cleanup()
+        finally:
+            if self._spool is not None:
+                self._spool.close()
+            self._closed = True
         self._cleanup_status = "ok"
 
 

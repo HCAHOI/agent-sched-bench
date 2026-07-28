@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import pickle
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from threading import Event, Lock
 from types import SimpleNamespace
 from typing import Any
@@ -16,6 +18,7 @@ from agents.openclaw.tools.base import Tool
 from agents.openclaw.tools.container import ContainerExecTool
 from agents.openclaw.tools.registry import ToolRegistry
 from llm_call.provider_base import LLMProvider, LLMResponse, ToolCallRequest
+from tool_resource import telemetry
 from tool_resource.artifact_schema import CLAUSE_TELEMETRY_SCHEMA_VERSION
 from tool_resource.telemetry import (
     ARG_FLAG_ARGV_CAPPED,
@@ -25,7 +28,9 @@ from tool_resource.telemetry import (
     MAX_ARGS,
     ClauseTelemetryCollector,
     ClauseTelemetryIntegrityError,
+    EventRow,
     ToolCallToken,
+    _EventSpool,
     _captured_argv,
     _is_protocol_timeout,
     shell_command_lookup_failure_evidence,
@@ -91,6 +96,8 @@ def _collector_without_bpf() -> ClauseTelemetryCollector:
     collector.cgroup_id = 7
     collector.quota_cores = 4.0
     collector.repo = "repo"
+    collector._spool_tmp = TemporaryDirectory(prefix="telemetry-test-")
+    collector.artifact_path = Path(collector._spool_tmp.name) / "artifact.json"
     collector._epoch_offset_s = 1_000.0
     collector.state = "active"
     collector._disabled_reason = None
@@ -99,16 +106,27 @@ def _collector_without_bpf() -> ClauseTelemetryCollector:
     # Every real collector owns these from __init__, and the disabled one from
     # unavailable(); a fixture without them is not a reachable state.
     collector._events_lock = Lock()
-    collector._events = []
+    collector._poll_lock = Lock()
+    collector._spool = _EventSpool(collector.artifact_path.parent)
     return collector
+
+
+def _set_collector_events(
+    collector: ClauseTelemetryCollector,
+    events: list[dict[str, Any]],
+) -> None:
+    collector._spool.close()
+    collector._spool = _EventSpool(collector.artifact_path.parent)
+    for event in events:
+        collector._spool.append(event)
 
 
 def _active_collector() -> ClauseTelemetryCollector:
     collector = _collector_without_bpf()
     collector.container_id = "container"
-    collector._bpf = object()
+    collector._bpf = SimpleNamespace(ring_buffer_consume=lambda: None)
     collector._events_lock = Lock()
-    collector._events = _clean_events()
+    _set_collector_events(collector, _clean_events())
     collector._stop_poll = Event()
     collector._active = None
     collector._closed = False
@@ -643,6 +661,212 @@ def test_chunked_argv_requires_one_complete_contiguous_sequence() -> None:
     assert flags[(40, 4)] == 1 << 1
 
 
+def test_event_row_keeps_one_raw_argv_payload() -> None:
+    payload = b"\xffraw"
+    row = EventRow(
+        "exec_arg",
+        1,
+        7,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        10,
+        10,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        arg_payload=payload,
+    )
+
+    assert row._arg_payload is payload
+    assert row["arg"] == "\ufffdraw"
+    assert row["arg_raw"] == payload.hex()
+
+
+def test_event_row_preserves_absent_payload_across_process_pickle() -> None:
+    row = EventRow(
+        "perf",
+        1,
+        7,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        10,
+        10,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    )
+
+    restored = pickle.loads(pickle.dumps(row))
+
+    assert dict(restored) == dict(row)
+    assert "arg" not in restored
+
+
+def test_event_spool_stably_sorts_across_segments(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        telemetry,
+        "_EVENT_SPOOL_SEGMENT_BYTES",
+        telemetry._EVENT_RECORD.size,
+    )
+    spool = _EventSpool(tmp_path)
+    for ts_ns, arg in ((20, "first"), (10, "earlier"), (20, "second")):
+        spool.append(_event("exec_arg", ts_ns, 10, seq=1, arg=arg))
+
+    with telemetry._sorted_event_source(
+        spool.snapshot(),
+        started_ns=0,
+        ended_ns=20,
+        cgroup_id=7,
+        directory=tmp_path,
+    ) as source:
+        assert [(event["ts_ns"], event["arg"]) for event in source] == [
+            (10, "earlier"),
+            (20, "first"),
+            (20, "second"),
+        ]
+    spool.close()
+
+
+def test_event_spool_preserves_call_summary() -> None:
+    events = _clean_events()
+    token = ToolCallToken("call-spool", "echo hi", 100, 0, 0)
+    baseline, baseline_violations = _collector_without_bpf()._summarize_call(
+        token=token,
+        ended_ns=230,
+        events=events,
+        loss_counts={},
+        perf_samples=2,
+    )
+
+    collector = _collector_without_bpf()
+    for event in events:
+        collector._spool.append(event)
+    snapshot = collector._spool.snapshot()
+    source = telemetry._sorted_event_source(
+        snapshot,
+        started_ns=100,
+        ended_ns=230,
+        cgroup_id=7,
+        directory=collector.artifact_path.parent,
+    )
+    with source:
+        spooled, spooled_violations = collector._summarize_call(
+            token=token,
+            ended_ns=230,
+            events=source,
+            raw_event_count=len(source),
+            loss_counts={},
+            perf_samples=2,
+        )
+
+    assert spooled == baseline
+    assert spooled_violations == baseline_violations
+
+
+def test_event_spool_preserves_pending_exec_start_evidence() -> None:
+    events = [
+        _event("exec_arg", 10, 100, seq=0, arg="sh"),
+        _event("perf", 15, 100, cpu_ns=1, rss_pages=1, mm_ptr=10),
+        _event("exec_boundary", 20, 100, seq=0),
+        _event("exit_boundary", 30, 100, seq=0),
+    ]
+    baseline_clauses, baseline_fork_parent = telemetry._clauses_and_lineage(events)
+    _, baseline_gaps = telemetry._attribute(
+        events,
+        baseline_clauses,
+        baseline_fork_parent,
+        entry_pid=50,
+    )
+
+    collector = _collector_without_bpf()
+    for event in events:
+        collector._spool.append(event)
+    snapshot = collector._spool.snapshot()
+    source = telemetry._sorted_event_source(
+        snapshot,
+        started_ns=0,
+        ended_ns=30,
+        cgroup_id=7,
+        directory=collector.artifact_path.parent,
+    )
+    with source:
+        spooled_clauses, spooled_fork_parent = telemetry._clauses_and_lineage(source)
+        _, spooled_gaps = telemetry._attribute(
+            source,
+            spooled_clauses,
+            spooled_fork_parent,
+            entry_pid=50,
+        )
+
+    assert spooled_gaps == baseline_gaps
+    assert spooled_gaps[0]["reason"] == (
+        "initial_exec_pending_pre_boundary_structural_setup"
+    )
+
+
+def test_event_spool_split_by_call_boundary_fails_closed() -> None:
+    collector = _collector_without_bpf()
+    collector._spool.append(
+        _event(
+            "exec_arg",
+            99,
+            10,
+            seq=1,
+            arg="before",
+            arg_flags=ARG_FLAG_CONTINUED,
+        ),
+    )
+    collector._spool.append(
+        _event(
+            "exec_arg",
+            101,
+            10,
+            seq=1,
+            arg_chunk_index=1,
+            arg="inside",
+        ),
+    )
+    collector._spool.append(_event("exec_boundary", 105, 10, seq=1))
+    snapshot = collector._spool.snapshot()
+    source = telemetry._sorted_event_source(
+        snapshot,
+        started_ns=100,
+        ended_ns=110,
+        cgroup_id=7,
+        directory=collector.artifact_path.parent,
+    )
+    with source:
+        words, flags = _captured_argv(source)
+
+    assert words == {(10, 1): {0: "inside"}}
+    assert flags == {(10, 1): 1}
+
+
 def test_truncated_requested_path_invalidates_bare_head_mapping() -> None:
     events = [
         _event(
@@ -682,7 +906,7 @@ def test_mapping_failure_does_not_disable_later_valid_call(
     bad = ToolCallToken("bad", "missing arg", 100, 0, 0)
     collector._active = bad
     first = collector.finish_tool_call(bad, replay_response={"returncode": 0})
-    collector._events = _clean_events()
+    _set_collector_events(collector, _clean_events())
     good = ToolCallToken("good", "echo hi", 100, 0, 0)
     collector._active = good
     second = collector.finish_tool_call(good, replay_response={"returncode": 0})
@@ -720,6 +944,80 @@ def test_internal_analysis_failure_disables_later_collection(
     assert following["telemetry_quality"] == "unavailable"
 
 
+def test_event_spool_read_failure_disables_collection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    collector = _active_collector()
+    monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
+    monkeypatch.setattr("tool_resource.telemetry.time.sleep", lambda *_: None)
+
+    def fail_spool(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("spool read failed")
+
+    monkeypatch.setattr(
+        "tool_resource.telemetry._sorted_event_source",
+        fail_spool,
+    )
+    token = ToolCallToken("spool-broken", "echo hi", 100, 0, 0)
+    collector._active = token
+
+    failed = collector.finish_tool_call(
+        token,
+        replay_response={"returncode": 0},
+        ended_ns=230,
+    )
+
+    assert failed["telemetry_quality"] == "unavailable"
+    assert failed["eligible_for_kb"] is False
+    assert collector.state == "disabled"
+    assert collector._first_disabled_call == "spool-broken"
+
+
+def test_event_spool_prepare_failure_does_not_block_tool_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    collector = _active_collector()
+    monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
+
+    def fail_spool(_started_ns: int) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(collector._spool, "drop_before", fail_spool)
+
+    token = collector.begin_tool_call("spool-full", "echo hi", started_ns=100)
+
+    assert token.tool_call_id == "spool-full"
+    assert collector._active is token
+    assert collector.state == "disabled"
+    assert collector._first_disabled_call == "spool-full"
+
+
+def test_event_spool_closes_when_bpf_cleanup_fails() -> None:
+    collector = _collector_without_bpf()
+    collector._closed = False
+    collector._stop_poll = Event()
+    collector._poller = SimpleNamespace(
+        join=lambda **_kwargs: None,
+        is_alive=lambda: False,
+    )
+    collector._perf_type = SimpleNamespace(SOFTWARE=1)
+    collector._perf_config = SimpleNamespace(CPU_CLOCK=2)
+
+    def fail_cleanup() -> None:
+        raise RuntimeError("cleanup failed")
+
+    collector._bpf = SimpleNamespace(
+        detach_perf_event=lambda **_kwargs: None,
+        cleanup=fail_cleanup,
+    )
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        collector._close_bpf()
+
+    assert collector._spool._current.file.closed
+    assert collector._closed is True
+
+
 def test_per_call_loss_does_not_disable_later_valid_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -745,7 +1043,7 @@ def test_per_call_loss_does_not_disable_later_valid_call(
     first_token = ToolCallToken("loss", "echo hi", 100, 0, 0)
     collector._active = first_token
     first = collector.finish_tool_call(first_token, replay_response={"returncode": 0})
-    collector._events = _clean_events()
+    _set_collector_events(collector, _clean_events())
     second_token = ToolCallToken("recovered", "echo hi", 100, 0, 0)
     collector._active = second_token
     second = collector.finish_tool_call(second_token, replay_response={"returncode": 0})
@@ -770,7 +1068,6 @@ def test_poller_failure_disables_session_and_marks_following_calls_unavailable()
     assert collector.state == "disabled"
     assert collector._first_disabled_call == "first"
     assert collector._stop_poll.is_set()
-    assert collector._events == []
     assert first["telemetry_quality"] == "unavailable"
     assert second["telemetry_quality"] == "unavailable"
     assert second["invalid_reasons"][0]["kind"] == "collector_disabled"
@@ -929,9 +1226,9 @@ def test_disconnected_command_trees_persist_provenance_in_failed_call(
     collector = _collector_without_bpf()
     token = ToolCallToken("call-disconnected", "true", 100, 0, 0)
     collector._active = token
-    collector._bpf = object()
+    collector._bpf = SimpleNamespace(ring_buffer_consume=lambda: None)
     collector._events_lock = Lock()
-    collector._events = events
+    _set_collector_events(collector, events)
     collector.calls = []
     collector._integrity_errors = []
     monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
@@ -1025,9 +1322,9 @@ def test_short_circuit_source_replay_disagreement_invalidates_only_telemetry(
         source_tool_result="source success\n\nExit code: 0",
     )
     collector._active = token
-    collector._bpf = object()
+    collector._bpf = SimpleNamespace(ring_buffer_consume=lambda: None)
     collector._events_lock = Lock()
-    collector._events = _control_events(1)
+    _set_collector_events(collector, _control_events(1))
     collector.calls = []
     collector._integrity_errors = []
     monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
@@ -1101,9 +1398,9 @@ def _finish_control_call(
         source_tool_result="source success\n\nExit code: 0",
     )
     collector._active = token
-    collector._bpf = object()
+    collector._bpf = SimpleNamespace(ring_buffer_consume=lambda: None)
     collector._events_lock = Lock()
-    collector._events = _mapped_control_events(exit_status)
+    _set_collector_events(collector, _mapped_control_events(exit_status))
     collector.calls = []
     collector._integrity_errors = []
     monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
@@ -1141,11 +1438,14 @@ def test_consumed_events_are_pruned_after_each_call(
     collector = _collector_without_bpf()
     token = ToolCallToken("call-prune", "left && right", 100, 0, 0)
     collector._active = token
-    collector._bpf = object()
+    collector._bpf = SimpleNamespace(ring_buffer_consume=lambda: None)
     collector._events_lock = Lock()
     stale = dict(_mapped_control_events(1)[0], ts_ns=10)
     future = dict(_mapped_control_events(1)[0], ts_ns=230)
-    collector._events = [stale, *_mapped_control_events(1), future]
+    _set_collector_events(
+        collector,
+        [stale, *_mapped_control_events(1), future],
+    )
     collector.calls = []
     collector._integrity_errors = []
     monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
@@ -1157,7 +1457,43 @@ def test_consumed_events_are_pruned_after_each_call(
         ended_ns=220,
     )
 
-    assert collector._events == [future]
+    snapshot = collector._spool.snapshot()
+    with telemetry._sorted_event_source(
+        snapshot,
+        started_ns=221,
+        ended_ns=230,
+        cgroup_id=7,
+        directory=collector.artifact_path.parent,
+    ) as remaining:
+        assert [dict(event) for event in remaining] == [future]
+
+
+def test_finish_drains_ring_before_spool_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    collector = _active_collector()
+    _set_collector_events(collector, _clean_events()[:-1])
+    late_exit = _clean_events()[-1]
+
+    def consume() -> None:
+        with collector._events_lock:
+            collector._spool.append(late_exit)
+
+    collector._bpf = SimpleNamespace(ring_buffer_consume=consume)
+    monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
+    token = ToolCallToken("call-drain", "echo hi", 100, 0, 0)
+    collector._active = token
+
+    summary = collector.finish_tool_call(
+        token,
+        replay_response={"returncode": 0},
+        ended_ns=230,
+    )
+
+    assert summary["clauses"][0]["provenance"]["boundary_coverage"] == {
+        "has_exec": True,
+        "has_exit": True,
+    }
 
 
 def test_short_circuit_fails_closed_when_controller_succeeded(
@@ -1650,7 +1986,7 @@ def test_guard_blocked_exec_is_explicit_no_runtime_and_advances_source(
     collector = _collector_without_bpf()
     collector._closed = False
     collector._active = None
-    collector._bpf = object()
+    collector._bpf = SimpleNamespace(ring_buffer_consume=lambda: None)
     collector.calls = []
     collector._integrity_errors = []
     collector._source_exec_actions = [
