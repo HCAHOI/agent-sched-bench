@@ -195,20 +195,34 @@ class MvdanClient:
                 raise _RetryableProcessError("mvdan adapter crashed") from error
 
     def _readline(self, file_descriptor: int, deadline: float) -> bytes:
-        while b"\n" not in self._stdout_buffer:
-            timeout = deadline - time.monotonic()
-            if timeout <= 0:
-                raise _RetryableProcessError("mvdan adapter request timed out")
-            ready, _, _ = select.select([file_descriptor], [], [], timeout)
-            if not ready:
-                raise _RetryableProcessError("mvdan adapter request timed out")
-            chunk = os.read(file_descriptor, 64 * 1024)
-            if not chunk:
-                raise _RetryableProcessError("mvdan adapter crashed")
-            self._stdout_buffer += chunk
-            if len(self._stdout_buffer) > _MAX_RESPONSE_BYTES:
-                raise _RetryableProcessError("mvdan adapter response is too large")
-        line, self._stdout_buffer = self._stdout_buffer.split(b"\n", 1)
+        # Accumulate into a list and join once. Appending to a bytes object
+        # reallocates and copies the whole buffer per 64 KiB chunk, which is
+        # quadratic in the response size: at the 64 MiB ceiling that is ~13 s
+        # of pure memcpy versus ~30 ms for a single join.
+        buffer = self._stdout_buffer
+        newline = buffer.find(b"\n")
+        if newline < 0:
+            chunks = [buffer]
+            size = len(buffer)
+            while True:
+                timeout = deadline - time.monotonic()
+                if timeout <= 0:
+                    raise _RetryableProcessError("mvdan adapter request timed out")
+                ready, _, _ = select.select([file_descriptor], [], [], timeout)
+                if not ready:
+                    raise _RetryableProcessError("mvdan adapter request timed out")
+                chunk = os.read(file_descriptor, 64 * 1024)
+                if not chunk:
+                    raise _RetryableProcessError("mvdan adapter crashed")
+                chunks.append(chunk)
+                size += len(chunk)
+                if size > _MAX_RESPONSE_BYTES:
+                    raise _RetryableProcessError("mvdan adapter response is too large")
+                if b"\n" in chunk:
+                    break
+            buffer = b"".join(chunks)
+            newline = buffer.find(b"\n")
+        line, self._stdout_buffer = buffer[:newline], buffer[newline + 1 :]
         return line
 
     def _stop(self) -> None:

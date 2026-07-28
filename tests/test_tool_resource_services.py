@@ -1704,7 +1704,7 @@ def test_duplicate_external_run_ids_do_not_cross_promote(tmp_path: Path) -> None
         visible_ids = {
             row[0]
             for row in store._connection.execute(
-                "SELECT observation_id FROM observations WHERE visible=1"
+                "SELECT observation_id FROM observations WHERE promotion_sequence IS NOT NULL"
             )
         }
     assert visible_ids == {first_closed["artifact"]["calls"][0]["observation_id"]}
@@ -1716,7 +1716,7 @@ def test_duplicate_external_run_ids_do_not_cross_promote(tmp_path: Path) -> None
         visible_ids = {
             row[0]
             for row in store._connection.execute(
-                "SELECT observation_id FROM observations WHERE visible=1"
+                "SELECT observation_id FROM observations WHERE promotion_sequence IS NOT NULL"
             )
         }
     assert visible_ids == {
@@ -1734,7 +1734,7 @@ def test_duplicate_external_run_ids_do_not_cross_promote(tmp_path: Path) -> None
     with store._lock:
         assert (
             store._connection.execute(
-                "SELECT COUNT(*) FROM observations WHERE visible=1"
+                "SELECT COUNT(*) FROM observations WHERE promotion_sequence IS NOT NULL"
             ).fetchone()[0]
             == 2
         )
@@ -2995,7 +2995,7 @@ def test_live_service_chain_produces_one_eligible_observation(
                         "SELECT COUNT(*) FROM observations"
                     ).fetchone() == (1,)
                     assert connection.execute(
-                        "SELECT COUNT(*) FROM observations WHERE visible=1"
+                        "SELECT COUNT(*) FROM observations WHERE promotion_sequence IS NOT NULL"
                     ).fetchone() == (1,)
     finally:
         stop_process(resource_proc)
