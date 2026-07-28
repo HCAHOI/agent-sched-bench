@@ -29,6 +29,7 @@ from scripts.evaluation.evaluate_clause_resource_classes import (  # noqa: E402
 from tool_resource_eval.labels import repo_of  # noqa: E402
 from tool_resource.runtime_kb import (  # noqa: E402
     CANONICAL_LATENCY_BUCKETS,
+    ClauseLatencyBucketPrediction,
     ClauseResourceKB,
 )
 
@@ -72,7 +73,7 @@ def _validate_partition(
 def _exact_bucket_metrics(rows: Sequence[ScoredRow]) -> dict[str, Any]:
     correct = sum(_exact_bucket_correct(row) for row in rows)
     return {
-        "exact_bucket_accuracy": correct / len(rows) if rows else None,
+        "three_class_accuracy": correct / len(rows) if rows else None,
         "eligible_examples": len(rows),
     }
 
@@ -81,9 +82,15 @@ def _argmax_bucket(row: ScoredRow) -> int:
     """Predicted bucket: highest probability, lowest bucket id on ties."""
 
     assert row.probability_by_bucket is not None
+    return _argmax_probabilities(row.probability_by_bucket)
+
+
+def _argmax_probabilities(probabilities: Sequence[float]) -> int:
+    """Highest-probability bucket, with the shortest bucket winning ties."""
+
     return max(
         range(CANONICAL_LATENCY_BUCKETS.bucket_count),
-        key=row.probability_by_bucket.__getitem__,
+        key=probabilities.__getitem__,
     )
 
 
@@ -107,9 +114,50 @@ def _bucket_intervals() -> list[dict[str, Any]]:
     ]
 
 
-def _telemetry_scored_rows(
+def _scored_row(
+    row: Row,
+    clause_index: int,
+    prediction: ClauseLatencyBucketPrediction | None,
+    unavailable_reason: str | None = None,
+) -> ScoredRow:
+    return ScoredRow(
+        sample_id=f"{row.task_id}:{row.manifest_index}:{clause_index}",
+        task_id=row.task_id,
+        repo=row.repo,
+        command=" ".join(row.argv),
+        label_bucket=CANONICAL_LATENCY_BUCKETS.bucket_id(row.latency_ms),
+        probability_by_bucket=(
+            None if prediction is None else prediction.probability_by_bucket
+        ),
+        layer=None if prediction is None else prediction.scope,
+        key_kind=None if prediction is None else prediction.key_kind,
+        evidence_count=0 if prediction is None else prediction.evidence_count,
+        fallback_path=None if prediction is None else prediction.fallback_path,
+        unavailable_reason=unavailable_reason,
+        mapping_evidence="canonical_clause_telemetry",
+    )
+
+
+def _oracle_prediction(
+    candidates: Sequence[ClauseLatencyBucketPrediction],
+    label_bucket: int,
+    fallback: ClauseLatencyBucketPrediction,
+) -> ClauseLatencyBucketPrediction:
+    """Analysis-only hindsight choice; never a deployable selector."""
+
+    return next(
+        (
+            candidate
+            for candidate in candidates
+            if _argmax_probabilities(candidate.probability_by_bucket) == label_bucket
+        ),
+        fallback,
+    )
+
+
+def _telemetry_scored_arms(
     fit_rows: Sequence[Row], eval_rows: Sequence[Row]
-) -> list[ScoredRow]:
+) -> dict[str, list[ScoredRow]]:
     """Score canonical clause telemetry with the runtime KB in causal task order.
 
     Public priors are fit leave-one-repo-out so the fit corpus never carries the
@@ -128,7 +176,16 @@ def _telemetry_scored_rows(
     by_task: dict[tuple[int, str], list[Row]] = defaultdict(list)
     for row in eval_rows:
         by_task[(row.manifest_index, row.task_id)].append(row)
-    scored: list[ScoredRow] = []
+    scored: dict[str, list[ScoredRow]] = {
+        name: []
+        for name in (
+            "current",
+            "public_only",
+            "local_only",
+            "current_public_oracle",
+            "node_oracle",
+        )
+    }
     for task_ordinal, task_key in enumerate(sorted(by_task)):
         rows = by_task[task_key]
         # Query strictly before this task's observations settle; settle strictly
@@ -144,70 +201,165 @@ def _telemetry_scored_rows(
                 CANONICAL_LATENCY_BUCKETS,
                 ts_start=query_ts,
             )
-            scored.append(
-                ScoredRow(
-                    sample_id=f"{row.task_id}:{row.manifest_index}:{clause_index}",
-                    task_id=row.task_id,
-                    repo=row.repo,
-                    command=" ".join(row.argv),
-                    label_bucket=CANONICAL_LATENCY_BUCKETS.bucket_id(row.latency_ms),
-                    probability_by_bucket=prediction.probability_by_bucket,
-                    layer=prediction.scope,
-                    key_kind=prediction.key_kind,
-                    evidence_count=prediction.evidence_count,
-                    fallback_path=prediction.fallback_path,
-                    unavailable_reason=None,
-                    mapping_evidence="canonical_clause_telemetry",
+            candidates = kb_by_repo[
+                row.repo
+            ].diagnostic_clause_latency_candidates(
+                row.repo,
+                row.bin,
+                row.argv,
+                CANONICAL_LATENCY_BUCKETS,
+                ts_start=query_ts,
+            )
+            if not candidates or candidates[0] != prediction:
+                raise AssertionError(
+                    "diagnostic candidates differ from runtime prediction"
+                )
+            public = next(
+                (item for item in candidates if item.scope == "public"),
+                None,
+            )
+            local = next(
+                (item for item in candidates if item.scope == "repo"),
+                None,
+            )
+            label = CANONICAL_LATENCY_BUCKETS.bucket_id(row.latency_ms)
+            scored["current"].append(_scored_row(row, clause_index, prediction))
+            scored["public_only"].append(
+                _scored_row(
+                    row,
+                    clause_index,
+                    public,
+                    None if public is not None else "no_public_evidence",
+                )
+            )
+            scored["local_only"].append(
+                _scored_row(
+                    row,
+                    clause_index,
+                    local,
+                    None if local is not None else "no_local_evidence",
+                )
+            )
+            current_public = [prediction]
+            if public is not None and public != prediction:
+                current_public.append(public)
+            scored["current_public_oracle"].append(
+                _scored_row(
+                    row,
+                    clause_index,
+                    _oracle_prediction(current_public, label, prediction),
+                )
+            )
+            scored["node_oracle"].append(
+                _scored_row(
+                    row,
+                    clause_index,
+                    _oracle_prediction(candidates, label, prediction),
                 )
             )
         for row in rows:
             kb_by_repo[row.repo].observe_completed_clause(
                 row.observation(query_ts, settle_ts)
             )
-    if not scored:
+    if not scored["current"]:
         raise ValueError("no eligible clause telemetry observations to score")
     return scored
 
 
-def _telemetry_metrics(rows: Sequence[ScoredRow]) -> dict[str, Any]:
+def _telemetry_scored_rows(
+    fit_rows: Sequence[Row], eval_rows: Sequence[Row]
+) -> list[ScoredRow]:
+    """Compatibility helper returning the deployable current arm only."""
+
+    return _telemetry_scored_arms(fit_rows, eval_rows)["current"]
+
+
+def _support_band(evidence_count: int) -> str:
+    if evidence_count == 1:
+        return "1"
+    if evidence_count <= 4:
+        return "2-4"
+    return "5+"
+
+
+def _telemetry_metrics(
+    rows: Sequence[ScoredRow],
+    *,
+    current_accuracy: float | None = None,
+) -> dict[str, Any]:
     bucket_count = CANONICAL_LATENCY_BUCKETS.bucket_count
+    if bucket_count != 3:
+        raise AssertionError(f"canonical latency objective has {bucket_count} classes")
+    if not rows:
+        raise ValueError("no rows to score")
     label_counts: Counter[int] = Counter(row.label_bucket for row in rows)
     majority_bucket, majority_count = min(
         label_counts.most_common(),
         key=lambda item: (-item[1], item[0]),
     )
+    known = [row for row in rows if row.probability_by_bucket is not None]
     confusion = [[0] * bucket_count for _ in range(bucket_count)]
     predicted_counts: Counter[int] = Counter()
-    for row in rows:
+    for row in known:
         predicted = _argmax_bucket(row)
         confusion[row.label_bucket][predicted] += 1
         predicted_counts[predicted] += 1
-    per_bucket = []
+    class_names = ("short", "middle", "long")
+    per_class = []
     for bucket in range(bucket_count):
         support = label_counts.get(bucket, 0)
         predicted_total = predicted_counts.get(bucket, 0)
-        hit = confusion[bucket][bucket]
-        per_bucket.append(
+        per_class.append(
             {
-                "bucket_id": bucket,
+                "class": class_names[bucket],
+                "class_id": bucket,
                 "label_count": support,
                 "label_share": support / len(rows),
                 "predicted_count": predicted_total,
-                "correct": hit,
-                "recall": hit / support if support else None,
-                "precision": hit / predicted_total if predicted_total else None,
+                "predicted_share": predicted_total / len(rows),
             }
         )
+    available_accuracy = _exact_bucket_metrics(known)["three_class_accuracy"]
+    complete_accuracy = available_accuracy if len(known) == len(rows) else None
+    majority_accuracy = majority_count / len(rows)
+    if current_accuracy is None and complete_accuracy is not None:
+        current_accuracy = complete_accuracy
+    support_counts = Counter(_support_band(row.evidence_count) for row in known)
+    evidence_count_counts = Counter(row.evidence_count for row in known)
     return {
-        **_exact_bucket_metrics(rows),
-        "majority_bucket": majority_bucket,
-        "majority_bucket_baseline_accuracy": majority_count / len(rows),
+        "eligible_examples": len(rows),
+        "three_class_accuracy": complete_accuracy,
+        "available_only_accuracy": available_accuracy,
+        "prediction_available": len(known),
+        "prediction_coverage": len(known) / len(rows),
+        "majority_class": class_names[majority_bucket],
+        "majority_class_id": majority_bucket,
+        "majority_class_accuracy": majority_accuracy,
+        "current_accuracy": current_accuracy,
+        "accuracy_minus_majority_percentage_points": (
+            None
+            if complete_accuracy is None
+            else 100.0 * (complete_accuracy - majority_accuracy)
+        ),
+        "accuracy_minus_current_percentage_points": (
+            None
+            if complete_accuracy is None or current_accuracy is None
+            else 100.0 * (complete_accuracy - current_accuracy)
+        ),
+        "prediction_unavailable": len(rows) - len(known),
         "confusion_label_by_prediction": confusion,
-        "per_bucket": per_bucket,
-        "scope_counts": dict(sorted(Counter(row.layer for row in rows).items())),
-        "key_kind_counts": dict(sorted(Counter(row.key_kind for row in rows).items())),
+        "per_class": per_class,
+        "scope_counts": dict(sorted(Counter(row.layer for row in known).items())),
+        "key_kind_counts": dict(sorted(Counter(row.key_kind for row in known).items())),
+        "support_band_counts": {
+            band: support_counts[band] for band in ("1", "2-4", "5+")
+        },
+        "evidence_count_counts": {
+            str(count): frequency
+            for count, frequency in sorted(evidence_count_counts.items())
+        },
         "fallback_path_counts": dict(
-            sorted(Counter(":".join(row.fallback_path or ()) for row in rows).items())
+            sorted(Counter(":".join(row.fallback_path or ()) for row in known).items())
         ),
     }
 
@@ -219,7 +371,23 @@ def evaluate_clause_telemetry(
 ) -> tuple[dict[str, Any], list[ScoredRow]]:
     """Evaluate latency buckets on canonical eBPF clause telemetry."""
 
-    rows = _telemetry_scored_rows(fit_rows, eval_rows)
+    arms = _telemetry_scored_arms(fit_rows, eval_rows)
+    rows = arms["current"]
+    identity = [(row.sample_id, row.label_bucket) for row in rows]
+    if any(
+        identity != [(row.sample_id, row.label_bucket) for row in arm_rows]
+        for arm_rows in arms.values()
+    ):
+        raise AssertionError("baseline/oracle row identity or labels differ")
+    current_metrics = _telemetry_metrics(rows)
+    current_accuracy = current_metrics["three_class_accuracy"]
+    assert current_accuracy is not None
+    majority = {
+        "class": current_metrics["majority_class"],
+        "class_id": current_metrics["majority_class_id"],
+        "accuracy": current_metrics["majority_class_accuracy"],
+        "eligible_examples": len(rows),
+    }
     return (
         {
             "status": "development_exposed_canonical_clause_telemetry",
@@ -229,7 +397,48 @@ def evaluate_clause_telemetry(
             "bucket_intervals": _bucket_intervals(),
             "fit_clause_observation_count": len(fit_rows),
             "eval_clause_observation_count": len(eval_rows),
-            "metrics": _telemetry_metrics(rows),
+            "row_identity": {
+                "identical_row_ids_and_labels": True,
+                "eligible_row_count": len(rows),
+            },
+            "baselines": {
+                "majority": majority,
+                "current": current_metrics,
+                "public_only": _telemetry_metrics(
+                    arms["public_only"],
+                    current_accuracy=current_accuracy,
+                ),
+                "local_only_diagnostic": {
+                    **_telemetry_metrics(
+                        arms["local_only"],
+                        current_accuracy=current_accuracy,
+                    ),
+                    "selection_forbidden": True,
+                },
+            },
+            "oracles": {
+                "current_public": {
+                    **_telemetry_metrics(
+                        arms["current_public_oracle"],
+                        current_accuracy=current_accuracy,
+                    ),
+                    "oracle": True,
+                    "deployable": False,
+                },
+                "current_nodes": {
+                    **_telemetry_metrics(
+                        arms["node_oracle"],
+                        current_accuracy=current_accuracy,
+                    ),
+                    "oracle": True,
+                    "deployable": False,
+                    "candidate_nodes": (
+                        "repo exact/prefix/bin and public bin/global; "
+                        "structured Candidate R is not implemented yet"
+                    ),
+                },
+            },
+            "metrics": current_metrics,
             "provenance": dict(provenance),
         },
         rows,

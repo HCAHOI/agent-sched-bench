@@ -1,0 +1,225 @@
+{
+  "artifact_type": "development_exposed_three_bucket_baseline_decision",
+  "claim_bearing": false,
+  "checkpoint": "three_bucket_contract_and_reconciled_baselines",
+  "configuration": {
+    "latency_bucket_edges_ms": [
+      2000,
+      8000
+    ],
+    "latency_classes": [
+      "[0,2000]",
+      "(2000,8000]",
+      "(8000,+inf)"
+    ],
+    "latency_primary_metric": "exact_three_class_accuracy",
+    "latency_comparator": "same_evaluation_majority_class",
+    "task_order": "(manifest_index, task_id) ascending",
+    "trace_update": "predict all clauses in a task before releasing that task observations",
+    "same_repo_fit_evidence_excluded": true
+  },
+  "decision": {
+    "next_step": "implement_and_review_candidate_r",
+    "reason": "current is near majority, while bounded hindsight ceilings are positive but small in both orientations; this supports the predeclared structured-argv test but not an unbounded model sweep",
+    "current_beats_majority_in_both_orientations": false,
+    "candidate_r_metrics_read": false
+  },
+  "input_audit": {
+    "repo_overlap_count": 35,
+    "task_overlap_count": 0,
+    "swe100": {
+      "all_argv_nonempty": true,
+      "all_bin_nonempty": true,
+      "all_latency_nonnegative": true,
+      "path": "traces/swe-rebench/qwen3.7-max/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+      "repo_count": 93,
+      "row_count": 4458,
+      "task_count": 99,
+      "target_availability": {
+        "disk_read_write_bytes_total": {
+          "null_unavailable": 9,
+          "observed": 4449
+        },
+        "peak_cpu_cores": {
+          "null_unavailable": 592,
+          "observed": 627,
+          "short_null_imputed_light": 3239
+        },
+        "sampled_peak_rss_mb": {
+          "null_unavailable": 368,
+          "observed": 2158,
+          "short_null_imputed_light": 1932
+        }
+      }
+    },
+    "swe277": {
+      "all_argv_nonempty": true,
+      "all_bin_nonempty": true,
+      "all_latency_nonnegative": true,
+      "path": "traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl",
+      "repo_count": 213,
+      "row_count": 13766,
+      "task_count": 277,
+      "target_availability": {
+        "disk_read_write_bytes_total": {
+          "null_unavailable": 43,
+          "observed": 13722,
+          "short_null_imputed_light": 1
+        },
+        "peak_cpu_cores": {
+          "null_unavailable": 2156,
+          "observed": 2136,
+          "short_null_imputed_light": 9474
+        },
+        "sampled_peak_rss_mb": {
+          "null_unavailable": 1408,
+          "observed": 6466,
+          "short_null_imputed_light": 5892
+        }
+      }
+    }
+  },
+  "latency_orientations": {
+    "swe100_fit_swe277_eval": {
+      "artifact": "analysis/results/tool-resource-nighttime-3bucket-20260728/baseline-swe100-fit-swe277-eval.json",
+      "confusion_label_by_prediction": [
+        [
+          11529,
+          85,
+          11
+        ],
+        [
+          1289,
+          85,
+          15
+        ],
+        [
+          694,
+          38,
+          20
+        ]
+      ],
+      "current_accuracy": 0.8451256719453727,
+      "current_minus_majority_percentage_points": 0.06537846869097974,
+      "current_node_oracle_accuracy": 0.8532616591602499,
+      "current_node_oracle_minus_best_deployable_percentage_points": 0.8135987214877183,
+      "current_public_oracle_accuracy": 0.8520267325294203,
+      "eligible_examples": 13766,
+      "label_counts": {
+        "long": 752,
+        "middle": 1389,
+        "short": 11625
+      },
+      "local_only_available_accuracy": 0.862679279829112,
+      "local_only_coverage": 0.23805026877814905,
+      "majority_accuracy": 0.8444718872584629,
+      "majority_class": "short",
+      "public_only_accuracy": 0.8443992445154729,
+      "support_band_counts": {
+        "1": 902,
+        "2-4": 1083,
+        "5+": 11781
+      }
+    },
+    "swe277_fit_swe100_eval": {
+      "artifact": "analysis/results/tool-resource-nighttime-3bucket-20260728/baseline-swe277-fit-swe100-eval.json",
+      "confusion_label_by_prediction": [
+        [
+          3875,
+          18,
+          9
+        ],
+        [
+          350,
+          4,
+          3
+        ],
+        [
+          195,
+          0,
+          4
+        ]
+      ],
+      "current_accuracy": 0.8710183938986092,
+      "current_minus_majority_percentage_points": -0.4262000897263363,
+      "current_node_oracle_accuracy": 0.8770749214894572,
+      "current_node_oracle_minus_best_deployable_percentage_points": 0.17945266935845972,
+      "current_public_oracle_accuracy": 0.8770749214894572,
+      "eligible_examples": 4458,
+      "label_counts": {
+        "long": 199,
+        "middle": 357,
+        "short": 3902
+      },
+      "local_only_available_accuracy": 0.8807531380753139,
+      "local_only_coverage": 0.10722296994167788,
+      "majority_accuracy": 0.8752803947958726,
+      "majority_class": "short",
+      "public_only_accuracy": 0.8752803947958726,
+      "support_band_counts": {
+        "1": 159,
+        "2-4": 186,
+        "5+": 4113
+      }
+    }
+  },
+  "resource_baselines": {
+    "swe100_fit_swe277_eval": {
+      "artifact": "analysis/results/tool-resource-nighttime-3bucket-20260728/resource-baseline-swe100-fit-swe277-eval.json",
+      "disk": {
+        "accuracy": 0.9779202798221963,
+        "eligible_n": 13723,
+        "majority_light_accuracy": 0.9760985207316184
+      },
+      "peak_cpu": {
+        "accuracy": 0.9559862187769165,
+        "eligible_n": 11610,
+        "majority_light_accuracy": 0.9559862187769165
+      },
+      "sampled_rss": {
+        "accuracy": 0.9901278524033015,
+        "eligible_n": 12358,
+        "majority_light_accuracy": 0.9902087716458974
+      }
+    },
+    "swe277_fit_swe100_eval": {
+      "artifact": "analysis/results/tool-resource-nighttime-3bucket-20260728/resource-baseline-swe277-fit-swe100-eval.json",
+      "disk": {
+        "accuracy": 0.9777478084962913,
+        "eligible_n": 4449,
+        "majority_light_accuracy": 0.9777478084962913
+      },
+      "peak_cpu": {
+        "accuracy": 0.9529229177444387,
+        "eligible_n": 3866,
+        "majority_light_accuracy": 0.9568028970512157
+      },
+      "sampled_rss": {
+        "accuracy": 0.9897310513447433,
+        "eligible_n": 4090,
+        "majority_light_accuracy": 0.9897310513447433
+      }
+    }
+  },
+  "review": {
+    "initial_findings": [
+      "major: missing public/local/oracle baseline arms",
+      "major: missing evidence-support provenance"
+    ],
+    "focused_re_review": "GO",
+    "remaining_findings": []
+  },
+  "runtime_seconds": {
+    "latency_swe100_fit_swe277_eval": 26.1542,
+    "latency_swe277_fit_swe100_eval": 27.6494,
+    "resource_swe100_fit_swe277_eval": 23.6759,
+    "resource_swe277_fit_swe100_eval": 26.7496
+  },
+  "verification": {
+    "focused_tests": "106 passed, 1 skipped",
+    "ruff": "passed",
+    "git_diff_check": "passed",
+    "latency_confusion_and_support_counts_reconcile": true,
+    "source_row_counts_match_previous_extraction": true
+  }
+}

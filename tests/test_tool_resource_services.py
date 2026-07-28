@@ -183,9 +183,9 @@ class _FakeCollector:
                 {
                     "bin": clause["bin"],
                     "argv": clause["argv"],
-                    "ts_start": now - 0.75,
+                    "ts_start": now - 3.0,
                     "ts_end": now,
-                    "latency_ms": 750.0,
+                    "latency_ms": 3000.0,
                     "peak_cpu_cores": 0.5,
                     "sampled_peak_rss_mb": 8.0,
                     "cpu_ns_cumulative": 10,

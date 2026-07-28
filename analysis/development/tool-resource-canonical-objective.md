@@ -1,6 +1,6 @@
 # Tool-Resource Prediction — Canonical Objective and Implementation Lock
 
-**Effective 2026-07-27.** This document is authoritative for current KB and
+**Effective 2026-07-28.** This document is authoritative for current KB and
 predictor work. It replaces the earlier CPU/memory objective, the stale
 3500/5000 ms binary objective, boolean clause composition, and separate offline
 model paths. Historical artifacts remain evidence of what ran; they are not
@@ -12,46 +12,44 @@ Predict clause latency as one probability mass function over fixed ordered
 buckets, plus clause CPU peak, sampled RSS, and Disk I/O as independent
 Heavy/Light classifications.
 
-The fixed boundaries are, in milliseconds:
+The human-authorized fixed boundaries are, in milliseconds:
 
 ```text
-500, 1000, 2000, 4000, 8000, 16000, 32000, 64000
+2000, 8000
 ```
 
-To match the scheduler questions `T > b`, the buckets are:
+The mutually exclusive buckets are:
 
 ```text
-[0, 500]
-(500, 1000]
-(1000, 2000]
-(2000, 4000]
-(4000, 8000]
-(8000, 16000]
-(16000, 32000]
-(32000, 64000]
-(64000, +inf)
+[0, 2000]
+(2000, 8000]
+(8000, +inf)
 ```
 
-The predictor returns one normalized bucket PMF. For every boundary `b_i`,
+The predictor returns one normalized three-bucket PMF:
 
 ```text
-P(T > b_i) = sum(probability of buckets strictly above b_i)
-predicted(T > b_i) = P(T > b_i) > 0.5
-ground_truth(T > b_i) = observed_latency_ms > b_i
+(P(short), P(middle), P(long))
 ```
 
-The sole prediction score is classification accuracy at each fixed boundary:
+The hard prediction is the highest-probability bucket. An exact probability
+tie selects the shorter bucket. The primary development score is exact
+three-class accuracy:
 
 ```text
-accuracy_i = correct(T > b_i) / eligible_examples
+three_class_accuracy = correct_bucket / eligible_examples
 ```
 
-Reports include `eligible_examples`, positive count/rate, and the four confusion
-counts so raw accuracy is interpretable. These are reconciliation/diagnostic
-counts, not additional acceptance metrics.
-Do not add balanced accuracy, precision/recall, Brier/NLL, bucket MAE, q-error,
-or legacy 3500/5000 ms metrics unless the human explicitly changes this lock.
-There is no hidden aggregate across boundaries.
+The comparator is the most frequent ground-truth bucket on the exact same
+evaluation rows. Reports include `eligible_examples`, per-class counts/rates,
+predicted class counts, the 3x3 label-by-prediction confusion matrix, majority
+class and accuracy, and deltas from majority and current. These are
+reconciliation diagnostics, not additional acceptance metrics.
+
+The old eight-boundary accuracies and nine-bin exact accuracy remain historical
+diagnostics and must not select a candidate. Do not use balanced accuracy,
+precision/recall, Brier/NLL, bucket MAE, q-error, legacy 3500/5000 ms metrics,
+or a hand-selected subset to choose the candidate.
 
 The Heavy thresholds are fixed and strict:
 
@@ -136,10 +134,10 @@ only calls marked eligible for KB ingestion. Withheld or missing observations
 are never negative labels or zero-valued targets, except for the explicit,
 per-observation short-null resource-label policy above.
 
-Legacy SWE-100 and fresh-277 traces are development-exposed diagnostic proxies.
-They may be used to implement, replay, and compare this mechanism but cannot
-support a canonical resource claim. Untouched Terminal-Bench confirmation data
-must remain untouched until the implementation and criterion are frozen.
+The locked SWE-100 and fresh-277 traces are development-exposed diagnostic
+inputs. They may be used in both fit/evaluation orientations to implement,
+replay, and compare this mechanism but cannot support a confirmation claim.
+No other benchmark is in scope for the current three-bucket development goal.
 
 **2026-07-27 development amendment:** `generic-argv-v1` results were visible
 before `generic-argv-v2-shape` was defined. V2 removes plaintext opaque values
@@ -183,13 +181,11 @@ Stop and review after P0. Do not begin a long SWE replay in P0.
 ### P1 — frozen development baseline
 
 Run the canonical core on the development-exposed SWE fit/replay corpora with
-these exact boundaries. Report per-boundary accuracy and the required counts.
-This is a diagnostic baseline, not confirmation.
+the exact `2000/8000` boundaries. Report three-class accuracy, the
+same-evaluation majority baseline, the 3x3 confusion matrix, class counts, and
+the required provenance. This is a diagnostic baseline, not confirmation.
 P1 scores each mapped non-structural clause against its aligned segment latency;
 outer command bucket composition remains out of scope.
-After P1 was visible, the human requested mutually exclusive exact-bucket
-classification as development-exploratory presentation; it is not a canonical
-acceptance score unless later promoted by the human.
 Use manifest task order as a serialized virtual deployment: predict every call
 in one source trace before successful finalization releases its observations,
 preserve repository state across later traces, and use synthetic monotonic
@@ -219,6 +215,20 @@ similarity while latency is the only target.
 
 An open amendment is legitimate; an amendment described as pre-registration is
 not. Each entry records the date and what was visible when the criterion moved.
+
+### 2026-07-28 — three-bucket development objective
+
+Visible before this amendment: all earlier eight-boundary/nine-bin SWE
+diagnostics, `generic-argv-v1`, `generic-argv-v2-shape`, the failed
+`local_n <= 4` arbitration gate, and both SWE resource-class orientations.
+
+The human replaced the eight latency boundaries with `2000/8000` after deciding
+that three operational latency regimes—short, uncertain middle, and long—were
+sufficient. Exact three-class accuracy against the same-evaluation majority
+class is now the primary development decision metric. This is an openly
+development-exposed amendment, not a pre-registration or confirmation claim.
+CPU, sampled RSS, Disk I/O, short-null policy, evidence eligibility, causal
+visibility, and compound-command semantics are unchanged.
 
 ### 2026-07-27 — concurrency-one diagnostic
 
@@ -322,11 +332,13 @@ Every result-affecting KB/predictor task must preserve:
 
 ```text
 Targets = latency bucket PMF plus CPU peak, sampled RSS, and Disk I/O Heavy/Light.
-Boundaries_ms = [500, 1000, 2000, 4000, 8000, 16000, 32000, 64000].
-Threshold truth = latency_ms > boundary; prediction = cumulative PMF > 0.5.
+Boundaries_ms = [2000, 8000].
+Latency truth = exact bucket in [0,2000], (2000,8000], or (8000,+inf).
+Latency prediction = argmax normalized PMF; exact ties select the shorter bucket.
+Primary latency score = exact three-class accuracy vs same-evaluation majority.
 Resource truth = CPU > 2 cores; RSS > 500 decimal MB; Disk read+write > 100 MiB.
 Short-null resource policy = Light only when explicitly marked and latency_ms < 500.
 Scores include n, positive rate, TP/TN/FP/FN, accuracy, and majority-Light baseline.
 Offline and online use one predictor implementation and identical causal updates.
-No compound composition, legacy predictor path, or TB confirmation access.
+No compound composition, legacy predictor path, or non-SWE benchmark access.
 ```

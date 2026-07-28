@@ -58,9 +58,9 @@ tool_resource:
   update_policy: frozen
   snapshot: latest_at_run_start
   telemetry_requirement: required_for_valid_evidence
-  latency_bucket_edges_ms: [500, 1000, 2000, 4000, 8000, 16000, 32000, 64000]
+  latency_bucket_edges_ms: [2000, 8000]
 ```
 
-Latency intervals are `[0, 500]`, `(500, 1000]`, ..., `(64000, +inf)`: an
-exact boundary belongs to the lower bucket, matching the scheduler question
-`T > boundary`. Compound-command buckets are not composed.
+Latency intervals are `[0, 2000]`, `(2000, 8000]`, and `(8000, +inf)`: an
+exact boundary belongs to the lower bucket. Compound-command buckets are not
+composed.

@@ -13,6 +13,7 @@ from scripts.evaluation.evaluate_clause_latency_buckets import (
     _telemetry_metrics,
     _telemetry_scored_rows,
     _validate_partition,
+    evaluate_clause_telemetry,
 )
 from scripts.evaluation.evaluate_clause_resource_classes import load_rows
 
@@ -42,12 +43,12 @@ def test_partition_overlap_fails_closed() -> None:
 def test_exact_bucket_metrics_use_lowest_argmax_on_ties() -> None:
     # A tie between buckets 0 and 1 must resolve to the lower bucket id, so the
     # row labelled 1 is scored wrong and the row labelled 2 is scored right.
-    tie = _scored(1, (0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
-    hit = _scored(2, (0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+    tie = _scored(1, (0.5, 0.5, 0.0))
+    hit = _scored(2, (0.0, 0.0, 1.0))
 
     assert _argmax_bucket(tie) == 0
     assert _exact_bucket_metrics([tie, hit]) == {
-        "exact_bucket_accuracy": 0.5,
+        "three_class_accuracy": 0.5,
         "eligible_examples": 2,
     }
 
@@ -139,28 +140,73 @@ def test_clause_telemetry_path_is_causal_and_reports_bucket_semantics(
     # No intra-task leakage: both clauses still fall back to the public prior.
     assert [row.layer for row in first_task] == ["public", "public"]
     assert [_argmax_bucket(row) for row in first_task] == [0, 0]
-    assert [row.label_bucket for row in first_task] == [3, 3]
+    assert [row.label_bucket for row in first_task] == [1, 1]
 
     second_task = {row.command: row for row in rows if row.task_id.endswith("-2")}
     learned = second_task["sleep 9"]
     # The earlier task settled before this one queried, so repo evidence wins.
     assert learned.layer == "repo"
-    assert _argmax_bucket(learned) == 3
+    assert _argmax_bucket(learned) == 1
     assert learned.evidence_count == 2
-    # 500 ms sits exactly on the first edge and belongs to the lower bucket.
+    # 500 ms is below the first edge and belongs to the short bucket.
     assert second_task["sleep 1"].label_bucket == 0
 
     metrics = _telemetry_metrics(rows)
     assert metrics["eligible_examples"] == 4
-    assert metrics["exact_bucket_accuracy"] == 0.25
-    assert metrics["majority_bucket"] == 3
-    assert metrics["majority_bucket_baseline_accuracy"] == 0.75
+    assert metrics["three_class_accuracy"] == 0.25
+    assert metrics["majority_class"] == "middle"
+    assert metrics["majority_class_id"] == 1
+    assert metrics["majority_class_accuracy"] == 0.75
+    assert metrics["accuracy_minus_majority_percentage_points"] == -50.0
+    assert metrics["accuracy_minus_current_percentage_points"] == 0.0
+    assert metrics["prediction_unavailable"] == 0
     assert sum(sum(row) for row in metrics["confusion_label_by_prediction"]) == 4
-    assert metrics["confusion_label_by_prediction"][3][0] == 2
-    assert metrics["per_bucket"][3]["label_count"] == 3
-    assert metrics["per_bucket"][3]["recall"] == pytest.approx(1 / 3)
+    assert metrics["confusion_label_by_prediction"][1][0] == 2
+    assert metrics["per_class"][1] == {
+        "class": "middle",
+        "class_id": 1,
+        "label_count": 3,
+        "label_share": 0.75,
+        "predicted_count": 2,
+        "predicted_share": 0.5,
+    }
     assert set(metrics["scope_counts"]) == {"public", "repo"}
+    assert sum(metrics["support_band_counts"].values()) == 4
+    assert sum(metrics["evidence_count_counts"].values()) == 4
     assert metrics["fallback_path_counts"]
+
+    result, result_rows = evaluate_clause_telemetry(
+        load_rows(fit),
+        load_rows(evaluation),
+        {"fixture": True},
+    )
+    assert result_rows == rows
+    assert result["row_identity"] == {
+        "identical_row_ids_and_labels": True,
+        "eligible_row_count": 4,
+    }
+    assert set(result["baselines"]) == {
+        "majority",
+        "current",
+        "public_only",
+        "local_only_diagnostic",
+    }
+    assert set(result["oracles"]) == {"current_public", "current_nodes"}
+    current = result["baselines"]["current"]["three_class_accuracy"]
+    public = result["baselines"]["public_only"]["three_class_accuracy"]
+    assert current is not None and public is not None
+    assert result["oracles"]["current_public"]["three_class_accuracy"] >= max(
+        current,
+        public,
+    )
+    assert result["oracles"]["current_nodes"]["three_class_accuracy"] >= result[
+        "oracles"
+    ]["current_public"]["three_class_accuracy"]
+    assert result["oracles"]["current_nodes"]["oracle"] is True
+    local = result["baselines"]["local_only_diagnostic"]
+    assert local["selection_forbidden"] is True
+    assert local["prediction_coverage"] == 0.5
+    assert local["three_class_accuracy"] is None
 
 
 def test_clause_telemetry_path_backs_off_to_global_and_reports_the_path(

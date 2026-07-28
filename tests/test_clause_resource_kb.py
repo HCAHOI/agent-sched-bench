@@ -157,14 +157,8 @@ def test_latency_buckets_match_strict_threshold_decisions() -> None:
     assert buckets.bucket_id(1000.0) == 1
     assert buckets.bucket_id(1e12) == 2
     assert CANONICAL_LATENCY_BUCKET_EDGES_MS == (
-        500.0,
-        1000.0,
         2000.0,
-        4000.0,
         8000.0,
-        16000.0,
-        32000.0,
-        64000.0,
     )
 
 
@@ -428,6 +422,21 @@ def test_causal_exact_clause_becomes_available_strictly_after_end() -> None:
     assert after_end is not None and after_end.scope == "repo"
     assert after_end.key_kind == "exact_clause"
     assert after_end.probability_by_bucket == (0.0, 0.0, 1.0)
+    candidates = kb.diagnostic_clause_latency_candidates(
+        "r1",
+        "pytest",
+        ("pytest", "-q"),
+        buckets,
+        ts_start=12.1,
+    )
+    assert candidates[0] == after_end
+    assert [(item.scope, item.key_kind) for item in candidates] == [
+        ("repo", "exact_clause"),
+        ("repo", "argv_prefix_depth_2"),
+        ("repo", "bin"),
+        ("public", "bin"),
+        ("public", "global"),
+    ]
 
 
 def test_repo_prefix_backoff_and_isolation() -> None:

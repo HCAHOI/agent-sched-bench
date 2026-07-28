@@ -180,14 +180,8 @@ class LatencyBuckets:
 
 
 CANONICAL_LATENCY_BUCKET_EDGES_MS = (
-    500.0,
-    1000.0,
     2000.0,
-    4000.0,
     8000.0,
-    16000.0,
-    32000.0,
-    64000.0,
 )
 CANONICAL_LATENCY_BUCKETS = LatencyBuckets(CANONICAL_LATENCY_BUCKET_EDGES_MS)
 
@@ -498,9 +492,11 @@ class ClauseResourceKB:
                     # per observation, prediction happens on every clause.
                     _insert_into_node(repo_sources[source].setdefault(key, []), value)
 
-    def _select(
+    def _candidate_nodes(
         self, repo: str, source: str, bin_: str, argv: Sequence[str]
-    ) -> tuple[Sequence[float], str, str, tuple[str, ...]] | None:
+    ) -> Iterator[tuple[Sequence[float], str, str, tuple[str, ...]]]:
+        """Yield non-empty backoff nodes in runtime selection order."""
+
         repo_nodes = self._repo.get(repo, {}).get(source, {})
         public_nodes = self._public[source]
         path: list[str] = []
@@ -508,30 +504,23 @@ class ClauseResourceKB:
             path.append(f"repo:{key[0]}")
             values = repo_nodes.get(key)
             if values:
-                return values, "repo", key[0], tuple(path)
+                yield values, "repo", key[0], tuple(path)
         for key in _clause_public_keys(bin_):
             path.append(f"public:{key[0]}")
             values = public_nodes.get(key)
             if values:
-                return values, "public", key[0], tuple(path)
-        return None
+                yield values, "public", key[0], tuple(path)
 
-    def predict_clause_latency_bucket(
-        self,
-        repo: str,
-        bin_: str,
-        argv: Sequence[str],
+    def _select(
+        self, repo: str, source: str, bin_: str, argv: Sequence[str]
+    ) -> tuple[Sequence[float], str, str, tuple[str, ...]] | None:
+        return next(self._candidate_nodes(repo, source, bin_, argv), None)
+
+    @staticmethod
+    def _latency_prediction(
+        selected: tuple[Sequence[float], str, str, tuple[str, ...]],
         buckets: LatencyBuckets,
-        *,
-        ts_start: float | None = None,
     ) -> ClauseLatencyBucketPrediction:
-        """Predict the empirical latency-bucket PMF for one clause."""
-
-        if ts_start is not None:
-            self._advance(ts_start)
-        selected = self._select(repo, _LATENCY_MS, bin_, argv)
-        if selected is None:
-            raise ValueError("no public global clause latency node")
         values, scope, kind, path = selected
         # Nodes are sorted, so the histogram is one binary search per edge
         # instead of a scan of every value. Bucket i is (edges[i-1], edges[i]],
@@ -551,6 +540,47 @@ class ClauseResourceKB:
             key_kind=kind,
             evidence_count=len(values),
             fallback_path=path,
+        )
+
+    def predict_clause_latency_bucket(
+        self,
+        repo: str,
+        bin_: str,
+        argv: Sequence[str],
+        buckets: LatencyBuckets,
+        *,
+        ts_start: float | None = None,
+    ) -> ClauseLatencyBucketPrediction:
+        """Predict the empirical latency-bucket PMF for one clause."""
+
+        if ts_start is not None:
+            self._advance(ts_start)
+        selected = self._select(repo, _LATENCY_MS, bin_, argv)
+        if selected is None:
+            raise ValueError("no public global clause latency node")
+        return self._latency_prediction(selected, buckets)
+
+    def diagnostic_clause_latency_candidates(
+        self,
+        repo: str,
+        bin_: str,
+        argv: Sequence[str],
+        buckets: LatencyBuckets,
+        *,
+        ts_start: float | None = None,
+    ) -> tuple[ClauseLatencyBucketPrediction, ...]:
+        """Return all non-empty backoff nodes for analysis-only oracle ceilings.
+
+        The first item is exactly the runtime-selected prediction. Callers must
+        never use a later item for deployment selection: choosing among these
+        candidates requires the observed label and is therefore hindsight.
+        """
+
+        if ts_start is not None:
+            self._advance(ts_start)
+        return tuple(
+            self._latency_prediction(selected, buckets)
+            for selected in self._candidate_nodes(repo, _LATENCY_MS, bin_, argv)
         )
 
     def predict_clause_heavy_light(
