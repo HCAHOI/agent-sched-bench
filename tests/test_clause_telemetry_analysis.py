@@ -701,3 +701,83 @@ def test_disk_io_new_forked_tid_uses_zero_baseline() -> None:
         metrics[0].disk_cancelled_write_bytes_total,
     ) == (310, 420, 50)
     assert metrics[0].provenance["disk_io"]["zero_fork_baseline_tids"] == [101]
+
+
+def _spoolable(event: dict) -> dict:
+    """_ev omits the fields the packed spool record needs; default them."""
+    return {
+        "hiwater_pages": 0, "parent_host_pid": 0, "arg_chunk_index": 0,
+        "arg_flags": 0, **event,
+    }
+
+
+def _stream_with_every_event_type() -> tuple[list[dict], int]:
+    """One pid execs twice with argv, meta and a failed attempt, forks a child
+    and a thread, samples, then exits -- so every declared event type appears."""
+    events = [
+        _ev("fork", 10, 100, child=101, child_tid=101),
+        _ev("exec_boundary", 20, 101, seq=1, cpu_ns=10, rss=100, mm=1616),
+        _ev("exec_arg", 20, 101, seq=1, arg_index=0, arg="/usr/bin/gcc"),
+        _ev("exec_arg", 20, 101, seq=1, arg_index=1, arg="-c"),
+        _ev("exec_meta", 20, 101, seq=1, arg="/usr/bin/gcc"),
+        _ev("bprm_meta", 20, 101, seq=1, arg="/usr/bin/gcc", exit_code=2),
+        _ev("interp_meta", 20, 101, seq=1, arg="/lib/ld.so"),
+        _ev("perf", 40, 101, seq=1, cpu_ns=500, rss=200, mm=1616),
+        _ev("fork", 50, 101, child=102, child_tid=102),
+        _ev("fork", 55, 101, child=101, child_tid=9101),
+        _ev("failed_exec_attempt", 60, 101, seq=1, exit_code=2, arg="/bin/nope"),
+        _ev("exec_boundary", 70, 101, seq=2, cpu_ns=800, rss=150, mm=1616),
+        _ev("exec_arg", 70, 101, seq=2, arg_index=0, arg="/usr/bin/ld"),
+        _ev("perf", 90, 101, seq=2, cpu_ns=900, rss=250, mm=1616),
+        _ev("exit_boundary", 120, 101, seq=2, cpu_ns=1000, mm=1616),
+        # pid 102 execs and never exits, so its clause is bounded by the last
+        # timestamp in the stream...
+        _ev("exec_boundary", 130, 102, seq=3, cpu_ns=5, rss=80, mm=1632),
+        _ev("exec_arg", 130, 102, seq=3, arg_index=0, arg="/bin/sleep"),
+        # ...which is a perf event, a type the lineage view drops. A view that
+        # reported its own maximum would end that clause at 130 instead of 500.
+        _ev("perf", 500, 102, seq=3, cpu_ns=10, rss=5, mm=1632),
+    ]
+    return [_spoolable(event) for event in events], 500
+
+
+def test_type_filtered_views_match_the_unfiltered_source(tmp_path) -> None:
+    """A pass handed only its declared event types must produce exactly what it
+    produces from the whole stream. This is the failure the filter can cause:
+    a type missing from one of the declared sets silently drops evidence."""
+    events, last_ts = _stream_with_every_event_type()
+    types = {event["type"] for event in events}
+    assert types == set(C.TYPE_CODES), "stream must exercise every event type"
+
+    spool = C._EventSpool(tmp_path)
+    for event in events:
+        spool.append(event)
+    source = C._sorted_event_source(
+        spool.snapshot(), started_ns=0, ended_ns=last_ts, cgroup_id=1,
+        directory=tmp_path,
+    )
+    try:
+        assert [dict(row) for row in source.of_types(frozenset(types))] == [
+            dict(row) for row in source
+        ]
+        assert source.max_ts_ns == last_ts
+
+        full_argv = C._captured_argv(source)
+        view_argv = C._captured_argv(source.of_types(C._ARGV_EVENT_TYPES))
+        assert view_argv == full_argv
+
+        full = C._clauses_and_lineage(source, full_argv)
+        view = C._clauses_and_lineage(
+            source.of_types(C._LINEAGE_EVENT_TYPES), full_argv
+        )
+        assert view == full
+        # The unterminated clause is bounded by an event the lineage view drops.
+        assert any(not clause.has_causal_end for clause in full[0])
+        assert max(clause.t_end_ns for clause in full[0]) == last_ts
+
+        assert C._fork_io_baselines(
+            source.of_types(C._FORK_EVENT_TYPES), *full
+        ) == C._fork_io_baselines(source, *full)
+    finally:
+        source.close()
+        spool.close()

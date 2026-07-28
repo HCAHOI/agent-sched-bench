@@ -38,16 +38,13 @@ import tempfile
 import threading
 import time
 from bisect import bisect_left, bisect_right
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
     BinaryIO,
-    Callable,
-    Iterator,
-    Mapping,
-    Sequence,
 )
 
 from tool_resource.artifact_schema import (
@@ -1038,6 +1035,40 @@ class Clause:
     argv_capture_flags: int = 0
 
 
+# The event types each pass over a call's event stream actually branches on.
+# A pass handed a view narrower than its set would silently drop evidence, so
+# these live beside the functions that consume them and are covered by
+# tests/test_clause_telemetry_analysis.py::test_type_filtered_views_match_full.
+_ARGV_EVENT_TYPES = frozenset({"exec_arg", "exec_boundary", "failed_exec_attempt"})
+_LINEAGE_EVENT_TYPES = frozenset(
+    {
+        "fork",
+        "exec_meta",
+        "bprm_meta",
+        "interp_meta",
+        "exit_boundary",
+        "exec_boundary",
+    }
+)
+_FORK_EVENT_TYPES = frozenset({"fork"})
+
+
+def _events_of_types(
+    events: Any,
+    types: frozenset[str],
+) -> Any:
+    """Restrict ``events`` to ``types`` without decoding what is filtered out.
+
+    Only worth doing for a disk-backed source, where skipping a record skips a
+    deserialization; an in-memory list is already decoded, so it is returned
+    untouched and the consumer's own type test does the work.
+    """
+
+    if isinstance(events, _SortedEventSource):
+        return events.of_types(types)
+    return events
+
+
 def _captured_argv(
     events: Sequence[Mapping[str, Any]],
 ) -> tuple[
@@ -1110,8 +1141,14 @@ def _clauses_and_lineage(
     ``captured_argv`` lets a caller that already ran :func:`_captured_argv`
     reuse it; the argv reassembly decodes every ``exec_arg`` chunk, which is the
     bulk of an event stream.
+
+    A terminal exec that never exited is bounded by the last timestamp in the
+    stream. When ``events`` is a view restricted to ``_LINEAGE_EVENT_TYPES``
+    that bound has to come from the unfiltered source, or the clause would end
+    early; ``_EventTypeView`` carries it as ``source_max_ts_ns``.
     """
 
+    last_ts: int | None = getattr(events, "source_max_ts_ns", None)
     fork_parent: dict[int, int] = {}
     exact_argc: dict[tuple[int, int], int | None] = {}
     requested_paths: dict[tuple[int, int], str] = {}
@@ -1121,7 +1158,6 @@ def _clauses_and_lineage(
     bprm_truncated: set[tuple[int, int]] = set()
     exits: dict[int, int] = {}
     execs_by_pid: dict[int, list[dict[str, Any]]] = {}
-    last_ts: int | None = None
     for e in events:
         event_type = e["type"]
         last_ts = e["ts_ns"] if last_ts is None else max(last_ts, e["ts_ns"])
@@ -1153,6 +1189,13 @@ def _clauses_and_lineage(
         elif event_type == "exec_boundary" and e["exec_seq"] != SENTINEL:
             execs_by_pid.setdefault(e["host_pid"], []).append(e)
 
+    if captured_argv is None:
+        # A lineage-restricted view carries no exec_arg events, so reassembling
+        # argv from it would hand every clause an empty argv and a "" bin
+        # without failing. A caller that passes a view must pass the argv too.
+        assert not isinstance(events, _EventTypeView), (
+            "_clauses_and_lineage needs precomputed argv when given a filtered view"
+        )
     argv_words, argv_capture_flags = (
         _captured_argv(events) if captured_argv is None else captured_argv
     )
@@ -2538,7 +2581,9 @@ def _analyze_streaming(
         tid: [event["ts_ns"] for event in events]
         for tid, events in boundary_events_by_tid.items()
     }
-    fork_io_baselines = _fork_io_baselines(run.events, clauses, fork_parent)
+    fork_io_baselines = _fork_io_baselines(
+        _events_of_types(run.events, _FORK_EVENT_TYPES), clauses, fork_parent
+    )
 
     scheduled_cpu: list[tuple[int, int, tuple[int, int], int, int]] = []
     schedule_order = 0
@@ -2906,6 +2951,9 @@ _EVENT_FIELDS = (
     "errno",
 )
 _EVENT_KEYS = frozenset((*_EVENT_FIELDS, "arg", "arg_raw"))
+# The stored fields, without the two derived-from-payload keys, so the common
+# lookup answers on one frozenset hit and skips the payload branches.
+_EVENT_SLOT_KEYS = frozenset(_EVENT_FIELDS)
 
 
 class EventRow(Mapping):
@@ -2975,8 +3023,13 @@ class EventRow(Mapping):
         # without hashing, which is a linear scan on the hottest accessor in the
         # module and answers an unhashable key with KeyError where a dict raises
         # TypeError. Hashing the key restores both.
-        if key not in _EVENT_KEYS:
-            raise KeyError(key)
+        if key in _EVENT_SLOT_KEYS:
+            return getattr(self, key)
+        return self._payload_item(key)
+
+    def _payload_item(self, key: str) -> Any:
+        """The two keys derived from the raw payload, plus every miss."""
+
         if key == "arg":
             if self._arg_payload is _UNSET:
                 raise KeyError(key)
@@ -2985,7 +3038,23 @@ class EventRow(Mapping):
             if self._arg_payload is _UNSET or self.type != "exec_arg":
                 raise KeyError(key)
             return self._arg_payload.hex()
-        return getattr(self, key)
+        raise KeyError(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        # The inherited Mapping.get answers a miss by raising KeyError out of
+        # __getitem__ and catching it, which measured 242 ns against 30 ns for
+        # a dict. Every attributed sample asks for three keys this row never
+        # carries ("attribution", "metric_excluded"), so the miss is the hot
+        # case and must not raise. Membership still hashes the key, so an
+        # unhashable one raises TypeError exactly as dict.get does.
+        if key in _EVENT_SLOT_KEYS:
+            return getattr(self, key)
+        if key not in _EVENT_KEYS:
+            return default
+        try:
+            return self._payload_item(key)
+        except KeyError:
+            return default
 
     def __iter__(self) -> Any:
         yield from _EVENT_FIELDS
@@ -3050,6 +3119,13 @@ _EVENT_SPOOL_MERGE_FAN_IN = 32
 # arrival, type, ten u64 counters/identities, nine u32 fields,
 # payload-size-plus-one (zero means absent), fixed payload storage.
 _EVENT_RECORD = struct.Struct(f"<QB10Q9IH{ARG_BYTES}s")
+# The sort key and the window test read four leading fields. Unpacking the
+# whole record for them also copies the ARG_BYTES payload, which measured
+# 239 ns against 65 ns for this prefix -- and both run once per record per
+# merge pass. The type code is the single byte at _EVENT_TYPE_OFFSET, so a
+# type filter can reject a record without unpacking anything at all.
+_EVENT_RECORD_PREFIX = struct.Struct("<QBQQ")  # arrival, type, ts_ns, cgroup_id
+_EVENT_TYPE_OFFSET = 8
 
 
 def _pack_event_record(event: Mapping[str, Any], arrival: int) -> bytes:
@@ -3118,8 +3194,8 @@ def _unpack_event_record(record: bytes) -> EventRow:
 
 
 def _event_record_key(record: bytes) -> tuple[int, int]:
-    values = _EVENT_RECORD.unpack(record)
-    return int(values[2]), int(values[0])
+    arrival, _type_code, ts_ns, _cgroup_id = _EVENT_RECORD_PREFIX.unpack_from(record)
+    return ts_ns, arrival
 
 
 def _event_record_in_window(
@@ -3129,8 +3205,10 @@ def _event_record_in_window(
     ended_ns: int,
     cgroup_id: int,
 ) -> bool:
-    values = _EVENT_RECORD.unpack(record)
-    return started_ns <= values[2] <= ended_ns and values[3] == cgroup_id
+    _arrival, _type_code, ts_ns, record_cgroup = _EVENT_RECORD_PREFIX.unpack_from(
+        record
+    )
+    return started_ns <= ts_ns <= ended_ns and record_cgroup == cgroup_id
 
 
 @dataclass(slots=True)
@@ -3150,6 +3228,34 @@ def _temporary_binary_file(directory: Path) -> BinaryIO:
     )
 
 
+class _EventTypeView:
+    """Re-iterable view of one event source restricted to some event types.
+
+    A single tool call walks its event source several times, and most of those
+    walks want a small minority of it: the fork map wants ``fork``, argv
+    reassembly wants the exec events. Testing the type byte in the packed
+    record costs an index; decoding one costs a struct unpack plus twenty-one
+    slot stores. So the filter runs before the decode, not after it.
+
+    ``source_max_ts_ns`` is the maximum over the WHOLE source, not over the
+    retained types, because a consumer that bounds an unterminated clause by
+    "the last thing that happened" must not see a shortened stream.
+    """
+
+    def __init__(self, source: "_SortedEventSource", types: frozenset[str]) -> None:
+        self._source = source
+        self._codes = frozenset(TYPE_CODES[name] for name in types)
+
+    @property
+    def source_max_ts_ns(self) -> int:
+        # Read on demand: resolving it seeks the shared run, so doing it at
+        # construction time would derail an iteration already in flight.
+        return self._source.max_ts_ns
+
+    def __iter__(self) -> Iterator[EventRow]:
+        return self._source.iter_records(self._codes)
+
+
 class _SortedEventSource:
     """Re-iterable stable timestamp order over one private temporary run."""
 
@@ -3157,15 +3263,36 @@ class _SortedEventSource:
         self._run = run
         self.record_count = record_count
 
-    def __iter__(self) -> Iterator[EventRow]:
+    @property
+    def max_ts_ns(self) -> int:
+        """The last record's timestamp; the run is in timestamp order."""
+
+        if not self.record_count:
+            return 0
+        self._run.seek((self.record_count - 1) * _EVENT_RECORD.size)
+        record = self._run.read(_EVENT_RECORD.size)
+        if len(record) != _EVENT_RECORD.size:
+            raise OSError("event spool sorted run is truncated")
+        return _EVENT_RECORD_PREFIX.unpack_from(record)[2]
+
+    def of_types(self, types: frozenset[str]) -> _EventTypeView:
+        return _EventTypeView(self, types)
+
+    def iter_records(self, codes: frozenset[int] | None = None) -> Iterator[EventRow]:
+        """Every record, or only those whose packed type byte is in ``codes``."""
+
         self._run.seek(0)
         for _ in range(self.record_count):
             record = self._run.read(_EVENT_RECORD.size)
             if len(record) != _EVENT_RECORD.size:
                 raise OSError("event spool sorted run is truncated")
-            yield _unpack_event_record(record)
+            if codes is None or record[_EVENT_TYPE_OFFSET] in codes:
+                yield _unpack_event_record(record)
         if self._run.read(1):
             raise OSError("event spool sorted run has trailing bytes")
+
+    def __iter__(self) -> Iterator[EventRow]:
+        return self.iter_records()
 
     def __len__(self) -> int:
         return self.record_count
@@ -4071,7 +4198,7 @@ class ClauseTelemetryCollector:
             ],
         )
         fork_records: dict[int, list[dict[str, Any]]] = {}
-        for event in events:
+        for event in _events_of_types(events, _FORK_EVENT_TYPES):
             if event["type"] == "fork" and event["child_host_pid"]:
                 fork_records.setdefault(event["child_host_pid"], []).append(event)
         fork_parent = {
@@ -4082,8 +4209,10 @@ class ClauseTelemetryCollector:
         # Reassemble argv and reconstruct the clause list ONCE for this call:
         # analyze() and the failed-exec records below reuse both rather than
         # rebuilding them from the same events.
-        captured_argv = _captured_argv(events)
-        clauses_and_lineage = _clauses_and_lineage(events, captured_argv)
+        captured_argv = _captured_argv(_events_of_types(events, _ARGV_EVENT_TYPES))
+        clauses_and_lineage = _clauses_and_lineage(
+            _events_of_types(events, _LINEAGE_EVENT_TYPES), captured_argv
+        )
         clauses, _ = clauses_and_lineage
         if safety_guard_blocked is not None and not clauses and not events:
             entry_pid = 0
