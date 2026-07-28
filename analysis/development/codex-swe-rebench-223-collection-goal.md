@@ -63,6 +63,19 @@ collector retention fix, then pass focused tests, Ruff, one bounded review,
 and a real eBPF memory smoke. A failed gate stops the operation. The Hermes
 watchdog is observer-only and must not nudge or restart collection.
 
+## 2026-07-28 restart lock
+
+The previous Phase 3 launch crossed the gate without a concise human-visible
+gate report; its first invocation also omitted `TASK_CONTAINER_CLEANUP_IMAGES=1`.
+The old Codex session, collector, and task containers have been stopped.
+
+The next fresh Codex session must not launch collection. It must first verify
+from artifacts (not prior-agent claims) that the retry and telemetry gates are
+complete, inspect the interrupted Phase 3 attempts without fabricating terminal
+state, and make the collection launch fail closed unless image cleanup is
+enabled and Gradio is excluded. Run the minimum relevant checks and stop with
+a concise gate report. Collection requires a later explicit human go-ahead.
+
 ## Canonical context to reload before acting
 
 Read and obey:
