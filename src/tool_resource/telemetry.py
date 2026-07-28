@@ -1113,26 +1113,26 @@ def _clauses_and_lineage(
     """
 
     fork_parent: dict[int, int] = {}
-    for e in events:
-        if e["type"] == "fork" and e["child_host_pid"]:
-            fork_parent.setdefault(e["child_host_pid"], e["host_pid"])
-
-    argv_words, argv_capture_flags = (
-        _captured_argv(events) if captured_argv is None else captured_argv
-    )
     exact_argc: dict[tuple[int, int], int | None] = {}
     requested_paths: dict[tuple[int, int], str] = {}
     requested_path_truncated: set[tuple[int, int]] = set()
     bprm_filenames: dict[tuple[int, int], str] = {}
     bprm_interpreters: dict[tuple[int, int], str] = {}
     bprm_truncated: set[tuple[int, int]] = set()
+    exits: dict[int, int] = {}
+    execs_by_pid: dict[int, list[dict[str, Any]]] = {}
+    last_ts: int | None = None
     for e in events:
-        if e["type"] == "exec_meta":
+        event_type = e["type"]
+        last_ts = e["ts_ns"] if last_ts is None else max(last_ts, e["ts_ns"])
+        if event_type == "fork" and e["child_host_pid"]:
+            fork_parent.setdefault(e["child_host_pid"], e["host_pid"])
+        elif event_type == "exec_meta":
             key = (e["host_pid"], e["exec_seq"])
             requested_paths[key] = e.get("arg", "")
             if int(e.get("arg_flags", 0)) & ARG_FLAG_TRUNCATED:
                 requested_path_truncated.add(key)
-        if e["type"] == "bprm_meta":
+        elif event_type == "bprm_meta":
             key = (e["host_pid"], e["exec_seq"])
             bprm_filenames[key] = e.get("arg", "")
             argc = int(e.get("exit_code") or 0)
@@ -1140,11 +1140,22 @@ def _clauses_and_lineage(
                 exact_argc[key] = argc
             if int(e.get("arg_flags", 0)) & ARG_FLAG_TRUNCATED:
                 bprm_truncated.add(key)
-        if e["type"] == "interp_meta":
+        elif event_type == "interp_meta":
             key = (e["host_pid"], e["exec_seq"])
             bprm_interpreters[key] = e.get("arg", "")
             if int(e.get("arg_flags", 0)) & ARG_FLAG_TRUNCATED:
                 bprm_truncated.add(key)
+        elif event_type == "exit_boundary":
+            exits[e["host_pid"]] = max(
+                exits.get(e["host_pid"], 0),
+                e["ts_ns"],
+            )
+        elif event_type == "exec_boundary" and e["exec_seq"] != SENTINEL:
+            execs_by_pid.setdefault(e["host_pid"], []).append(e)
+
+    argv_words, argv_capture_flags = (
+        _captured_argv(events) if captured_argv is None else captured_argv
+    )
 
     def argv_of(pid: int, seq: int) -> tuple[tuple[str, ...], int]:
         words = argv_words.get((pid, seq), {})
@@ -1153,18 +1164,7 @@ def _clauses_and_lineage(
             argv_capture_flags.get((pid, seq), 0),
         )
 
-    exits: dict[int, int] = {}
-    for e in events:
-        if e["type"] == "exit_boundary":
-            exits[e["host_pid"]] = max(exits.get(e["host_pid"], 0), e["ts_ns"])
-
     # exec boundaries per pid, ordered -> clause windows
-    execs_by_pid: dict[int, list[dict[str, Any]]] = {}
-    for e in events:
-        if e["type"] == "exec_boundary" and e["exec_seq"] != SENTINEL:
-            execs_by_pid.setdefault(e["host_pid"], []).append(e)
-
-    last_ts = max((r["ts_ns"] for r in events), default=0)
     clauses: list[Clause] = []
     for pid, execs in execs_by_pid.items():
         execs.sort(key=lambda r: r["ts_ns"])
@@ -1177,6 +1177,8 @@ def _clauses_and_lineage(
                 t_end = exits[pid]
                 has_causal_end = True
             else:
+                # execs_by_pid is non-empty here, so the stream had a timestamp.
+                assert last_ts is not None
                 t_end = last_ts  # synthetic bound; NOT a real causal end
                 has_causal_end = False
             argv, capture_flags = argv_of(pid, e["exec_seq"])
@@ -1292,19 +1294,19 @@ def _attribute(
         (c.host_pid, c.exec_seq): [] for c in clauses
     }
     fork_records: dict[int, list[dict[str, Any]]] = {}
-    for event in events:
-        if event["type"] == "fork" and event.get("child_host_pid"):
-            fork_records.setdefault(event["child_host_pid"], []).append(event)
     exec_boundaries_by_tid: dict[int, list[dict[str, Any]]] = {}
     boundary_events_by_tid: dict[int, list[dict[str, Any]]] = {}
     exec_arg_start_by_tid_seq: dict[tuple[int, int], int] = {}
     for event in events:
-        if event["type"] == "exec_boundary":
+        event_type = event["type"]
+        if event_type == "fork" and event.get("child_host_pid"):
+            fork_records.setdefault(event["child_host_pid"], []).append(event)
+        elif event_type == "exec_boundary":
             exec_boundaries_by_tid.setdefault(event["host_tid"], []).append(event)
             boundary_events_by_tid.setdefault(event["host_tid"], []).append(event)
-        elif event["type"] == "exit_boundary":
+        elif event_type == "exit_boundary":
             boundary_events_by_tid.setdefault(event["host_tid"], []).append(event)
-        elif event["type"] == "exec_arg" and event["arg_index"] == 0:
+        elif event_type == "exec_arg" and event["arg_index"] == 0:
             key = (event["host_tid"], event["exec_seq"])
             exec_arg_start_by_tid_seq[key] = min(
                 exec_arg_start_by_tid_seq.get(key, event["ts_ns"]),
@@ -2939,9 +2941,30 @@ class EventRow(Mapping):
         *values: Any,
         arg_payload: bytes | object = _UNSET,
     ) -> None:
-        for name, value in zip(_EVENT_FIELDS, values, strict=True):
-            object.__setattr__(self, name, value)
-        object.__setattr__(self, "_arg_payload", arg_payload)
+        (
+            self.type,
+            self.ts_ns,
+            self.cgroup_id,
+            self.exec_seq,
+            self.cpu_ns,
+            self.rss_pages,
+            self.mm_ptr,
+            self.hiwater_pages,
+            self.io_read_bytes,
+            self.io_write_bytes,
+            self.io_cancelled_write_bytes,
+            self.host_pid,
+            self.host_tid,
+            self.parent_host_pid,
+            self.child_host_pid,
+            self.child_host_tid,
+            self.arg_index,
+            self.arg_chunk_index,
+            self.arg_flags,
+            self.exit_code,
+            self.errno,
+        ) = values
+        self._arg_payload = arg_payload
 
     def __getitem__(self, key: str) -> Any:
         # Membership first: `getattr` alone would answer `row["get"]` with the
@@ -3030,6 +3053,36 @@ _EVENT_RECORD = struct.Struct(f"<QB10Q9IH{ARG_BYTES}s")
 
 
 def _pack_event_record(event: Mapping[str, Any], arrival: int) -> bytes:
+    if isinstance(event, EventRow):
+        payload = None if event._arg_payload is _UNSET else event._arg_payload
+        payload_marker = 0 if payload is None else len(payload) + 1
+        if payload is not None and len(payload) > ARG_BYTES:
+            raise ValueError("event payload exceeds spool record")
+        return _EVENT_RECORD.pack(
+            arrival,
+            TYPE_CODES[event.type],
+            event.ts_ns,
+            event.cgroup_id,
+            event.exec_seq,
+            event.cpu_ns,
+            event.rss_pages,
+            event.mm_ptr,
+            event.hiwater_pages,
+            event.io_read_bytes,
+            event.io_write_bytes,
+            event.io_cancelled_write_bytes,
+            event.host_pid,
+            event.host_tid,
+            event.parent_host_pid,
+            event.child_host_pid,
+            event.child_host_tid,
+            event.arg_index,
+            event.arg_chunk_index,
+            event.arg_flags,
+            event.exit_code,
+            payload_marker,
+            b"" if payload is None else payload,
+        )
     payload = getattr(event, "_arg_payload", _UNSET)
     if payload is _UNSET:
         payload = (
