@@ -11,14 +11,17 @@ from scripts.evaluation.evaluate_clause_latency_buckets import (
     _bounded_node_oracle_candidates,
     _exact_bucket_metrics,
     _parser,
+    _select_shrinkage_alpha,
     _telemetry_metrics,
     _telemetry_scored_rows,
     _validate_partition,
     evaluate_clause_telemetry,
 )
 from scripts.evaluation.evaluate_clause_resource_classes import (
+    CandidateSSelection,
     Row,
     evaluate as evaluate_resources,
+    load_candidate_s_selection,
     load_rows,
 )
 from tool_resource.runtime_kb import ClauseLatencyBucketPrediction
@@ -37,6 +40,12 @@ def _scored(label_bucket: int, probability_by_bucket: tuple[float, ...]) -> Scor
         evidence_count=1,
         fallback_path=("repo:bin",),
         canonicalizer_version="raw-argv-prefix-v1",
+        arbitration="hard-first-nonempty-v1",
+        local_key_kind=None,
+        local_evidence_count=0,
+        public_key_kind=None,
+        public_evidence_count=0,
+        shrinkage_alpha=None,
         unavailable_reason=None,
         mapping_evidence="canonical_clause_telemetry",
     )
@@ -100,6 +109,17 @@ def test_cli_requires_both_telemetry_corpora() -> None:
         "fit.jsonl",
         "eval.jsonl",
     )
+    assert args.candidate_s is False
+    candidate_args = _parser().parse_args(
+        [
+            "--telemetry-fit",
+            "fit.jsonl",
+            "--telemetry-eval",
+            "eval.jsonl",
+            "--candidate-s",
+        ]
+    )
+    assert candidate_args.candidate_s is True
 
 
 def _telemetry_record(
@@ -320,6 +340,134 @@ def test_clause_telemetry_path_rejects_a_corpus_with_no_eligible_clauses(
         load_rows(empty)
 
 
+def test_candidate_s_alpha_selection_groups_repos_and_breaks_ties_larger() -> None:
+    fit = [
+        Row(
+            task_id=f"owner__fit-{index}",
+            repo=f"owner__fit-{index}",
+            manifest_index=index,
+            bin="runner",
+            argv=("runner", "deploy", f"--path=/tmp/{index}"),
+            latency_ms=100.0,
+            peak_cpu_cores=None,
+            sampled_peak_rss_mb=None,
+            disk_read_write_bytes_total=None,
+        )
+        for index in range(5)
+    ]
+
+    selection = _select_shrinkage_alpha(fit)
+
+    assert selection["fold_count"] == 5
+    assert selection["fit_repo_count"] == 5
+    assert selection["selected_alpha"] == 64.0
+    assert len(set(selection["accuracy_by_alpha"].values())) == 1
+    assert all(fold["validation_repo_count"] == 1 for fold in selection["folds"])
+    assert selection["outer_labels_used"] is False
+
+
+def test_candidate_s_result_uses_fit_selected_alpha_on_identical_outer_rows() -> None:
+    fit = [
+        Row(
+            task_id=f"owner__fit-{index}",
+            repo=f"owner__fit-{index}",
+            manifest_index=index,
+            bin="runner",
+            argv=("runner", "deploy", f"--path=/tmp/{index}"),
+            latency_ms=100.0,
+            peak_cpu_cores=None,
+            sampled_peak_rss_mb=None,
+            disk_read_write_bytes_total=None,
+        )
+        for index in range(5)
+    ]
+    evaluation = [
+        Row(
+            task_id=f"owner__eval-{index}",
+            repo="owner__eval",
+            manifest_index=index,
+            bin="runner",
+            argv=("runner", "deploy", "--path=/tmp/eval"),
+            latency_ms=3000.0,
+            peak_cpu_cores=None,
+            sampled_peak_rss_mb=None,
+            disk_read_write_bytes_total=None,
+        )
+        for index in range(2)
+    ]
+
+    result, rows = evaluate_clause_telemetry(
+        fit,
+        evaluation,
+        {"fixture": True},
+        include_candidate_s=True,
+    )
+
+    assert len(rows) == 2
+    assert result["row_identity"]["identical_row_ids_and_labels"] is True
+    assert result["selection"]["candidate_s_alpha"]["selected_alpha"] == 64.0
+    candidate = result["candidates"]["candidate_s"]
+    assert candidate["eligible_examples"] == 2
+    assert candidate["prediction_unavailable"] == 0
+    assert candidate["shrinkage_alpha_counts"] == {"64.0": 2}
+    assert candidate["arbitration_counts"] == {"public-local-posterior-v1": 2}
+    assert result["uncertainty"]["candidate_s_vs_best_baseline"][
+        "statistic"
+    ].startswith("candidate_s_accuracy")
+
+
+def test_resource_candidate_s_selection_verifies_latency_result_inputs(
+    tmp_path: Path,
+) -> None:
+    fit = tmp_path / "fit.jsonl"
+    evaluation = tmp_path / "eval.jsonl"
+    other = tmp_path / "other.jsonl"
+    for path in (fit, evaluation, other):
+        path.write_text("", encoding="utf-8")
+    result_path = tmp_path / "latency.json"
+    result = {
+        "bucket_edges_ms": [2000.0, 8000.0],
+        "fit_clause_observation_count": 5,
+        "eval_clause_observation_count": 2,
+        "row_identity": {"identical_row_ids_and_labels": True},
+        "selection": {
+            "candidate_s_alpha": {
+                "alpha_grid": [1.0, 4.0, 16.0, 64.0],
+                "selected_alpha": 16.0,
+                "selection_target": "three_class_latency_accuracy",
+                "tie_break": "larger_alpha",
+                "fit_row_count": 5,
+                "outer_labels_used": False,
+            }
+        },
+        "provenance": {
+            "fit_telemetry": str(fit.resolve()),
+            "eval_telemetry": str(evaluation.resolve()),
+            "candidate_s": {"enabled": True},
+        },
+    }
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+
+    selection = load_candidate_s_selection(
+        result_path,
+        fit_path=fit,
+        eval_path=evaluation,
+        fit_row_count=5,
+        eval_row_count=2,
+    )
+    assert selection.alpha == 16.0
+    assert selection.latency_result_path == str(result_path.resolve())
+
+    with pytest.raises(ValueError, match="eval input differs"):
+        load_candidate_s_selection(
+            result_path,
+            fit_path=fit,
+            eval_path=other,
+            fit_row_count=5,
+            eval_row_count=2,
+        )
+
+
 def test_resource_evaluator_compares_candidate_on_identical_label_rows() -> None:
     mib = 1024 * 1024
     fit = [
@@ -372,17 +520,32 @@ def test_resource_evaluator_compares_candidate_on_identical_label_rows() -> None
         ),
     ]
 
-    result = evaluate_resources(fit, evaluation)
+    result = evaluate_resources(
+        fit,
+        evaluation,
+        candidate_s_selection=CandidateSSelection(
+            alpha=64.0,
+            latency_result_path="fixture-latency.json",
+            fit_path="fixture-fit.jsonl",
+            eval_path="fixture-eval.jsonl",
+            fit_row_count=len(fit),
+            eval_row_count=len(evaluation),
+        ),
+    )
 
     assert result["row_identity"] == {
         "identical_label_rows_across_arms": True,
         "fit_eval_task_overlap_count": 0,
     }
     assert result["candidate_r"]["representation"] == "generic-argv-v3-role"
+    assert result["candidate_s"]["shrinkage_alpha"] == 64.0
     for resource, current in result["metrics"].items():
         candidate = result["candidates"]["candidate_r"]["metrics"][resource]
+        shrinkage = result["candidates"]["candidate_s"]["metrics"][resource]
         assert current["eligible_n"] == candidate["eligible_n"] == 2
         assert current["null_unavailable"] == candidate["null_unavailable"] == 1
         assert current["prediction_unavailable"] == 0
         assert candidate["prediction_unavailable"] == 0
         assert candidate["current_accuracy"] == current["accuracy"]
+        assert shrinkage["eligible_n"] == current["eligible_n"]
+        assert shrinkage["prediction_unavailable"] == 0

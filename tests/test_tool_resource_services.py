@@ -712,7 +712,11 @@ def test_snapshot_strict_causal_boundary_and_cross_scope(tmp_path: Path) -> None
     service.close()
 
 
-def test_structured_online_offline_golden_stream_and_restore(tmp_path: Path) -> None:
+@pytest.mark.parametrize("shrinkage_alpha", [None, 4.0])
+def test_structured_online_offline_golden_stream_and_restore(
+    tmp_path: Path,
+    shrinkage_alpha: float | None,
+) -> None:
     envelopes = [
         _envelope(
             f"public-{index}",
@@ -742,6 +746,7 @@ def test_structured_online_offline_golden_stream_and_restore(tmp_path: Path) -> 
     offline = ClauseResourceKB.fit_public(
         public,
         representation=STRUCTURED_ARGV_REPRESENTATION,
+        shrinkage_alpha=shrinkage_alpha,
     )
     for observation in local:
         offline.observe_completed_clause(observation)
@@ -763,6 +768,7 @@ def test_structured_online_offline_golden_stream_and_restore(tmp_path: Path) -> 
             )
         ),
         kb_representation=STRUCTURED_ARGV_REPRESENTATION,
+        kb_shrinkage_alpha=shrinkage_alpha,
     )
     run = _open_run(
         service,
@@ -801,8 +807,14 @@ def test_structured_online_offline_golden_stream_and_restore(tmp_path: Path) -> 
         assert restored_prediction == offline_prediction
         assert online["canonicalizer_version"] == GENERIC_ARGV_CANONICALIZER_VERSION
 
-    assert offline_prediction.scope == "repo"
-    assert offline_prediction.key_kind == "exact_clause"
+    if shrinkage_alpha is None:
+        assert offline_prediction.scope == "repo"
+        assert offline_prediction.key_kind == "exact_clause"
+    else:
+        assert offline_prediction.scope == "repo+public"
+        assert offline_prediction.local_key_kind == "exact_clause"
+        assert offline_prediction.public_key_kind == "structured_argv"
+        assert offline_prediction.shrinkage_alpha == shrinkage_alpha
     service.close()
 
 

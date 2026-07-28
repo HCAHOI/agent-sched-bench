@@ -7,6 +7,8 @@ import pytest
 from tool_resource.runtime_kb import (
     CANONICAL_LATENCY_BUCKET_EDGES_MS,
     GENERIC_ARGV_CANONICALIZER_VERSION,
+    POSTERIOR_SHRINKAGE_ARBITRATION,
+    SHRINKAGE_ALPHA_GRID,
     STRUCTURED_ARGV_REPRESENTATION,
     ClauseObservation,
     ClauseResourceKB,
@@ -792,9 +794,142 @@ def test_structured_snapshot_restores_vocabulary_state_and_provenance() -> None:
     assert actual.canonicalizer_version == GENERIC_ARGV_CANONICALIZER_VERSION
 
 
+def test_posterior_shrinkage_uses_one_local_and_one_public_node_causally() -> None:
+    fit = [
+        _obs(
+            f"fit-{index}",
+            "runner",
+            ("runner", "deploy", f"--path=/tmp/{index}"),
+            float(index),
+            float(index) + 0.5,
+            latency_ms=100.0,
+            cpu=1.0,
+        )
+        for index in range(3)
+    ]
+    local = [
+        _obs(
+            "repo",
+            "runner",
+            ("runner", "deploy", "--path=/tmp/local"),
+            10.0 + index,
+            12.0,
+            latency_ms=3000.0,
+            cpu=3.0,
+        )
+        for index in range(2)
+    ]
+    kb = ClauseResourceKB.fit_public(
+        fit,
+        representation=STRUCTURED_ARGV_REPRESENTATION,
+        shrinkage_alpha=4.0,
+    )
+    diagnostic = ClauseResourceKB.fit_public(
+        fit,
+        representation=STRUCTURED_ARGV_REPRESENTATION,
+    )
+    for observation in local:
+        kb.observe_completed_clause(observation)
+        diagnostic.observe_completed_clause(observation)
+
+    at_boundary = kb.predict_clause_latency_bucket(
+        "repo",
+        "runner",
+        ("runner", "deploy", "--path=/tmp/local"),
+        LatencyBuckets((2000.0, 8000.0)),
+        ts_start=12.0,
+    )
+    after = kb.predict_clause_latency_bucket(
+        "repo",
+        "runner",
+        ("runner", "deploy", "--path=/tmp/local"),
+        LatencyBuckets((2000.0, 8000.0)),
+        ts_start=12.1,
+    )
+    alpha_predictions = diagnostic.diagnostic_clause_latency_shrinkage_predictions(
+        "repo",
+        "runner",
+        ("runner", "deploy", "--path=/tmp/local"),
+        LatencyBuckets((2000.0, 8000.0)),
+        SHRINKAGE_ALPHA_GRID,
+        ts_start=12.1,
+    )
+    cpu = kb.predict_clause_heavy_light(
+        "repo",
+        "runner",
+        ("runner", "deploy", "--path=/tmp/local"),
+        "peak_cpu_cores",
+        ts_start=12.1,
+    )
+
+    assert at_boundary.probability_by_bucket == (1.0, 0.0, 0.0)
+    assert at_boundary.local_evidence_count == 0
+    assert after.probability_by_bucket == pytest.approx((4 / 6, 2 / 6, 0.0))
+    assert after.scope == "repo+public"
+    assert after.local_key_kind == "exact_clause"
+    assert after.local_evidence_count == 2
+    assert after.public_key_kind == "structured_argv"
+    assert after.public_evidence_count == 3
+    assert after.arbitration == POSTERIOR_SHRINKAGE_ARBITRATION
+    assert after.shrinkage_alpha == 4.0
+    assert alpha_predictions[0].probability_by_bucket == pytest.approx(
+        (1 / 3, 2 / 3, 0.0)
+    )
+    assert cpu is not None
+    assert cpu.probability_heavy == pytest.approx(2 / 6)
+    assert cpu.label == "light"
+
+    restored = ClauseResourceKB.from_json_obj(
+        json.loads(json.dumps(kb.to_json_obj()))
+    )
+    assert restored.arbitration == POSTERIOR_SHRINKAGE_ARBITRATION
+    assert restored.shrinkage_alpha == 4.0
+    assert restored.predict_clause_latency_bucket(
+        "repo",
+        "runner",
+        ("runner", "deploy", "--path=/tmp/local"),
+        LatencyBuckets((2000.0, 8000.0)),
+        ts_start=12.1,
+    ) == after
+
+
 def test_v5_snapshot_requires_refit_for_resource_labels() -> None:
     with pytest.raises(ValueError, match="refit the snapshot"):
         ClauseResourceKB.from_json_obj({"schema": "runtime_clause_resource_kb_v5"})
+
+
+def test_v6_snapshot_migrates_only_unambiguous_raw_hard_backoff() -> None:
+    raw = _fit(_obs("public", "runner", ("runner",), 0.0, 1.0))
+    legacy = raw.to_json_obj()
+    legacy["schema"] = "runtime_clause_resource_kb_v6"
+    for field in (
+        "representation",
+        "canonicalizer_version",
+        "arbitration",
+        "shrinkage_alpha",
+        "stable_subcommands",
+    ):
+        legacy.pop(field)
+    restored = ClauseResourceKB.from_json_obj(legacy)
+    assert restored.representation == "raw-argv-prefix-v1"
+    assert restored.arbitration == "hard-first-nonempty-v1"
+
+    structured = ClauseResourceKB.fit_public(
+        [
+            _obs(
+                f"fit-{index}",
+                "runner",
+                ("runner", "deploy"),
+                float(index),
+                float(index) + 0.5,
+            )
+            for index in range(3)
+        ],
+        representation=STRUCTURED_ARGV_REPRESENTATION,
+    ).to_json_obj()
+    structured["schema"] = "runtime_clause_resource_kb_v6"
+    with pytest.raises(ValueError, match="refit the snapshot"):
+        ClauseResourceKB.from_json_obj(structured)
 
 
 def test_parse_failure_is_explicitly_unavailable() -> None:

@@ -74,3 +74,17 @@ evidence. Its stable subcommand vocabulary is derived without labels from at
 least three distinct fit repositories. The selected representation and
 canonicalizer version are carried by prediction provenance and KB snapshots;
 there is no client-side predictor or per-command fallback.
+
+The development-only `public-local-posterior-v1` arbitration selects the
+deepest non-empty repository node and public node independently, then combines
+their distributions with one fit-selected alpha. Its fixed alpha grid is
+`1, 4, 16, 64`; the selected value is shared by latency, CPU, RSS, and Disk.
+When one scope is absent the other is used unchanged. Nodes within a scope are
+never summed, because exact/signature/bin/global nodes repeat observations.
+The serving default remains hard first-nonempty arbitration until a reviewed
+candidate passes all target and operational gates.
+
+Formal resource evaluation does not accept a free alpha. It reads the matching
+Candidate S latency result and verifies the fit/evaluation paths, row counts,
+canonical edges, fixed grid, fit-only selection contract, and selected alpha
+before applying that value unchanged to CPU, RSS, and Disk.

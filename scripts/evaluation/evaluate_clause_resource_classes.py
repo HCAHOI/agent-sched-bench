@@ -7,6 +7,7 @@ import argparse
 import json
 import sys
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,9 @@ sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 from tool_resource_eval.labels import repo_of  # noqa: E402
 from tool_resource.runtime_kb import (  # noqa: E402
+    CANONICAL_LATENCY_BUCKETS,
     CANONICAL_RESOURCE_HEAVY_THRESHOLDS,
+    SHRINKAGE_ALPHA_GRID,
     SHORT_NULL_LIGHT_MAX_LATENCY_MS,
     STRUCTURED_ARGV_REPRESENTATION,
     ClauseObservation,
@@ -55,6 +58,76 @@ class Row:
             disk_read_write_bytes_total=self.disk_read_write_bytes_total,
             impute_short_null_resources_as_light=True,
         )
+
+
+@dataclass(frozen=True)
+class CandidateSSelection:
+    alpha: float
+    latency_result_path: str
+    fit_path: str
+    eval_path: str
+    fit_row_count: int
+    eval_row_count: int
+
+    def __post_init__(self) -> None:
+        if self.alpha not in SHRINKAGE_ALPHA_GRID:
+            raise ValueError(f"shrinkage alpha must be one of {SHRINKAGE_ALPHA_GRID}")
+
+
+def load_candidate_s_selection(
+    latency_result_path: Path,
+    *,
+    fit_path: Path,
+    eval_path: Path,
+    fit_row_count: int,
+    eval_row_count: int,
+) -> CandidateSSelection:
+    result = json.loads(latency_result_path.read_text(encoding="utf-8"))
+    selection = result.get("selection", {}).get("candidate_s_alpha")
+    provenance = result.get("provenance")
+    if not isinstance(selection, Mapping) or not isinstance(provenance, Mapping):
+        raise ValueError("latency result has no Candidate S fit selection")
+    alpha = selection.get("selected_alpha")
+    if (
+        not isinstance(alpha, (int, float))
+        or isinstance(alpha, bool)
+        or float(alpha) not in SHRINKAGE_ALPHA_GRID
+    ):
+        raise ValueError("latency result selected alpha is outside the fixed grid")
+    if selection.get("alpha_grid") != list(SHRINKAGE_ALPHA_GRID):
+        raise ValueError("latency result alpha grid differs from the fixed grid")
+    if (
+        selection.get("selection_target") != "three_class_latency_accuracy"
+        or selection.get("tie_break") != "larger_alpha"
+        or selection.get("outer_labels_used") is not False
+    ):
+        raise ValueError("latency result Candidate S selection contract differs")
+    if result.get("bucket_edges_ms") != list(CANONICAL_LATENCY_BUCKETS.edges_ms):
+        raise ValueError("latency result bucket edges differ from the canonical objective")
+    if provenance.get("candidate_s", {}).get("enabled") is not True:
+        raise ValueError("latency result does not declare Candidate S enabled")
+    resolved_fit = fit_path.resolve()
+    resolved_eval = eval_path.resolve()
+    if Path(str(provenance.get("fit_telemetry"))).resolve() != resolved_fit:
+        raise ValueError("latency result fit input differs from resource fit input")
+    if Path(str(provenance.get("eval_telemetry"))).resolve() != resolved_eval:
+        raise ValueError("latency result eval input differs from resource eval input")
+    if (
+        result.get("fit_clause_observation_count") != fit_row_count
+        or selection.get("fit_row_count") != fit_row_count
+        or result.get("eval_clause_observation_count") != eval_row_count
+    ):
+        raise ValueError("latency and resource result row counts differ")
+    if result.get("row_identity", {}).get("identical_row_ids_and_labels") is not True:
+        raise ValueError("latency result did not reconcile outer rows and labels")
+    return CandidateSSelection(
+        alpha=float(alpha),
+        latency_result_path=str(latency_result_path.resolve()),
+        fit_path=str(resolved_fit),
+        eval_path=str(resolved_eval),
+        fit_row_count=fit_row_count,
+        eval_row_count=eval_row_count,
+    )
 
 
 def _number(value: Any) -> float | None:
@@ -180,7 +253,20 @@ def _finalize_resource_metric(
     }
 
 
-def evaluate(fit_rows: list[Row], eval_rows: list[Row]) -> dict[str, Any]:
+def evaluate(
+    fit_rows: list[Row],
+    eval_rows: list[Row],
+    *,
+    candidate_s_selection: CandidateSSelection | None = None,
+) -> dict[str, Any]:
+    shrinkage_alpha = (
+        None if candidate_s_selection is None else candidate_s_selection.alpha
+    )
+    if candidate_s_selection is not None and (
+        candidate_s_selection.fit_row_count != len(fit_rows)
+        or candidate_s_selection.eval_row_count != len(eval_rows)
+    ):
+        raise ValueError("Candidate S selection row counts differ from evaluator rows")
     fit_tasks = {row.task_id for row in fit_rows}
     eval_tasks = {row.task_id for row in eval_rows}
     overlap = fit_tasks & eval_tasks
@@ -201,17 +287,29 @@ def evaluate(fit_rows: list[Row], eval_rows: list[Row]) -> dict[str, Any]:
         )
         for repo in sorted(eval_repos)
     }
+    shrinkage_kbs = (
+        {
+            repo: ClauseResourceKB.fit_public(
+                (row.observation(0.0, 1.0) for row in fit_rows if row.repo != repo),
+                representation=STRUCTURED_ARGV_REPRESENTATION,
+                shrinkage_alpha=shrinkage_alpha,
+            )
+            for repo in sorted(eval_repos)
+        }
+        if shrinkage_alpha is not None
+        else {}
+    )
     by_task: dict[tuple[int, str], list[Row]] = defaultdict(list)
     for row in eval_rows:
         by_task[(row.manifest_index, row.task_id)].append(row)
 
+    arm_names = ["current", "candidate_r"]
+    if shrinkage_alpha is not None:
+        arm_names.append("candidate_s")
     metrics = {
         resource: {
             "label_source_counts": Counter(),
-            "arms": {
-                "current": _empty_confusion(),
-                "candidate_r": _empty_confusion(),
-            },
+            "arms": {arm: _empty_confusion() for arm in arm_names},
         }
         for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS
     }
@@ -220,6 +318,7 @@ def evaluate(fit_rows: list[Row], eval_rows: list[Row]) -> dict[str, Any]:
         query_ts = float(task_ordinal * 2 + 1)
         current_kb = current_kbs[rows[0].repo]
         candidate_kb = candidate_kbs[rows[0].repo]
+        shrinkage_kb = shrinkage_kbs.get(rows[0].repo)
         for row in rows:
             predictions_by_arm = {
                 "current": current_kb.predict_clause_resource_classes(
@@ -229,6 +328,15 @@ def evaluate(fit_rows: list[Row], eval_rows: list[Row]) -> dict[str, Any]:
                     row.repo, row.bin, row.argv, ts_start=query_ts
                 ),
             }
+            if shrinkage_kb is not None:
+                predictions_by_arm["candidate_s"] = (
+                    shrinkage_kb.predict_clause_resource_classes(
+                        row.repo,
+                        row.bin,
+                        row.argv,
+                        ts_start=query_ts,
+                    )
+                )
             for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS:
                 label, source = _label(row, resource)
                 metric = metrics[resource]
@@ -243,7 +351,8 @@ def evaluate(fit_rows: list[Row], eval_rows: list[Row]) -> dict[str, Any]:
                         continue
                     arm_metric["provenance_counts"][
                         f"{prediction.scope}:{prediction.key_kind}:"
-                        f"{prediction.canonicalizer_version}"
+                        f"{prediction.canonicalizer_version}:"
+                        f"{prediction.arbitration}"
                     ] += 1
                     predicted = prediction.label == "heavy"
                     if label and predicted:
@@ -259,42 +368,48 @@ def evaluate(fit_rows: list[Row], eval_rows: list[Row]) -> dict[str, Any]:
             observation = row.observation(query_ts, close_ts)
             current_kb.observe_completed_clause(observation)
             candidate_kb.observe_completed_clause(observation)
+            if shrinkage_kb is not None:
+                shrinkage_kb.observe_completed_clause(observation)
 
     current_metrics: dict[str, Any] = {}
-    candidate_metrics: dict[str, Any] = {}
+    arm_metrics: dict[str, dict[str, Any]] = {
+        arm: {} for arm in arm_names if arm != "current"
+    }
     for resource, raw in metrics.items():
         current = _finalize_resource_metric(
             raw["arms"]["current"],
-            raw["label_source_counts"],
-        )
-        candidate = _finalize_resource_metric(
-            raw["arms"]["candidate_r"],
             raw["label_source_counts"],
         )
         current_metrics[resource] = {
             "threshold": CANONICAL_RESOURCE_HEAVY_THRESHOLDS[resource],
             **current,
         }
-        candidate_metrics[resource] = {
-            "threshold": CANONICAL_RESOURCE_HEAVY_THRESHOLDS[resource],
-            **candidate,
-            "current_accuracy": current["accuracy"],
-            "accuracy_minus_current_percentage_points": (
-                None
-                if candidate["accuracy"] is None or current["accuracy"] is None
-                else 100.0 * (candidate["accuracy"] - current["accuracy"])
-            ),
-            "accuracy_minus_majority_light_percentage_points": (
-                None
-                if candidate["accuracy"] is None
-                else 100.0
-                * (
-                    candidate["accuracy"]
-                    - candidate["majority_light_accuracy"]
-                )
-            ),
-        }
-    return {
+        for arm in arm_metrics:
+            candidate = _finalize_resource_metric(
+                raw["arms"][arm],
+                raw["label_source_counts"],
+            )
+            arm_metrics[arm][resource] = {
+                "threshold": CANONICAL_RESOURCE_HEAVY_THRESHOLDS[resource],
+                **candidate,
+                "current_accuracy": current["accuracy"],
+                "accuracy_minus_current_percentage_points": (
+                    None
+                    if candidate["accuracy"] is None
+                    or current["accuracy"] is None
+                    else 100.0 * (candidate["accuracy"] - current["accuracy"])
+                ),
+                "accuracy_minus_majority_light_percentage_points": (
+                    None
+                    if candidate["accuracy"] is None
+                    else 100.0
+                    * (
+                        candidate["accuracy"]
+                        - candidate["majority_light_accuracy"]
+                    )
+                ),
+            }
+    result = {
         "artifact_type": "development_exposed_serialized_virtual_resource_classification",
         "claim_bearing": False,
         "fit": {
@@ -326,8 +441,27 @@ def evaluate(fit_rows: list[Row], eval_rows: list[Row]) -> dict[str, Any]:
             "arbitration": "same hard first-nonempty selection as current",
         },
         "metrics": current_metrics,
-        "candidates": {"candidate_r": {"metrics": candidate_metrics}},
+        "candidates": {
+            arm: {"metrics": metrics_by_resource}
+            for arm, metrics_by_resource in arm_metrics.items()
+        },
     }
+    if shrinkage_alpha is not None:
+        result["candidate_s"] = {
+            "representation": STRUCTURED_ARGV_REPRESENTATION,
+            "arbitration": "deepest local plus deepest public posterior",
+            "shrinkage_alpha": shrinkage_alpha,
+            "alpha_source": {
+                "latency_result": candidate_s_selection.latency_result_path,
+                "fit_path": candidate_s_selection.fit_path,
+                "eval_path": candidate_s_selection.eval_path,
+                "fit_row_count": candidate_s_selection.fit_row_count,
+                "eval_row_count": candidate_s_selection.eval_row_count,
+                "verified": True,
+            },
+            "same_alpha_for_all_targets": True,
+        }
+    return result
 
 
 def main() -> None:
@@ -335,8 +469,30 @@ def main() -> None:
     parser.add_argument("--fit", type=Path, required=True)
     parser.add_argument("--eval", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument(
+        "--latency-result",
+        type=Path,
+        help="Candidate S latency result that owns and proves the fit-selected alpha",
+    )
     args = parser.parse_args()
-    result = evaluate(load_rows(args.fit), load_rows(args.eval))
+    fit_rows = load_rows(args.fit)
+    eval_rows = load_rows(args.eval)
+    selection = (
+        None
+        if args.latency_result is None
+        else load_candidate_s_selection(
+            args.latency_result,
+            fit_path=args.fit,
+            eval_path=args.eval,
+            fit_row_count=len(fit_rows),
+            eval_row_count=len(eval_rows),
+        )
+    )
+    result = evaluate(
+        fit_rows,
+        eval_rows,
+        candidate_s_selection=selection,
+    )
     result["fit"]["path"] = str(args.fit)
     result["eval"]["path"] = str(args.eval)
     args.out.parent.mkdir(parents=True, exist_ok=True)

@@ -130,6 +130,7 @@ class ResourceService:
         *,
         result_ttl_s: float = DEFAULT_RESULT_TTL_S,
         kb_representation: str = RAW_ARGV_REPRESENTATION,
+        kb_shrinkage_alpha: float | None = None,
     ) -> None:
         if not math.isfinite(result_ttl_s) or result_ttl_s <= 0:
             raise ValueError("result_ttl_s must be finite and positive")
@@ -139,8 +140,10 @@ class ResourceService:
         # Validation belongs to the canonical KB; constructing an empty state
         # has no evidence or persistence side effect.
         self.kb_representation = ClauseResourceKB(
-            representation=kb_representation
+            representation=kb_representation,
+            shrinkage_alpha=kb_shrinkage_alpha,
         ).representation
+        self.kb_shrinkage_alpha = kb_shrinkage_alpha
         self._runs: dict[str, _Run] = {}
         self._traces: dict[str, _Trace] = {}
         self._operation_results: dict[
@@ -346,9 +349,13 @@ class ResourceService:
                 ClauseResourceKB.fit_public(
                     public,
                     representation=self.kb_representation,
+                    shrinkage_alpha=self.kb_shrinkage_alpha,
                 )
                 if public
-                else ClauseResourceKB(representation=self.kb_representation)
+                else ClauseResourceKB(
+                    representation=self.kb_representation,
+                    shrinkage_alpha=self.kb_shrinkage_alpha,
+                )
             )
             for observation in observations:
                 if observation.repo == scope:
@@ -1321,6 +1328,8 @@ class ResourceService:
                     "resulting_snapshot_id": resulting_snapshot,
                     "canonicalizer_version": CANONICALIZER_VERSION,
                     "kb_canonicalizer_version": run.kb.canonicalizer_version,
+                    "kb_arbitration": run.kb.arbitration,
+                    "kb_shrinkage_alpha": run.kb.shrinkage_alpha,
                     "store_schema_version": STORE_SCHEMA_VERSION,
                     "latency_bucket_edges_ms": list(run.buckets.edges_ms),
                     "update_policy": run.update_policy,

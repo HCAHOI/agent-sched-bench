@@ -8,6 +8,7 @@ eBPF clause telemetry; git history holds it if it is ever needed again.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import sys
@@ -30,6 +31,7 @@ from scripts.evaluation.evaluate_clause_resource_classes import (  # noqa: E402
 from tool_resource_eval.labels import repo_of  # noqa: E402
 from tool_resource.runtime_kb import (  # noqa: E402
     CANONICAL_LATENCY_BUCKETS,
+    SHRINKAGE_ALPHA_GRID,
     STRUCTURED_ARGV_REPRESENTATION,
     ClauseLatencyBucketPrediction,
     ClauseResourceKB,
@@ -49,6 +51,12 @@ class ScoredRow:
     evidence_count: int
     fallback_path: tuple[str, ...] | None
     canonicalizer_version: str | None
+    arbitration: str | None
+    local_key_kind: str | None
+    local_evidence_count: int
+    public_key_kind: str | None
+    public_evidence_count: int
+    shrinkage_alpha: float | None
     unavailable_reason: str | None
     mapping_evidence: str
 
@@ -139,6 +147,16 @@ def _scored_row(
         canonicalizer_version=(
             None if prediction is None else prediction.canonicalizer_version
         ),
+        arbitration=None if prediction is None else prediction.arbitration,
+        local_key_kind=None if prediction is None else prediction.local_key_kind,
+        local_evidence_count=(
+            0 if prediction is None else prediction.local_evidence_count
+        ),
+        public_key_kind=None if prediction is None else prediction.public_key_kind,
+        public_evidence_count=(
+            0 if prediction is None else prediction.public_evidence_count
+        ),
+        shrinkage_alpha=None if prediction is None else prediction.shrinkage_alpha,
         unavailable_reason=unavailable_reason,
         mapping_evidence="canonical_clause_telemetry",
     )
@@ -175,8 +193,136 @@ def _bounded_node_oracle_candidates(
     )
 
 
+def _inner_repo_folds(repositories: Sequence[str]) -> dict[str, int]:
+    if len(repositories) < 2:
+        raise ValueError("Candidate S alpha selection requires at least two fit repos")
+    fold_count = min(5, len(repositories))
+    ordered = sorted(
+        repositories,
+        key=lambda repo: (hashlib.sha256(repo.encode()).digest(), repo),
+    )
+    return {repo: index % fold_count for index, repo in enumerate(ordered)}
+
+
+def _score_shrinkage_alpha_fold(
+    train_rows: Sequence[Row],
+    validation_rows: Sequence[Row],
+) -> dict[float, dict[str, int]]:
+    validation_repos = sorted({row.repo for row in validation_rows})
+    kbs = {
+        repo: ClauseResourceKB.fit_public(
+            (row.observation(0.0, 1.0) for row in train_rows),
+            representation=STRUCTURED_ARGV_REPRESENTATION,
+        )
+        for repo in validation_repos
+    }
+    by_task: dict[tuple[int, str], list[Row]] = defaultdict(list)
+    for row in validation_rows:
+        by_task[(row.manifest_index, row.task_id)].append(row)
+    scores = {
+        alpha: {"correct": 0, "eligible_examples": 0}
+        for alpha in SHRINKAGE_ALPHA_GRID
+    }
+    for task_ordinal, task_key in enumerate(sorted(by_task)):
+        rows = by_task[task_key]
+        query_ts = float(task_ordinal * 2 + 1)
+        settle_ts = query_ts + 1.0
+        for row in rows:
+            predictions = kbs[
+                row.repo
+            ].diagnostic_clause_latency_shrinkage_predictions(
+                row.repo,
+                row.bin,
+                row.argv,
+                CANONICAL_LATENCY_BUCKETS,
+                SHRINKAGE_ALPHA_GRID,
+                ts_start=query_ts,
+            )
+            label = CANONICAL_LATENCY_BUCKETS.bucket_id(row.latency_ms)
+            for alpha, prediction in zip(
+                SHRINKAGE_ALPHA_GRID,
+                predictions,
+                strict=True,
+            ):
+                scores[alpha]["eligible_examples"] += 1
+                scores[alpha]["correct"] += (
+                    _argmax_probabilities(prediction.probability_by_bucket) == label
+                )
+        for row in rows:
+            kbs[row.repo].observe_completed_clause(
+                row.observation(query_ts, settle_ts)
+            )
+    return scores
+
+
+def _select_shrinkage_alpha(fit_rows: Sequence[Row]) -> dict[str, Any]:
+    """Select one Candidate S alpha using latency-only fit-repository folds."""
+
+    repositories = sorted({row.repo for row in fit_rows})
+    fold_by_repo = _inner_repo_folds(repositories)
+    fold_count = max(fold_by_repo.values()) + 1
+    totals = {
+        alpha: {"correct": 0, "eligible_examples": 0}
+        for alpha in SHRINKAGE_ALPHA_GRID
+    }
+    folds = []
+    for fold in range(fold_count):
+        validation_repos = {
+            repo for repo, assigned in fold_by_repo.items() if assigned == fold
+        }
+        train_rows = [row for row in fit_rows if row.repo not in validation_repos]
+        validation_rows = [
+            row for row in fit_rows if row.repo in validation_repos
+        ]
+        scores = _score_shrinkage_alpha_fold(train_rows, validation_rows)
+        for alpha, score in scores.items():
+            totals[alpha]["correct"] += score["correct"]
+            totals[alpha]["eligible_examples"] += score["eligible_examples"]
+        folds.append(
+            {
+                "fold": fold,
+                "train_repo_count": len(repositories) - len(validation_repos),
+                "validation_repo_count": len(validation_repos),
+                "validation_row_count": len(validation_rows),
+                "accuracy_by_alpha": {
+                    str(int(alpha)): (
+                        score["correct"] / score["eligible_examples"]
+                    )
+                    for alpha, score in scores.items()
+                },
+            }
+        )
+    accuracy_by_alpha = {
+        alpha: score["correct"] / score["eligible_examples"]
+        for alpha, score in totals.items()
+    }
+    selected = max(
+        SHRINKAGE_ALPHA_GRID,
+        key=lambda alpha: (accuracy_by_alpha[alpha], alpha),
+    )
+    return {
+        "method": "repository_grouped_inner_fit_folds",
+        "fold_assignment": "sha256(repository) order, round-robin over five folds",
+        "fold_count": fold_count,
+        "alpha_grid": list(SHRINKAGE_ALPHA_GRID),
+        "tie_break": "larger_alpha",
+        "selection_target": "three_class_latency_accuracy",
+        "fit_repo_count": len(repositories),
+        "fit_row_count": len(fit_rows),
+        "accuracy_by_alpha": {
+            str(int(alpha)): accuracy for alpha, accuracy in accuracy_by_alpha.items()
+        },
+        "selected_alpha": selected,
+        "folds": folds,
+        "outer_labels_used": False,
+    }
+
+
 def _telemetry_scored_arms(
-    fit_rows: Sequence[Row], eval_rows: Sequence[Row]
+    fit_rows: Sequence[Row],
+    eval_rows: Sequence[Row],
+    *,
+    shrinkage_alpha: float | None = None,
 ) -> dict[str, list[ScoredRow]]:
     """Score canonical clause telemetry with the runtime KB in causal task order.
 
@@ -200,6 +346,18 @@ def _telemetry_scored_arms(
         )
         for repo in sorted(eval_repos)
     }
+    shrinkage_kb_by_repo = (
+        {
+            repo: ClauseResourceKB.fit_public(
+                (row.observation(0.0, 1.0) for row in fit_rows if row.repo != repo),
+                representation=STRUCTURED_ARGV_REPRESENTATION,
+                shrinkage_alpha=shrinkage_alpha,
+            )
+            for repo in sorted(eval_repos)
+        }
+        if shrinkage_alpha is not None
+        else {}
+    )
     by_task: dict[tuple[int, str], list[Row]] = defaultdict(list)
     for row in eval_rows:
         by_task[(row.manifest_index, row.task_id)].append(row)
@@ -215,6 +373,8 @@ def _telemetry_scored_arms(
             "node_oracle",
         )
     }
+    if shrinkage_alpha is not None:
+        scored["candidate_s"] = []
     for task_ordinal, task_key in enumerate(sorted(by_task)):
         rows = by_task[task_key]
         # Query strictly before this task's observations settle; settle strictly
@@ -224,6 +384,7 @@ def _telemetry_scored_arms(
         for clause_index, row in enumerate(rows):
             current_kb = kb_by_repo[row.repo]
             candidate_kb = candidate_kb_by_repo[row.repo]
+            shrinkage_kb = shrinkage_kb_by_repo.get(row.repo)
             # Raises when no evidence node exists; never falls back to synthetic.
             prediction = current_kb.predict_clause_latency_bucket(
                 row.repo,
@@ -306,6 +467,19 @@ def _telemetry_scored_arms(
             scored["candidate_r"].append(
                 _scored_row(row, clause_index, candidate_prediction)
             )
+            if shrinkage_kb is not None:
+                shrinkage_prediction = (
+                    shrinkage_kb.predict_clause_latency_bucket(
+                        row.repo,
+                        row.bin,
+                        row.argv,
+                        CANONICAL_LATENCY_BUCKETS,
+                        ts_start=query_ts,
+                    )
+                )
+                scored["candidate_s"].append(
+                    _scored_row(row, clause_index, shrinkage_prediction)
+                )
             current_public = [prediction]
             if public is not None and public != prediction:
                 current_public.append(public)
@@ -334,6 +508,8 @@ def _telemetry_scored_arms(
             observation = row.observation(query_ts, settle_ts)
             kb_by_repo[row.repo].observe_completed_clause(observation)
             candidate_kb_by_repo[row.repo].observe_completed_clause(observation)
+            if row.repo in shrinkage_kb_by_repo:
+                shrinkage_kb_by_repo[row.repo].observe_completed_clause(observation)
     if not scored["current"]:
         raise ValueError("no eligible clause telemetry observations to score")
     return scored
@@ -437,6 +613,55 @@ def _telemetry_metrics(
         "canonicalizer_version_counts": dict(
             sorted(Counter(row.canonicalizer_version for row in known).items())
         ),
+        "arbitration_counts": dict(
+            sorted(Counter(row.arbitration for row in known).items())
+        ),
+        "local_key_kind_counts": dict(
+            sorted(
+                Counter(
+                    row.local_key_kind
+                    for row in known
+                    if row.local_key_kind is not None
+                ).items()
+            )
+        ),
+        "public_key_kind_counts": dict(
+            sorted(
+                Counter(
+                    row.public_key_kind
+                    for row in known
+                    if row.public_key_kind is not None
+                ).items()
+            )
+        ),
+        "local_support_band_counts": dict(
+            sorted(
+                Counter(
+                    _support_band(row.local_evidence_count)
+                    for row in known
+                    if row.local_evidence_count > 0
+                ).items()
+            )
+        ),
+        "public_support_band_counts": dict(
+            sorted(
+                Counter(
+                    _support_band(row.public_evidence_count)
+                    for row in known
+                    if row.public_evidence_count > 0
+                ).items()
+            )
+        ),
+        "shrinkage_alpha_counts": {
+            str(alpha): count
+            for alpha, count in sorted(
+                Counter(
+                    row.shrinkage_alpha
+                    for row in known
+                    if row.shrinkage_alpha is not None
+                ).items()
+            )
+        },
     }
 
 
@@ -455,6 +680,7 @@ def _paired_repo_cluster_bootstrap(
     *,
     seed: int = 0,
     draws: int = 2000,
+    candidate_name: str = "candidate_r",
 ) -> dict[str, Any]:
     """Paired repository-cluster uncertainty for Candidate R's exact score."""
 
@@ -511,7 +737,9 @@ def _paired_repo_cluster_bootstrap(
         "cluster_unit": "repository",
         "seed": seed,
         "draws": draws,
-        "statistic": "candidate_r_accuracy_minus_max_current_same_resample_majority",
+        "statistic": (
+            f"{candidate_name}_accuracy_minus_max_current_same_resample_majority"
+        ),
         "point_estimate": point,
         "median": median,
         "interval_95": [lower, upper],
@@ -525,10 +753,19 @@ def evaluate_clause_telemetry(
     fit_rows: Sequence[Row],
     eval_rows: Sequence[Row],
     provenance: Mapping[str, Any],
+    *,
+    include_candidate_s: bool = False,
 ) -> tuple[dict[str, Any], list[ScoredRow]]:
     """Evaluate latency buckets on canonical eBPF clause telemetry."""
 
-    arms = _telemetry_scored_arms(fit_rows, eval_rows)
+    selection = _select_shrinkage_alpha(fit_rows) if include_candidate_s else None
+    arms = _telemetry_scored_arms(
+        fit_rows,
+        eval_rows,
+        shrinkage_alpha=(
+            None if selection is None else float(selection["selected_alpha"])
+        ),
+    )
     rows = arms["current"]
     identity = [(row.sample_id, row.label_bucket) for row in rows]
     if any(
@@ -549,8 +786,7 @@ def evaluate_clause_telemetry(
         "accuracy": current_metrics["majority_class_accuracy"],
         "eligible_examples": len(rows),
     }
-    return (
-        {
+    result = {
             "status": "development_exposed_canonical_clause_telemetry",
             "claim_bearing": False,
             "objective": "clause_latency_bucket_prediction",
@@ -618,9 +854,22 @@ def evaluate_clause_telemetry(
             },
             "metrics": current_metrics,
             "provenance": dict(provenance),
-        },
-        rows,
-    )
+        }
+    if selection is not None:
+        shrinkage_metrics = _telemetry_metrics(
+            arms["candidate_s"],
+            current_accuracy=current_accuracy,
+        )
+        result["selection"] = {"candidate_s_alpha": selection}
+        result["candidates"]["candidate_s"] = shrinkage_metrics
+        result["uncertainty"]["candidate_s_vs_best_baseline"] = (
+            _paired_repo_cluster_bootstrap(
+                arms["current"],
+                arms["candidate_s"],
+                candidate_name="candidate_s",
+            )
+        )
+    return result, rows
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -631,6 +880,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--telemetry-eval", type=Path, required=True)
     parser.add_argument("--out", type=Path)
     parser.add_argument("--dump-rows", type=Path)
+    parser.add_argument(
+        "--candidate-s",
+        action="store_true",
+        help="select Candidate S alpha on fit-repository folds and score it",
+    )
     return parser
 
 
@@ -669,6 +923,21 @@ def _run_clause_telemetry(args: argparse.Namespace) -> None:
             "public_hierarchy": "structured argv, bin, global",
             "arbitration": "same hard first-nonempty selection as current",
         },
+        "candidate_s": (
+            {
+                "enabled": True,
+                "representation": STRUCTURED_ARGV_REPRESENTATION,
+                "arbitration": "deepest local plus deepest public posterior",
+                "alpha_grid": list(SHRINKAGE_ALPHA_GRID),
+                "alpha_selection": (
+                    "repository-grouped inner fit folds; latency accuracy only; "
+                    "larger alpha on exact tie"
+                ),
+                "same_alpha_for_all_targets": True,
+            }
+            if args.candidate_s
+            else {"enabled": False}
+        ),
         "bootstrap": {
             "seed": 0,
             "draws": 2000,
@@ -686,7 +955,12 @@ def _run_clause_telemetry(args: argparse.Namespace) -> None:
         ),
         "edge_source": "canonical_objective",
     }
-    result, rows = evaluate_clause_telemetry(fit_rows, eval_rows, provenance)
+    result, rows = evaluate_clause_telemetry(
+        fit_rows,
+        eval_rows,
+        provenance,
+        include_candidate_s=args.candidate_s,
+    )
     _write(args, result, rows)
 
 

@@ -60,12 +60,15 @@ def _nodes_from_json(
 # Clause latency bucket predictor
 # ==========================================================================
 
-_CLAUSE_SCHEMA = "runtime_clause_resource_kb_v6"
+_CLAUSE_SCHEMA = "runtime_clause_resource_kb_v7"
 _CLAUSE_MAX_DEPTH = 4  # frozen ordered argv-prefix depth budget
 _DELIM = "\x00"  # argv tokens may contain spaces; NUL cannot collide
 RAW_ARGV_REPRESENTATION = "raw-argv-prefix-v1"
 GENERIC_ARGV_CANONICALIZER_VERSION = "generic-argv-v3-role"
 STRUCTURED_ARGV_REPRESENTATION = GENERIC_ARGV_CANONICALIZER_VERSION
+HARD_BACKOFF_ARBITRATION = "hard-first-nonempty-v1"
+POSTERIOR_SHRINKAGE_ARBITRATION = "public-local-posterior-v1"
+SHRINKAGE_ALPHA_GRID = (1.0, 4.0, 16.0, 64.0)
 _SUPPORTED_REPRESENTATIONS = {
     RAW_ARGV_REPRESENTATION,
     STRUCTURED_ARGV_REPRESENTATION,
@@ -207,6 +210,12 @@ class ClauseLatencyBucketPrediction:
     evidence_count: int
     fallback_path: tuple[str, ...]
     canonicalizer_version: str
+    arbitration: str = HARD_BACKOFF_ARBITRATION
+    local_key_kind: str | None = None
+    local_evidence_count: int = 0
+    public_key_kind: str | None = None
+    public_evidence_count: int = 0
+    shrinkage_alpha: float | None = None
 
 
 @dataclass(frozen=True)
@@ -222,6 +231,12 @@ class ClauseHeavyLightPrediction:
     evidence_count: int
     fallback_path: tuple[str, ...]
     canonicalizer_version: str
+    arbitration: str = HARD_BACKOFF_ARBITRATION
+    local_key_kind: str | None = None
+    local_evidence_count: int = 0
+    public_key_kind: str | None = None
+    public_evidence_count: int = 0
+    shrinkage_alpha: float | None = None
 
 
 @dataclass(frozen=True)
@@ -539,13 +554,28 @@ class ClauseResourceKB:
         *,
         representation: str = RAW_ARGV_REPRESENTATION,
         stable_subcommands: frozenset[tuple[str, str]] = frozenset(),
+        shrinkage_alpha: float | None = None,
     ) -> None:
         if representation not in _SUPPORTED_REPRESENTATIONS:
             raise ValueError(f"unsupported clause representation {representation!r}")
         if representation == RAW_ARGV_REPRESENTATION and stable_subcommands:
             raise ValueError("raw argv representation cannot carry subcommand vocabulary")
+        if shrinkage_alpha is not None:
+            if representation != STRUCTURED_ARGV_REPRESENTATION:
+                raise ValueError("posterior shrinkage requires structured argv")
+            if (
+                isinstance(shrinkage_alpha, bool)
+                or not math.isfinite(shrinkage_alpha)
+                or float(shrinkage_alpha) not in SHRINKAGE_ALPHA_GRID
+            ):
+                raise ValueError(
+                    f"shrinkage alpha must be one of {SHRINKAGE_ALPHA_GRID}"
+                )
         self._representation = representation
         self._stable_subcommands = stable_subcommands
+        self._shrinkage_alpha = (
+            None if shrinkage_alpha is None else float(shrinkage_alpha)
+        )
         self._public: dict[str, dict[NodeKey, tuple[float, ...]]] = {
             source: {} for source in _CLAUSE_SOURCES
         }
@@ -560,6 +590,7 @@ class ClauseResourceKB:
         observations: Iterable[ClauseObservation],
         *,
         representation: str = RAW_ARGV_REPRESENTATION,
+        shrinkage_alpha: float | None = None,
     ) -> ClauseResourceKB:
         """Fit frozen public priors and any label-free fit vocabulary."""
 
@@ -572,6 +603,7 @@ class ClauseResourceKB:
         kb = cls(
             representation=representation,
             stable_subcommands=stable_subcommands,
+            shrinkage_alpha=shrinkage_alpha,
         )
         acc: dict[str, dict[NodeKey, list[float]]] = {
             source: {} for source in _CLAUSE_SOURCES
@@ -602,6 +634,18 @@ class ClauseResourceKB:
     @property
     def canonicalizer_version(self) -> str:
         return self._representation
+
+    @property
+    def arbitration(self) -> str:
+        return (
+            HARD_BACKOFF_ARBITRATION
+            if self._shrinkage_alpha is None
+            else POSTERIOR_SHRINKAGE_ARBITRATION
+        )
+
+    @property
+    def shrinkage_alpha(self) -> float | None:
+        return self._shrinkage_alpha
 
     def _repo_keys(self, bin_: str, argv: Sequence[str]) -> tuple[NodeKey, ...]:
         if self._representation == RAW_ARGV_REPRESENTATION:
@@ -680,17 +724,42 @@ class ClauseResourceKB:
     ) -> tuple[Sequence[float], str, str, tuple[str, ...]] | None:
         return next(self._candidate_nodes(repo, source, bin_, argv), None)
 
-    def _latency_prediction(
+    def _select_independent_scopes(
         self,
-        selected: tuple[Sequence[float], str, str, tuple[str, ...]],
+        repo: str,
+        source: str,
+        bin_: str,
+        argv: Sequence[str],
+    ) -> tuple[
+        tuple[Sequence[float], str, str, tuple[str, ...]] | None,
+        tuple[Sequence[float], str, str, tuple[str, ...]] | None,
+    ]:
+        repo_nodes = self._repo.get(repo, {}).get(source, {})
+        public_nodes = self._public[source]
+        repo_path: list[str] = []
+        local = None
+        for key in self._repo_keys(bin_, argv):
+            repo_path.append(f"repo:{key[0]}")
+            values = repo_nodes.get(key)
+            if values:
+                local = (values, "repo", key[0], tuple(repo_path))
+                break
+        public_path: list[str] = []
+        public = None
+        for key in self._public_keys(bin_, argv):
+            public_path.append(f"public:{key[0]}")
+            values = public_nodes.get(key)
+            if values:
+                public = (values, "public", key[0], tuple(public_path))
+                break
+        return local, public
+
+    @staticmethod
+    def _bucket_probabilities(
+        values: Sequence[float],
         buckets: LatencyBuckets,
-    ) -> ClauseLatencyBucketPrediction:
-        values, scope, kind, path = selected
-        # Nodes are sorted, so the histogram is one binary search per edge
-        # instead of a scan of every value. Bucket i is (edges[i-1], edges[i]],
-        # which is exactly what bucket_id = bisect_left(edges, v) selects, so
-        # the counts are identical to the per-value loop this replaces. Values
-        # were validated by _checked_latency as they entered the node.
+    ) -> tuple[float, ...]:
+        # Nodes are sorted, so the histogram is one binary search per edge.
         counts: list[int] = []
         at_or_below_previous = 0
         for edge in buckets.edges_ms:
@@ -698,13 +767,79 @@ class ClauseResourceKB:
             counts.append(at_or_below - at_or_below_previous)
             at_or_below_previous = at_or_below
         counts.append(len(values) - at_or_below_previous)
+        return tuple(count / len(values) for count in counts)
+
+    def _latency_prediction(
+        self,
+        selected: tuple[Sequence[float], str, str, tuple[str, ...]],
+        buckets: LatencyBuckets,
+    ) -> ClauseLatencyBucketPrediction:
+        values, scope, kind, path = selected
         return ClauseLatencyBucketPrediction(
-            probability_by_bucket=tuple(count / len(values) for count in counts),
+            probability_by_bucket=self._bucket_probabilities(values, buckets),
             scope=scope,
             key_kind=kind,
             evidence_count=len(values),
             fallback_path=path,
             canonicalizer_version=self.canonicalizer_version,
+        )
+
+    def _posterior_latency_prediction(
+        self,
+        local: tuple[Sequence[float], str, str, tuple[str, ...]] | None,
+        public: tuple[Sequence[float], str, str, tuple[str, ...]] | None,
+        buckets: LatencyBuckets,
+        alpha: float,
+    ) -> ClauseLatencyBucketPrediction:
+        if local is None and public is None:
+            raise ValueError("no local or public clause latency node")
+        local_values = () if local is None else local[0]
+        public_values = () if public is None else public[0]
+        if not local_values:
+            probabilities = self._bucket_probabilities(public_values, buckets)
+        elif not public_values:
+            probabilities = self._bucket_probabilities(local_values, buckets)
+        else:
+            local_probabilities = self._bucket_probabilities(local_values, buckets)
+            public_probabilities = self._bucket_probabilities(public_values, buckets)
+            denominator = len(local_values) + alpha
+            probabilities = tuple(
+                (
+                    len(local_values) * local_probability
+                    + alpha * public_probability
+                )
+                / denominator
+                for local_probability, public_probability in zip(
+                    local_probabilities,
+                    public_probabilities,
+                    strict=True,
+                )
+            )
+        local_kind = None if local is None else local[2]
+        public_kind = None if public is None else public[2]
+        scope = (
+            "repo+public"
+            if local is not None and public is not None
+            else ("repo" if local is not None else "public")
+        )
+        return ClauseLatencyBucketPrediction(
+            probability_by_bucket=probabilities,
+            scope=scope,
+            key_kind="+".join(
+                kind for kind in (local_kind, public_kind) if kind is not None
+            ),
+            evidence_count=len(local_values) + len(public_values),
+            fallback_path=(
+                *(local[3] if local is not None else ()),
+                *(public[3] if public is not None else ()),
+            ),
+            canonicalizer_version=self.canonicalizer_version,
+            arbitration=POSTERIOR_SHRINKAGE_ARBITRATION,
+            local_key_kind=local_kind,
+            local_evidence_count=len(local_values),
+            public_key_kind=public_kind,
+            public_evidence_count=len(public_values),
+            shrinkage_alpha=alpha,
         )
 
     def predict_clause_latency_bucket(
@@ -720,10 +855,61 @@ class ClauseResourceKB:
 
         if ts_start is not None:
             self._advance(ts_start)
+        if self._shrinkage_alpha is not None:
+            local, public = self._select_independent_scopes(
+                repo,
+                _LATENCY_MS,
+                bin_,
+                argv,
+            )
+            return self._posterior_latency_prediction(
+                local,
+                public,
+                buckets,
+                self._shrinkage_alpha,
+            )
         selected = self._select(repo, _LATENCY_MS, bin_, argv)
         if selected is None:
             raise ValueError("no public global clause latency node")
         return self._latency_prediction(selected, buckets)
+
+    def diagnostic_clause_latency_shrinkage_predictions(
+        self,
+        repo: str,
+        bin_: str,
+        argv: Sequence[str],
+        buckets: LatencyBuckets,
+        alphas: Sequence[float] = SHRINKAGE_ALPHA_GRID,
+        *,
+        ts_start: float | None = None,
+    ) -> tuple[ClauseLatencyBucketPrediction, ...]:
+        """Fit-only alpha candidates using the runtime posterior implementation."""
+
+        if self._representation != STRUCTURED_ARGV_REPRESENTATION:
+            raise ValueError("posterior shrinkage requires structured argv")
+        if ts_start is not None:
+            self._advance(ts_start)
+        local, public = self._select_independent_scopes(
+            repo,
+            _LATENCY_MS,
+            bin_,
+            argv,
+        )
+        predictions = []
+        for alpha in alphas:
+            if float(alpha) not in SHRINKAGE_ALPHA_GRID:
+                raise ValueError(
+                    f"shrinkage alpha must be one of {SHRINKAGE_ALPHA_GRID}"
+                )
+            predictions.append(
+                self._posterior_latency_prediction(
+                    local,
+                    public,
+                    buckets,
+                    float(alpha),
+                )
+            )
+        return tuple(predictions)
 
     def diagnostic_clause_latency_candidates(
         self,
@@ -743,10 +929,25 @@ class ClauseResourceKB:
 
         if ts_start is not None:
             self._advance(ts_start)
-        return tuple(
+        empirical = tuple(
             self._latency_prediction(selected, buckets)
             for selected in self._candidate_nodes(repo, _LATENCY_MS, bin_, argv)
         )
+        if self._shrinkage_alpha is None:
+            return empirical
+        local, public = self._select_independent_scopes(
+            repo,
+            _LATENCY_MS,
+            bin_,
+            argv,
+        )
+        posterior = self._posterior_latency_prediction(
+            local,
+            public,
+            buckets,
+            self._shrinkage_alpha,
+        )
+        return (posterior, *empirical)
 
     def predict_clause_heavy_light(
         self,
@@ -765,6 +966,64 @@ class ClauseResourceKB:
             raise ValueError(f"unknown Heavy/Light resource {resource!r}") from exc
         if ts_start is not None:
             self._advance(ts_start)
+        if self._shrinkage_alpha is not None:
+            local, public = self._select_independent_scopes(
+                repo,
+                resource,
+                bin_,
+                argv,
+            )
+            if local is None and public is None:
+                return None
+            local_values = () if local is None else local[0]
+            public_values = () if public is None else public[0]
+            local_heavy = len(local_values) - bisect_right(local_values, threshold)
+            public_probability = (
+                0.0
+                if not public_values
+                else (
+                    len(public_values) - bisect_right(public_values, threshold)
+                )
+                / len(public_values)
+            )
+            if not local_values:
+                probability_heavy = public_probability
+            elif not public_values:
+                probability_heavy = local_heavy / len(local_values)
+            else:
+                probability_heavy = (
+                    local_heavy + self._shrinkage_alpha * public_probability
+                ) / (len(local_values) + self._shrinkage_alpha)
+            local_kind = None if local is None else local[2]
+            public_kind = None if public is None else public[2]
+            return ClauseHeavyLightPrediction(
+                resource=resource,
+                threshold=threshold,
+                probability_heavy=probability_heavy,
+                label="heavy" if probability_heavy > 0.5 else "light",
+                scope=(
+                    "repo+public"
+                    if local is not None and public is not None
+                    else ("repo" if local is not None else "public")
+                ),
+                key_kind="+".join(
+                    kind
+                    for kind in (local_kind, public_kind)
+                    if kind is not None
+                ),
+                evidence_count=len(local_values) + len(public_values),
+                fallback_path=(
+                    *(local[3] if local is not None else ()),
+                    *(public[3] if public is not None else ()),
+                ),
+                canonicalizer_version=self.canonicalizer_version,
+                arbitration=POSTERIOR_SHRINKAGE_ARBITRATION,
+                local_key_kind=local_kind,
+                local_evidence_count=len(local_values),
+                public_key_kind=public_kind,
+                public_evidence_count=len(public_values),
+                shrinkage_alpha=self._shrinkage_alpha,
+            )
         selected = self._select(repo, resource, bin_, argv)
         if selected is None:
             return None
@@ -882,6 +1141,8 @@ class ClauseResourceKB:
             "max_prefix_depth": _CLAUSE_MAX_DEPTH,
             "representation": self._representation,
             "canonicalizer_version": self.canonicalizer_version,
+            "arbitration": self.arbitration,
+            "shrinkage_alpha": self._shrinkage_alpha,
             "stable_subcommands": [
                 [bin_, subcommand]
                 for bin_, subcommand in sorted(self._stable_subcommands)
@@ -903,7 +1164,8 @@ class ClauseResourceKB:
     def from_json_obj(cls, obj: Mapping[str, Any]) -> ClauseResourceKB:
         """Restore a snapshot produced by :meth:`to_json_obj`."""
 
-        if obj.get("schema") != _CLAUSE_SCHEMA:
+        schema = obj.get("schema")
+        if schema not in {_CLAUSE_SCHEMA, "runtime_clause_resource_kb_v6"}:
             if obj.get("schema") == "runtime_clause_resource_kb_v5":
                 raise ValueError(
                     "runtime_clause_resource_kb_v5 lacks Disk and short-null "
@@ -913,6 +1175,16 @@ class ClauseResourceKB:
         if obj.get("max_prefix_depth") != _CLAUSE_MAX_DEPTH:
             raise ValueError("snapshot prefix depth differs from module depth")
         representation = str(obj.get("representation", RAW_ARGV_REPRESENTATION))
+        if schema == "runtime_clause_resource_kb_v6" and (
+            representation != RAW_ARGV_REPRESENTATION
+            or obj.get("shrinkage_alpha") is not None
+            or obj.get("arbitration", HARD_BACKOFF_ARBITRATION)
+            != HARD_BACKOFF_ARBITRATION
+        ):
+            raise ValueError(
+                "runtime_clause_resource_kb_v6 cannot identify structured or "
+                "shrinkage semantics safely; refit the snapshot"
+            )
         canonicalizer_version = str(
             obj.get("canonicalizer_version", representation)
         )
@@ -925,7 +1197,14 @@ class ClauseResourceKB:
         kb = cls(
             representation=representation,
             stable_subcommands=stable_subcommands,
+            shrinkage_alpha=(
+                None
+                if obj.get("shrinkage_alpha") is None
+                else float(obj["shrinkage_alpha"])
+            ),
         )
+        if obj.get("arbitration", kb.arbitration) != kb.arbitration:
+            raise ValueError("snapshot arbitration and shrinkage alpha differ")
         # Re-sort on load: a snapshot written before nodes were held sorted, or
         # hand-edited, must still satisfy the binary-search invariant. Latency
         # values are revalidated here for the same reason they are validated on
@@ -967,7 +1246,10 @@ __all__ = [
     "CANONICAL_LATENCY_BUCKET_EDGES_MS",
     "CANONICAL_RESOURCE_HEAVY_THRESHOLDS",
     "GENERIC_ARGV_CANONICALIZER_VERSION",
+    "HARD_BACKOFF_ARBITRATION",
+    "POSTERIOR_SHRINKAGE_ARBITRATION",
     "RAW_ARGV_REPRESENTATION",
+    "SHRINKAGE_ALPHA_GRID",
     "SHORT_NULL_LIGHT_MAX_LATENCY_MS",
     "STRUCTURED_ARGV_REPRESENTATION",
     "ClauseHeavyLightPrediction",
