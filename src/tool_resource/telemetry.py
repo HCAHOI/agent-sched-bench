@@ -2783,6 +2783,16 @@ class ClauseTelemetryCollector:
             or started_ns > now_ns
         ):
             raise ValueError("started_ns must be a past positive monotonic timestamp")
+        # Drop everything the ring delivered before this call opened. The
+        # finish-time slice keeps only [started_ns, ended_ns], and calls are
+        # sequential, so an earlier event can belong to no call at all -- but it
+        # was retained until the next finish anyway. Container background tasks
+        # keep the perf sampler firing while the agent is between tool calls, so
+        # that gap accumulated events destined to be discarded.
+        with self._events_lock:
+            self._events = [
+                event for event in self._events if event["ts_ns"] >= started_ns
+            ]
         token = ToolCallToken(
             tool_call_id=tool_call_id,
             command=command,
