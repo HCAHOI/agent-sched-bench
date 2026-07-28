@@ -323,19 +323,24 @@ class ResourceService:
             if snapshot == "latest_at_run_start"
             else snapshot
         )
+        # Building the KB is part of loading the snapshot: a stored observation
+        # the KB refuses is a bad snapshot, and this boundary reports those as
+        # protocol errors. Only the decode was inside the guard, so a refusal
+        # from fit_public or observe_completed_clause escaped as a raw
+        # ValueError while an identically-caused decode failure did not.
         try:
             observations = self._snapshot_observations(snapshot_id)
+            public = [
+                observation
+                for observation in observations
+                if observation.repo != scope and observation.latency_ms is not None
+            ]
+            kb = ClauseResourceKB.fit_public(public) if public else ClauseResourceKB()
+            for observation in observations:
+                if observation.repo == scope:
+                    kb.observe_completed_clause(observation)
         except ValueError as exc:
             raise ResourceProtocolError(str(exc)) from exc
-        public = [
-            observation
-            for observation in observations
-            if observation.repo != scope and observation.latency_ms is not None
-        ]
-        kb = ClauseResourceKB.fit_public(public) if public else ClauseResourceKB()
-        for observation in observations:
-            if observation.repo == scope:
-                kb.observe_completed_clause(observation)
         run_token = uuid.uuid4().hex
         with self._lock:
             self._runs[run_token] = _Run(
