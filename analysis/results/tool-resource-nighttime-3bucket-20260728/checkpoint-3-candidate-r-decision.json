@@ -1,0 +1,200 @@
+{
+  "artifact_type": "tool_resource_nighttime_candidate_r_decision",
+  "checkpoint": 3,
+  "claim_bearing": false,
+  "code_commit": "08034bc7011100662cab3888b0972a6f75beeb80",
+  "date": "2026-07-28",
+  "inputs": {
+    "swe100": "traces/swe-rebench/qwen3.7-max/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+    "swe277": "traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl"
+  },
+  "configuration": {
+    "latency_bucket_edges_ms": [
+      2000.0,
+      8000.0
+    ],
+    "candidate": "generic-argv-v3-role",
+    "arbitration": "hard first-nonempty current hierarchy",
+    "stable_subcommand_min_distinct_fit_repositories": 3,
+    "bootstrap": {
+      "cluster_unit": "repository",
+      "draws": 2000,
+      "positive_sign_rule": "bootstrap median > 0",
+      "seed": 0
+    },
+    "outer_results_development_exposed": true
+  },
+  "execution": {
+    "candidate_r_swe100_fit_swe277_eval_seconds": 88,
+    "candidate_r_swe277_fit_swe100_eval_seconds": 56,
+    "resource_candidate_r_swe100_fit_swe277_eval_seconds": 38,
+    "resource_candidate_r_swe277_fit_swe100_eval_seconds": 44,
+    "all_exit_codes": 0
+  },
+  "review": {
+    "verdict": "GO",
+    "initial_major_findings": [
+      "standalone option values were not consumed",
+      "node oracle admitted raw prefix nodes"
+    ],
+    "focused_rereview": "both findings closed",
+    "formal_swe_inputs_accessed_by_reviewer": false
+  },
+  "latency": {
+    "swe100_fit_swe277_eval": {
+      "eligible_examples": 13766,
+      "identical_row_ids_and_labels": true,
+      "class_counts_short_middle_long": [
+        11625,
+        1389,
+        752
+      ],
+      "majority_accuracy": 0.8444718872584629,
+      "current_accuracy": 0.8451256719453727,
+      "candidate_r_public_only_accuracy": 0.8501380212116809,
+      "candidate_r_accuracy": 0.8490483800668314,
+      "candidate_r_minus_best_baseline_percentage_points": 0.39227081214586734,
+      "candidate_r_confusion_label_by_prediction": [
+        [
+          11415,
+          169,
+          41
+        ],
+        [
+          1113,
+          225,
+          51
+        ],
+        [
+          607,
+          97,
+          48
+        ]
+      ],
+      "prediction_unavailable": 0,
+      "bootstrap_point_estimate": 0.003922708121458673,
+      "bootstrap_median": 0.0033833107552516117,
+      "bootstrap_interval_95": [
+        -0.0010073703489733576,
+        0.006282382593619514
+      ],
+      "bootstrap_positive_draw_fraction": 0.946,
+      "bootstrap_sign_positive": true
+    },
+    "swe277_fit_swe100_eval": {
+      "eligible_examples": 4458,
+      "identical_row_ids_and_labels": true,
+      "class_counts_short_middle_long": [
+        3902,
+        357,
+        199
+      ],
+      "majority_accuracy": 0.8752803947958726,
+      "current_accuracy": 0.8710183938986092,
+      "candidate_r_public_only_accuracy": 0.8822341857335128,
+      "candidate_r_accuracy": 0.8808882907133243,
+      "candidate_r_minus_best_baseline_percentage_points": 0.56078959174517,
+      "candidate_r_confusion_label_by_prediction": [
+        [
+          3850,
+          39,
+          13
+        ],
+        [
+          272,
+          69,
+          16
+        ],
+        [
+          154,
+          37,
+          8
+        ]
+      ],
+      "prediction_unavailable": 0,
+      "bootstrap_point_estimate": 0.0056078959174517,
+      "bootstrap_median": 0.0058883485450157425,
+      "bootstrap_interval_95": [
+        -0.0019028290051604944,
+        0.012914402710642236
+      ],
+      "bootstrap_positive_draw_fraction": 0.932,
+      "bootstrap_sign_positive": true
+    },
+    "gate": "GO",
+    "limitation": "Both exploratory 95% cluster-bootstrap intervals cross zero; this is not confirmation."
+  },
+  "resources": {
+    "disk_read_write_bytes_total": {
+      "swe100_fit_swe277_eval": {
+        "eligible_n": 13723,
+        "majority_light_accuracy": 0.9760985207316184,
+        "current_accuracy": 0.9779202798221963,
+        "candidate_r_accuracy": 0.9807622240034978,
+        "candidate_minus_current_percentage_points": 0.2841944181301459
+      },
+      "swe277_fit_swe100_eval": {
+        "eligible_n": 4449,
+        "majority_light_accuracy": 0.9777478084962913,
+        "current_accuracy": 0.9777478084962913,
+        "candidate_r_accuracy": 0.983142279163857,
+        "candidate_minus_current_percentage_points": 0.539447066756571
+      },
+      "gate": "GO"
+    },
+    "peak_cpu_cores": {
+      "swe100_fit_swe277_eval": {
+        "eligible_n": 11610,
+        "majority_light_accuracy": 0.9559862187769165,
+        "current_accuracy": 0.9559862187769165,
+        "candidate_r_accuracy": 0.9550387596899225,
+        "candidate_minus_current_percentage_points": -0.0947459086994007
+      },
+      "swe277_fit_swe100_eval": {
+        "eligible_n": 3866,
+        "majority_light_accuracy": 0.9568028970512157,
+        "current_accuracy": 0.9529229177444387,
+        "candidate_r_accuracy": 0.9508535954474909,
+        "candidate_minus_current_percentage_points": -0.20693222969477842
+      },
+      "gate": "NO-GO"
+    },
+    "sampled_peak_rss_mb": {
+      "swe100_fit_swe277_eval": {
+        "eligible_n": 12358,
+        "majority_light_accuracy": 0.9902087716458974,
+        "current_accuracy": 0.9901278524033015,
+        "candidate_r_accuracy": 0.9892377407347467,
+        "candidate_minus_current_percentage_points": -0.08901116685547938
+      },
+      "swe277_fit_swe100_eval": {
+        "eligible_n": 4090,
+        "majority_light_accuracy": 0.9897310513447433,
+        "current_accuracy": 0.9897310513447433,
+        "candidate_r_accuracy": 0.9894865525672372,
+        "candidate_minus_current_percentage_points": -0.024449877750609694
+      },
+      "gate": "NO-GO"
+    }
+  },
+  "mechanism_diagnosis": {
+    "representation": "Candidate R improves latency and Disk in both orientations.",
+    "arbitration": "Structured public-only exceeds full hard-local-first Candidate R by 0.1090 and 0.1346 percentage points; local arbitration is the next isolated mechanism.",
+    "remaining_node_oracle_accuracy": [
+      0.8673543513003051,
+      0.8930013458950202
+    ]
+  },
+  "decision": {
+    "candidate_r_latency": "development GO",
+    "candidate_r_shared_runtime": "NO-GO because CPU and RSS regress",
+    "runtime_default": "raw-argv-prefix-v1 unchanged",
+    "next_gate": "Candidate S is authorized; select one alpha on repository-grouped inner fit folds before reading outer Candidate S results"
+  },
+  "authoritative_results": [
+    "analysis/results/tool-resource-nighttime-3bucket-20260728/candidate-r-swe100-fit-swe277-eval.json",
+    "analysis/results/tool-resource-nighttime-3bucket-20260728/candidate-r-swe277-fit-swe100-eval.json",
+    "analysis/results/tool-resource-nighttime-3bucket-20260728/resource-candidate-r-swe100-fit-swe277-eval.json",
+    "analysis/results/tool-resource-nighttime-3bucket-20260728/resource-candidate-r-swe277-fit-swe100-eval.json"
+  ]
+}
