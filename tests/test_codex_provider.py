@@ -122,3 +122,10 @@ def test_codex_stream_requires_completed_event() -> None:
     assert success.content == "partial"
     assert refused.finish_reason == "stop"
     assert refused.content == "refused"
+
+
+def test_codex_backend_retry_message_is_transient() -> None:
+    assert CodexProvider._is_transient_error(
+        "An error occurred while processing your request. "
+        "You can retry your request."
+    )

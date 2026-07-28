@@ -107,6 +107,7 @@ class LLMProvider(ABC):
         "connection",
         "server error",
         "temporarily unavailable",
+        "you can retry your request",
     )
 
     _SENTINEL = object()
