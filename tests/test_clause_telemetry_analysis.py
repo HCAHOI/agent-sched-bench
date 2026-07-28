@@ -22,11 +22,14 @@ def test_bpf_lifecycle_keeps_identity_until_free_and_clears_new_child() -> None:
         "RAW_TRACEPOINT_PROBE(sched_process_free)", 1
     )[1].split("int on_cpu_clock", 1)[0]
 
+    # The fork event carries no argv payload, so it is emitted on the small
+    # ring; what matters here is unchanged -- the child's inherited identity is
+    # cleared before the event goes out.
     assert fork_probe.index("current_seq.delete(&child_key)") < (
-        fork_probe.index("events.ringbuf_reserve")
+        fork_probe.index("events_small.ringbuf_reserve")
     )
     assert fork_probe.index("pending_seq.delete(&child_key)") < (
-        fork_probe.index("events.ringbuf_reserve")
+        fork_probe.index("events_small.ringbuf_reserve")
     )
     assert "current_seq.delete" not in exit_probe
     assert "pending_seq.delete" not in exit_probe
@@ -781,3 +784,75 @@ def test_type_filtered_views_match_the_unfiltered_source(tmp_path) -> None:
     finally:
         source.close()
         spool.close()
+
+
+def _reserve_blocks() -> list[tuple[str, str]]:
+    """Each ringbuf reserve..submit block in the BPF program as (ring, body)."""
+    import re
+
+    blocks = []
+    for match in re.finditer(
+        r"struct (event_t|event_small_t) \*e = (events|events_small)"
+        r"\.ringbuf_reserve",
+        C.BPF_PROGRAM,
+    ):
+        body = C.BPF_PROGRAM[match.start() : C.BPF_PROGRAM.index(
+            "ringbuf_submit", match.start()
+        )]
+        record, ring = match.group(1), match.group(2)
+        assert (record == "event_t") == (ring == "events"), (
+            f"{ring} reserved as {record}"
+        )
+        blocks.append((ring, body))
+    return blocks
+
+
+def test_only_the_argv_ring_carries_an_argv_payload() -> None:
+    """The small ring's record has no ``arg`` member and its decode never reads
+    one, so an emitter that fills a payload must stay on the wide ring and a
+    type _event_row unpacks a payload for must never be emitted on the small
+    one. Both mistakes are silent: the first loses the argv, the second makes
+    every argv word come back empty."""
+    payload_types = {
+        "TYPE_EXEC_ARG", "TYPE_EXEC_META", "TYPE_BPRM_META", "TYPE_INTERP_META",
+    }
+    # _event_row extracts a payload for exactly these type codes.
+    assert {C.TYPE_CODES[C.TYPE_NAMES[code]] for code in (1, 7, 8, 9)} == {
+        C.TYPE_CODES[name.removeprefix("TYPE_").lower()] for name in payload_types
+    }
+
+    blocks = _reserve_blocks()
+    assert len(blocks) >= 8, "expected every emitter to be found"
+    assert {ring for ring, _ in blocks} == {"events", "events_small"}
+
+    import re
+
+    wide = 0
+    for ring, body in blocks:
+        emitted = set(re.findall(r"e->type\s*=\s*[^;]*?(TYPE_\w+)", body))
+        emitted |= set(re.findall(r":\s*(TYPE_\w+)", body))
+        if ring == "events_small":
+            assert "e->arg" not in body, "small-ring emitter fills a payload"
+            assert not emitted & payload_types, (
+                f"payload type {sorted(emitted & payload_types)} on the small ring"
+            )
+            continue
+        wide += 1
+        # The converse, and the one that silently costs rather than breaks:
+        # a type with no payload sitting on the wide ring pays 640 bytes a
+        # record instead of 128, which is the entire point of the split. A
+        # block that sets its type from a parameter must at least fill a
+        # payload to belong here.
+        assert emitted or "e->arg" in body, (
+            "wide-ring emitter neither names a type nor fills a payload"
+        )
+        assert not emitted - payload_types, (
+            f"non-payload type {sorted(emitted - payload_types)} on the wide ring"
+        )
+    assert wide == 4, f"expected 4 payload emitters on the wide ring, found {wide}"
+    # fill_counters serves only small-ring events; letting it take event_t
+    # again would quietly re-widen every counter event.
+    assert "static void fill_counters(struct event_small_t *e" in C.BPF_PROGRAM
+    assert "char arg[ARG_BYTES];" in C.BPF_PROGRAM
+    small = C.BPF_PROGRAM.split("struct event_small_t {", 1)[1].split("};", 1)[0]
+    assert "arg" not in small, "small record grew a payload"

@@ -129,33 +129,64 @@ BPF_PROGRAM = r"""
 #define ARG_FLAG_ARGV_CAPPED 2
 #define ARG_FLAG_CONTINUED 4
 
-struct event_t {
-    u64 timestamp_ns;
-    u64 cgroup_id;
-    u64 exec_seq;
-    u64 cpu_ns;         /* per-task cumulative utime+stime at sample time */
-    u64 rss_pages;      /* CURRENT rss = file+anon+shmem (not hiwater) */
-    u64 mm_ptr;         /* address-space identity for dedup */
-    u64 hiwater_pages;  /* raw lifetime hiwater (exit only), kept separate */
-    u64 io_read_bytes;  /* task->ioac.read_bytes */
-    u64 io_write_bytes; /* task->ioac.write_bytes */
-    u64 io_cancelled_write_bytes; /* task->ioac.cancelled_write_bytes */
-    u32 type;
-    u32 host_pid;
-    u32 host_tid;
-    u32 parent_host_pid;
-    u32 child_host_pid;
-    u32 child_host_tid;
-    u32 arg_index;
-    u32 arg_chunk_index;
-    u32 arg_flags;
+/* The fields every event carries. Only four of the nine event types ever fill
+ * the argv payload that follows, and those four are the minority: across 370
+ * collected artifacts the argv word a payload holds averages 10 bytes, while a
+ * perf sample -- by far the highest-volume type, one per 10ms of CPU time --
+ * carries none at all. Two ring buffers, so a sample costs 128 bytes in the
+ * ring instead of 640 and the same allocation absorbs a proportionally longer
+ * burst before ringbuf_reserve starts failing (any failure voids the whole
+ * tool call's evidence).
+ *
+ * event_small_t names its fields identically to event_t, so the emitters that
+ * moved to the small ring are unchanged apart from their declaration.
+ */
+#define EVENT_COMMON_FIELDS \
+    u64 timestamp_ns; \
+    u64 cgroup_id; \
+    u64 exec_seq; \
+    u64 cpu_ns;         /* per-task cumulative utime+stime at sample time */ \
+    u64 rss_pages;      /* CURRENT rss = file+anon+shmem (not hiwater) */ \
+    u64 mm_ptr;         /* address-space identity for dedup */ \
+    u64 hiwater_pages;  /* raw lifetime hiwater (exit only), kept separate */ \
+    u64 io_read_bytes;  /* task->ioac.read_bytes */ \
+    u64 io_write_bytes; /* task->ioac.write_bytes */ \
+    u64 io_cancelled_write_bytes; /* task->ioac.cancelled_write_bytes */ \
+    u32 type; \
+    u32 host_pid; \
+    u32 host_tid; \
+    u32 parent_host_pid; \
+    u32 child_host_pid; \
+    u32 child_host_tid; \
+    u32 arg_index; \
+    u32 arg_chunk_index; \
+    u32 arg_flags; \
     u32 exit_code;
+
+struct event_t {
+    EVENT_COMMON_FIELDS
     char arg[ARG_BYTES];
 };
 
+struct event_small_t {
+    EVENT_COMMON_FIELDS
+};
+
+/* Page counts must be powers of two. The argv ring keeps its original size so
+ * no workload mix can hold fewer argv events than before this split; the small
+ * ring is added capacity, and a loss in either voids the call, so the safe
+ * starting point is "never worse", not "same total bytes". 4MiB + 1MiB per
+ * collector: 6553 argv-carrying events as before, plus 8192 counter events
+ * that used to compete for the same space at five times the width. */
 BPF_RINGBUF_OUTPUT(events, 1024);
+BPF_RINGBUF_OUTPUT(events_small, 256);
 BPF_ARRAY(target_cgroup, u64, 1);
 BPF_ARRAY(ringbuf_reserve_failures, u64, 1);
+/* Diagnostic only: which ring ran out. ringbuf_reserve_failures stays the
+ * total both rings contribute to, so the persisted loss schema is unchanged
+ * and a loss still voids the call the same way regardless of which ring it
+ * came from. */
+BPF_ARRAY(ringbuf_small_reserve_failures, u64, 1);
 BPF_ARRAY(argv_read_failures, u64, 1);
 BPF_ARRAY(argv_boundary_read_failures, u64, 1);
 BPF_ARRAY(perf_sample_count, u64, 1);
@@ -187,6 +218,12 @@ static void lost(u64 *counter) {
 static void ringbuf_reserve_failed(void) {
     u32 z = 0;
     lost(ringbuf_reserve_failures.lookup(&z));
+}
+
+static void ringbuf_small_reserve_failed(void) {
+    u32 z = 0;
+    lost(ringbuf_reserve_failures.lookup(&z));
+    lost(ringbuf_small_reserve_failures.lookup(&z));
 }
 
 static void argv_read_failed(void) {
@@ -228,7 +265,7 @@ static u64 current_cpu_ns(struct task_struct *task) {
     return u + s;
 }
 
-static void fill_counters(struct event_t *e, struct task_struct *task) {
+static void fill_counters(struct event_small_t *e, struct task_struct *task) {
     u64 mm_ptr = 0;
     e->rss_pages = current_rss_pages(task, &mm_ptr);
     e->mm_ptr = mm_ptr;
@@ -502,9 +539,9 @@ static int on_exec_return(long ret) {
         if (ret >= 0) {
             current_seq.update(&task_key, &pending->seq);
         }
-        struct event_t *e = events.ringbuf_reserve(sizeof(*e));
+        struct event_small_t *e = events_small.ringbuf_reserve(sizeof(*e));
         if (!e) {
-            ringbuf_reserve_failed();
+            ringbuf_small_reserve_failed();
         } else {
             __builtin_memset(e, 0, sizeof(*e));
             e->timestamp_ns = bpf_ktime_get_ns();
@@ -521,7 +558,7 @@ static int on_exec_return(long ret) {
                     e, (struct task_struct *)bpf_get_current_task()
                 );
             }
-            events.ringbuf_submit(e, 0);
+            events_small.ringbuf_submit(e, 0);
         }
     }
     pending_seq.delete(&task_key);
@@ -548,8 +585,8 @@ RAW_TRACEPOINT_PROBE(sched_process_fork) {
     };
     current_seq.delete(&child_key);
     pending_seq.delete(&child_key);
-    struct event_t *e = events.ringbuf_reserve(sizeof(*e));
-    if (!e) { ringbuf_reserve_failed(); return 0; }
+    struct event_small_t *e = events_small.ringbuf_reserve(sizeof(*e));
+    if (!e) { ringbuf_small_reserve_failed(); return 0; }
     __builtin_memset(e, 0, sizeof(*e));
     e->timestamp_ns = bpf_ktime_get_ns();
     e->cgroup_id = bpf_get_current_cgroup_id();
@@ -558,7 +595,7 @@ RAW_TRACEPOINT_PROBE(sched_process_fork) {
     e->host_pid = bpf_get_current_pid_tgid() >> 32;  /* parent TGID */
     e->child_host_pid = child_tid;
     e->child_host_tid = child_tid;
-    events.ringbuf_submit(e, 0);
+    events_small.ringbuf_submit(e, 0);
     return 0;
 }
 
@@ -581,8 +618,8 @@ TRACEPOINT_PROBE(sched, sched_process_exit) {
         .task_ptr = (u64)task,
     };
     u64 *seq = current_seq.lookup(&task_key);
-    struct event_t *e = events.ringbuf_reserve(sizeof(*e));
-    if (!e) { ringbuf_reserve_failed(); return 0; }
+    struct event_small_t *e = events_small.ringbuf_reserve(sizeof(*e));
+    if (!e) { ringbuf_small_reserve_failed(); return 0; }
     __builtin_memset(e, 0, sizeof(*e));
     fill_counters(e, task);
     e->timestamp_ns = bpf_ktime_get_ns();
@@ -594,7 +631,7 @@ TRACEPOINT_PROBE(sched, sched_process_exit) {
     e->host_tid = tid;
     e->parent_host_pid = parent_tgid();
     e->exit_code = exit_code;
-    events.ringbuf_submit(e, 0);
+    events_small.ringbuf_submit(e, 0);
     return 0;
 }
 
@@ -626,8 +663,8 @@ int on_cpu_clock(struct bpf_perf_event_data *ctx) {
         .task_ptr = (u64)task,
     };
     u64 *seq = current_seq.lookup(&task_key);
-    struct event_t *e = events.ringbuf_reserve(sizeof(*e));
-    if (!e) { ringbuf_reserve_failed(); return 0; }
+    struct event_small_t *e = events_small.ringbuf_reserve(sizeof(*e));
+    if (!e) { ringbuf_small_reserve_failed(); return 0; }
     __builtin_memset(e, 0, sizeof(*e));
     fill_counters(e, task);
     e->timestamp_ns = bpf_ktime_get_ns();
@@ -636,7 +673,7 @@ int on_cpu_clock(struct bpf_perf_event_data *ctx) {
     e->type = TYPE_PERF;
     e->host_pid = pid_tgid >> 32;
     e->host_tid = tid;
-    events.ringbuf_submit(e, 0);
+    events_small.ringbuf_submit(e, 0);
     u32 z = 0;
     u64 *c = perf_sample_count.lookup(&z);
     if (c) __sync_fetch_and_add(c, 1);
@@ -929,14 +966,19 @@ def collect_case(command: str, tag: str, *, marker: str = "") -> RawRun:
     events: list[dict[str, Any]] = []
     lock = threading.Lock()
     table = bpf["events"]
+    small_table = bpf["events_small"]
 
-    def receive(_ctx: int, data: int, _size: int) -> int:
-        row = _event_row(table, data)
-        with lock:
-            events.append(row)
-        return 0
+    def receiver(source: Any) -> "Callable[[int, int, int], int]":
+        def receive(_ctx: int, data: int, _size: int) -> int:
+            row = _event_row(source, data)
+            with lock:
+                events.append(row)
+            return 0
 
-    table.open_ring_buffer(receive)
+        return receive
+
+    table.open_ring_buffer(receiver(table))
+    small_table.open_ring_buffer(receiver(small_table))
     stop_poll = threading.Event()
 
     def poll() -> None:
@@ -3648,18 +3690,27 @@ class ClauseTelemetryCollector:
                 self.cgroup_id
             )
             self._table = self._bpf["events"]
+            self._small_table = self._bpf["events_small"]
 
-            def receive(_ctx: int, data: int, _size: int) -> int:
-                try:
-                    row = _event_row(self._table, data)
-                    with self._events_lock:
-                        self._spool.append(row)
-                except BaseException as exc:
-                    self._poll_error = exc
-                    self._stop_poll.set()
-                return 0
+            def receiver(table: Any) -> "Callable[[int, int, int], int]":
+                # One callback per ring; both append to the one spool, which
+                # restores a single order by (ts_ns, arrival). Every emitter
+                # stamps its own bpf_ktime_get_ns(), so the timestamp -- not
+                # the ring a record arrived on -- is what orders the stream.
+                def receive(_ctx: int, data: int, _size: int) -> int:
+                    try:
+                        row = _event_row(table, data)
+                        with self._events_lock:
+                            self._spool.append(row)
+                    except BaseException as exc:
+                        self._poll_error = exc
+                        self._stop_poll.set()
+                    return 0
 
-            self._table.open_ring_buffer(receive)
+                return receive
+
+            self._table.open_ring_buffer(receiver(self._table))
+            self._small_table.open_ring_buffer(receiver(self._small_table))
 
             def poll() -> None:
                 try:
