@@ -265,6 +265,39 @@ def _checked_latency(value: float) -> float:
     return value
 
 
+def _ordered_node(values: Iterable[float]) -> list[float]:
+    """Node order: non-comparable values first, then ascending.
+
+    Only latency is validated on entry, because only latency was validated
+    before. The Heavy/Light sources therefore still admit NaN, and NaN has no
+    position under ``<``: letting it into the sorted region leaves genuinely
+    ordered values out of order, and the Heavy/Light bisect then miscounts
+    values that are themselves perfectly fine.
+
+    Holding NaN ahead of the sorted region keeps the binary-search
+    precondition -- ``threshold < value`` stays false-then-true across the
+    node -- and reproduces the total it replaced: ``threshold < nan`` is false,
+    so a NaN counts as light exactly as ``sum(value > threshold)`` counted it,
+    and it still counts toward the denominator.
+    """
+
+    materialized = list(values)
+    return [value for value in materialized if math.isnan(value)] + sorted(
+        value for value in materialized if not math.isnan(value)
+    )
+
+
+def _insert_into_node(node: list[float], value: float) -> None:
+    """Insert preserving :func:`_ordered_node`'s invariant."""
+
+    if math.isnan(value):
+        node.insert(0, value)
+    else:
+        # bisect skips the NaN prefix on its own: `value < nan` is false, so the
+        # search moves right past it into the sorted region.
+        insort(node, value)
+
+
 def _clause_tokens(bin_: str, argv: Sequence[str]) -> tuple[str, ...]:
     # Identity token stream: bin head then the argv tail (argv[0] may be a full
     # path; bin is its basename, already normalized by mvdan).
@@ -349,8 +382,14 @@ def generic_argv_keys(bin_: str, argv: Sequence[str]) -> list[NodeKey]:
 
 
 @lru_cache(maxsize=8192)
-def _clause_repo_keys_cached(bin_: str, argv: tuple[str, ...]) -> tuple[NodeKey, ...]:
-    tokens = _clause_tokens(bin_, argv)
+def _clause_repo_keys_cached(bin_: str, argv_tail: tuple[str, ...]) -> tuple[NodeKey, ...]:
+    # Keyed on the tail, not the whole argv: _clause_tokens drops argv[0], so
+    # ("git", ("/usr/bin/git", "status")) and ("git", ("git", "status")) produce
+    # identical keys and would otherwise occupy two entries and miss each other.
+    # ponytail: bounded by entry count, not by key length -- argv here comes
+    # from parsed agent commands, so the ceiling is fine; add a length guard if
+    # argv ever originates from an untrusted source.
+    tokens = (bin_, *argv_tail)
     keys: list[NodeKey] = [("exact_clause", _DELIM.join(tokens))]
     depth = min(len(tokens), _CLAUSE_MAX_DEPTH)
     # depth-1 prefix equals the bin node's content, so stop prefixes at 2.
@@ -372,7 +411,7 @@ def _clause_repo_keys(bin_: str, argv: Sequence[str]) -> tuple[NodeKey, ...]:
     on every query, and the joins dominate an otherwise O(log n) lookup.
     """
 
-    return _clause_repo_keys_cached(bin_, tuple(argv))
+    return _clause_repo_keys_cached(bin_, tuple(argv[1:]))
 
 
 def _clause_public_keys(bin_: str) -> tuple[NodeKey, ...]:
@@ -422,14 +461,24 @@ class ClauseResourceKB:
         kb = cls()
         # Nodes are held sorted so predictions are binary searches, not scans.
         kb._public = {
-            source: {key: tuple(sorted(values)) for key, values in nodes.items()}
+            source: {key: tuple(_ordered_node(values)) for key, values in nodes.items()}
             for source, nodes in acc.items()
         }
         return kb
 
     def observe_completed_clause(self, obs: ClauseObservation) -> None:
-        """Buffer a completed clause; visible only once strictly causally prior."""
+        """Buffer a completed clause; visible only once strictly causally prior.
 
+        An unusable latency is refused here, on submission, rather than when the
+        buffer drains. Draining pops the observation before it could be checked,
+        so a rejection there destroyed the evidence it rejected: the query
+        raised once and every later query then succeeded over a corpus quietly
+        missing that clause. Draining also happens inside every query, so a bad
+        latency aborted predictions for unrelated repositories and resources.
+        """
+
+        if obs.latency_ms is not None:
+            _checked_latency(obs.latency_ms)
         heapq.heappush(self._pending, (obs.ts_end, self._pending_seq, obs))
         self._pending_seq += 1
 
@@ -444,12 +493,10 @@ class ClauseResourceKB:
                 value = _clause_value(obs, source)
                 if value is None:
                     continue
-                if source == _LATENCY_MS:
-                    _checked_latency(value)
                 for key in keys:
-                    # Keep each node sorted on insert: absorption happens once
+                    # Keep each node ordered on insert: absorption happens once
                     # per observation, prediction happens on every clause.
-                    insort(repo_sources[source].setdefault(key, []), value)
+                    _insert_into_node(repo_sources[source].setdefault(key, []), value)
 
     def _select(
         self, repo: str, source: str, bin_: str, argv: Sequence[str]
@@ -672,7 +719,7 @@ class ClauseResourceKB:
             if source == _LATENCY_MS:
                 for value in values:
                     _checked_latency(value)
-            return sorted(values)
+            return _ordered_node(values)
 
         kb._public = {
             source: {
