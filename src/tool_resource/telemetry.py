@@ -2369,41 +2369,116 @@ def _container_cgroup(
     return cgroup, init_pid
 
 
-def _event_row(table: Any, data: int) -> dict[str, Any]:
+_EVENT_FIELDS = (
+    "type",
+    "ts_ns",
+    "cgroup_id",
+    "exec_seq",
+    "cpu_ns",
+    "rss_pages",
+    "mm_ptr",
+    "hiwater_pages",
+    "io_read_bytes",
+    "io_write_bytes",
+    "io_cancelled_write_bytes",
+    "host_pid",
+    "host_tid",
+    "parent_host_pid",
+    "child_host_pid",
+    "child_host_tid",
+    "arg_index",
+    "arg_chunk_index",
+    "arg_flags",
+    "exit_code",
+    "errno",
+)
+_UNSET = object()
+
+
+class EventRow(Mapping):
+    """One ring-buffer event, stored compactly.
+
+    A dict per event measured 636 bytes against 388 for this layout with
+    realistic per-event values -- the difference is the dict table, since the
+    integer values cost the same either way. A build-heavy tool call spawns
+    tens of thousands of processes and every exec emits up to MAX_ARGS *
+    MAX_ARG_CHUNKS argv events, so a single call can deliver millions of these
+    and holds them until it finishes: on a two-container collection that is
+    gigabytes of host memory, and host OOM has already stopped a run.
+
+    It is a Mapping so every consumer keeps working through ``[]``, ``.get()``,
+    ``in`` and ``**`` splat, and so do the tests that build events as plain
+    dicts. ``arg``/``arg_raw`` stay genuinely absent when the kernel did not
+    supply them, matching the dict this replaces -- ``event.get("arg", "")``
+    must still yield ``""`` and not ``None``.
+    """
+
+    __slots__ = (*_EVENT_FIELDS, "arg", "arg_raw")
+
+    def __init__(
+        self,
+        *values: Any,
+        arg: Any = _UNSET,
+        arg_raw: Any = _UNSET,
+    ) -> None:
+        for name, value in zip(_EVENT_FIELDS, values, strict=True):
+            object.__setattr__(self, name, value)
+        object.__setattr__(self, "arg", arg)
+        object.__setattr__(self, "arg_raw", arg_raw)
+
+    def __getitem__(self, key: str) -> Any:
+        value = getattr(self, key, _UNSET)
+        if value is _UNSET:
+            raise KeyError(key)
+        return value
+
+    def __iter__(self) -> Any:
+        for name in self.__slots__:
+            if getattr(self, name) is not _UNSET:
+                yield name
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+    def __repr__(self) -> str:
+        return f"EventRow({dict(self)!r})"
+
+
+def _event_row(table: Any, data: int) -> EventRow:
     event = table.event(data)
-    row = {
-        "type": TYPE_NAMES[int(event.type)],
-        "ts_ns": int(event.timestamp_ns),
-        "cgroup_id": int(event.cgroup_id),
-        "exec_seq": int(event.exec_seq),
-        "cpu_ns": int(event.cpu_ns),
-        "rss_pages": int(event.rss_pages),
-        "mm_ptr": int(event.mm_ptr),
-        "hiwater_pages": int(event.hiwater_pages),
-        "io_read_bytes": int(event.io_read_bytes),
-        "io_write_bytes": int(event.io_write_bytes),
-        "io_cancelled_write_bytes": int(event.io_cancelled_write_bytes),
-        "host_pid": int(event.host_pid),
-        "host_tid": int(event.host_tid),
-        "parent_host_pid": int(event.parent_host_pid),
-        "child_host_pid": int(event.child_host_pid),
-        "child_host_tid": int(event.child_host_tid),
-        "arg_index": int(event.arg_index),
-        "arg_chunk_index": int(event.arg_chunk_index),
-        "arg_flags": int(event.arg_flags),
-        "exit_code": int(event.exit_code),
-        "errno": (
-            int(event.exit_code)
-            if TYPE_NAMES[int(event.type)] == "failed_exec_attempt"
-            else 0
-        ),
-    }
+    event_type = TYPE_NAMES[int(event.type)]
+    arg: Any = _UNSET
+    arg_raw: Any = _UNSET
     if event.type in {1, 7, 8, 9}:
         payload = bytes(event.arg).split(b"\0", 1)[0]
-        row["arg"] = payload.decode("utf-8", "replace")
+        arg = payload.decode("utf-8", "replace")
         if event.type == 1:
-            row["arg_raw"] = payload.hex()
-    return row
+            arg_raw = payload.hex()
+    return EventRow(
+        event_type,
+        int(event.timestamp_ns),
+        int(event.cgroup_id),
+        int(event.exec_seq),
+        int(event.cpu_ns),
+        int(event.rss_pages),
+        int(event.mm_ptr),
+        int(event.hiwater_pages),
+        int(event.io_read_bytes),
+        int(event.io_write_bytes),
+        int(event.io_cancelled_write_bytes),
+        int(event.host_pid),
+        int(event.host_tid),
+        int(event.parent_host_pid),
+        int(event.child_host_pid),
+        int(event.child_host_tid),
+        int(event.arg_index),
+        int(event.arg_chunk_index),
+        int(event.arg_flags),
+        int(event.exit_code),
+        int(event.exit_code) if event_type == "failed_exec_attempt" else 0,
+        arg=arg,
+        arg_raw=arg_raw,
+    )
 
 
 def _counter(bpf: Any, name: str) -> int:
@@ -3704,6 +3779,7 @@ __all__ = [
     "ClauseMetrics",
     "ClauseTelemetryCollector",
     "ClauseTelemetryIntegrityError",
+    "EventRow",
     "RawRun",
     "SAMPLE_PERIOD_NS",
     "SENTINEL",
