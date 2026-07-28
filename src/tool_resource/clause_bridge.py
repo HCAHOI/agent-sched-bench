@@ -903,9 +903,28 @@ def _consumer_identity(clause: Mapping[str, Any]) -> tuple[object, ...]:
     )
 
 
+def _alignment_matrix(
+    statics: Mapping[int, Mapping[str, Any]],
+    chains: Mapping[int, list[ExecImageRecord]],
+) -> dict[tuple[int, int], tuple[str | None, str]]:
+    """Evidence for every (static clause, runtime chain) pair, computed once.
+
+    ``_alignment_evidence`` is a backtracking search over glob spans, and the
+    same pairs were previously re-derived by the shell test, the assignment,
+    and the unmatched-chain check.
+    """
+
+    return {
+        (si, pid): _alignment_evidence(clause, imgs[0])
+        for si, clause in statics.items()
+        for pid, imgs in chains.items()
+    }
+
+
 def _assign(
     statics: Mapping[int, Mapping[str, Any]],
     chains: Mapping[int, list[ExecImageRecord]],
+    alignment: Mapping[tuple[int, int], tuple[str | None, str]],
 ) -> tuple[
     dict[int, int],
     dict[int, str],
@@ -921,9 +940,9 @@ def _assign(
 
     candidates: dict[tuple[int, int], str] = {}
     rejections: list[dict[str, Any]] = []
-    for si, clause in statics.items():
-        for pid, imgs in chains.items():
-            label, reason = _alignment_evidence(clause, imgs[0])
+    for si in statics:
+        for pid in chains:
+            label, reason = alignment[(si, pid)]
             if label is not None:
                 candidates[(si, pid)] = label
             else:
@@ -1081,17 +1100,28 @@ def bridge_command(
         for si, c in statics.items()
     }
 
+    alignment = _alignment_matrix(statics, chains)
+
+    def has_static_candidate(pid: int) -> bool:
+        return any(alignment[(si, pid)][0] is not None for si in statics)
+
+    shell_cache: dict[int, bool] = {}
+
     def is_shell(pid: int) -> bool:
+        # Memoized: the ancestor walk below re-asks this for the same pids.
+        cached = shell_cache.get(pid)
+        if cached is not None:
+            return cached
         if pid not in chains or not all(img.bin in _SHELL_BINS for img in chains[pid]):
+            shell_cache[pid] = False
             return False
         # Ignore orchestration shells, but preserve an explicitly requested
         # shell clause (for example ``bash installer.sh``). Bin-only evidence is
         # intentionally insufficient here: the outer ``sh -c <command>`` often
         # shares the same bin and must remain structural.
-        return not any(
-            _alignment_evidence(clause, chains[pid][0])[0] is not None
-            for clause in statics.values()
-        )
+        result = not has_static_candidate(pid)
+        shell_cache[pid] = result
+        return result
 
     def nearest_nonstructural_ancestor(pid: int) -> int | None:
         cur = fork_parent.get(pid)
@@ -1110,7 +1140,7 @@ def bridge_command(
         pid: chain for pid, chain in chains.items() if not is_shell(pid)
     }
     assigned, evidence, ambiguous, candidate_rejections, loop_assigned = _assign(
-        statics, candidate_chains
+        statics, candidate_chains, alignment
     )
     loop_pids = {pid for pids in loop_assigned.values() for pid in pids}
     mapped_roots = set(assigned.values()) | loop_pids
@@ -1377,12 +1407,7 @@ def bridge_command(
     # a chain that matched but lost to ambiguity is already covered by the
     # ambiguous static-clause gap and must not be double-reported.
     chains_with_candidate = {
-        pid
-        for pid, imgs in candidate_chains.items()
-        if any(
-            _alignment_evidence(clause, imgs[0])[0] is not None
-            for clause in statics.values()
-        )
+        pid for pid in candidate_chains if has_static_candidate(pid)
     }
     for pid in top_level:
         if (
@@ -1486,6 +1511,7 @@ def _owned_pids(
     root_pid: int, children: Mapping[int, Sequence[int]], mapped_roots: set[int]
 ) -> tuple[int, ...]:
     owned = [root_pid]
+    seen = {root_pid}  # membership set: `child not in owned` was O(len(owned))
     frontier = [root_pid]
     while frontier:
         nxt: list[int] = []
@@ -1493,7 +1519,8 @@ def _owned_pids(
             for child in children.get(pid, ()):
                 if child in mapped_roots and child != root_pid:
                     continue  # child starts its own static clause
-                if child not in owned:
+                if child not in seen:
+                    seen.add(child)
                     owned.append(child)
                     nxt.append(child)
         frontier = nxt

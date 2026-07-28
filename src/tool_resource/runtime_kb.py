@@ -28,10 +28,11 @@ from __future__ import annotations
 import heapq
 import math
 import re
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right, insort
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
+from functools import lru_cache
 from typing import Any
 
 from tool_resource.clause_parser import parse_command_clauses
@@ -332,15 +333,8 @@ def generic_argv_keys(bin_: str, argv: Sequence[str]) -> list[NodeKey]:
     return keys
 
 
-def _clause_repo_keys(bin_: str, argv: Sequence[str]) -> list[NodeKey]:
-    """Repo backoff keys, most-specific first, for clause identity (bin, argv).
-
-    Order: exact clause -> shorter bin-qualified argv prefixes -> bin. Every
-    prefix key is nested under ``bin`` (its first token is ``bin``), so ``bin``
-    is the LAST, most-general node queried — a more-specific prefix always wins
-    before the bare bin node.
-    """
-
+@lru_cache(maxsize=8192)
+def _clause_repo_keys_cached(bin_: str, argv: tuple[str, ...]) -> tuple[NodeKey, ...]:
     tokens = _clause_tokens(bin_, argv)
     keys: list[NodeKey] = [("exact_clause", _DELIM.join(tokens))]
     depth = min(len(tokens), _CLAUSE_MAX_DEPTH)
@@ -348,13 +342,28 @@ def _clause_repo_keys(bin_: str, argv: Sequence[str]) -> list[NodeKey]:
     for length in range(depth, 1, -1):
         keys.append((f"argv_prefix_depth_{length}", _DELIM.join(tokens[:length])))
     keys.append(("bin", bin_))
-    return keys
+    return tuple(keys)
 
 
-def _clause_public_keys(bin_: str) -> list[NodeKey]:
+def _clause_repo_keys(bin_: str, argv: Sequence[str]) -> tuple[NodeKey, ...]:
+    """Repo backoff keys, most-specific first, for clause identity (bin, argv).
+
+    Order: exact clause -> shorter bin-qualified argv prefixes -> bin. Every
+    prefix key is nested under ``bin`` (its first token is ``bin``), so ``bin``
+    is the LAST, most-general node queried — a more-specific prefix always wins
+    before the bare bin node.
+
+    Memoized: ``_select`` rebuilds the identical key list once per value source
+    on every query, and the joins dominate an otherwise O(log n) lookup.
+    """
+
+    return _clause_repo_keys_cached(bin_, tuple(argv))
+
+
+def _clause_public_keys(bin_: str) -> tuple[NodeKey, ...]:
     """Public clause keys: coarse bin prior then global."""
 
-    return [("bin", bin_), ("global", "")]
+    return (("bin", bin_), ("global", ""))
 
 
 class ClauseResourceKB:
@@ -394,8 +403,9 @@ class ClauseResourceKB:
         if not acc[_LATENCY_MS].get(("global", "")):
             raise ValueError("fit corpus has no clause latency evidence")
         kb = cls()
+        # Nodes are held sorted so predictions are binary searches, not scans.
         kb._public = {
-            source: {key: tuple(values) for key, values in nodes.items()}
+            source: {key: tuple(sorted(values)) for key, values in nodes.items()}
             for source, nodes in acc.items()
         }
         return kb
@@ -418,7 +428,9 @@ class ClauseResourceKB:
                 if value is None:
                     continue
                 for key in keys:
-                    repo_sources[source].setdefault(key, []).append(value)
+                    # Keep each node sorted on insert: absorption happens once
+                    # per observation, prediction happens on every clause.
+                    insort(repo_sources[source].setdefault(key, []), value)
 
     def _select(
         self, repo: str, source: str, bin_: str, argv: Sequence[str]
@@ -455,9 +467,21 @@ class ClauseResourceKB:
         if selected is None:
             raise ValueError("no public global clause latency node")
         values, scope, kind, path = selected
-        counts = [0] * buckets.bucket_count
-        for value in values:
-            counts[buckets.bucket_id(value)] += 1
+        # Nodes are sorted, so the histogram is one binary search per edge
+        # instead of a scan of every value. Bucket i is (edges[i-1], edges[i]],
+        # which is exactly what bucket_id = bisect_left(edges, v) selects, so
+        # the counts are identical to the per-value loop this replaces.
+        if not math.isfinite(values[0]) or values[0] < 0.0 or not math.isfinite(
+            values[-1]
+        ):
+            raise ValueError("latency_ms must be finite and non-negative")
+        counts: list[int] = []
+        at_or_below_previous = 0
+        for edge in buckets.edges_ms:
+            at_or_below = bisect_right(values, edge)
+            counts.append(at_or_below - at_or_below_previous)
+            at_or_below_previous = at_or_below
+        counts.append(len(values) - at_or_below_previous)
         return ClauseLatencyBucketPrediction(
             probability_by_bucket=tuple(count / len(values) for count in counts),
             scope=scope,
@@ -487,7 +511,11 @@ class ClauseResourceKB:
         if selected is None:
             return None
         values, scope, kind, path = selected
-        probability_heavy = sum(value > threshold for value in values) / len(values)
+        # Sorted node: everything after the threshold's right-insertion point is
+        # strictly greater, so the Heavy count is one binary search.
+        probability_heavy = (
+            len(values) - bisect_right(values, threshold)
+        ) / len(values)
         return ClauseHeavyLightPrediction(
             resource=resource,
             threshold=threshold,
@@ -620,9 +648,11 @@ class ClauseResourceKB:
         if obj.get("max_prefix_depth") != _CLAUSE_MAX_DEPTH:
             raise ValueError("snapshot prefix depth differs from module depth")
         kb = cls()
+        # Re-sort on load: a snapshot written before nodes were held sorted, or
+        # hand-edited, must still satisfy the binary-search invariant.
         kb._public = {
             source: {
-                key: tuple(values)
+                key: tuple(sorted(values))
                 for key, values in _nodes_from_json(obj["public"].get(source, []))
             }
             for source in _CLAUSE_SOURCES
@@ -630,7 +660,7 @@ class ClauseResourceKB:
         kb._repo = {
             repo: {
                 source: {
-                    key: list(values)
+                    key: sorted(values)
                     for key, values in _nodes_from_json(sources.get(source, []))
                 }
                 for source in _CLAUSE_SOURCES
