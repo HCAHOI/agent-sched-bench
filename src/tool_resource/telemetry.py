@@ -2669,16 +2669,13 @@ class ClauseTelemetryCollector:
                     ),
                     key=lambda event: event["ts_ns"],
                 )
-                # Calls are sequential within a collector, so a later window
-                # never reaches back before this call's start. Retaining those
-                # events grew the buffer for the collector's whole lifetime and
-                # made every finish O(total events), which degraded long runs
-                # until late calls failed outright. Drop only what is provably
-                # unreachable; anything at or after this start is kept.
+                # Calls are sequential within a collector. Events through this
+                # call's end are now owned by the local snapshot and cannot
+                # belong to a later window; keep only later arrivals.
                 self._events = [
                     event
                     for event in self._events
-                    if event["ts_ns"] >= token.started_ns
+                    if event["ts_ns"] > ended_ns
                 ]
         except BaseException as exc:
             self._disable(

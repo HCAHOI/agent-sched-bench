@@ -523,6 +523,7 @@ class TelemetryService:
                 "session_summary": session.summary,
                 "observation_ids": list(session.observations),
             }
+            session.collector = None
             session.last_used = session.finalized_at
             final_result = session.final_result
         _LOG.info(
@@ -566,6 +567,7 @@ class TelemetryService:
                 "session_summary": session.summary,
                 "observation_ids": [],
             }
+            session.collector = None
         _LOG.info(
             "aborted session run_id=%s trace_id=%s call_id=- reason=%s",
             session.run_id,

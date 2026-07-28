@@ -1485,12 +1485,13 @@ def test_delayed_telemetry_uses_online_call_boundaries(
     )
     processed_after = time.monotonic_ns()
     transport.release.set()
+    collector = next(iter(telemetry._sessions.values())).collector
     closed = service.dispatch(
         "CloseTrace",
         {"trace_token": trace["trace_token"], "workload_status": "completed"},
     )
     assert closed["artifact"]["calls"][0]["eligible_for_kb"] is True
-    collector = next(iter(telemetry._sessions.values())).collector
+    assert next(iter(telemetry._sessions.values())).collector is None
     [(started_ns, ended_ns)] = collector.boundaries
     assert isinstance(started_ns, int)
     assert isinstance(ended_ns, int)
@@ -2726,6 +2727,7 @@ def test_trace_owner_exit_aborts_only_its_collector(
     assert trace.close_result["telemetry_status"] == "unavailable"
     session = next(iter(telemetry._sessions.values()))
     assert session.final_result is not None
+    assert session.collector is None
     closed = service.dispatch(
         "CloseRun",
         {"run_token": run["run_token"], "workload_status": "failed"},

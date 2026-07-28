@@ -677,6 +677,7 @@ def test_mapping_failure_does_not_disable_later_valid_call(
     bad = ToolCallToken("bad", "missing arg", 100, 0, 0)
     collector._active = bad
     first = collector.finish_tool_call(bad, replay_response={"returncode": 0})
+    collector._events = _clean_events()
     good = ToolCallToken("good", "echo hi", 100, 0, 0)
     collector._active = good
     second = collector.finish_tool_call(good, replay_response={"returncode": 0})
@@ -739,6 +740,7 @@ def test_per_call_loss_does_not_disable_later_valid_call(
     first_token = ToolCallToken("loss", "echo hi", 100, 0, 0)
     collector._active = first_token
     first = collector.finish_tool_call(first_token, replay_response={"returncode": 0})
+    collector._events = _clean_events()
     second_token = ToolCallToken("recovered", "echo hi", 100, 0, 0)
     collector._active = second_token
     second = collector.finish_tool_call(second_token, replay_response={"returncode": 0})
@@ -1129,29 +1131,26 @@ def test_short_circuit_resolves_without_byte_exact_replay_output(
 def test_consumed_events_are_pruned_after_each_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The ring-buffer callback appends every event and nothing used to remove
-    # them, so the buffer grew for the collector's whole lifetime and each
-    # finish rescanned all of it. Long runs degraded until late calls failed.
     collector = _collector_without_bpf()
     token = ToolCallToken("call-prune", "left && right", 100, 0, 0)
     collector._active = token
     collector._bpf = object()
     collector._events_lock = Lock()
-    # One event from a previous call (ts below this call's start) plus this
-    # call's own events. Only the stale one is unreachable by any later window.
     stale = dict(_mapped_control_events(1)[0], ts_ns=10)
-    collector._events = [stale, *_mapped_control_events(1)]
+    future = dict(_mapped_control_events(1)[0], ts_ns=230)
+    collector._events = [stale, *_mapped_control_events(1), future]
     collector.calls = []
     collector._integrity_errors = []
     monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
     monkeypatch.setattr("tool_resource.telemetry.time.sleep", lambda *_: None)
 
     collector.finish_tool_call(
-        token, replay_response={"ok": True, "result": "ok", "returncode": 0}
+        token,
+        replay_response={"ok": True, "result": "ok", "returncode": 0},
+        ended_ns=220,
     )
 
-    assert stale not in collector._events
-    assert all(event["ts_ns"] >= token.started_ns for event in collector._events)
+    assert collector._events == [future]
 
 
 def test_short_circuit_fails_closed_when_controller_succeeded(
