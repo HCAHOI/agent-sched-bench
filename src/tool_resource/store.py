@@ -157,6 +157,13 @@ class ObservationStore:
             return 0
         placeholders = ",".join("?" for _ in observation_ids)
         with self._lock, self._connection:
+            # Load-bearing invariant: rows are never deleted from `observations`,
+            # so MAX(promotion_sequence) only ever grows and every batch is
+            # strictly above every existing watermark. Pruning this table would
+            # let a new batch reuse a number at or below a live watermark, which
+            # silently admits a late promotion into an earlier snapshot -- the
+            # one property snapshots exist to provide. Prune by copying to a new
+            # database, never in place.
             batch = int(
                 self._connection.execute(
                     "SELECT COALESCE(MAX(promotion_sequence), 0) + 1 FROM observations"

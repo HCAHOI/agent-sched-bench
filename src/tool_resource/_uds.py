@@ -471,10 +471,10 @@ class StrictUnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServe
                     len(self._responses) > self.response_cache_size
                     or self._responses_bytes > self.response_cache_bytes
                 ):
-                    _evicted, (_op, _identity, payload) = self._responses.popitem(
+                    _evicted, (_op, _identity, frame) = self._responses.popitem(
                         last=False
                     )
-                    self._responses_bytes -= len(payload)
+                    self._responses_bytes -= len(frame)
             return response
         finally:
             with self._request_lock:
