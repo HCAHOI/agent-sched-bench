@@ -1,4 +1,4 @@
-# Codex SWE-ReBench 223-Trace Collection Goal
+# Codex SWE-ReBench 223-Selection / 222-Trace Collection Goal
 
 Status: ACTIVE objective lock
 Owner: one Codex CLI agent in tmux session `cx-swe223`
@@ -8,7 +8,10 @@ Starting branch/head: `dev/kv-swap-profile-sweep-test` at `4dee7a396a14e80a70b76
 
 ## Goal
 
-Produce 223 new, real SWE-ReBench traces using the repository's OpenClaw harness and Codex provider, with live canonical eBPF clause-resource telemetry collected in the same execution.
+Select the fixed 223-task SWE-ReBench window and produce 222 accepted, real traces
+using the repository's OpenClaw harness and Codex provider, with live canonical
+eBPF clause-resource telemetry collected in the same execution. The one-task
+difference is the declared backend attrition recorded below; it is not replaced.
 
 Fixed experimental settings:
 
@@ -19,13 +22,46 @@ Fixed experimental settings:
 - maximum iterations: `100`
 - selection seed: `42`
 - selection skip: `428` (zero-based; starts at shuffle ordinal 429)
-- total tasks: `223`
+- selected tasks: `223`
+- accepted corpus target: `222`
+- declared attrition: `gradio-app__gradio-3196`
 - concurrency: `2`
 - container runtime: Docker
 - resource collection: enabled through the canonical tool-resource service/profile
 - output run directory: `traces/swe-rebench/gpt-5.6-sol/seed42-skip428-n223-c2-ebpf`
 
-The run is explicitly authorized even if it exceeds one night. It must be resumable from the same run directory; never silently shrink the cohort or substitute a different model/provider.
+The run is explicitly authorized even if it exceeds one night. It must be
+resumable from the same run directory; never substitute a different selected
+window, model, or provider.
+
+## 2026-07-28 objective amendment — declared backend attrition
+
+This amendment replaces the earlier requirement that all 23 pilot selections
+be accepted. The original ordered 223-task selection remains fixed.
+
+Evidence visible when the amendment was authorized:
+
+- `cekit__cekit-474/attempt_4` had coherently completed before intervention:
+  its manifest was `completed`, its result was successful with a 1,623-byte
+  patch, and its resource artifact was `valid`/`ok` with 27 of 37 calls
+  eligible. It is accepted.
+- `gradio-app__gradio-3196` attempts 1–3 have terminal `error` manifests.
+  Attempt 4 contains only its preserved partial `trace.jsonl`; it has no
+  terminal manifest, result, or resource artifact.
+- The SIGINT and SIGTERM affecting Gradio were explicit user cancellations.
+  They require no external-reaper, old-shell, or broader cancellation
+  investigation.
+
+Gradio is declared backend attrition. Do not start or resume it, replace it,
+or fabricate a terminal manifest. Preserve all of its failed and partial
+artifacts. The pilot accounting is therefore 22 accepted of 23 selected. The
+remaining 200 original selections make the accepted corpus target 222.
+
+The explicit Codex backend retry fix is complete at `778c479`. Before the
+remaining 200 may start, make only the agreed minimum telemetry raw-event /
+collector retention fix, then pass focused tests, Ruff, one bounded review,
+and a real eBPF memory smoke. A failed gate stops the operation. The Hermes
+watchdog is observer-only and must not nudge or restart collection.
 
 ## Canonical context to reload before acting
 
@@ -64,7 +100,7 @@ Do only work that directly protects:
 - canonical resource telemetry validity,
 - safe resumability,
 - bounded image/disk lifecycle,
-- the requested 23-task pilot followed by the remaining 200.
+- the 23-selected / 22-accepted pilot followed by the remaining 200.
 
 Do not add speculative abstractions, dashboards, reports, compatibility layers, benchmark-specific tuning, or unrelated cleanup. Reuse existing CLI, service, validation, and manifest paths.
 
@@ -95,7 +131,7 @@ Make the minimum root-cause fix:
 
 Run the focused collector tests, the full test suite once because this changes shared attempt lifecycle, Ruff on changed files, `git diff --check`, and conflict-marker search. Commit only the exact fix/test. One bounded review pass is permitted under the blocking criteria above; no review loop.
 
-## Phase 2 — Fresh services and 23-trace pilot
+## Phase 2 — Fresh services and 23-selected pilot
 
 Use the existing canonical service architecture; do not invent an alternate resource path.
 
@@ -123,14 +159,16 @@ Do not call mocked APIs or accept synthetic traces as evidence. Task solve failu
 Proceed to the remaining 200 only if all are true:
 
 - exactly 23 selected unique IDs, all from the pre-verified 223 cohort and disjoint from both old manifests;
-- every attempted task reaches a coherent terminal manifest/result without systemic Codex auth/protocol, Docker, daemon, or harness failure;
+- exactly 22 accepted tasks have coherent terminal manifests/results, with
+  Gradio retained only as the declared attrition above;
 - real Codex calls and real task-container tool execution are present;
-- each task has its expected canonical trace and resource artifact;
+- each accepted task has its expected canonical trace and resource artifact;
 - existing validators report no resource-integrity/cross-trace attribution failure and expected-call coverage is acceptable under the repository's canonical validity semantics;
 - c2 produces distinct task/container/trace identities with no evidence of cross-talk;
 - completed-task images are removed progressively and disk does not monotonically accumulate one image per completed task;
 - resource daemons remain healthy;
-- the run directory can be resumed without rerunning the 23 terminal tasks.
+- the run directory can be resumed without rerunning the 22 accepted tasks or
+  scheduling Gradio.
 
 If the pilot exposes a code bug, stop collection, fix only the root cause, add the smallest regression check, run affected tests, commit that fix, restart with fresh service state if required, and rerun the pilot. One bounded review pass total for that non-trivial fix; no infinite review.
 
@@ -140,15 +178,21 @@ Codex credential note: at preflight the current access token expired at `2026-07
 
 After the gate, clean only transient pilot scratch/process leftovers. Preserve the shared run directory and persistent service/run state required for causal continuation.
 
-## Phase 3 — Resume to 223 total (remaining 200)
+## Phase 3 — Resume to 222 accepted (remaining 200)
 
-Resume the same run directory and the same fresh service/run state using the same fixed settings, changing only `--sample 23` to `--sample 223`. The collector's terminal-manifest resume behavior must skip the completed pilot IDs and schedule exactly the remaining 200 IDs from the same seed42/skip428 window.
+Resume the same run directory and persistent service/run state using the same
+fixed settings. Supply the original ordered 223-task selection with only
+`gradio-app__gradio-3196` omitted. The collector's terminal-manifest resume
+behavior must skip the 22 accepted pilot IDs and schedule exactly the remaining
+200 IDs. This operational exclusion implements the declared attrition; it does
+not change or replace the selected window.
 
 Before allowing long execution, print and verify:
 
-- 23 already terminal/skipped;
+- 22 already terminal/skipped;
 - 200 pending;
-- 223 unique cohort IDs;
+- 223 unique selected IDs and the exact one-ID Gradio exclusion;
+- 222 unique accepted-target IDs;
 - zero overlap with the old 100/277 union;
 - same model/provider/max-iterations/concurrency/resource profile/run directory.
 
@@ -158,16 +202,28 @@ Stop and diagnose if there is a material validity/reliability signal: systemic a
 
 ## Phase 4 — Completion and cleanup
 
-At 223 terminal tasks:
+At 222 accepted tasks:
 
-1. Verify exact ID set/count and zero old-manifest overlap again.
+1. Verify the exact 222-ID accepted set/count, its relation to the fixed
+   223-task selection, the exact Gradio exclusion, and zero old-manifest
+   overlap again.
 2. Validate trace/resource artifact completeness and summarize collection-validity failures without hiding them.
 3. Confirm images/containers from the run are cleaned and disk is stable; do not delete unrelated Docker state.
-4. Gracefully close resource runs, stop operation-specific daemons/windows, and preserve only the requested traces, terminal manifests/results, and any canonical learned snapshot needed by downstream analysis.
+4. Gracefully close resource runs, stop operation-specific daemons/windows,
+   and preserve the requested traces, Gradio failure/partial artifacts, terminal
+   manifests/results, and any canonical learned snapshot needed by downstream
+   analysis.
 5. Remove transient scratch files and empty temporary runtime directories only after successful settlement; do not delete evidence.
 6. Ensure Git is clean except for intentional, reviewed commits. Do not commit generated traces or push.
-7. Leave a concise final summary in the Codex tmux window: commits, run directory, 23-task gate result, final completed/success/failure counts, resource validity/coverage, material caveats, and any resumable blocker.
+7. Leave a concise final summary in the Codex tmux window: commits, run
+   directory, 22-of-23 pilot gate result, final accepted/attrition counts,
+   resource validity/coverage, material caveats, and any resumable blocker.
 
 ## Autonomy boundary
 
-This entire sequence—goal commit, cleanup fix, tests, fresh service setup, 23-task pilot, gate evaluation, resume to 223 total, monitoring, and final cleanup—is authorized. Proceed without asking about routine derivable decisions. Stop rather than guess only if a choice would change the fixed experimental semantics, spend a different cohort/model/provider, risk data loss, or require an unrelated privileged/system configuration change.
+This entire sequence—goal amendment, telemetry retention fix, tests, bounded
+review, real eBPF memory smoke, gate evaluation, resume to 222 accepted,
+monitoring, and final cleanup—is authorized. Proceed without asking about
+routine derivable decisions. Stop rather than guess only if a choice would
+change the fixed experimental semantics, spend a different cohort/model/provider,
+risk data loss, or require an unrelated privileged/system configuration change.
