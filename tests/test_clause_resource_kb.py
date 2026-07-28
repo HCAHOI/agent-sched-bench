@@ -192,6 +192,64 @@ def test_latency_buckets_reject_invalid_values(latency: float) -> None:
         LatencyBuckets((100.0,)).bucket_id(latency)
 
 
+@pytest.mark.parametrize("latency", [-1.0, float("inf"), float("-inf"), float("nan")])
+@pytest.mark.parametrize("position", [0, 1, 2])
+def test_invalid_latency_fails_closed_at_any_position(
+    latency: float, position: int
+) -> None:
+    """An unusable latency must be refused wherever it sits in the node.
+
+    Nodes are held sorted so predictions can bisect them, and NaN compares
+    false against everything, so it can land anywhere in that order. Checking
+    only the ends of a node would let a NaN in the middle through and yield a
+    PMF that silently counts it as the lowest bucket.
+
+    Refusal happens as the value enters the node. That is deliberately earlier
+    than the original per-value check, which lived in the bucket histogram and
+    so only fired when the affected node was predicted from; a corpus carrying
+    an unusable latency now fails at fit rather than at the first query that
+    happens to reach it. Both fail closed; this one fails sooner and names the
+    corpus rather than the query.
+    """
+
+    values = [10.0, 20.0, 30.0]
+    values[position] = latency
+    observations = [
+        ClauseObservation(
+            repo="owner__repo",
+            bin="tool",
+            argv=("tool",),
+            ts_start=float(index),
+            ts_end=float(index) + 1.0,
+            latency_ms=value,
+        )
+        for index, value in enumerate(values)
+    ]
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        ClauseResourceKB.fit_public(observations)
+
+    kb = _fit(
+        ClauseObservation(
+            repo="other__repo",
+            bin="tool",
+            argv=("tool",),
+            ts_start=0.0,
+            ts_end=1.0,
+            latency_ms=10.0,
+        )
+    )
+    for observation in observations:
+        kb.observe_completed_clause(observation)
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        kb.predict_clause_latency_bucket(
+            "owner__repo",
+            "tool",
+            ("tool",),
+            LatencyBuckets(CANONICAL_LATENCY_BUCKET_EDGES_MS),
+            ts_start=100.0,
+        )
+
+
 def test_cold_clause_uses_public_bin_and_modal_bucket() -> None:
     kb = _fit(
         _obs("pub", "pytest", ("pytest", "-q"), 0.0, 1.0, latency_ms=50.0),

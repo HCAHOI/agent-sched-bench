@@ -250,6 +250,21 @@ def _clause_value(obs: ClauseObservation, source: str) -> float | None:
     return value
 
 
+def _checked_latency(value: float) -> float:
+    """Reject a latency a bucket id could not be computed from.
+
+    The bucket histogram used to validate every value on the way past, because
+    it called ``bucket_id`` per value. It is a binary search now, so validation
+    happens once per value as it enters a node instead. Checking only the ends
+    of the sorted node would not do: NaN compares false against everything, so
+    it can sort into the middle and slip past both ends.
+    """
+
+    if not math.isfinite(value) or value < 0.0:
+        raise ValueError("latency_ms must be finite and non-negative")
+    return value
+
+
 def _clause_tokens(bin_: str, argv: Sequence[str]) -> tuple[str, ...]:
     # Identity token stream: bin head then the argv tail (argv[0] may be a full
     # path; bin is its basename, already normalized by mvdan).
@@ -398,6 +413,8 @@ class ClauseResourceKB:
                 value = _clause_value(obs, source)
                 if value is None:
                     continue
+                if source == _LATENCY_MS:
+                    _checked_latency(value)
                 for key in keys:
                     acc[source].setdefault(key, []).append(value)
         if not acc[_LATENCY_MS].get(("global", "")):
@@ -427,6 +444,8 @@ class ClauseResourceKB:
                 value = _clause_value(obs, source)
                 if value is None:
                     continue
+                if source == _LATENCY_MS:
+                    _checked_latency(value)
                 for key in keys:
                     # Keep each node sorted on insert: absorption happens once
                     # per observation, prediction happens on every clause.
@@ -470,11 +489,8 @@ class ClauseResourceKB:
         # Nodes are sorted, so the histogram is one binary search per edge
         # instead of a scan of every value. Bucket i is (edges[i-1], edges[i]],
         # which is exactly what bucket_id = bisect_left(edges, v) selects, so
-        # the counts are identical to the per-value loop this replaces.
-        if not math.isfinite(values[0]) or values[0] < 0.0 or not math.isfinite(
-            values[-1]
-        ):
-            raise ValueError("latency_ms must be finite and non-negative")
+        # the counts are identical to the per-value loop this replaces. Values
+        # were validated by _checked_latency as they entered the node.
         counts: list[int] = []
         at_or_below_previous = 0
         for edge in buckets.edges_ms:
@@ -649,10 +665,18 @@ class ClauseResourceKB:
             raise ValueError("snapshot prefix depth differs from module depth")
         kb = cls()
         # Re-sort on load: a snapshot written before nodes were held sorted, or
-        # hand-edited, must still satisfy the binary-search invariant.
+        # hand-edited, must still satisfy the binary-search invariant. Latency
+        # values are revalidated here for the same reason they are validated on
+        # insert -- a restored node is never scanned again.
+        def _restore(source: str, values: list[float]) -> list[float]:
+            if source == _LATENCY_MS:
+                for value in values:
+                    _checked_latency(value)
+            return sorted(values)
+
         kb._public = {
             source: {
-                key: tuple(sorted(values))
+                key: tuple(_restore(source, values))
                 for key, values in _nodes_from_json(obj["public"].get(source, []))
             }
             for source in _CLAUSE_SOURCES
@@ -660,7 +684,7 @@ class ClauseResourceKB:
         kb._repo = {
             repo: {
                 source: {
-                    key: sorted(values)
+                    key: _restore(source, values)
                     for key, values in _nodes_from_json(sources.get(source, []))
                 }
                 for source in _CLAUSE_SOURCES
