@@ -2442,7 +2442,12 @@ class EventRow(Mapping):
         # Membership first: `getattr` alone would answer `row["get"]` with the
         # bound method and raise TypeError rather than KeyError for a non-string
         # key, neither of which a dict does.
-        if key not in self.__slots__:
+        #
+        # A frozenset, not `self.__slots__`: tuple membership compares with `==`
+        # without hashing, which is a linear scan on the hottest accessor in the
+        # module and answers an unhashable key with KeyError where a dict raises
+        # TypeError. Hashing the key restores both.
+        if key not in _EVENT_KEYS:
             raise KeyError(key)
         value = getattr(self, key)
         if value is _UNSET:
@@ -2459,6 +2464,10 @@ class EventRow(Mapping):
 
     def __repr__(self) -> str:
         return f"EventRow({dict(self)!r})"
+
+
+#: Hashed key membership for :meth:`EventRow.__getitem__`; see the note there.
+_EVENT_KEYS = frozenset(EventRow.__slots__)
 
 
 def _event_row(table: Any, data: int) -> EventRow:
