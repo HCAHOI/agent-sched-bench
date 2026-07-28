@@ -2475,6 +2475,9 @@ class ClauseTelemetryCollector:
             self.state = "disabled"
             self._disabled_reason = reason
             self._first_disabled_call = tool_call_id
+            self._stop_poll.set()
+            with self._events_lock:
+                self._events.clear()
         if reason not in self._integrity_errors:
             self._integrity_errors.append(reason)
 

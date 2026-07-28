@@ -4,7 +4,7 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from threading import Lock
+from threading import Event, Lock
 from types import SimpleNamespace
 from typing import Any
 
@@ -105,6 +105,7 @@ def _active_collector() -> ClauseTelemetryCollector:
     collector._bpf = object()
     collector._events_lock = Lock()
     collector._events = _clean_events()
+    collector._stop_poll = Event()
     collector._active = None
     collector._closed = False
     collector._cleanup_status = "not_started"
@@ -764,6 +765,8 @@ def test_poller_failure_disables_session_and_marks_following_calls_unavailable()
 
     assert collector.state == "disabled"
     assert collector._first_disabled_call == "first"
+    assert collector._stop_poll.is_set()
+    assert collector._events == []
     assert first["telemetry_quality"] == "unavailable"
     assert second["telemetry_quality"] == "unavailable"
     assert second["invalid_reasons"][0]["kind"] == "collector_disabled"
