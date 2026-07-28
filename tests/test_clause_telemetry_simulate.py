@@ -96,6 +96,10 @@ def _collector_without_bpf() -> ClauseTelemetryCollector:
     collector._disabled_reason = None
     collector._first_disabled_call = None
     collector._poll_error = None
+    # Every real collector owns these from __init__, and the disabled one from
+    # unavailable(); a fixture without them is not a reachable state.
+    collector._events_lock = Lock()
+    collector._events = []
     return collector
 
 

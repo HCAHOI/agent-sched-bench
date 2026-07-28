@@ -59,12 +59,14 @@ def receive_message(
     return value
 
 
-def send_message(
-    connection: socket.socket,
+def encode_message(
     message: Mapping[str, Any],
     *,
     max_message_bytes: int = MAX_MESSAGE_BYTES,
-) -> None:
+) -> bytes:
+    """Frame one message. Split out from :func:`send_message` so a response can
+    be encoded once and both cached and sent without serializing it twice."""
+
     try:
         payload = json.dumps(
             dict(message),
@@ -78,7 +80,18 @@ def send_message(
         raise WireError(
             f"message size {len(payload)} exceeds limit {max_message_bytes}"
         )
-    connection.sendall(_HEADER.pack(len(payload)) + payload)
+    return _HEADER.pack(len(payload)) + payload
+
+
+def send_message(
+    connection: socket.socket,
+    message: Mapping[str, Any],
+    *,
+    max_message_bytes: int = MAX_MESSAGE_BYTES,
+) -> None:
+    connection.sendall(
+        encode_message(message, max_message_bytes=max_message_bytes)
+    )
 
 
 def peer_credentials(connection: socket.socket) -> tuple[int, int, int]:
@@ -280,21 +293,20 @@ class _RequestHandler(socketserver.BaseRequestHandler):
             )
             response = server.handle_request_message(peer_pid, peer_uid, request)
         except Exception as exc:  # noqa: BLE001 - protocol boundary
-            response = {
-                "protocol_version": server.protocol_version,
-                "request_id": request_id,
-                "operation": operation,
-                "payload": {
-                    "ok": False,
-                    "error": f"{type(exc).__name__}: {exc}",
+            response = encode_message(
+                {
+                    "protocol_version": server.protocol_version,
+                    "request_id": request_id,
+                    "operation": operation,
+                    "payload": {
+                        "ok": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
                 },
-            }
-        try:
-            send_message(
-                self.request,
-                response,
                 max_message_bytes=server.max_message_bytes,
             )
+        try:
+            self.request.sendall(response)
         except (OSError, TimeoutError, WireError):
             pass
 
@@ -321,6 +333,7 @@ class StrictUnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServe
         socket_dir_mode: int = 0o700,
         socket_dir_gid: int | None = None,
         response_cache_size: int = 1024,
+        response_cache_bytes: int = 64 * 1024 * 1024,
     ) -> None:
         if not allowed_uids or any(uid < 0 for uid in allowed_uids):
             raise ValueError("allowed_uids must contain non-negative UIDs")
@@ -330,6 +343,8 @@ class StrictUnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServe
             raise ValueError("socket_dir_mode may grant only user/group rwx")
         if response_cache_size <= 0:
             raise ValueError("response_cache_size must be positive")
+        if response_cache_bytes <= 0:
+            raise ValueError("response_cache_bytes must be positive")
         self.socket_path = Path(socket_path)
         self.protocol_version = protocol_version
         self.protocol_error = protocol_error
@@ -338,9 +353,17 @@ class StrictUnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServe
         self.request_timeout_s = request_timeout_s
         self.max_message_bytes = max_message_bytes
         self.response_cache_size = response_cache_size
+        # The idempotency cache was bounded by entry count alone. Responses are
+        # not uniform: a CloseTrace reply carries every clause of a trace, so
+        # 1024 entries is ~14 MB at the median observed payload but ~927 MB at
+        # the largest, which the count bound cannot see. Cache the encoded
+        # frame and bound the total bytes as well; the byte bound only binds
+        # for unusually large replies, leaving typical behaviour unchanged.
+        self.response_cache_bytes = response_cache_bytes
         self._responses: OrderedDict[
-            tuple[int, str], tuple[str, str, dict[str, Any]]
+            tuple[int, str], tuple[str, str, bytes]
         ] = OrderedDict()
+        self._responses_bytes = 0
         self._pending: dict[
             tuple[int, str], tuple[str, str, threading.Event]
         ] = {}
@@ -376,7 +399,7 @@ class StrictUnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServe
         peer_pid: int,
         peer_uid: int,
         request: Mapping[str, Any],
-    ) -> dict[str, Any]:
+    ) -> bytes:
         request_id, operation, payload = validate_envelope(
             request,
             protocol_version=self.protocol_version,
@@ -431,17 +454,27 @@ class StrictUnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServe
                     "ok": False,
                     "error": f"{type(exc).__name__}: {exc}",
                 }
-            response = {
-                "protocol_version": self.protocol_version,
-                "request_id": request_id,
-                "operation": operation,
-                "payload": response_payload,
-            }
+            response = encode_message(
+                {
+                    "protocol_version": self.protocol_version,
+                    "request_id": request_id,
+                    "operation": operation,
+                    "payload": response_payload,
+                },
+                max_message_bytes=self.max_message_bytes,
+            )
             with self._request_lock:
                 self._responses[key] = (operation, payload_identity, response)
                 self._responses.move_to_end(key)
-                while len(self._responses) > self.response_cache_size:
-                    self._responses.popitem(last=False)
+                self._responses_bytes += len(response)
+                while self._responses and (
+                    len(self._responses) > self.response_cache_size
+                    or self._responses_bytes > self.response_cache_bytes
+                ):
+                    _evicted, (_op, _identity, frame) = self._responses.popitem(
+                        last=False
+                    )
+                    self._responses_bytes -= len(frame)
             return response
         finally:
             with self._request_lock:
@@ -460,6 +493,7 @@ __all__ = [
     "StrictUnixServer",
     "UnixTransport",
     "WireError",
+    "encode_message",
     "receive_message",
     "require_fields",
     "send_message",

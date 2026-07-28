@@ -192,6 +192,195 @@ def test_latency_buckets_reject_invalid_values(latency: float) -> None:
         LatencyBuckets((100.0,)).bucket_id(latency)
 
 
+@pytest.mark.parametrize("latency", [-1.0, float("inf"), float("-inf"), float("nan")])
+@pytest.mark.parametrize("position", [0, 1, 2])
+def test_invalid_latency_fails_closed_at_any_position(
+    latency: float, position: int
+) -> None:
+    """An unusable latency must be refused wherever it sits in the node.
+
+    Nodes are held sorted so predictions can bisect them, and NaN compares
+    false against everything, so it can land anywhere in that order. Checking
+    only the ends of a node would let a NaN in the middle through and yield a
+    PMF that silently counts it as the lowest bucket.
+
+    Refusal happens as the value enters the node. That is deliberately earlier
+    than the original per-value check, which lived in the bucket histogram and
+    so only fired when the affected node was predicted from; a corpus carrying
+    an unusable latency now fails at fit rather than at the first query that
+    happens to reach it. Both fail closed; this one fails sooner and names the
+    corpus rather than the query.
+    """
+
+    values = [10.0, 20.0, 30.0]
+    values[position] = latency
+    observations = [
+        ClauseObservation(
+            repo="owner__repo",
+            bin="tool",
+            argv=("tool",),
+            ts_start=float(index),
+            ts_end=float(index) + 1.0,
+            latency_ms=value,
+        )
+        for index, value in enumerate(values)
+    ]
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        ClauseResourceKB.fit_public(observations)
+
+    kb = _fit(
+        ClauseObservation(
+            repo="other__repo",
+            bin="tool",
+            argv=("tool",),
+            ts_start=0.0,
+            ts_end=1.0,
+            latency_ms=10.0,
+        )
+    )
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        for observation in observations:
+            kb.observe_completed_clause(observation)
+
+
+def test_refusing_a_latency_does_not_consume_the_observation() -> None:
+    """Refusal must not destroy the evidence it refuses.
+
+    Validating while draining the pending buffer popped the observation before
+    checking it, so the first query raised and every later query then succeeded
+    over a corpus quietly missing that clause -- closed once, open thereafter.
+    """
+
+    kb = _fit(
+        ClauseObservation(
+            repo="other__repo",
+            bin="tool",
+            argv=("tool",),
+            ts_start=0.0,
+            ts_end=1.0,
+            latency_ms=10.0,
+        )
+    )
+    good = [
+        ClauseObservation(
+            repo="owner__repo",
+            bin="tool",
+            argv=("tool",),
+            ts_start=float(index),
+            ts_end=float(index) + 0.5,
+            latency_ms=value,
+        )
+        for index, value in ((0, 10.0), (2, 20.0))
+    ]
+    kb.observe_completed_clause(good[0])
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        kb.observe_completed_clause(
+            ClauseObservation(
+                repo="owner__repo",
+                bin="tool",
+                argv=("tool",),
+                ts_start=1.0,
+                ts_end=1.5,
+                latency_ms=float("nan"),
+            )
+        )
+    kb.observe_completed_clause(good[1])
+
+    buckets = LatencyBuckets(CANONICAL_LATENCY_BUCKET_EDGES_MS)
+    first = kb.predict_clause_latency_bucket(
+        "owner__repo", "tool", ("tool",), buckets, ts_start=100.0
+    )
+    second = kb.predict_clause_latency_bucket(
+        "owner__repo", "tool", ("tool",), buckets, ts_start=100.0
+    )
+    assert first == second
+    assert first.evidence_count == 2
+
+
+def test_an_unusable_latency_does_not_abort_unrelated_predictions() -> None:
+    """Draining runs inside every query, so a bad latency must not reach one."""
+
+    kb = _fit(
+        ClauseObservation(
+            repo="other__repo",
+            bin="tool",
+            argv=("tool",),
+            ts_start=0.0,
+            ts_end=1.0,
+            latency_ms=10.0,
+            peak_cpu_cores=1.0,
+        )
+    )
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        kb.observe_completed_clause(
+            ClauseObservation(
+                repo="owner__repo",
+                bin="tool",
+                argv=("tool",),
+                ts_start=0.0,
+                ts_end=1.0,
+                latency_ms=float("inf"),
+            )
+        )
+    assert (
+        kb.predict_clause_heavy_light(
+            "unrelated__repo",
+            "zzz",
+            ("zzz",),
+            "peak_cpu_cores",
+            ts_start=50.0,
+        )
+        is not None
+    )
+
+
+def test_a_non_finite_resource_does_not_disorder_valid_values() -> None:
+    """Heavy/Light still admits NaN, because it always did.
+
+    NaN has no position under ``<``, so letting it into the sorted region left
+    genuinely ordered values out of order and the Heavy/Light bisect miscounted
+    values that were themselves fine. The answer must equal the total it
+    replaced: NaN counts as light and still counts toward the denominator.
+    """
+
+    values = [1.0, 3.0, float("nan"), 4.0, 2.0]
+    kb = _fit(
+        ClauseObservation(
+            repo="other__repo",
+            bin="tool",
+            argv=("tool",),
+            ts_start=0.0,
+            ts_end=1.0,
+            latency_ms=10.0,
+            peak_cpu_cores=1.0,
+        )
+    )
+    for index, value in enumerate(values):
+        kb.observe_completed_clause(
+            ClauseObservation(
+                repo="owner__repo",
+                bin="tool",
+                argv=("tool",),
+                ts_start=float(index),
+                ts_end=float(index) + 0.5,
+                latency_ms=100.0,
+                peak_cpu_cores=value,
+            )
+        )
+    prediction = kb.predict_clause_heavy_light(
+        "owner__repo",
+        "tool",
+        ("tool",),
+        "peak_cpu_cores",
+        ts_start=100.0,
+    )
+    assert prediction is not None
+    threshold = prediction.threshold
+    expected = sum(1 for value in values if value > threshold) / len(values)
+    assert prediction.probability_heavy == pytest.approx(expected)
+    assert prediction.evidence_count == len(values)
+
+
 def test_cold_clause_uses_public_bin_and_modal_bucket() -> None:
     kb = _fit(
         _obs("pub", "pytest", ("pytest", "-q"), 0.0, 1.0, latency_ms=50.0),

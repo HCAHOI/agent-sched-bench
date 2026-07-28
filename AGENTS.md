@@ -246,14 +246,25 @@ Do **not** spawn a reviewer for: planning, repository research, input prep,
 smoke runs, small mechanical edits, intermediate steps, or re-runs of
 unchanged reviewed code with a new declared configuration or task subset.
 
-The coordinator supplies contract, affected files, and acceptance criteria —
-no suggested verdict. The reviewer checks correctness, integrity (§3),
-completeness, consistency, and provenance of result-affecting inputs.
+The coordinator supplies contract, affected files, acceptance criteria, and a
+**bounded scope** — the named files and the specific questions, not "review
+this" — with no suggested verdict; an unbounded brief buys an expensive
+non-answer. The reviewer checks correctness, integrity (§3), completeness,
+consistency, and provenance of result-affecting inputs, then **reports and
+stops**: continuing to look for more is not thoroughness, and "none at this
+severity" is a complete answer.
+
+Every finding names a concrete failure in the *changed* code and how it was
+established. **Not findings:** style, hypothetical extensibility, and
+hardening this repository does not need — retries, defensive fallbacks,
+monitoring, abstraction for reuse, anything justified by "for production".
+§4 binds reviewers too; a suggestion is a proposal to add complexity and
+carries the §0 test like any other work.
+
 Critical/major findings → fix and focused re-review. Minor findings → fix if
-in scope; style and hypothetical extensibility never block; minor fixes need
-no re-review unless behavior changes. Record findings in the task response —
-no separate audit file. Keep reviewed files stable during review but continue
-other work; don't idle.
+in scope; minor fixes need no re-review unless behavior changes. Record
+findings in the task response — no separate audit file. Keep reviewed files
+stable during review but continue other work; don't idle.
 
 A result is invalid only if produced by relevant *changed* code that skipped
 this gate.

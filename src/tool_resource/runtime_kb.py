@@ -28,10 +28,11 @@ from __future__ import annotations
 import heapq
 import math
 import re
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right, insort
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
+from functools import lru_cache
 from typing import Any
 
 from tool_resource.clause_parser import parse_command_clauses
@@ -249,6 +250,54 @@ def _clause_value(obs: ClauseObservation, source: str) -> float | None:
     return value
 
 
+def _checked_latency(value: float) -> float:
+    """Reject a latency a bucket id could not be computed from.
+
+    The bucket histogram used to validate every value on the way past, because
+    it called ``bucket_id`` per value. It is a binary search now, so validation
+    happens once per value as it enters a node instead. Checking only the ends
+    of the sorted node would not do: NaN compares false against everything, so
+    it can sort into the middle and slip past both ends.
+    """
+
+    if not math.isfinite(value) or value < 0.0:
+        raise ValueError("latency_ms must be finite and non-negative")
+    return value
+
+
+def _ordered_node(values: Iterable[float]) -> list[float]:
+    """Node order: non-comparable values first, then ascending.
+
+    Only latency is validated on entry, because only latency was validated
+    before. The Heavy/Light sources therefore still admit NaN, and NaN has no
+    position under ``<``: letting it into the sorted region leaves genuinely
+    ordered values out of order, and the Heavy/Light bisect then miscounts
+    values that are themselves perfectly fine.
+
+    Holding NaN ahead of the sorted region keeps the binary-search
+    precondition -- ``threshold < value`` stays false-then-true across the
+    node -- and reproduces the total it replaced: ``threshold < nan`` is false,
+    so a NaN counts as light exactly as ``sum(value > threshold)`` counted it,
+    and it still counts toward the denominator.
+    """
+
+    materialized = list(values)
+    return [value for value in materialized if math.isnan(value)] + sorted(
+        value for value in materialized if not math.isnan(value)
+    )
+
+
+def _insert_into_node(node: list[float], value: float) -> None:
+    """Insert preserving :func:`_ordered_node`'s invariant."""
+
+    if math.isnan(value):
+        node.insert(0, value)
+    else:
+        # bisect skips the NaN prefix on its own: `value < nan` is false, so the
+        # search moves right past it into the sorted region.
+        insort(node, value)
+
+
 def _clause_tokens(bin_: str, argv: Sequence[str]) -> tuple[str, ...]:
     # Identity token stream: bin head then the argv tail (argv[0] may be a full
     # path; bin is its basename, already normalized by mvdan).
@@ -332,29 +381,43 @@ def generic_argv_keys(bin_: str, argv: Sequence[str]) -> list[NodeKey]:
     return keys
 
 
-def _clause_repo_keys(bin_: str, argv: Sequence[str]) -> list[NodeKey]:
-    """Repo backoff keys, most-specific first, for clause identity (bin, argv).
-
-    Order: exact clause -> shorter bin-qualified argv prefixes -> bin. Every
-    prefix key is nested under ``bin`` (its first token is ``bin``), so ``bin``
-    is the LAST, most-general node queried — a more-specific prefix always wins
-    before the bare bin node.
-    """
-
-    tokens = _clause_tokens(bin_, argv)
+@lru_cache(maxsize=8192)
+def _clause_repo_keys_cached(bin_: str, argv_tail: tuple[str, ...]) -> tuple[NodeKey, ...]:
+    # Keyed on the tail, not the whole argv: _clause_tokens drops argv[0], so
+    # ("git", ("/usr/bin/git", "status")) and ("git", ("git", "status")) produce
+    # identical keys and would otherwise occupy two entries and miss each other.
+    # ponytail: bounded by entry count, not by key length -- argv here comes
+    # from parsed agent commands, so the ceiling is fine; add a length guard if
+    # argv ever originates from an untrusted source.
+    tokens = (bin_, *argv_tail)
     keys: list[NodeKey] = [("exact_clause", _DELIM.join(tokens))]
     depth = min(len(tokens), _CLAUSE_MAX_DEPTH)
     # depth-1 prefix equals the bin node's content, so stop prefixes at 2.
     for length in range(depth, 1, -1):
         keys.append((f"argv_prefix_depth_{length}", _DELIM.join(tokens[:length])))
     keys.append(("bin", bin_))
-    return keys
+    return tuple(keys)
 
 
-def _clause_public_keys(bin_: str) -> list[NodeKey]:
+def _clause_repo_keys(bin_: str, argv: Sequence[str]) -> tuple[NodeKey, ...]:
+    """Repo backoff keys, most-specific first, for clause identity (bin, argv).
+
+    Order: exact clause -> shorter bin-qualified argv prefixes -> bin. Every
+    prefix key is nested under ``bin`` (its first token is ``bin``), so ``bin``
+    is the LAST, most-general node queried — a more-specific prefix always wins
+    before the bare bin node.
+
+    Memoized: ``_select`` rebuilds the identical key list once per value source
+    on every query, and the joins dominate an otherwise O(log n) lookup.
+    """
+
+    return _clause_repo_keys_cached(bin_, tuple(argv[1:]))
+
+
+def _clause_public_keys(bin_: str) -> tuple[NodeKey, ...]:
     """Public clause keys: coarse bin prior then global."""
 
-    return [("bin", bin_), ("global", "")]
+    return (("bin", bin_), ("global", ""))
 
 
 class ClauseResourceKB:
@@ -389,20 +452,33 @@ class ClauseResourceKB:
                 value = _clause_value(obs, source)
                 if value is None:
                     continue
+                if source == _LATENCY_MS:
+                    _checked_latency(value)
                 for key in keys:
                     acc[source].setdefault(key, []).append(value)
         if not acc[_LATENCY_MS].get(("global", "")):
             raise ValueError("fit corpus has no clause latency evidence")
         kb = cls()
+        # Nodes are held sorted so predictions are binary searches, not scans.
         kb._public = {
-            source: {key: tuple(values) for key, values in nodes.items()}
+            source: {key: tuple(_ordered_node(values)) for key, values in nodes.items()}
             for source, nodes in acc.items()
         }
         return kb
 
     def observe_completed_clause(self, obs: ClauseObservation) -> None:
-        """Buffer a completed clause; visible only once strictly causally prior."""
+        """Buffer a completed clause; visible only once strictly causally prior.
 
+        An unusable latency is refused here, on submission, rather than when the
+        buffer drains. Draining pops the observation before it could be checked,
+        so a rejection there destroyed the evidence it rejected: the query
+        raised once and every later query then succeeded over a corpus quietly
+        missing that clause. Draining also happens inside every query, so a bad
+        latency aborted predictions for unrelated repositories and resources.
+        """
+
+        if obs.latency_ms is not None:
+            _checked_latency(obs.latency_ms)
         heapq.heappush(self._pending, (obs.ts_end, self._pending_seq, obs))
         self._pending_seq += 1
 
@@ -418,7 +494,9 @@ class ClauseResourceKB:
                 if value is None:
                     continue
                 for key in keys:
-                    repo_sources[source].setdefault(key, []).append(value)
+                    # Keep each node ordered on insert: absorption happens once
+                    # per observation, prediction happens on every clause.
+                    _insert_into_node(repo_sources[source].setdefault(key, []), value)
 
     def _select(
         self, repo: str, source: str, bin_: str, argv: Sequence[str]
@@ -455,9 +533,18 @@ class ClauseResourceKB:
         if selected is None:
             raise ValueError("no public global clause latency node")
         values, scope, kind, path = selected
-        counts = [0] * buckets.bucket_count
-        for value in values:
-            counts[buckets.bucket_id(value)] += 1
+        # Nodes are sorted, so the histogram is one binary search per edge
+        # instead of a scan of every value. Bucket i is (edges[i-1], edges[i]],
+        # which is exactly what bucket_id = bisect_left(edges, v) selects, so
+        # the counts are identical to the per-value loop this replaces. Values
+        # were validated by _checked_latency as they entered the node.
+        counts: list[int] = []
+        at_or_below_previous = 0
+        for edge in buckets.edges_ms:
+            at_or_below = bisect_right(values, edge)
+            counts.append(at_or_below - at_or_below_previous)
+            at_or_below_previous = at_or_below
+        counts.append(len(values) - at_or_below_previous)
         return ClauseLatencyBucketPrediction(
             probability_by_bucket=tuple(count / len(values) for count in counts),
             scope=scope,
@@ -487,7 +574,11 @@ class ClauseResourceKB:
         if selected is None:
             return None
         values, scope, kind, path = selected
-        probability_heavy = sum(value > threshold for value in values) / len(values)
+        # Sorted node: everything after the threshold's right-insertion point is
+        # strictly greater, so the Heavy count is one binary search.
+        probability_heavy = (
+            len(values) - bisect_right(values, threshold)
+        ) / len(values)
         return ClauseHeavyLightPrediction(
             resource=resource,
             threshold=threshold,
@@ -620,9 +711,19 @@ class ClauseResourceKB:
         if obj.get("max_prefix_depth") != _CLAUSE_MAX_DEPTH:
             raise ValueError("snapshot prefix depth differs from module depth")
         kb = cls()
+        # Re-sort on load: a snapshot written before nodes were held sorted, or
+        # hand-edited, must still satisfy the binary-search invariant. Latency
+        # values are revalidated here for the same reason they are validated on
+        # insert -- a restored node is never scanned again.
+        def _restore(source: str, values: list[float]) -> list[float]:
+            if source == _LATENCY_MS:
+                for value in values:
+                    _checked_latency(value)
+            return _ordered_node(values)
+
         kb._public = {
             source: {
-                key: tuple(values)
+                key: tuple(_restore(source, values))
                 for key, values in _nodes_from_json(obj["public"].get(source, []))
             }
             for source in _CLAUSE_SOURCES
@@ -630,7 +731,7 @@ class ClauseResourceKB:
         kb._repo = {
             repo: {
                 source: {
-                    key: list(values)
+                    key: _restore(source, values)
                     for key, values in _nodes_from_json(sources.get(source, []))
                 }
                 for source in _CLAUSE_SOURCES

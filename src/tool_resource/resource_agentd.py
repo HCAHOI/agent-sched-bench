@@ -139,6 +139,9 @@ class ResourceService:
         self._operation_results: dict[
             tuple[int, str], tuple[str, str, dict[str, Any], str]
         ] = {}
+        #: (promotion watermark, decoded observations) shared by runs that open
+        #: against an unchanged store; see :meth:`_snapshot_observations`.
+        self._snapshot_cache: tuple[int, list[ClauseObservation]] | None = None
         self._lock = threading.Lock()
 
     def dispatch(
@@ -244,6 +247,33 @@ class ResourceService:
             "raw_events_exposed": False,
         }
 
+    def _snapshot_observations(self, snapshot_id: str) -> list[ClauseObservation]:
+        """Decoded observations for a snapshot, shared across runs that see the
+        same store contents.
+
+        A snapshot is identified by its promotion watermark, so two snapshots
+        with the same watermark contain exactly the same observations. Decoding
+        them per run cost a full JSON pass and a private copy of the corpus for
+        every run opened against an unchanged store. ``ClauseObservation`` is
+        frozen, so the decoded list is safe to share; only the KB built from it
+        is per-run mutable state. One watermark is cached because runs march
+        forward and an older watermark is not reopened.
+        """
+
+        watermark = self.store.require_snapshot(snapshot_id)
+        with self._lock:
+            cached = self._snapshot_cache
+            if cached is not None and cached[0] == watermark:
+                return cached[1]
+        observations = [
+            observation
+            for envelope in self.store.observations_for_snapshot(snapshot_id)
+            for observation in _clause_observations(envelope)
+        ]
+        with self._lock:
+            self._snapshot_cache = (watermark, observations)
+        return observations
+
     def _open_run(
         self,
         payload: Mapping[str, Any],
@@ -293,24 +323,24 @@ class ResourceService:
             if snapshot == "latest_at_run_start"
             else snapshot
         )
+        # Building the KB is part of loading the snapshot: a stored observation
+        # the KB refuses is a bad snapshot, and this boundary reports those as
+        # protocol errors. Only the decode was inside the guard, so a refusal
+        # from fit_public or observe_completed_clause escaped as a raw
+        # ValueError while an identically-caused decode failure did not.
         try:
-            envelopes = self.store.observations_for_snapshot(snapshot_id)
-            observations = [
+            observations = self._snapshot_observations(snapshot_id)
+            public = [
                 observation
-                for envelope in envelopes
-                for observation in _clause_observations(envelope)
+                for observation in observations
+                if observation.repo != scope and observation.latency_ms is not None
             ]
+            kb = ClauseResourceKB.fit_public(public) if public else ClauseResourceKB()
+            for observation in observations:
+                if observation.repo == scope:
+                    kb.observe_completed_clause(observation)
         except ValueError as exc:
             raise ResourceProtocolError(str(exc)) from exc
-        public = [
-            observation
-            for observation in observations
-            if observation.repo != scope and observation.latency_ms is not None
-        ]
-        kb = ClauseResourceKB.fit_public(public) if public else ClauseResourceKB()
-        for observation in observations:
-            if observation.repo == scope:
-                kb.observe_completed_clause(observation)
         run_token = uuid.uuid4().hex
         with self._lock:
             self._runs[run_token] = _Run(

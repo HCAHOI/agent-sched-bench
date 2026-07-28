@@ -269,13 +269,25 @@ def test_pre_exec_sample_inherits_active_exec_once() -> None:
     assert root.sampled_peak_rss_mb == pytest.approx(200 * C.PAGE / 1e6)
     attribution = root.provenance["sample_attribution"]
     assert attribution["inherited_owner_sample_count"] == 1
-    inherited = attribution["inherited_owner_samples"][0]
+    # Rows reference deduplicated evidence tables; resolving one restores the
+    # full record, including the fields recovered from the fork chain.
+    inherited = C.resolve_inherited_owner_sample(
+        attribution["inherited_owner_samples"][0], attribution
+    )
     assert inherited["original_host_pid"] == 200
     assert inherited["original_host_tid"] == 200
     assert inherited["original_exec_seq"] == C.SENTINEL
     assert inherited["owner_host_pid"] == 100
     assert inherited["owner_exec_seq"] == 0
     assert inherited["fork_ancestry"] == [200, 100, 50]
+    # Against the fixture's own fork timestamps, not against the chain the
+    # resolver derived these from -- comparing a derived field to its source
+    # would restate the derivation rather than test it.
+    assert inherited["fork_chain_records"] == [
+        {"child_id": 200, "parent_pid": 100, "ts_ns": 100_000_000},
+        {"child_id": 100, "parent_pid": 50, "ts_ns": 10},
+    ]
+    assert inherited["fork_ts_ns"] == 100_000_000
 
 
 def test_new_thread_pre_exec_sample_inherits_active_tgid_image() -> None:
@@ -337,8 +349,13 @@ def test_new_thread_pre_exec_sample_inherits_active_tgid_image() -> None:
             tuple(sample["fork_ancestry"]),
             sample["owner_host_pid"],
         )
-        for sample in inherited["inherited_owner_samples"]
+        for sample in (
+            C.resolve_inherited_owner_sample(row, inherited)
+            for row in inherited["inherited_owner_samples"]
+        )
     } == {(100, 101, (101, 100, 50), 100)}
+    # Both samples share one lineage, so the chain is stored exactly once.
+    assert len(inherited["fork_chains"]) == 1
 
 
 def test_pre_exec_ambiguous_fork_ancestry_is_fatal() -> None:

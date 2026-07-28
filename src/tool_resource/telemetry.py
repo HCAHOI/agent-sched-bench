@@ -34,6 +34,7 @@ import subprocess
 import sys
 import threading
 import time
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
@@ -1065,15 +1066,26 @@ def _captured_argv(
 
 def _clauses_and_lineage(
     events: list[dict[str, Any]],
+    captured_argv: tuple[
+        dict[tuple[int, int], dict[int, str]], dict[tuple[int, int], int]
+    ]
+    | None = None,
 ) -> tuple[list[Clause], dict[int, int]]:
-    """Build per-clause windows and the child_tgid -> parent_tgid fork map."""
+    """Build per-clause windows and the child_tgid -> parent_tgid fork map.
+
+    ``captured_argv`` lets a caller that already ran :func:`_captured_argv`
+    reuse it; the argv reassembly decodes every ``exec_arg`` chunk, which is the
+    bulk of an event stream.
+    """
 
     fork_parent: dict[int, int] = {}
     for e in events:
         if e["type"] == "fork" and e["child_host_pid"]:
             fork_parent.setdefault(e["child_host_pid"], e["host_pid"])
 
-    argv_words, argv_capture_flags = _captured_argv(events)
+    argv_words, argv_capture_flags = (
+        _captured_argv(events) if captured_argv is None else captured_argv
+    )
     exact_argc: dict[tuple[int, int], int | None] = {}
     requested_paths: dict[tuple[int, int], str] = {}
     requested_path_truncated: set[tuple[int, int]] = set()
@@ -1612,16 +1624,11 @@ def _cpu_counter_points(
     return {tid: sorted(points.items()) for tid, points in per_tid.items()}
 
 
-def cpu_window_profile(samples: list[dict[str, Any]]) -> tuple[tuple[int, int], ...]:
-    """Absolute-indexed (window_idx, cpu_ns) contributions for the clause bridge.
-
-    Windows are keyed by ``ts // WINDOW_NS`` (a common absolute grid) so the
-    bridge can SUM concurrent owned images per window; each per-TID cpu delta is
-    apportioned across every window it intersects.
-    """
-
+def _cpu_window_profile_from_points(
+    per_tid_points: dict[int, list[tuple[int, int]]],
+) -> tuple[tuple[int, int], ...]:
     windows: dict[int, float] = {}
-    for points in _cpu_counter_points(samples).values():
+    for points in per_tid_points.values():
         for (t0, c0), (t1, c1) in zip(points, points[1:]):
             if t1 <= t0 or c1 < c0:
                 continue
@@ -1630,14 +1637,30 @@ def cpu_window_profile(samples: list[dict[str, Any]]) -> tuple[tuple[int, int], 
     return tuple((w, int(round(v))) for w, v in sorted(windows.items()))
 
 
+def cpu_window_profile(samples: list[dict[str, Any]]) -> tuple[tuple[int, int], ...]:
+    """Absolute-indexed (window_idx, cpu_ns) contributions for the clause bridge.
+
+    Windows are keyed by ``ts // WINDOW_NS`` (a common absolute grid) so the
+    bridge can SUM concurrent owned images per window; each per-TID cpu delta is
+    apportioned across every window it intersects.
+    """
+
+    return _cpu_window_profile_from_points(_cpu_counter_points(samples))
+
+
 def _peak_cpu_cores(
-    samples: list[dict[str, Any]], clause: Clause, quota: float
+    samples: list[dict[str, Any]],
+    clause: Clause,
+    quota: float,
+    *,
+    per_tid_points: dict[int, list[tuple[int, int]]],
+    profile: tuple[tuple[int, int], ...],
 ) -> tuple[float | None, str, dict[str, Any]]:
+    """``per_tid_points``/``profile`` are computed once per clause by ``analyze``
+    and passed in: deriving them here re-walked the same samples three times."""
+
     cpu_samples = [s for s in samples if s["cpu_ns"] > 0]
-    cpu_counter_points = sum(
-        len(points) for points in _cpu_counter_points(samples).values()
-    )
-    profile = cpu_window_profile(samples)  # apportioned absolute windows
+    cpu_counter_points = sum(len(points) for points in per_tid_points.values())
     span = clause.t_end_ns - clause.t_exec_ns
     prov = {
         "cpu_sample_count": len(cpu_samples),
@@ -1756,8 +1779,9 @@ def _task_io_totals(
     clause: Clause,
     fork_baselines: dict[int, int],
     *,
-    counter_events_by_pid: Mapping[int, Sequence[dict[str, Any]]],
-    counter_events_by_tid: Mapping[int, Sequence[dict[str, Any]]],
+    exec_baseline_index: Mapping[tuple[int, int, int], Sequence[dict[str, Any]]],
+    boundary_events_by_tid: Mapping[int, Sequence[dict[str, Any]]],
+    boundary_ts_by_tid: Mapping[int, Sequence[int]],
 ) -> tuple[tuple[int, int, int] | None, str, dict[str, Any]]:
     """Exact task-I/O-accounting deltas for one exec image.
 
@@ -1765,15 +1789,15 @@ def _task_io_totals(
     TID starts from the kernel's zeroed task I/O accounting. The first later
     exec or exit boundary is the exact endpoint, so adjacent exec images and
     owned descendants remain disjoint; perf samples are diagnostic only.
+
+    The baseline and endpoint lookups are indexed rather than scanned: both were
+    linear in the events on the clause's pid/tid, so a pid carrying many exec
+    images cost quadratic time overall.
     """
 
-    exec_baselines = [
-        event
-        for event in counter_events_by_pid.get(clause.host_pid, ())
-        if event["type"] == "exec_boundary"
-        and event["exec_seq"] == clause.exec_seq
-        and event["ts_ns"] == clause.t_exec_ns
-    ]
+    exec_baselines = exec_baseline_index.get(
+        (clause.host_pid, clause.exec_seq, clause.t_exec_ns), ()
+    )
     provenance: dict[str, Any] = {
         "source": "linux_task_io_accounting",
         "reduction": "nonnegative_per_tid_deltas_then_sum",
@@ -1814,13 +1838,18 @@ def _task_io_totals(
 
     totals = dict.fromkeys(_IO_COUNTER_FIELDS, 0)
     for tid, (baseline_ts, baseline) in baselines.items():
-        endpoints = [
-            event
-            for event in counter_events_by_tid.get(tid, ())
-            if baseline_ts < event["ts_ns"] <= clause.t_end_ns
-            and event["type"] in {"exec_boundary", "exit_boundary"}
-        ]
-        if not endpoints:
+        # Boundaries for this tid are timestamp-sorted, so the first one after
+        # the baseline is the earliest endpoint — the same event the previous
+        # filter-then-min produced, including its tie-break on equal timestamps.
+        boundaries = boundary_events_by_tid.get(tid, ())
+        index = bisect_right(boundary_ts_by_tid.get(tid, ()), baseline_ts)
+        endpoint = (
+            boundaries[index]
+            if index < len(boundaries)
+            and boundaries[index]["ts_ns"] <= clause.t_end_ns
+            else None
+        )
+        if endpoint is None:
             provenance["missing_endpoint_tids"] = sorted(
                 {
                     *provenance.get("missing_endpoint_tids", []),
@@ -1828,7 +1857,6 @@ def _task_io_totals(
                 }
             )
             continue
-        endpoint = min(endpoints, key=lambda event: event["ts_ns"])
         provenance["exact_endpoint_tids"].append(tid)
         for counter_field in _IO_COUNTER_FIELDS:
             delta = int(endpoint[counter_field]) - baseline[counter_field]
@@ -1852,12 +1880,113 @@ def _task_io_totals(
     )
 
 
+class _AttributionTables:
+    """Deduplicated inherited-sample attribution evidence for one clause.
+
+    Every pre-exec sample on the same lineage carries the same fork chain, and
+    a clause with a long-running descendant accumulates thousands of them. The
+    chains and CPU-counter supports are stored once here and referenced by
+    index, so the per-sample rows hold only what actually varies.
+
+    Interning per clause loses nothing: a fork chain belongs to exactly one
+    lineage, which is owned by exactly one clause.
+    """
+
+    def __init__(self) -> None:
+        self.fork_chains: list[Sequence[Mapping[str, int]]] = []
+        self.cpu_counter_supports: list[Mapping[str, Any]] = []
+        self._chain_refs: dict[tuple[Any, ...], int] = {}
+        self._support_refs: dict[tuple[Any, ...], int] = {}
+
+    @staticmethod
+    def _ref(table: list[Any], refs: dict[tuple[Any, ...], int], key, value) -> int:
+        existing = refs.get(key)
+        if existing is not None:
+            return existing
+        ref = len(table)
+        refs[key] = ref
+        table.append(value)
+        return ref
+
+    def _fork_chain_ref(self, records: Sequence[Mapping[str, int]]) -> int:
+        key = tuple(
+            (record["child_id"], record["parent_pid"], record["ts_ns"])
+            for record in records
+        )
+        return self._ref(self.fork_chains, self._chain_refs, key, records)
+
+    def _cpu_counter_support_ref(self, support: Mapping[str, Any]) -> int:
+        key = tuple(
+            None if point is None else tuple(sorted(point.items()))
+            for point in (support.get("baseline"), support.get("endpoint"))
+        )
+        return self._ref(self.cpu_counter_supports, self._support_refs, key, support)
+
+    def row(self, attribution: Mapping[str, Any]) -> dict[str, Any]:
+        """One per-sample record with its shared evidence replaced by references.
+
+        ``fork_ancestry`` and ``fork_ts_ns`` are not stored: both are exactly
+        recoverable from the referenced chain — ancestry is
+        ``[chain[0].child_id] + [record.parent_pid for record in chain]`` and
+        ``fork_ts_ns`` is ``chain[0].ts_ns``. An ``inherited_active_exec_owner``
+        attribution is only produced after the fork walk ran, so its chain is
+        never empty.
+        """
+
+        return {
+            "kind": attribution["kind"],
+            "original_type": attribution["original_type"],
+            "original_ts_ns": attribution["original_ts_ns"],
+            "original_host_pid": attribution["original_host_pid"],
+            "original_host_tid": attribution["original_host_tid"],
+            "original_exec_seq": attribution["original_exec_seq"],
+            "owner_host_pid": attribution["owner_host_pid"],
+            "owner_exec_seq": attribution["owner_exec_seq"],
+            "fork_chain_ref": self._fork_chain_ref(
+                attribution["fork_chain_records"]
+            ),
+            "cpu_counter_support_ref": self._cpu_counter_support_ref(
+                attribution["cpu_counter_support"]
+            ),
+        }
+
+
+def resolve_inherited_owner_sample(
+    row: Mapping[str, Any],
+    sample_attribution: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Expand one interned row back to the full attribution record."""
+
+    chain = sample_attribution["fork_chains"][row["fork_chain_ref"]]
+    return {
+        **{
+            key: value
+            for key, value in row.items()
+            if key not in {"fork_chain_ref", "cpu_counter_support_ref"}
+        },
+        "fork_chain_records": chain,
+        "fork_ancestry": [chain[0]["child_id"], *(r["parent_pid"] for r in chain)],
+        "fork_ts_ns": chain[0]["ts_ns"],
+        "cpu_counter_support": sample_attribution["cpu_counter_supports"][
+            row["cpu_counter_support_ref"]
+        ],
+    }
+
+
 def analyze(
     run: RawRun,
     *,
     entry_pid: int | None = None,
+    clauses_and_lineage: tuple[list[Clause], dict[int, int]] | None = None,
 ) -> tuple[list[ClauseMetrics], list[dict[str, Any]]]:
-    clauses, fork_parent = _clauses_and_lineage(run.events)
+    """``clauses_and_lineage`` lets a caller that already built the clause list
+    hand it over instead of paying for a second reconstruction of it."""
+
+    clauses, fork_parent = (
+        _clauses_and_lineage(run.events)
+        if clauses_and_lineage is None
+        else clauses_and_lineage
+    )
     per_clause, gaps = _attribute(
         run.events,
         clauses,
@@ -1866,15 +1995,44 @@ def analyze(
     )
     fork_io_baselines = _fork_io_baselines(run.events, clauses, fork_parent)
     counter_events_by_pid: dict[int, list[dict[str, Any]]] = {}
-    counter_events_by_tid: dict[int, list[dict[str, Any]]] = {}
     exit_events_by_pid: dict[int, list[dict[str, Any]]] = {}
+    boundary_events_by_tid: dict[int, list[dict[str, Any]]] = {}
+    # (host_pid, exec_seq, ts_ns) -> exec boundaries, so one clause's I/O
+    # baseline is a dict hit instead of a scan of every event on its pid.
+    exec_baseline_index: dict[tuple[int, int, int], list[dict[str, Any]]] = {}
     for event in run.events:
         if event["type"] not in {"perf", "exec_boundary", "exit_boundary"}:
             continue
         counter_events_by_pid.setdefault(event["host_pid"], []).append(event)
-        counter_events_by_tid.setdefault(event["host_tid"], []).append(event)
+        if event["type"] != "perf":
+            boundary_events_by_tid.setdefault(event["host_tid"], []).append(event)
+        if event["type"] == "exec_boundary":
+            exec_baseline_index.setdefault(
+                (event["host_pid"], event["exec_seq"], event["ts_ns"]), []
+            ).append(event)
         if event["type"] == "exit_boundary":
             exit_events_by_pid.setdefault(event["host_pid"], []).append(event)
+    # Sort by timestamp so the per-clause lookups below can bisect, and make the
+    # in-window count independent of the order the caller supplied. The sort is
+    # stable, so events sharing a timestamp keep their original relative order
+    # and the endpoint "first match" tie-break is unchanged.
+    #
+    # That tie-break is order-dependent, and was before this change too: two
+    # boundaries on one tid at the same timestamp resolve to whichever the
+    # caller listed first, so `analyze` is not order-canonical. Preserving that
+    # is the point here -- the scans this replaced behaved identically.
+    for events_on_pid in counter_events_by_pid.values():
+        events_on_pid.sort(key=lambda event: event["ts_ns"])
+    for events_on_tid in boundary_events_by_tid.values():
+        events_on_tid.sort(key=lambda event: event["ts_ns"])
+    counter_ts_by_pid = {
+        pid: [event["ts_ns"] for event in events]
+        for pid, events in counter_events_by_pid.items()
+    }
+    boundary_ts_by_tid = {
+        tid: [event["ts_ns"] for event in events]
+        for tid, events in boundary_events_by_tid.items()
+    }
     metrics: list[ClauseMetrics] = []
     for c in clauses:
         attributed_samples = per_clause[(c.host_pid, c.exec_seq)]
@@ -1893,20 +2051,48 @@ def analyze(
             for sample in attributed_samples
             if "metric_excluded" in sample
         ]
-        in_window = sum(
-            1
-            for e in counter_events_by_pid.get(c.host_pid, ())
-            if c.t_exec_ns <= e["ts_ns"] <= c.t_end_ns
+        # Counter events on this pid are timestamp-sorted; the inclusive window
+        # count is the gap between two insertion points rather than a rescan of
+        # every event on the pid for every clause on it.
+        window_ts = counter_ts_by_pid.get(c.host_pid, ())
+        in_window = bisect_right(window_ts, c.t_end_ns) - bisect_left(
+            window_ts, c.t_exec_ns
         )
-        peak, cpu_reason, cpu_prov = _peak_cpu_cores(samples, c, run.quota_cores)
+        # Computed once per clause and reused by both the peak and the profile
+        # emitted below; these previously cost three walks of the same samples.
+        per_tid_points = _cpu_counter_points(samples)
+        cpu_windows = _cpu_window_profile_from_points(per_tid_points)
+        peak, cpu_reason, cpu_prov = _peak_cpu_cores(
+            samples,
+            c,
+            run.quota_cores,
+            per_tid_points=per_tid_points,
+            profile=cpu_windows,
+        )
         rss, rss_reason, rss_prov = _sampled_peak_rss(samples, c)
         io_totals, io_reason, io_prov = _task_io_totals(
             samples,
             c,
             fork_io_baselines[(c.host_pid, c.exec_seq)],
-            counter_events_by_pid=counter_events_by_pid,
-            counter_events_by_tid=counter_events_by_tid,
+            exec_baseline_index=exec_baseline_index,
+            boundary_events_by_tid=boundary_events_by_tid,
+            boundary_ts_by_tid=boundary_ts_by_tid,
         )
+        # Intern the inherited-sample evidence: the raw attribution dicts are
+        # discarded with `samples` when this call returns, so only the compact
+        # rows and their shared tables stay resident in the collector.
+        attribution_tables = _AttributionTables()
+        inherited_rows = [
+            attribution_tables.row(sample["attribution"])
+            for sample in samples
+            if "attribution" in sample
+        ]
+        attribution_payload = {
+            "inherited_owner_sample_count": len(inherited_rows),
+            "inherited_owner_samples": inherited_rows,
+            "fork_chains": attribution_tables.fork_chains,
+            "cpu_counter_supports": attribution_tables.cpu_counter_supports,
+        }
         exits = exit_events_by_pid.get(c.host_pid, ())
         has_exit = bool(exits)
         # Raw cumulative CPU (preserved separately, never used for the peak):
@@ -1964,7 +2150,7 @@ def analyze(
                     io_totals[2] if io_totals is not None else None
                 ),
                 disk_io_reason=io_reason,
-                cpu_windows=cpu_window_profile(samples),
+                cpu_windows=cpu_windows,
                 rss_bins=rss_bin_profile(samples),
                 provenance={
                     "cadence_ns": SAMPLE_PERIOD_NS,
@@ -1984,16 +2170,7 @@ def analyze(
                     "cpu": cpu_prov,
                     "rss": rss_prov,
                     "disk_io": io_prov,
-                    "sample_attribution": {
-                        "inherited_owner_sample_count": sum(
-                            "attribution" in sample for sample in samples
-                        ),
-                        "inherited_owner_samples": [
-                            sample["attribution"]
-                            for sample in samples
-                            if "attribution" in sample
-                        ],
-                    },
+                    "sample_attribution": attribution_payload,
                 },
                 argv_capture_flags=c.argv_capture_flags,
             )
@@ -2197,41 +2374,137 @@ def _container_cgroup(
     return cgroup, init_pid
 
 
-def _event_row(table: Any, data: int) -> dict[str, Any]:
+_EVENT_FIELDS = (
+    "type",
+    "ts_ns",
+    "cgroup_id",
+    "exec_seq",
+    "cpu_ns",
+    "rss_pages",
+    "mm_ptr",
+    "hiwater_pages",
+    "io_read_bytes",
+    "io_write_bytes",
+    "io_cancelled_write_bytes",
+    "host_pid",
+    "host_tid",
+    "parent_host_pid",
+    "child_host_pid",
+    "child_host_tid",
+    "arg_index",
+    "arg_chunk_index",
+    "arg_flags",
+    "exit_code",
+    "errno",
+)
+_UNSET = object()
+
+
+class EventRow(Mapping):
+    """One ring-buffer event, stored compactly.
+
+    A dict per event measured 636 bytes against 388 for this layout with
+    realistic per-event values -- the difference is the dict table, since the
+    integer values cost the same either way. A build-heavy tool call spawns
+    tens of thousands of processes and every exec emits up to MAX_ARGS *
+    MAX_ARG_CHUNKS argv events, so a single call can deliver millions of these
+    and holds them until it finishes: on a two-container collection that is
+    gigabytes of host memory, and host OOM has already stopped a run.
+
+    It is a Mapping so every consumer keeps working through ``[]``, ``.get()``,
+    ``in`` and ``**`` splat, and so do the tests that build events as plain
+    dicts. ``arg``/``arg_raw`` stay genuinely absent when the kernel did not
+    supply them, matching the dict this replaces -- ``event.get("arg", "")``
+    must still yield ``""`` and not ``None``.
+
+    One known divergence, with no consumer today: ``copy.deepcopy`` rebuilds the
+    absent-field sentinel as a fresh object, so absent fields come back present
+    holding it. Nothing deep-copies ring events; if that changes, give the
+    sentinel a stable identity across pickling rather than working around it at
+    the call site. ``copy.copy`` and JSON output are unaffected -- events reach
+    the artifact only through ``{**event, ...}`` splats, never raw.
+    """
+
+    __slots__ = (*_EVENT_FIELDS, "arg", "arg_raw")
+
+    def __init__(
+        self,
+        *values: Any,
+        arg: Any = _UNSET,
+        arg_raw: Any = _UNSET,
+    ) -> None:
+        for name, value in zip(_EVENT_FIELDS, values, strict=True):
+            object.__setattr__(self, name, value)
+        object.__setattr__(self, "arg", arg)
+        object.__setattr__(self, "arg_raw", arg_raw)
+
+    def __getitem__(self, key: str) -> Any:
+        # Membership first: `getattr` alone would answer `row["get"]` with the
+        # bound method and raise TypeError rather than KeyError for a non-string
+        # key, neither of which a dict does.
+        #
+        # A frozenset, not `self.__slots__`: tuple membership compares with `==`
+        # without hashing, which is a linear scan on the hottest accessor in the
+        # module and answers an unhashable key with KeyError where a dict raises
+        # TypeError. Hashing the key restores both.
+        if key not in _EVENT_KEYS:
+            raise KeyError(key)
+        value = getattr(self, key)
+        if value is _UNSET:
+            raise KeyError(key)
+        return value
+
+    def __iter__(self) -> Any:
+        for name in self.__slots__:
+            if getattr(self, name) is not _UNSET:
+                yield name
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+    def __repr__(self) -> str:
+        return f"EventRow({dict(self)!r})"
+
+
+#: Hashed key membership for :meth:`EventRow.__getitem__`; see the note there.
+_EVENT_KEYS = frozenset(EventRow.__slots__)
+
+
+def _event_row(table: Any, data: int) -> EventRow:
     event = table.event(data)
-    row = {
-        "type": TYPE_NAMES[int(event.type)],
-        "ts_ns": int(event.timestamp_ns),
-        "cgroup_id": int(event.cgroup_id),
-        "exec_seq": int(event.exec_seq),
-        "cpu_ns": int(event.cpu_ns),
-        "rss_pages": int(event.rss_pages),
-        "mm_ptr": int(event.mm_ptr),
-        "hiwater_pages": int(event.hiwater_pages),
-        "io_read_bytes": int(event.io_read_bytes),
-        "io_write_bytes": int(event.io_write_bytes),
-        "io_cancelled_write_bytes": int(event.io_cancelled_write_bytes),
-        "host_pid": int(event.host_pid),
-        "host_tid": int(event.host_tid),
-        "parent_host_pid": int(event.parent_host_pid),
-        "child_host_pid": int(event.child_host_pid),
-        "child_host_tid": int(event.child_host_tid),
-        "arg_index": int(event.arg_index),
-        "arg_chunk_index": int(event.arg_chunk_index),
-        "arg_flags": int(event.arg_flags),
-        "exit_code": int(event.exit_code),
-        "errno": (
-            int(event.exit_code)
-            if TYPE_NAMES[int(event.type)] == "failed_exec_attempt"
-            else 0
-        ),
-    }
+    event_type = TYPE_NAMES[int(event.type)]
+    arg: Any = _UNSET
+    arg_raw: Any = _UNSET
     if event.type in {1, 7, 8, 9}:
         payload = bytes(event.arg).split(b"\0", 1)[0]
-        row["arg"] = payload.decode("utf-8", "replace")
+        arg = payload.decode("utf-8", "replace")
         if event.type == 1:
-            row["arg_raw"] = payload.hex()
-    return row
+            arg_raw = payload.hex()
+    return EventRow(
+        event_type,
+        int(event.timestamp_ns),
+        int(event.cgroup_id),
+        int(event.exec_seq),
+        int(event.cpu_ns),
+        int(event.rss_pages),
+        int(event.mm_ptr),
+        int(event.hiwater_pages),
+        int(event.io_read_bytes),
+        int(event.io_write_bytes),
+        int(event.io_cancelled_write_bytes),
+        int(event.host_pid),
+        int(event.host_tid),
+        int(event.parent_host_pid),
+        int(event.child_host_pid),
+        int(event.child_host_tid),
+        int(event.arg_index),
+        int(event.arg_chunk_index),
+        int(event.arg_flags),
+        int(event.exit_code),
+        int(event.exit_code) if event_type == "failed_exec_attempt" else 0,
+        arg=arg,
+        arg_raw=arg_raw,
+    )
 
 
 def _counter(bpf: Any, name: str) -> int:
@@ -2295,10 +2568,18 @@ def _exec_image_record(metric: ClauseMetrics) -> Any:
     )
 
 
-def _failed_exec_attempt_records(events: list[dict[str, Any]]) -> list[Any]:
+def _failed_exec_attempt_records(
+    events: list[dict[str, Any]],
+    captured_argv: tuple[
+        dict[tuple[int, int], dict[int, str]], dict[tuple[int, int], int]
+    ]
+    | None = None,
+) -> list[Any]:
     from tool_resource.clause_bridge import FailedExecAttempt
 
-    argv_words, argv_capture_flags = _captured_argv(events)
+    argv_words, argv_capture_flags = (
+        _captured_argv(events) if captured_argv is None else captured_argv
+    )
     attempts: list[FailedExecAttempt] = []
     for event in events:
         if event["type"] != "failed_exec_attempt":
@@ -2603,6 +2884,16 @@ class ClauseTelemetryCollector:
             or started_ns > now_ns
         ):
             raise ValueError("started_ns must be a past positive monotonic timestamp")
+        # Drop everything the ring delivered before this call opened. The
+        # finish-time slice keeps only [started_ns, ended_ns], and calls are
+        # sequential, so an earlier event can belong to no call at all -- but it
+        # was retained until the next finish anyway. Container background tasks
+        # keep the perf sampler firing while the agent is between tool calls, so
+        # that gap accumulated events destined to be discarded.
+        with self._events_lock:
+            self._events = [
+                event for event in self._events if event["ts_ns"] >= started_ns
+            ]
         token = ToolCallToken(
             tool_call_id=tool_call_id,
             command=command,
@@ -2924,7 +3215,12 @@ class ClauseTelemetryCollector:
             for child, records in fork_records.items()
             if len({record["host_pid"] for record in records}) == 1
         }
-        clauses, _ = _clauses_and_lineage(events)
+        # Reassemble argv and reconstruct the clause list ONCE for this call:
+        # analyze() and the failed-exec records below reuse both rather than
+        # rebuilding them from the same events.
+        captured_argv = _captured_argv(events)
+        clauses_and_lineage = _clauses_and_lineage(events, captured_argv)
+        clauses, _ = clauses_and_lineage
         if safety_guard_blocked is not None and not clauses and not events:
             entry_pid = 0
             root_pids: set[int] = set()
@@ -2941,7 +3237,11 @@ class ClauseTelemetryCollector:
                 fork_parent,
                 fork_records=fork_records,
             )
-        metrics, attribution_gaps = analyze(run, entry_pid=entry_pid)
+        metrics, attribution_gaps = analyze(
+            run,
+            entry_pid=entry_pid,
+            clauses_and_lineage=clauses_and_lineage,
+        )
 
         def command_descendant(pid: int) -> bool:
             current = pid
@@ -3031,7 +3331,7 @@ class ClauseTelemetryCollector:
             parsed_command=token.static_plan,
             failed_exec_attempts=[
                 attempt
-                for attempt in _failed_exec_attempt_records(events)
+                for attempt in _failed_exec_attempt_records(events, captured_argv)
                 if command_descendant(attempt.host_pid)
             ],
             command_lookup_failure=command_lookup_failure,
@@ -3505,6 +3805,7 @@ __all__ = [
     "ClauseMetrics",
     "ClauseTelemetryCollector",
     "ClauseTelemetryIntegrityError",
+    "EventRow",
     "RawRun",
     "SAMPLE_PERIOD_NS",
     "SENTINEL",
@@ -3512,6 +3813,7 @@ __all__ = [
     "WINDOW_NS",
     "analyze",
     "cpu_window_profile",
+    "resolve_inherited_owner_sample",
     "rss_bin_profile",
     "validate_clause_telemetry_runtime",
 ]
