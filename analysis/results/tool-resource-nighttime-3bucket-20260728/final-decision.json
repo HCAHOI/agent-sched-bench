@@ -1,0 +1,343 @@
+{
+  "artifact_type": "tool_resource_nighttime_final_decision",
+  "claim_bearing": false,
+  "date": "2026-07-28",
+  "completion_path": "Path B - reviewed NO-GO for a shared runtime replacement",
+  "repository": {
+    "branch": "exp/tool-resource-3bucket-swe",
+    "base_commit": "776d2857b6325992262da59abce88b256404fed9",
+    "goal_lock_commit": "7e93875",
+    "baseline_commit": "15d365d",
+    "candidate_r_implementation_commit": "08034bc",
+    "candidate_r_result_commit": "846b008",
+    "candidate_s_implementation_commit": "0f4c7324032a4b532f52b164fb413045b6b79f27",
+    "candidate_s_result_commit": "9e0689dc348ef3ac82f5258d0628bc813a75df5c"
+  },
+  "objective": {
+    "latency_bucket_edges_ms": [
+      2000.0,
+      8000.0
+    ],
+    "latency_bucket_intervals": [
+      "[0, 2000]",
+      "(2000, 8000]",
+      "(8000, +inf)"
+    ],
+    "latency_metric": "exact three-class accuracy",
+    "latency_comparator": "same-evaluation majority class",
+    "resource_thresholds": {
+      "peak_cpu_cores": 2.0,
+      "sampled_peak_rss_mb": 500.0,
+      "disk_read_write_bytes_total": 104857600
+    },
+    "short_null_policy": "Light only when explicitly null and latency_ms < 500",
+    "compound_commands": "unavailable; no composition"
+  },
+  "inputs": {
+    "swe100": {
+      "path": "traces/swe-rebench/qwen3.7-max/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+      "rows": 4458,
+      "tasks": 99,
+      "repositories": 93
+    },
+    "swe277": {
+      "path": "traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl",
+      "rows": 13766,
+      "tasks": 277,
+      "repositories": 213
+    },
+    "task_overlap_count": 0,
+    "all_results_development_exposed": true
+  },
+  "provenance": {
+    "core": "ClauseResourceKB is shared by offline evaluation and resource-agentd",
+    "causal_visibility": "observation.ts_end < query.ts_start",
+    "local_update_barrier": "successful trace finalization and ingest_eligible is True",
+    "public_fit": "leave-one-evaluation-repository-out frozen fit evidence",
+    "evaluation_order": "manifest task order; all task clauses predict before task settlement",
+    "current": {
+      "representation": "raw-argv-prefix-v1",
+      "arbitration": "hard-first-nonempty-v1"
+    },
+    "candidate_r": {
+      "representation": "generic-argv-v3-role",
+      "arbitration": "hard-first-nonempty-v1",
+      "stable_subcommand_min_distinct_fit_repositories": 3,
+      "stable_subcommand_uses_labels": false
+    },
+    "candidate_s": {
+      "representation": "generic-argv-v3-role",
+      "arbitration": "public-local-posterior-v1",
+      "formula": "(local_counts + alpha * public_pmf) / (local_n + alpha)",
+      "alpha_grid": [
+        1,
+        4,
+        16,
+        64
+      ],
+      "selection": "repository-grouped inner fit folds using latency accuracy only; ties select larger alpha",
+      "selected_alpha_both_orientations": 16,
+      "outer_labels_used_for_alpha": false,
+      "same_alpha_for_latency_cpu_rss_disk": true
+    }
+  },
+  "latency": {
+    "swe100_fit_swe277_eval": {
+      "eligible_examples": 13766,
+      "class_counts_short_middle_long": [
+        11625,
+        1389,
+        752
+      ],
+      "identical_row_ids_and_labels": true,
+      "majority_accuracy": 0.8444718872584629,
+      "current_accuracy": 0.8451256719453727,
+      "candidate_r_accuracy": 0.8490483800668314,
+      "candidate_s_accuracy": 0.8510097341275606,
+      "candidate_s_prediction_unavailable": 0,
+      "candidate_s_minus_current_percentage_points": 0.5884062182187955,
+      "candidate_s_minus_majority_percentage_points": 0.6537846869097752
+    },
+    "swe277_fit_swe100_eval": {
+      "eligible_examples": 4458,
+      "class_counts_short_middle_long": [
+        3902,
+        357,
+        199
+      ],
+      "identical_row_ids_and_labels": true,
+      "majority_accuracy": 0.8752803947958726,
+      "current_accuracy": 0.8710183938986092,
+      "candidate_r_accuracy": 0.8808882907133243,
+      "candidate_s_accuracy": 0.8822341857335128,
+      "candidate_s_prediction_unavailable": 0,
+      "candidate_s_minus_current_percentage_points": 1.121579183490351,
+      "candidate_s_minus_majority_percentage_points": 0.6953790937640147
+    },
+    "uncertainty": {
+      "method": "paired repository-cluster percentile bootstrap",
+      "draws": 2000,
+      "seed": 0,
+      "candidate_r": {
+        "swe100_fit_swe277_eval": {
+          "median": 0.0033833107552516117,
+          "interval_95": [
+            -0.0010073703489733576,
+            0.006282382593619514
+          ],
+          "positive_draw_fraction": 0.946
+        },
+        "swe277_fit_swe100_eval": {
+          "median": 0.0058883485450157425,
+          "interval_95": [
+            -0.0019028290051604944,
+            0.012914402710642236
+          ],
+          "positive_draw_fraction": 0.932
+        }
+      },
+      "candidate_s": {
+        "swe100_fit_swe277_eval": {
+          "median": 0.005448502510432995,
+          "interval_95": [
+            0.00013529174783053497,
+            0.009579017122972133
+          ],
+          "positive_draw_fraction": 0.976
+        },
+        "swe277_fit_swe100_eval": {
+          "median": 0.007192725554185042,
+          "interval_95": [
+            0.0,
+            0.013666023233273298
+          ],
+          "positive_draw_fraction": 0.973
+        }
+      },
+      "confirmatory": false
+    },
+    "candidate_s_gate": "development GO"
+  },
+  "resources": {
+    "peak_cpu_cores": {
+      "swe100_fit_swe277_eval": {
+        "eligible_n": 11610,
+        "heavy_count": 511,
+        "majority_light_accuracy": 0.9559862187769165,
+        "current_accuracy": 0.9559862187769165,
+        "candidate_r_accuracy": 0.9550387596899225,
+        "candidate_s_accuracy": 0.9546080964685616,
+        "candidate_s_minus_current_percentage_points": -0.13781223083548788
+      },
+      "swe277_fit_swe100_eval": {
+        "eligible_n": 3866,
+        "heavy_count": 167,
+        "majority_light_accuracy": 0.9568028970512157,
+        "current_accuracy": 0.9529229177444387,
+        "candidate_r_accuracy": 0.9508535954474909,
+        "candidate_s_accuracy": 0.9500775995861356,
+        "candidate_s_minus_current_percentage_points": -0.2845318158303134
+      },
+      "candidate_s_gate": "NO-GO"
+    },
+    "sampled_peak_rss_mb": {
+      "swe100_fit_swe277_eval": {
+        "eligible_n": 12358,
+        "heavy_count": 121,
+        "majority_light_accuracy": 0.9902087716458974,
+        "current_accuracy": 0.9901278524033015,
+        "candidate_r_accuracy": 0.9892377407347467,
+        "candidate_s_accuracy": 0.9889949830069591,
+        "candidate_s_minus_current_percentage_points": -0.11328693963423841
+      },
+      "swe277_fit_swe100_eval": {
+        "eligible_n": 4090,
+        "heavy_count": 42,
+        "majority_light_accuracy": 0.9897310513447433,
+        "current_accuracy": 0.9897310513447433,
+        "candidate_r_accuracy": 0.9894865525672372,
+        "candidate_s_accuracy": 0.9894865525672372,
+        "candidate_s_minus_current_percentage_points": -0.024449877750609694
+      },
+      "candidate_s_gate": "NO-GO"
+    },
+    "disk_read_write_bytes_total": {
+      "swe100_fit_swe277_eval": {
+        "eligible_n": 13723,
+        "heavy_count": 328,
+        "majority_light_accuracy": 0.9760985207316184,
+        "current_accuracy": 0.9779202798221963,
+        "candidate_r_accuracy": 0.9807622240034978,
+        "candidate_s_accuracy": 0.9798877796400204,
+        "candidate_s_minus_current_percentage_points": 0.196749981782407
+      },
+      "swe277_fit_swe100_eval": {
+        "eligible_n": 4449,
+        "heavy_count": 99,
+        "majority_light_accuracy": 0.9777478084962913,
+        "current_accuracy": 0.9777478084962913,
+        "candidate_r_accuracy": 0.983142279163857,
+        "candidate_s_accuracy": 0.983142279163857,
+        "candidate_s_minus_current_percentage_points": 0.539447066756571
+      },
+      "candidate_s_gate": "development GO"
+    },
+    "shared_runtime_gate": "NO-GO because CPU and RSS regress from current in both orientations"
+  },
+  "candidate_c_precondition_audit": {
+    "authorized": false,
+    "candidate_s_node_oracle_accuracy": {
+      "swe100_fit_swe277_eval": 0.8673543513003051,
+      "swe277_fit_swe100_eval": 0.8930013458950202
+    },
+    "eligible_row_schema": "No CPU quota, machine class, cwd, or pre-execution input-size field exists in clause telemetry.",
+    "decoded_tool_args_coverage": {
+      "swe100": {
+        "command": "4458/4458",
+        "timeout": "1327/4458",
+        "working_dir": "0/4458"
+      },
+      "swe277": {
+        "command": "13766/13766",
+        "timeout": "4955/13766",
+        "working_dir": "23/13766"
+      }
+    },
+    "working_dir_distinct_values_when_present": 1,
+    "decision": "Stop. No authorized context has at least 90% coverage and useful variation in both cohorts. Command is already the argv source, and timeout is neither an authorized context nor sufficiently covered.",
+    "candidate_c_code_or_scores_created": false
+  },
+  "operational": {
+    "representative_state": {
+      "source": "SWE100 fit rows",
+      "active_repository": "nltk__nltk",
+      "public_rows_excluding_active_repository": 4218,
+      "causal_local_rows": 240,
+      "prediction_calls_per_arm": 20000,
+      "snapshot_restore_identity_queries": 100,
+      "single_host_repetition": true
+    },
+    "current": {
+      "prediction_p50_ns": 2774,
+      "prediction_p95_ns": 3957,
+      "snapshot_json_bytes": 512040,
+      "snapshot_build_ms": 27.965275,
+      "snapshot_restore_ms": 10.879974
+    },
+    "candidate_s": {
+      "prediction_p50_ns": 11268,
+      "prediction_p95_ns": 23147,
+      "snapshot_json_bytes": 719880,
+      "snapshot_build_ms": 57.960401,
+      "snapshot_restore_ms": 15.415464,
+      "p50_ratio_vs_current": 4.062004325883201,
+      "p95_ratio_vs_current": 5.849633560778368,
+      "state_size_ratio_vs_current": 1.4059057886102648
+    },
+    "snapshot_build_restore": "PASS",
+    "online_offline_pmf_and_provenance_identity": "PASS",
+    "invalid_missing_and_telemetry_failure_workload_neutrality": "PASS",
+    "candidate_s_prediction_latency_gate": "NO-GO on large relative regression; absolute p95 remained below 25 microseconds"
+  },
+  "review": {
+    "candidate_r": {
+      "independent_bounded_review": "GO after focused re-review",
+      "major_findings_closed": [
+        "standalone option values are consumed",
+        "node oracle excludes raw-prefix hindsight nodes"
+      ],
+      "formal_swe_inputs_accessed_by_reviewer": false
+    },
+    "candidate_s": {
+      "independent_bounded_review": "GO after focused re-review",
+      "major_findings_closed": [
+        "resource evaluation no longer accepts a free alpha and verifies its latency-selection artifact"
+      ],
+      "snapshot_semantics": "schema v7; legacy v6 is accepted only for unambiguous raw hard-backoff state",
+      "formal_swe_inputs_accessed_by_reviewer": false
+    }
+  },
+  "verification": {
+    "implementation_checkpoint": "119 passed, 1 skipped; Ruff and git diff --check passed",
+    "final_focused_checks": "10 passed; posterior causality, snapshot migration, invalid-state fail-closed, online/offline golden parity, and workload-neutral telemetry failures",
+    "final_ruff": "PASS",
+    "final_git_diff_check": "PASS"
+  },
+  "mechanism_diagnosis": {
+    "representation": "Role-aware argv improves latency and Disk over current in both orientations, so argv semantics carry signal beyond bin/global evidence.",
+    "arbitration": "Posterior shrinkage improves latency over hard local-first arbitration in both orientations, confirming that sparse local evidence should not have infinite priority for latency.",
+    "resource_signal": "The shared signature and latency-selected alpha do not transfer to rare CPU/RSS Heavy labels; CPU/RSS lose accuracy in both orientations while Disk improves.",
+    "coverage": "No eligible pre-execution context satisfies Candidate C coverage and variation gates.",
+    "operations": "Candidate S lookup and state costs are higher than current even though absolute prediction latency remains microsecond-scale."
+  },
+  "decision": {
+    "latency_candidate": "Candidate S is promising development evidence, not confirmation.",
+    "shared_runtime_replacement": "NO-GO",
+    "runtime_default": "Keep raw-argv-prefix-v1 with hard-first-nonempty-v1.",
+    "candidate_s_availability": "Retain only as an explicit reviewed experimental path; do not select it as the shared default.",
+    "candidate_c": "Not authorized and not run.",
+    "new_data_collected": false,
+    "protected_files_modified": false,
+    "pushed": false
+  },
+  "limitations": [
+    "Both SWE cohorts and every reported outer result are development-exposed; no confirmation claim is supported.",
+    "The reverse Candidate S exploratory bootstrap interval touches zero.",
+    "CPU and RSS Heavy labels are rare and include many policy-imputed short-null Light labels; accuracy is reported without inventing unavailable labels.",
+    "Operational latency is one representative loaded-state repetition on this host and has no predeclared materiality threshold.",
+    "The contract forbids target-specific similarity or a second resource model, so latency and Disk gains cannot rescue the shared runtime failure."
+  ],
+  "authoritative_artifacts": [
+    "analysis/results/tool-resource-nighttime-3bucket-20260728/checkpoint-1-baseline-decision.json",
+    "analysis/results/tool-resource-nighttime-3bucket-20260728/checkpoint-3-candidate-r-decision.json",
+    "analysis/results/tool-resource-nighttime-3bucket-20260728/checkpoint-5-candidate-s-decision.json",
+    "analysis/results/tool-resource-nighttime-3bucket-20260728/candidate-r-swe100-fit-swe277-eval.json",
+    "analysis/results/tool-resource-nighttime-3bucket-20260728/candidate-r-swe277-fit-swe100-eval.json",
+    "analysis/results/tool-resource-nighttime-3bucket-20260728/candidate-s-swe100-fit-swe277-eval.json",
+    "analysis/results/tool-resource-nighttime-3bucket-20260728/candidate-s-swe277-fit-swe100-eval.json",
+    "analysis/results/tool-resource-nighttime-3bucket-20260728/resource-candidate-r-swe100-fit-swe277-eval.json",
+    "analysis/results/tool-resource-nighttime-3bucket-20260728/resource-candidate-r-swe277-fit-swe100-eval.json",
+    "analysis/results/tool-resource-nighttime-3bucket-20260728/resource-candidate-s-swe100-fit-swe277-eval.json",
+    "analysis/results/tool-resource-nighttime-3bucket-20260728/resource-candidate-s-swe277-fit-swe100-eval.json"
+  ]
+}
