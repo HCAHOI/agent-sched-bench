@@ -881,7 +881,14 @@ async def collect_traces(
         from tool_resource.client import ResourceRun
 
         manifest_dir = run_dir / "tool_resource_runs"
-        for scope in sorted({_tool_resource_scope(task) for task in tasks}):
+        terminal_ids = load_completed_ids(run_dir)
+        for scope in sorted(
+            {
+                _tool_resource_scope(task)
+                for task in tasks
+                if task["instance_id"] not in terminal_ids
+            }
+        ):
             scope_digest = hashlib.sha256(scope.encode()).hexdigest()[:16]
             resource_runs[scope] = ResourceRun.open(
                 tool_resource_profile,

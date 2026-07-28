@@ -186,5 +186,74 @@ def test_collect_traces_requires_explicit_container_runtime(
         )
 
 
+def test_collect_traces_opens_resource_runs_only_for_pending_tasks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    run_dir = tmp_path / "run"
+    completed_attempt = run_dir / "done" / "attempt_1"
+    completed_attempt.mkdir(parents=True)
+    (completed_attempt / "run_manifest.json").write_text(
+        '{"status":"completed"}\n',
+        encoding="utf-8",
+    )
+    opened_scopes: list[str] = []
+
+    class FakeResourceRun:
+        @classmethod
+        def open(cls, _profile, **kwargs):
+            opened_scopes.append(kwargs["workspace_scope"])
+            return cls()
+
+        def finalize(self, *, workload_status: str):
+            return None
+
+    benchmark = SimpleNamespace(
+        validate_scaffold_support=lambda scaffold: None,
+        runtime_mode_for=lambda scaffold: "task_container_agent",
+        load_tasks=lambda: [
+            {"instance_id": "done", "repo": "owner/done"},
+            {"instance_id": "pending", "repo": "owner/pending"},
+        ],
+        execution_environment="container",
+    )
+
+    monkeypatch.setattr(
+        "trace_collect.collector._prepare_collect_model_backend",
+        lambda **_kwargs: SimpleNamespace(
+            provider=object(),
+            provider_name="codex",
+            api_base="https://example.com",
+            api_key="test-key",
+            trace_run_config={},
+        ),
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector._run_scaffold_tasks",
+        lambda **_kwargs: asyncio.sleep(0, result=run_dir),
+    )
+    monkeypatch.setattr(
+        "tool_resource.profile.ResourceProfile.load",
+        classmethod(lambda cls, path: None),
+    )
+    monkeypatch.setattr("tool_resource.client.ResourceRun", FakeResourceRun)
+
+    asyncio.run(
+        collect_traces(
+            scaffold="openclaw",
+            provider_name="codex",
+            api_base="https://example.com",
+            api_key="test-key",
+            model="gpt-5.6-sol",
+            benchmark=benchmark,
+            run_id=str(run_dir),
+            container_executable="docker",
+            tool_resource_profile=tmp_path / "resource.yaml",
+        )
+    )
+
+    assert opened_scopes == ["owner/pending"]
+
+
 def test_collectors_max_iterations_defaults_to_100() -> None:
     assert inspect.signature(collect_traces).parameters["max_iterations"].default == 100
