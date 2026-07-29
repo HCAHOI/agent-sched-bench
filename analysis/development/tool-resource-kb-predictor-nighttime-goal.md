@@ -240,6 +240,15 @@ high-purity Heavy neighborhood. Failure ends embedding and contrastive tuning
 on these exposed corpora. Success permits a reviewed reusable implementation;
 it is not confirmation evidence.
 
+The completed full-population result was NO-GO. B1 retrieval pooled one true
+positive and ten false positives; preserving current raw positives produced
+one true positive and eleven false positives. SWE100 added one true positive
+and three false positives, while SWE277 added no true positives and seven
+false positives. B1 accuracy was below current and majority-Light in both
+cohorts. Frozen B0 was also NO-GO and had fewer false positives than B1, so
+contrastive adaptation expanded the wrong neighborhoods. Do not tune epochs,
+margin, mining, `k`, or vote threshold on these exposed rows.
+
 ### 2026-07-29 landmark and speculative-execution amendment
 
 Visible before this amendment: the Heavy/Light mechanism audit, both RSS MLP
@@ -351,9 +360,10 @@ action utility at the operating point, including predictor cost, action
 latency, useful remaining-runtime coverage, and harmful false actions; higher
 conditional classification accuracy alone is insufficient.
 
-The already-running full-population contrastive experiment remains an
-unchanged representation baseline. Do not reinterpret its partially visible
-folds as landmark evidence or modify its frozen protocol.
+The completed full-population contrastive experiment remains an unchanged
+NO-GO representation baseline. Do not reinterpret it as landmark evidence;
+landmark conditioning changes the decision population and must be frozen and
+evaluated as a separate mechanism.
 
 ## 2. Authority and required amendment
 
