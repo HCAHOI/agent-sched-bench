@@ -21,6 +21,10 @@ node wins):
 4. public binary
 5. public global
 
+An opt-in ``repo_binary_first`` arbitration reorders step 3 ahead of steps 1-2,
+selecting the repository's binary-granularity node whenever it holds evidence.
+The default order is unchanged; see ``REPO_BINARY_FIRST_ARBITRATION``.
+
 Only observations completed strictly before a query become visible. Compound
 command bucket IDs remain uncomposed because sequential and pipeline clauses
 have different physical timing semantics.
@@ -68,6 +72,11 @@ GENERIC_ARGV_CANONICALIZER_VERSION = "generic-argv-v3-role"
 STRUCTURED_ARGV_REPRESENTATION = GENERIC_ARGV_CANONICALIZER_VERSION
 HARD_BACKOFF_ARBITRATION = "hard-first-nonempty-v1"
 POSTERIOR_SHRINKAGE_ARBITRATION = "public-local-posterior-v1"
+# Prefer the repository's binary-granularity node over deeper repository nodes.
+# Deepest-non-empty selects sparse exact/prefix nodes that usually hold no Heavy
+# observation, then falls through to a diluted cross-repository prior; the
+# binary-granularity repository node is the level with both coverage and purity.
+REPO_BINARY_FIRST_ARBITRATION = "repo-binary-first-v1"
 SHRINKAGE_ALPHA_GRID = (1.0, 4.0, 16.0, 64.0)
 
 # Heavy/Light decision cut on P(Heavy). 0.5 is optimal only when a false action
@@ -568,7 +577,14 @@ class ClauseResourceKB:
         stable_subcommands: frozenset[tuple[str, str]] = frozenset(),
         shrinkage_alpha: float | None = None,
         heavy_decision_threshold: float = DEFAULT_HEAVY_DECISION_THRESHOLD,
+        repo_binary_first: bool = False,
     ) -> None:
+        if repo_binary_first and shrinkage_alpha is not None:
+            # Shrinkage selects its scopes independently and never consults
+            # _select, so the two arbitrations cannot be composed coherently.
+            raise ValueError(
+                "repo_binary_first and posterior shrinkage are exclusive arbitrations"
+            )
         # The open-interval test alone rejects NaN, both infinities, and bool
         # (True -> 1.0, False -> 0.0). Unlike shrinkage_alpha, which tests grid
         # membership and would silently accept True as 1.0, no separate bool or
@@ -594,6 +610,7 @@ class ClauseResourceKB:
                 )
         self._representation = representation
         self._heavy_decision_threshold = float(heavy_decision_threshold)
+        self._repo_binary_first = bool(repo_binary_first)
         self._stable_subcommands = stable_subcommands
         self._shrinkage_alpha = (
             None if shrinkage_alpha is None else float(shrinkage_alpha)
@@ -614,6 +631,7 @@ class ClauseResourceKB:
         representation: str = RAW_ARGV_REPRESENTATION,
         shrinkage_alpha: float | None = None,
         heavy_decision_threshold: float = DEFAULT_HEAVY_DECISION_THRESHOLD,
+        repo_binary_first: bool = False,
     ) -> ClauseResourceKB:
         """Fit frozen public priors and any label-free fit vocabulary."""
 
@@ -628,6 +646,7 @@ class ClauseResourceKB:
             stable_subcommands=stable_subcommands,
             shrinkage_alpha=shrinkage_alpha,
             heavy_decision_threshold=heavy_decision_threshold,
+            repo_binary_first=repo_binary_first,
         )
         acc: dict[str, dict[NodeKey, list[float]]] = {
             source: {} for source in _CLAUSE_SOURCES
@@ -661,11 +680,11 @@ class ClauseResourceKB:
 
     @property
     def arbitration(self) -> str:
-        return (
-            HARD_BACKOFF_ARBITRATION
-            if self._shrinkage_alpha is None
-            else POSTERIOR_SHRINKAGE_ARBITRATION
-        )
+        if self._shrinkage_alpha is not None:
+            return POSTERIOR_SHRINKAGE_ARBITRATION
+        if self._repo_binary_first:
+            return REPO_BINARY_FIRST_ARBITRATION
+        return HARD_BACKOFF_ARBITRATION
 
     @property
     def shrinkage_alpha(self) -> float | None:
@@ -730,6 +749,24 @@ class ClauseResourceKB:
                     # per observation, prediction happens on every clause.
                     _insert_into_node(repo_sources[source].setdefault(key, []), value)
 
+    def _ordered_repo_keys(
+        self, bin_: str, argv: Sequence[str]
+    ) -> tuple[NodeKey, ...]:
+        """Repository keys in consultation order for the active arbitration.
+
+        ``repo_binary_first`` moves the binary-granularity node ahead of the
+        deeper exact/prefix nodes. Reordering happens HERE rather than in
+        ``_select`` so that ``_select`` remains exactly the first candidate --
+        the invariant ``diagnostic_clause_latency_candidates`` documents and the
+        latency evaluator asserts.
+        """
+
+        keys = self._repo_keys(bin_, argv)
+        if not self._repo_binary_first:
+            return keys
+        binary = ("bin", bin_)
+        return (binary, *(key for key in keys if key != binary))
+
     def _candidate_nodes(
         self, repo: str, source: str, bin_: str, argv: Sequence[str]
     ) -> Iterator[tuple[Sequence[float], str, str, tuple[str, ...]]]:
@@ -738,7 +775,7 @@ class ClauseResourceKB:
         repo_nodes = self._repo.get(repo, {}).get(source, {})
         public_nodes = self._public[source]
         path: list[str] = []
-        for key in self._repo_keys(bin_, argv):
+        for key in self._ordered_repo_keys(bin_, argv):
             path.append(f"repo:{key[0]}")
             values = repo_nodes.get(key)
             if values:
@@ -812,6 +849,7 @@ class ClauseResourceKB:
             evidence_count=len(values),
             fallback_path=path,
             canonicalizer_version=self.canonicalizer_version,
+            arbitration=self.arbitration,
         )
 
     def _posterior_latency_prediction(
@@ -1083,6 +1121,7 @@ class ClauseResourceKB:
             evidence_count=len(values),
             fallback_path=path,
             canonicalizer_version=self.canonicalizer_version,
+            arbitration=self.arbitration,
         )
 
     def predict_clause_resource_classes(
@@ -1184,6 +1223,7 @@ class ClauseResourceKB:
             "arbitration": self.arbitration,
             "shrinkage_alpha": self._shrinkage_alpha,
             "heavy_decision_threshold": self._heavy_decision_threshold,
+            "repo_binary_first": self._repo_binary_first,
             "stable_subcommands": [
                 [bin_, subcommand]
                 for bin_, subcommand in sorted(self._stable_subcommands)
@@ -1246,6 +1286,7 @@ class ClauseResourceKB:
             heavy_decision_threshold=float(
                 obj.get("heavy_decision_threshold", DEFAULT_HEAVY_DECISION_THRESHOLD)
             ),
+            repo_binary_first=bool(obj.get("repo_binary_first", False)),
         )
         if obj.get("arbitration", kb.arbitration) != kb.arbitration:
             raise ValueError("snapshot arbitration and shrinkage alpha differ")

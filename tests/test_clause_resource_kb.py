@@ -1073,3 +1073,164 @@ def test_probability_exactly_equal_to_the_threshold_decides_light() -> None:
     prediction = _cpu_prediction(_cpu_kb(1, 5, threshold=1.0 / 6.0))
     assert prediction.probability_heavy == 1.0 / 6.0
     assert prediction.label == "light"
+
+
+def _two_level_repo_kb(*, repo_binary_first: bool) -> ClauseResourceKB:
+    """Sparse all-Light exact node over a binary node that carries the Heavy mass.
+
+    This is the shape the runtime provenance showed: the deepest repository node
+    exists but holds no Heavy observation, so deepest-non-empty stops there.
+    """
+
+    kb = ClauseResourceKB.fit_public(
+        [_obs("other__repo", "tool", ("tool",), 0.0, 1.0, cpu=1.0)],
+        repo_binary_first=repo_binary_first,
+    )
+    # exact clause ("tool","probe"): one Light observation
+    kb.observe_completed_clause(
+        _obs("owner__repo", "tool", ("tool", "probe"), 0.0, 0.5, cpu=0.1)
+    )
+    # Same binary, different clauses: three of four are CPU-Heavy, and all four
+    # are long, so the binary node differs from the exact node on BOTH targets.
+    for index, cores in enumerate((8.0, 8.0, 8.0, 0.1)):
+        kb.observe_completed_clause(
+            _obs(
+                "owner__repo",
+                "tool",
+                ("tool", f"other{index}"),
+                float(index + 1),
+                float(index + 1) + 0.5,
+                latency_ms=20_000.0,
+                cpu=cores,
+            )
+        )
+    return kb
+
+
+def _probe(kb: ClauseResourceKB):
+    prediction = kb.predict_clause_heavy_light(
+        "owner__repo", "tool", ("tool", "probe"), "peak_cpu_cores", ts_start=100.0
+    )
+    assert prediction is not None
+    return prediction
+
+
+def test_default_arbitration_stops_at_the_sparse_exact_node() -> None:
+    prediction = _probe(_two_level_repo_kb(repo_binary_first=False))
+    assert prediction.key_kind == "exact_clause"
+    assert prediction.evidence_count == 1
+    assert prediction.probability_heavy == 0.0
+
+
+def test_repo_binary_first_selects_the_binary_node_instead() -> None:
+    prediction = _probe(_two_level_repo_kb(repo_binary_first=True))
+    assert prediction.key_kind == "bin"
+    assert prediction.scope == "repo"
+    assert prediction.evidence_count == 5
+    assert prediction.probability_heavy == pytest.approx(3 / 5)
+    # The binary node is consulted first, so it is the whole traversal.
+    assert prediction.fallback_path == ("repo:bin",)
+    # A prediction must name the arbitration that produced it, not the default.
+    assert prediction.arbitration == "repo-binary-first-v1"
+
+
+def test_default_arbitration_still_reports_hard_backoff() -> None:
+    assert _probe(_two_level_repo_kb(repo_binary_first=False)).arbitration == (
+        "hard-first-nonempty-v1"
+    )
+
+
+def test_repo_binary_first_keeps_select_as_the_first_diagnostic_candidate() -> None:
+    """The latency evaluator asserts this invariant and aborts if it breaks."""
+
+    buckets = LatencyBuckets(CANONICAL_LATENCY_BUCKET_EDGES_MS)
+    for flag in (False, True):
+        kb = _two_level_repo_kb(repo_binary_first=flag)
+        runtime = kb.predict_clause_latency_bucket(
+            "owner__repo", "tool", ("tool", "probe"), buckets, ts_start=100.0
+        )
+        candidates = kb.diagnostic_clause_latency_candidates(
+            "owner__repo", "tool", ("tool", "probe"), buckets, ts_start=100.0
+        )
+        assert candidates[0].probability_by_bucket == runtime.probability_by_bucket
+        assert candidates[0].fallback_path == runtime.fallback_path
+
+
+def test_repo_binary_first_also_moves_the_latency_prediction() -> None:
+    """Arbitration is shared, so latency changes too. Stated, not incidental."""
+
+    buckets = LatencyBuckets(CANONICAL_LATENCY_BUCKET_EDGES_MS)
+    default = _two_level_repo_kb(repo_binary_first=False).predict_clause_latency_bucket(
+        "owner__repo", "tool", ("tool", "probe"), buckets, ts_start=100.0
+    )
+    reordered = _two_level_repo_kb(repo_binary_first=True).predict_clause_latency_bucket(
+        "owner__repo", "tool", ("tool", "probe"), buckets, ts_start=100.0
+    )
+    assert default.evidence_count == 1
+    assert reordered.evidence_count == 5
+    assert default.probability_by_bucket == (1.0, 0.0, 0.0)
+    assert reordered.probability_by_bucket == pytest.approx((1 / 5, 0.0, 4 / 5))
+
+
+def test_repo_binary_first_falls_back_when_the_binary_node_is_absent() -> None:
+    """An unseen binary must still reach public evidence, not become unavailable."""
+
+    kb = ClauseResourceKB.fit_public(
+        [_obs("other__repo", "fresh", ("fresh",), 0.0, 1.0, cpu=8.0)],
+        repo_binary_first=True,
+    )
+    prediction = kb.predict_clause_heavy_light(
+        "owner__repo", "fresh", ("fresh",), "peak_cpu_cores", ts_start=100.0
+    )
+    assert prediction is not None
+    assert prediction.scope == "public"
+
+
+def test_repo_binary_first_reports_and_restores_its_arbitration() -> None:
+    kb = _two_level_repo_kb(repo_binary_first=True)
+    assert kb.arbitration == "repo-binary-first-v1"
+    restored = ClauseResourceKB.from_json_obj(json.loads(json.dumps(kb.to_json_obj())))
+    assert restored.arbitration == "repo-binary-first-v1"
+    assert _probe(restored).probability_heavy == pytest.approx(3 / 5)
+
+
+def test_repo_binary_first_and_shrinkage_are_exclusive() -> None:
+    with pytest.raises(ValueError, match="exclusive arbitrations"):
+        ClauseResourceKB(
+            representation=STRUCTURED_ARGV_REPRESENTATION,
+            shrinkage_alpha=4.0,
+            repo_binary_first=True,
+        )
+
+
+def test_repo_binary_first_preserves_causal_visibility() -> None:
+    """Reordering arbitration must not let an unfinished observation be seen."""
+
+    kb = _two_level_repo_kb(repo_binary_first=True)
+    kb.observe_completed_clause(
+        _obs("owner__repo", "tool", ("tool", "late"), 200.0, 300.0, cpu=8.0)
+    )
+    before = kb.predict_clause_heavy_light(
+        "owner__repo", "tool", ("tool", "probe"), "peak_cpu_cores", ts_start=250.0
+    )
+    assert before is not None
+    assert before.evidence_count == 5  # the 300.0-end observation is not yet visible
+
+
+def test_repo_binary_first_ignores_an_empty_binary_node() -> None:
+    """A restored snapshot can hold an empty node; it must not veto the backoff."""
+
+    kb = _two_level_repo_kb(repo_binary_first=True)
+    _probe(kb)  # advance the clock so pending observations are absorbed into nodes
+    obj = json.loads(json.dumps(kb.to_json_obj()))
+    for source, rows in obj["repo"]["owner__repo"].items():
+        if source != "peak_cpu_cores":
+            continue
+        for row in rows:
+            if row[0] == "bin":
+                row[2] = []  # empty, not absent
+    restored = ClauseResourceKB.from_json_obj(obj)
+    prediction = _probe(restored)
+    # Falls through to the deeper repository node rather than returning nothing.
+    assert prediction.key_kind == "exact_clause"
+    assert prediction.evidence_count == 1
