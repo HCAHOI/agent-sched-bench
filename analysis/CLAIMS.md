@@ -101,6 +101,64 @@ task-clustered bootstrap interval, as C1 does.
 does not generalise and W5's `ours` arm should not receive GPU time until re-based. It
 does not retract C1, which is a pre-restore claim on a different decision point.
 
+## Open question — does runtime CPU activity beat survival alone on high-variance calls?
+
+**Criterion frozen 2026-07-29, before the implementation exists.**
+
+Visible when frozen: C1-C3, the closed-questions register, the container-artifact
+attribution (`04ef2bd`), the per-group dispersion measurements (`apt-get update &&`
+`P(long)=95.7%` `CV=0.40`; `python3 -m pytest` `P(long)=12.0%` `CV=1.79`; pytest the
+largest long-call group at 179 long of 1,489), and the label-distribution facts in the
+next paragraph. No runtime-activity arm has been implemented or run.
+
+**Acceptance bar, derived not fitted.** An early swap saves at most `K` on a long call
+and costs `rho*K` on a short one, so acting is profitable only where
+`P(long | causal state) > rho/(1+rho) = 0.94/1.94 = 48.5%`. A candidate must lift a
+subgroup **across** that bar; improving AUC, MAE or log-score is not evidence.
+
+**Why this is not closed already.** C3 closes elapsed-only multi-check schemes and
+scopes itself to "elapsed-only and observed-boundary enrichments". Boundary-conditioned
+re-checks, atom/segment models, stable-atom screening and per-call self-footprint
+pricing are closed separately. A per-500ms CPU-activity trajectory is none of those: it
+is strictly richer than elapsed time, so it lies outside every recorded closure.
+
+**Observable.** `data.resource_timeline` on `tool_exec` records, present on all 8,976
+`exec` calls of the SWE277 replay trace: 500 ms sampling with `offset_s`, `dt_s`,
+`cpu_core_s`, `net_rx_bytes`, `net_tx_bytes`, `cpu_quota_cores`. Only samples whose
+window has completely ended before the decision may be read.
+
+**Corpus.** The SWE277 **replay** trace, not the Fresh-277 source corpus, because the
+timeline lives there. Its tool durations are real re-executions but carry container and
+eBPF overhead, so they are systematically slower than source; the arms are compared
+against each other on identical rows, so the overhead cancels in the comparison but the
+absolute seconds are not comparable to C1.
+
+**Landmark and population.** `t = 1000 ms`, the first point with two complete 500 ms
+windows. Population is calls with `duration_ms > 1000`: 1,794 of 8,976 (20.0%).
+Recorded before the run, `P(long)` among those survivors is **48.4%** at `kv=3500` and
+**37.4%** at `kv=5000` — so survival alone already sits at the bar in one cell, and the
+feature must beat survival, not the unconditional rate.
+
+**Arms**, identical rows, `guard_ms = 0`, `restore = 0.94*kv`:
+
+1. `deadline_only` — fire at the threshold. Structurally misses nothing.
+2. `elapsed_only@1s` — fire at the landmark for every survivor. No feature.
+3. `cpu_state@1s` — fire at the landmark only when the rule says long.
+
+**Rule.** One decision stump on a single feature, cumulative `cpu_core_s` divided by
+observed wall time over completed windows, its threshold chosen on profile tasks to
+maximise net utility. No model family sweep, no second feature, no second landmark.
+
+**Gate.** Development GO only if `cpu_state@1s` net utility is strictly greater than
+**both** `deadline_only` and `elapsed_only@1s`, in **both** `kv = 3500` and `5000`,
+out-of-fold under five task-grouped folds, **and** the fired subgroup's realised
+`P(long)` exceeds `48.5%` in both cells. Margin over the stronger comparator carries a
+task-clustered bootstrap interval.
+
+**Not authorized.** Adding landmarks, features, or model capacity after reading;
+substituting a fit metric for the utility gate; or reporting the fired subgroup's
+purity without the utility comparison.
+
 ## Explicit non-claims
 
 - No live W5 or headline systems result exists.
