@@ -69,6 +69,17 @@ STRUCTURED_ARGV_REPRESENTATION = GENERIC_ARGV_CANONICALIZER_VERSION
 HARD_BACKOFF_ARBITRATION = "hard-first-nonempty-v1"
 POSTERIOR_SHRINKAGE_ARBITRATION = "public-local-posterior-v1"
 SHRINKAGE_ALPHA_GRID = (1.0, 4.0, 16.0, 64.0)
+
+# Heavy/Light decision cut on P(Heavy). 0.5 is optimal only when a false action
+# and a missed Heavy cost the same; a caller whose action is asymmetric passes
+# C/(B+C) instead. Not a tuned parameter -- it is declared from the action's
+# cost ratio, never fitted to evaluation data.
+#
+# The comparison is strict, so a ratio exactly equal to the cut decides Light.
+# Ties are reachable: a 6-observation node with one Heavy is bit-equal to a
+# declared 1/6. Light on a tie matches the latency contract, where an exact
+# probability tie selects the shorter bucket.
+DEFAULT_HEAVY_DECISION_THRESHOLD = 0.5
 _SUPPORTED_REPRESENTATIONS = {
     RAW_ARGV_REPRESENTATION,
     STRUCTURED_ARGV_REPRESENTATION,
@@ -225,6 +236,7 @@ class ClauseHeavyLightPrediction:
     resource: str
     threshold: float
     probability_heavy: float
+    heavy_decision_threshold: float
     label: str
     scope: str
     key_kind: str
@@ -555,7 +567,16 @@ class ClauseResourceKB:
         representation: str = RAW_ARGV_REPRESENTATION,
         stable_subcommands: frozenset[tuple[str, str]] = frozenset(),
         shrinkage_alpha: float | None = None,
+        heavy_decision_threshold: float = DEFAULT_HEAVY_DECISION_THRESHOLD,
     ) -> None:
+        # The open-interval test alone rejects NaN, both infinities, and bool
+        # (True -> 1.0, False -> 0.0). Unlike shrinkage_alpha, which tests grid
+        # membership and would silently accept True as 1.0, no separate bool or
+        # isfinite guard is reachable here.
+        if not 0.0 < float(heavy_decision_threshold) < 1.0:
+            raise ValueError(
+                "heavy_decision_threshold must be a finite probability in (0, 1)"
+            )
         if representation not in _SUPPORTED_REPRESENTATIONS:
             raise ValueError(f"unsupported clause representation {representation!r}")
         if representation == RAW_ARGV_REPRESENTATION and stable_subcommands:
@@ -572,6 +593,7 @@ class ClauseResourceKB:
                     f"shrinkage alpha must be one of {SHRINKAGE_ALPHA_GRID}"
                 )
         self._representation = representation
+        self._heavy_decision_threshold = float(heavy_decision_threshold)
         self._stable_subcommands = stable_subcommands
         self._shrinkage_alpha = (
             None if shrinkage_alpha is None else float(shrinkage_alpha)
@@ -591,6 +613,7 @@ class ClauseResourceKB:
         *,
         representation: str = RAW_ARGV_REPRESENTATION,
         shrinkage_alpha: float | None = None,
+        heavy_decision_threshold: float = DEFAULT_HEAVY_DECISION_THRESHOLD,
     ) -> ClauseResourceKB:
         """Fit frozen public priors and any label-free fit vocabulary."""
 
@@ -604,6 +627,7 @@ class ClauseResourceKB:
             representation=representation,
             stable_subcommands=stable_subcommands,
             shrinkage_alpha=shrinkage_alpha,
+            heavy_decision_threshold=heavy_decision_threshold,
         )
         acc: dict[str, dict[NodeKey, list[float]]] = {
             source: {} for source in _CLAUSE_SOURCES
@@ -646,6 +670,12 @@ class ClauseResourceKB:
     @property
     def shrinkage_alpha(self) -> float | None:
         return self._shrinkage_alpha
+
+    @property
+    def heavy_decision_threshold(self) -> float:
+        """Cut on P(Heavy). Result-affecting, so a formal run must record it."""
+
+        return self._heavy_decision_threshold
 
     def _repo_keys(self, bin_: str, argv: Sequence[str]) -> tuple[NodeKey, ...]:
         if self._representation == RAW_ARGV_REPRESENTATION:
@@ -1000,7 +1030,12 @@ class ClauseResourceKB:
                 resource=resource,
                 threshold=threshold,
                 probability_heavy=probability_heavy,
-                label="heavy" if probability_heavy > 0.5 else "light",
+                heavy_decision_threshold=self._heavy_decision_threshold,
+                label=(
+                    "heavy"
+                    if probability_heavy > self._heavy_decision_threshold
+                    else "light"
+                ),
                 scope=(
                     "repo+public"
                     if local is not None and public is not None
@@ -1037,7 +1072,12 @@ class ClauseResourceKB:
             resource=resource,
             threshold=threshold,
             probability_heavy=probability_heavy,
-            label="heavy" if probability_heavy > 0.5 else "light",
+            heavy_decision_threshold=self._heavy_decision_threshold,
+            label=(
+                "heavy"
+                if probability_heavy > self._heavy_decision_threshold
+                else "light"
+            ),
             scope=scope,
             key_kind=kind,
             evidence_count=len(values),
@@ -1143,6 +1183,7 @@ class ClauseResourceKB:
             "canonicalizer_version": self.canonicalizer_version,
             "arbitration": self.arbitration,
             "shrinkage_alpha": self._shrinkage_alpha,
+            "heavy_decision_threshold": self._heavy_decision_threshold,
             "stable_subcommands": [
                 [bin_, subcommand]
                 for bin_, subcommand in sorted(self._stable_subcommands)
@@ -1201,6 +1242,9 @@ class ClauseResourceKB:
                 None
                 if obj.get("shrinkage_alpha") is None
                 else float(obj["shrinkage_alpha"])
+            ),
+            heavy_decision_threshold=float(
+                obj.get("heavy_decision_threshold", DEFAULT_HEAVY_DECISION_THRESHOLD)
             ),
         )
         if obj.get("arbitration", kb.arbitration) != kb.arbitration:

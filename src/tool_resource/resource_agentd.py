@@ -36,6 +36,7 @@ from tool_resource.resource_protocol import (
 )
 from tool_resource.runtime_kb import (
     CANONICAL_LATENCY_BUCKETS,
+    DEFAULT_HEAVY_DECISION_THRESHOLD,
     RAW_ARGV_REPRESENTATION,
     ClauseObservation,
     ClauseResourceKB,
@@ -131,6 +132,7 @@ class ResourceService:
         result_ttl_s: float = DEFAULT_RESULT_TTL_S,
         kb_representation: str = RAW_ARGV_REPRESENTATION,
         kb_shrinkage_alpha: float | None = None,
+        kb_heavy_decision_threshold: float = DEFAULT_HEAVY_DECISION_THRESHOLD,
     ) -> None:
         if not math.isfinite(result_ttl_s) or result_ttl_s <= 0:
             raise ValueError("result_ttl_s must be finite and positive")
@@ -142,8 +144,10 @@ class ResourceService:
         self.kb_representation = ClauseResourceKB(
             representation=kb_representation,
             shrinkage_alpha=kb_shrinkage_alpha,
+            heavy_decision_threshold=kb_heavy_decision_threshold,
         ).representation
         self.kb_shrinkage_alpha = kb_shrinkage_alpha
+        self.kb_heavy_decision_threshold = kb_heavy_decision_threshold
         self._runs: dict[str, _Run] = {}
         self._traces: dict[str, _Trace] = {}
         self._operation_results: dict[
@@ -350,11 +354,13 @@ class ResourceService:
                     public,
                     representation=self.kb_representation,
                     shrinkage_alpha=self.kb_shrinkage_alpha,
+                    heavy_decision_threshold=self.kb_heavy_decision_threshold,
                 )
                 if public
                 else ClauseResourceKB(
                     representation=self.kb_representation,
                     shrinkage_alpha=self.kb_shrinkage_alpha,
+                    heavy_decision_threshold=self.kb_heavy_decision_threshold,
                 )
             )
             for observation in observations:
@@ -1330,6 +1336,7 @@ class ResourceService:
                     "kb_canonicalizer_version": run.kb.canonicalizer_version,
                     "kb_arbitration": run.kb.arbitration,
                     "kb_shrinkage_alpha": run.kb.shrinkage_alpha,
+                    "kb_heavy_decision_threshold": run.kb.heavy_decision_threshold,
                     "store_schema_version": STORE_SCHEMA_VERSION,
                     "latency_bucket_edges_ms": list(run.buckets.edges_ms),
                     "update_policy": run.update_policy,

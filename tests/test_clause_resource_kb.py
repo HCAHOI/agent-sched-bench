@@ -969,3 +969,107 @@ def test_nonfinite_query_time_fails_before_absorbing_pending(ts_start: float) ->
         "r1", "x", 11.0, LatencyBuckets((1000.0,))
     ).prediction
     assert prediction is not None and prediction.scope == "public"
+
+
+def _cpu_kb(heavy: int, light: int, *, threshold: float) -> ClauseResourceKB:
+    """Repo-local node holding `heavy` Heavy and `light` Light CPU observations."""
+
+    kb = ClauseResourceKB.fit_public(
+        [_obs("other__repo", "tool", ("tool",), 0.0, 1.0, cpu=1.0)],
+        heavy_decision_threshold=threshold,
+    )
+    for index in range(heavy + light):
+        kb.observe_completed_clause(
+            _obs(
+                "owner__repo",
+                "tool",
+                ("tool",),
+                float(index),
+                float(index) + 0.5,
+                cpu=8.0 if index < heavy else 0.1,
+            )
+        )
+    return kb
+
+
+def _cpu_prediction(kb: ClauseResourceKB):
+    prediction = kb.predict_clause_heavy_light(
+        "owner__repo", "tool", ("tool",), "peak_cpu_cores", ts_start=100.0
+    )
+    assert prediction is not None
+    return prediction
+
+
+def test_heavy_decision_threshold_defaults_to_one_half() -> None:
+    # 2 of 5 Heavy: below 0.5, so the shipped default must still say light.
+    prediction = _cpu_prediction(_cpu_kb(2, 3, threshold=0.5))
+    assert prediction.probability_heavy == pytest.approx(0.4)
+    assert prediction.heavy_decision_threshold == 0.5
+    assert prediction.label == "light"
+
+
+def test_declared_threshold_fires_below_one_half() -> None:
+    """A cost-asymmetric caller acts on evidence the symmetric cut discards."""
+
+    prediction = _cpu_prediction(_cpu_kb(2, 3, threshold=1.0 / 6.0))
+    assert prediction.probability_heavy == pytest.approx(0.4)
+    assert prediction.label == "heavy"
+
+
+def test_threshold_does_not_alter_reported_probability_or_evidence() -> None:
+    """The reported evidence is identical whatever cut is declared.
+
+    Both cuts label this node light -- the point is that probability_heavy and
+    evidence_count report the raw node, not something rescaled by the cut.
+    """
+
+    low = _cpu_prediction(_cpu_kb(1, 9, threshold=1.0 / 6.0))
+    default = _cpu_prediction(_cpu_kb(1, 9, threshold=0.5))
+    assert low.probability_heavy == default.probability_heavy == pytest.approx(0.1)
+    assert low.evidence_count == default.evidence_count == 10
+    assert low.label == default.label == "light"
+
+
+def test_single_light_observation_never_fires_at_a_low_threshold() -> None:
+    """Regression: a smoothed decision probability would fire here, and must not.
+
+    One Light observation is evidence against Heavy. A Beta(1/2,1/2) posterior
+    mean returns 0.25 for this node and would cross a 1/6 threshold, so the
+    decision reads the raw ratio and thin nodes stay silent.
+    """
+
+    prediction = _cpu_prediction(_cpu_kb(0, 1, threshold=1.0 / 6.0))
+    assert prediction.evidence_count == 1
+    assert prediction.probability_heavy == 0.0
+    assert prediction.label == "light"
+
+
+def test_threshold_survives_snapshot_round_trip() -> None:
+    kb = _cpu_kb(2, 3, threshold=1.0 / 6.0)
+    restored = ClauseResourceKB.from_json_obj(json.loads(json.dumps(kb.to_json_obj())))
+    assert _cpu_prediction(restored).label == "heavy"
+    assert _cpu_prediction(restored).heavy_decision_threshold == pytest.approx(1.0 / 6.0)
+
+
+def test_threshold_outside_the_open_unit_interval_is_rejected() -> None:
+    for bad in (0.0, 1.0, -0.1, 1.5, float("nan")):
+        with pytest.raises(ValueError, match="heavy_decision_threshold"):
+            ClauseResourceKB(heavy_decision_threshold=bad)
+
+
+def test_snapshot_written_before_the_threshold_existed_restores_at_one_half() -> None:
+    """A pre-change snapshot has no threshold key and must decide as it used to."""
+
+    obj = json.loads(json.dumps(_cpu_kb(2, 3, threshold=1.0 / 6.0).to_json_obj()))
+    del obj["heavy_decision_threshold"]
+    restored = ClauseResourceKB.from_json_obj(obj)
+    assert restored.heavy_decision_threshold == 0.5
+    assert _cpu_prediction(restored).label == "light"
+
+
+def test_probability_exactly_equal_to_the_threshold_decides_light() -> None:
+    """Ties are reachable: 1 Heavy of 6 is bit-equal to a declared 1/6 cut."""
+
+    prediction = _cpu_prediction(_cpu_kb(1, 5, threshold=1.0 / 6.0))
+    assert prediction.probability_heavy == 1.0 / 6.0
+    assert prediction.label == "light"

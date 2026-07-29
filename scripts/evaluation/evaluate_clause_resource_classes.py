@@ -19,6 +19,7 @@ from tool_resource_eval.labels import repo_of  # noqa: E402
 from tool_resource.runtime_kb import (  # noqa: E402
     CANONICAL_LATENCY_BUCKETS,
     CANONICAL_RESOURCE_HEAVY_THRESHOLDS,
+    DEFAULT_HEAVY_DECISION_THRESHOLD,
     SHRINKAGE_ALPHA_GRID,
     SHORT_NULL_LIGHT_MAX_LATENCY_MS,
     STRUCTURED_ARGV_REPRESENTATION,
@@ -258,6 +259,7 @@ def evaluate(
     eval_rows: list[Row],
     *,
     candidate_s_selection: CandidateSSelection | None = None,
+    heavy_decision_threshold: float = DEFAULT_HEAVY_DECISION_THRESHOLD,
 ) -> dict[str, Any]:
     shrinkage_alpha = (
         None if candidate_s_selection is None else candidate_s_selection.alpha
@@ -276,7 +278,8 @@ def evaluate(
     eval_repos = {row.repo for row in eval_rows}
     current_kbs = {
         repo: ClauseResourceKB.fit_public(
-            row.observation(0.0, 1.0) for row in fit_rows if row.repo != repo
+            (row.observation(0.0, 1.0) for row in fit_rows if row.repo != repo),
+            heavy_decision_threshold=heavy_decision_threshold,
         )
         for repo in sorted(eval_repos)
     }
@@ -284,6 +287,7 @@ def evaluate(
         repo: ClauseResourceKB.fit_public(
             (row.observation(0.0, 1.0) for row in fit_rows if row.repo != repo),
             representation=STRUCTURED_ARGV_REPRESENTATION,
+            heavy_decision_threshold=heavy_decision_threshold,
         )
         for repo in sorted(eval_repos)
     }
@@ -293,6 +297,7 @@ def evaluate(
                 (row.observation(0.0, 1.0) for row in fit_rows if row.repo != repo),
                 representation=STRUCTURED_ARGV_REPRESENTATION,
                 shrinkage_alpha=shrinkage_alpha,
+                heavy_decision_threshold=heavy_decision_threshold,
             )
             for repo in sorted(eval_repos)
         }
@@ -426,6 +431,11 @@ def evaluate(
             "identical_label_rows_across_arms": True,
             "fit_eval_task_overlap_count": 0,
         },
+        "decision_policy": {
+            "heavy_decision_threshold": heavy_decision_threshold,
+            "tie_decides": "light",
+            "source": "declared from the action cost ratio C/(B+C), never fitted",
+        },
         "label_policy": {
             "heavy_is_strictly_greater_than_threshold": True,
             "short_null_light_max_latency_ms_exclusive": SHORT_NULL_LIGHT_MAX_LATENCY_MS,
@@ -474,6 +484,15 @@ def main() -> None:
         type=Path,
         help="Candidate S latency result that owns and proves the fit-selected alpha",
     )
+    parser.add_argument(
+        "--heavy-decision-threshold",
+        type=float,
+        default=DEFAULT_HEAVY_DECISION_THRESHOLD,
+        help=(
+            "Cut on P(Heavy), declared as C/(B+C) from the action's cost ratio. "
+            "Never select this from an evaluation result."
+        ),
+    )
     args = parser.parse_args()
     fit_rows = load_rows(args.fit)
     eval_rows = load_rows(args.eval)
@@ -492,6 +511,7 @@ def main() -> None:
         fit_rows,
         eval_rows,
         candidate_s_selection=selection,
+        heavy_decision_threshold=args.heavy_decision_threshold,
     )
     result["fit"]["path"] = str(args.fit)
     result["eval"]["path"] = str(args.eval)
