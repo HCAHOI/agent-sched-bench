@@ -400,6 +400,53 @@ only the trigger varies.
 **Causal contract.** `best_constant` reads profile-fold rows only; the five
 task-grouped folds partition task ids. `ORACLE_constant` is labelled analysis-only.
 
+## Open question — are the negative results an artifact of the restore charge?
+
+**Criterion frozen 2026-07-30, before the numbers exist.**
+
+Visible when frozen: the full negative chain — budget `57cbbbb`, per-key ceiling
+`3bc4906`, key ladder `8e7ed28`, leave-one-out refutation `f1cbee3`, and
+best-constant `24d4344`. Every one of those charged a flat `restore_cost_fraction =
+0.94` on short-call misfires. `24d4344` recorded the mechanism explicitly: `T = kv`
+is optimal *because* the restore penalty at `rho = 0.94` is close to a full swap and
+swamps everything gained in the `kv..2kv` band. It also recorded, untested, that a
+smaller restore fraction would make a sub-`kv` trigger profitable.
+
+**Why the charge is probably too high.**
+`analysis/serving/tool-time-prefill-cost-20260716/findings.md` states the design
+plainly: the restore action takes "the cheaper of reload (`rho*kv` over PCIe) or
+recompute (prefill the context)". This lane never implemented the `min`. It always
+charged reload. So every negative result to date sits under the most pessimistic
+restore assumption available, and the true effective fraction is `<= 0.94`.
+
+**Question.** Sweep `rho` and locate the value at which each negative conclusion
+flips. Two policy classes are re-run at each `rho`: `best_constant`, one scalar
+fitted out-of-fold, and the per-key leave-one-out ceiling for `cmd_depth_4`, both
+against `deadline_only` recomputed at the same `rho`.
+
+**Sweep.** `rho` in `{0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.94}`, at
+`kv = 3500` and `5000`. `rho = 0` is the most generous assumption physically
+possible — a free restore — and is included deliberately as the strongest test the
+data can support.
+
+**Interpretation fixed in advance.** If neither class beats `deadline_only` at any
+`rho` including `0`, the negative result is **unconditional in the restore charge**,
+which is a materially stronger claim than anything committed so far. If a class
+flips at some `rho* <= 0.94`, the negative result is **contingent**, and every
+committed conclusion in this lane must be restated as holding only for
+swap-back-expensive regimes. Report `rho*` per class and cell. There is no
+pass/fail band here; the sweep's output is the boundary itself, and it must be
+reported wherever it falls.
+
+**Premise, binding.** Forced eviction; with no memory pressure every arm scores
+zero. Fresh-277 cannot exhibit contention. Hidden-swap milliseconds, not wall clock.
+Note that `rho` and `kv` are swept parameters of the cost model here, not derived
+from any specific context length in this corpus.
+
+**Causal contract.** `best_constant` and the per-key trigger read only rows outside
+the scored row's fit, as in `24d4344` and `f1cbee3` respectively. The five
+task-grouped folds partition task ids.
+
 ## Explicit non-claims
 
 - No live W5 or headline systems result exists.
