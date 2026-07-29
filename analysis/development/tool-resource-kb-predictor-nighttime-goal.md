@@ -306,23 +306,28 @@ Use this speculative state machine:
 t = 0:
     bind clause_id, command features, and the intended KB snapshot
     schedule the landmark timer
-
-t = h - predictor_p99_latency - safety_margin:
-    if the clause ended: do not launch the predictor
-    if it is alive: launch the conditional predictor asynchronously
+    launch the conditional predictor asynchronously
 
 t = h:
     if the clause ended: discard any result
     if alive and the result is valid and ready: apply the action
-    if alive but result is late, invalid, or unavailable: no-op/current fallback
+    if alive but the result is late: apply it when ready only if the clause
+        is still alive, or use the declared no-op/current fallback at h
+    if alive but the result is invalid or unavailable: no-op/current fallback
 ```
 
-Launching the full predictor at `t=0` for every clause hides prediction latency
-but does not save compute: predictions for 57.44% and 69.76% of clauses would
-be discarded at the 100 and 500 ms landmarks. Launch as late as the measured
-p99 permits. Measure persistent single-clause predictor p50/p95/p99 on the
-actual scheduler hardware before selecting a landmark; do not infer it from
-offline batch throughput.
+The human corrected the earlier delayed-launch proposal after it was written:
+the predictor starts at clause start for every clause. Prediction latency
+therefore determines whether a result is ready at `h`, not when prediction
+starts. If the result is ready before `h`, cache it; if the clause ends before
+`h`, discard it. If the result becomes ready after `h`, the earliest possible
+application time is that completion time and the clause must still be alive.
+Equivalently, application is gated at `max(h, prediction_completion_time)`;
+`min(h, prediction_completion_time)` is only the first checkpoint. Charge all
+launched work, including predictions discarded for the 57.44% and 69.76% of
+clauses that end by the 100 and 500 ms landmarks. Measure end-to-end latency
+only for a predictor that remains a candidate, to quantify deadline coverage;
+do not benchmark a rejected representation merely to choose a launch time.
 
 The static conditional head may be computed later but must use the frozen
 start-time command features and declared KB snapshot. A separate dynamic
@@ -359,6 +364,39 @@ arms, and cohort-separated reporting. The primary deployment gate must be
 action utility at the operating point, including predictor cost, action
 latency, useful remaining-runtime coverage, and harmful false actions; higher
 conditional classification accuracy alone is insufficient.
+
+Before changing predictor structure, run one fixed-predictor landmark
+falsification on the two development-exposed SWE cohorts:
+
+1. Evaluate exactly `h=100 ms` and `h=500 ms`, with strict survival
+   `latency_ms > h`. Use five deterministic repository-grouped folds separately
+   in each cohort, manifest task order, and task-close causal updates.
+2. Fix both arms to the current raw exact/prefix hard-backoff KB. The
+   unconditional arm fits public evidence and admits later local evidence from
+   all eligible clauses. The conditional arm differs only by fitting and
+   admitting evidence from clauses with `latency_ms > h`.
+3. At replay inference, invoke both arms for every eligible clause at clause
+   start, before any observation from the task settles. Score and apply only
+   on the identical survivor rows. Report all launched, discarded, survivor,
+   and resource-label-unavailable counts.
+4. Keep the canonical total-latency `2000/8000 ms` buckets and whole-clause
+   CPU/RSS/Disk labels for this controlled first probe. These aggregate
+   resource labels can test population conditioning but are not future-after-h
+   targets; the available artifacts do not contain the time-resolved resource
+   values needed to claim future action utility.
+5. For latency report exact accuracy, class counts, confusion, and the
+   same-survivor majority. For every resource report label-source counts,
+   TP/TN/FP/FN, exact accuracy, and same-survivor majority-Light. Reconcile
+   identical survivor row identities and labels across arms.
+6. A target/landmark is a development GO only if the conditional arm is
+   strictly more accurate than both the unconditional arm and the
+   same-survivor majority in both cohorts. Otherwise it is NO-GO for that
+   target. Do not tune the landmark, KB representation, thresholds, or
+   resource labels after reading these results.
+7. Also report the already fixed useful-opportunity counts for action
+   latencies 100, 250, and 500 ms. Do not select one global landmark or claim
+   scheduler utility without a concrete action cost/benefit model and
+   time-resolved post-landmark targets.
 
 The completed full-population contrastive experiment remains an unchanged
 NO-GO representation baseline. Do not reinterpret it as landmark evidence;
