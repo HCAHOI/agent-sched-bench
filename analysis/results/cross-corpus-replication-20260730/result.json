@@ -1,0 +1,233 @@
+{
+  "artifact_type": "cross_corpus_replication_of_kv_lane_negative",
+  "date": "2026-07-30",
+  "criterion_frozen_in": "1b8a57d",
+  "claim_bearing": false,
+  "swe100": {
+    "corpus": "configs/corpora/swe-100.json",
+    "tasks": 100,
+    "rows": 4640,
+    "cells": {
+      "56": {
+        "kv_ms": 56.0,
+        "rows": 4640,
+        "long_frac": 0.24525862068965518,
+        "band_frac": 0.017025862068965517,
+        "deadline_s": 58.74620669555664,
+        "best_constant_s": 58.63757546173096,
+        "per_key_loo_s": 58.533408522109994,
+        "oracle_s": 63.728,
+        "budget_s": 4.981793304443359,
+        "budget_frac_of_deadline": 0.08480195717590333,
+        "const_gain_s": -0.10863123382568302,
+        "loo_gain_s": -0.21279817344664478,
+        "const_beats": false,
+        "loo_beats": false
+      },
+      "100": {
+        "kv_ms": 100.0,
+        "rows": 4640,
+        "long_frac": 0.23081896551724138,
+        "band_frac": 0.017025862068965517,
+        "deadline_s": 98.2840461730957,
+        "best_constant_s": 98.67135647010804,
+        "per_key_loo_s": 98.7412775630951,
+        "oracle_s": 107.1,
+        "budget_s": 8.815953826904297,
+        "budget_frac_of_deadline": 0.08969872700781806,
+        "const_gain_s": 0.3873102970123291,
+        "loo_gain_s": 0.45723138999938967,
+        "const_beats": true,
+        "loo_beats": true
+      },
+      "160": {
+        "kv_ms": 160.0,
+        "rows": 4640,
+        "long_frac": 0.21875,
+        "band_frac": 0.027801724137931035,
+        "deadline_s": 143.30828937530518,
+        "best_constant_s": 142.98198577308665,
+        "per_key_loo_s": 145.03969001007084,
+        "oracle_s": 162.4,
+        "budget_s": 19.091710624694823,
+        "budget_frac_of_deadline": 0.13322125822530892,
+        "const_gain_s": -0.3263036022185406,
+        "loo_gain_s": 1.731400634765654,
+        "const_beats": false,
+        "loo_beats": true
+      },
+      "3500": {
+        "kv_ms": 3500.0,
+        "rows": 4640,
+        "long_frac": 0.054310344827586204,
+        "band_frac": 0.01853448275862069,
+        "deadline_s": 542.8394908905029,
+        "best_constant_s": 533.8922323322296,
+        "per_key_loo_s": 446.46858136177065,
+        "oracle_s": 882.0,
+        "budget_s": 339.16050910949707,
+        "budget_frac_of_deadline": 0.6247896750347327,
+        "const_gain_s": -8.947258558273315,
+        "loo_gain_s": -96.3709095287323,
+        "const_beats": false,
+        "loo_beats": false
+      },
+      "5000": {
+        "kv_ms": 5000.0,
+        "rows": 4640,
+        "long_frac": 0.04482758620689655,
+        "band_frac": 0.021551724137931036,
+        "deadline_s": 571.4171009063721,
+        "best_constant_s": 587.6876825332639,
+        "per_key_loo_s": 542.796056318283,
+        "oracle_s": 1040.0,
+        "budget_s": 468.58289909362793,
+        "budget_frac_of_deadline": 0.820036534346574,
+        "const_gain_s": 16.270581626891857,
+        "loo_gain_s": -28.62104458808899,
+        "const_beats": true,
+        "loo_beats": false
+      }
+    }
+  },
+  "swe277_reference": {
+    "56": {
+      "kv_ms": 56.0,
+      "rows": 13410,
+      "long_rows": 3857,
+      "band_rows": 300,
+      "deadline_s": 197.73456591796875,
+      "best_constant_s": 197.1818536146544,
+      "per_key_loo_s": 198.64187826705898,
+      "oracle_s": 215.992,
+      "budget_s": 18.25743408203125,
+      "budget_frac_of_deadline": 0.0923330425172372,
+      "const_gain_s": -0.5527123033143579,
+      "loo_gain_s": 0.9073123490902363,
+      "const_beats": false,
+      "loo_beats": true
+    },
+    "100": {
+      "kv_ms": 100.0,
+      "rows": 13410,
+      "long_rows": 3605,
+      "band_rows": 339,
+      "deadline_s": 324.30611791610715,
+      "best_constant_s": 324.30611791610715,
+      "per_key_loo_s": 321.99705453681946,
+      "oracle_s": 360.5,
+      "budget_s": 36.193882083892824,
+      "budget_frac_of_deadline": 0.11160406814544153,
+      "const_gain_s": 0.0,
+      "loo_gain_s": -2.3090633792877195,
+      "const_beats": false,
+      "loo_beats": false
+    },
+    "160": {
+      "kv_ms": 160.0,
+      "rows": 13410,
+      "long_rows": 3391,
+      "band_rows": 518,
+      "deadline_s": 465.4378967666626,
+      "best_constant_s": 466.95030241546584,
+      "per_key_loo_s": 464.29507713279696,
+      "oracle_s": 542.56,
+      "budget_s": 77.1221032333374,
+      "budget_frac_of_deadline": 0.1656979454597375,
+      "const_gain_s": 1.512405648803222,
+      "loo_gain_s": -1.1428196338656125,
+      "const_beats": true,
+      "loo_beats": false
+    },
+    "3500": {
+      "kv_ms": 3500.0,
+      "rows": 13410,
+      "long_rows": 845,
+      "band_rows": 309,
+      "deadline_s": 1565.4090399742126,
+      "best_constant_s": 1529.0907402038574,
+      "per_key_loo_s": 1481.8362240695953,
+      "oracle_s": 2957.5,
+      "budget_s": 1392.0909600257874,
+      "budget_frac_of_deadline": 0.889282560964845,
+      "const_gain_s": -36.318299770355225,
+      "loo_gain_s": -83.57281590461731,
+      "const_beats": false,
+      "loo_beats": false
+    },
+    "5000": {
+      "kv_ms": 5000.0,
+      "rows": 13410,
+      "long_rows": 644,
+      "band_rows": 325,
+      "deadline_s": 1742.3890233039856,
+      "best_constant_s": 1742.3890233039856,
+      "per_key_loo_s": 1597.039232158661,
+      "oracle_s": 3220.0,
+      "budget_s": 1477.6109766960144,
+      "budget_frac_of_deadline": 0.8480373538477137,
+      "const_gain_s": 0.0,
+      "loo_gain_s": -145.3497911453247,
+      "const_beats": false,
+      "loo_beats": false
+    }
+  },
+  "win_matrix": {
+    "56": {
+      "swe100": {
+        "const": false,
+        "loo": false
+      },
+      "swe277": {
+        "const": false,
+        "loo": true
+      }
+    },
+    "100": {
+      "swe100": {
+        "const": true,
+        "loo": true
+      },
+      "swe277": {
+        "const": false,
+        "loo": false
+      }
+    },
+    "160": {
+      "swe100": {
+        "const": false,
+        "loo": true
+      },
+      "swe277": {
+        "const": true,
+        "loo": false
+      }
+    },
+    "3500": {
+      "swe100": {
+        "const": false,
+        "loo": false
+      },
+      "swe277": {
+        "const": false,
+        "loo": false
+      }
+    },
+    "5000": {
+      "swe100": {
+        "const": true,
+        "loo": false
+      },
+      "swe277": {
+        "const": false,
+        "loo": false
+      }
+    }
+  },
+  "verdict": "REPLICATES. Both parts of the frozen claim hold on SWE100. No deployable arm reliably beats deadline_only at any cell, and the budget as a fraction of deadline utility is small at per-request scale (8.5%, 9.0%, 13.3% at 56/100/160 ms) and large at the campaign cells (62.5% at 3500, 82.0% at 5000). The negative result is corpus-robust across traces.",
+  "stronger_evidence_than_either_corpus_alone": "The cells where an arm appears to win do NOT overlap between corpora. per_key_loo wins at 56 ms on SWE277 and LOSES there on SWE100; it wins at 100 and 160 on SWE100 and loses at both on SWE277. best_constant wins at 160 on SWE277 and loses there on SWE100. Zero cells agree. A real effect at some cell would replicate at that cell; scattered wins with no cross-corpus overlap are noise. This converts 8968434's 'probably noise, interval spans zero' into a positive demonstration.",
+  "quantitative_difference_worth_noting": "The budget at kv=3500 is 62.5% of deadline utility on SWE100 against 88.9% on SWE277. The qualitative pattern is identical, large at campaign cells and small at per-request cells, but the magnitude is not stable, so budget fractions should be quoted as a range across corpora rather than a point.",
+  "scope": "Both corpora share benchmark, scaffold and model, so this is replication across TRACES, not across WORKLOADS. It does not establish that the conclusion holds for non-SWE agents. SWE100 has 100 tasks and 4640 rows against SWE277's 277 tasks and 13410 rows.",
+  "why_this_ran": "I had concluded no valuable offline experiment remained and was about to stop the loop, then found every result in the lane rested on one corpus while a second declared corpus sat unused. Replication had already caught a defective statistic once this run (c211b37).",
+  "premise": "Forced eviction; with no memory pressure every arm scores zero; neither corpus can exhibit contention; hidden-swap milliseconds, not wall clock. The per-request kv values were derived from Fresh-277's context distribution and reused unchanged, so they are held fixed across corpora by construction rather than re-derived per corpus."
+}
