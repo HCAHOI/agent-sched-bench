@@ -190,6 +190,56 @@ and retain current raw hard-backoff for CPU and RSS. Alpha 4 remains a
 fit-only CPU research candidate, not deployment evidence. No additional RSS
 MLP, loss, seed, or threshold tuning is authorized from these exposed data.
 
+### 2026-07-29 contrastive clause-retrieval amendment
+
+Visible before this amendment: both RSS MLP failures, the Heavy/Light mechanism
+audit, and a historical 2026-07-23 BERT summary reporting no robust marginal
+for the older tool-level whole-container memory target. That historical target,
+telemetry, and unit differ from the current clause-level sampled-RSS objective,
+so the result is a caution rather than a substitute for this test.
+
+The human explicitly authorized a pretrained embedding model plus contrastive
+adaptation for canonicalized clauses. This supersedes invariant 10 only for
+one development-only, offline RSS retrieval falsification. Do not add a runtime
+dependency, ANN index, model download, or service integration. Use the locally
+cached `distilbert-base-uncased` weights through an ephemeral
+`transformers==4.57.6` environment; do not modify `pyproject.toml` or
+`uv.lock`.
+
+Use one joint deterministic five-fold repository partition over the union of
+the two locked SWE inputs; a repository must remain in one fold even if it
+appears in both inputs. Report each cohort separately and pooled. For every
+fold:
+
+1. Render each clause as the training-vocabulary `generic-argv-v3-role` token
+   stream with explicit role markers. Validation labels and repositories never
+   affect the stable-subcommand vocabulary.
+2. B0 is frozen DistilBERT last-hidden-state mean pooling under the attention
+   mask, L2 normalized, maximum 128 wordpieces. Report truncation coverage.
+3. Construct exactly one training triplet per RSS-Heavy anchor. The positive
+   is the closest B0 Heavy example from another repository, preferring the same
+   bin when available. The hard negative is the closest B0 Light example from
+   another repository, also preferring the same bin. Mining uses outer-training
+   labels only.
+4. B1 adds a 768-to-128 linear projection and unfreezes only DistilBERT's final
+   transformer block. Train the fixed triplets for five epochs, batch size 32,
+   seed 0, cosine triplet margin 0.2, AdamW with encoder learning rate `2e-5`,
+   projection learning rate `1e-3`, and weight decay `1e-4`. There is no
+   checkpoint, epoch, margin, mining, or learning-rate selection.
+5. Retrieve the five nearest outer-training clauses by cosine similarity.
+   Predict Heavy only when at least three neighbors are Heavy. The primary arm
+   preserves current raw hard-backoff positives and adds retrieval positives;
+   also report standalone retrieval for mechanism diagnosis.
+6. B1 is GO only if the primary hybrid strictly beats current and all-Light
+   accuracy in each cohort, has at least one additional true positive, and
+   adds fewer false positives than true positives. B0 is a frozen baseline,
+   not an alternative selection opportunity.
+
+This test asks whether task-adapted embedding geometry creates a small
+high-purity Heavy neighborhood. Failure ends embedding and contrastive tuning
+on these exposed corpora. Success permits a reviewed reusable implementation;
+it is not confirmation evidence.
+
 ## 2. Authority and required amendment
 
 Before reading any new three-bin result, rewrite
