@@ -259,6 +259,54 @@ regime, not wall clock.
 existing five task-grouped folds with disjointness asserted. Both oracles are
 labelled analysis-only and reported separately.
 
+## Open question — is the within-key variance irreducible, or an artifact of key choice?
+
+**Criterion frozen 2026-07-29, before the numbers exist.**
+
+Visible when frozen: `57cbbbb` (budget 1392.1 s / 1477.6 s, entirely in `kv < L < 2*kv`)
+and `3bc4906` (per-key ceiling 32.1% / 29.3%, with ~70% of the budget attributed to
+within-key variance). That 70% was computed against **one** key: the deepest
+command-prefix key at `max_prefix_depth=4`. Whether it is a property of the workload
+or of that key is untested.
+
+**Question.** Compute the per-key oracle ceiling as a function of key richness. If the
+ceiling rises materially as the key sharpens, the variance is reducible and keying is
+the lever. If the curve is flat past the command prefix, the variance is genuinely
+within-command and no member of the per-key family — Continuum's included — can reach
+it.
+
+**Key ladder**, coarse to fine, each scored identically:
+
+1. `tool_name` — Continuum's granularity.
+2. `cmd_depth_1` — binary only.
+3. `cmd_depth_2`.
+4. `cmd_depth_4` — the shipped key, already measured in `3bc4906`.
+5. `repo+cmd_depth_4` — adds repository identity, the richest key available offline.
+
+**Metric.** For each key, the per-key in-sample oracle ceiling as a fraction of the
+per-call ORACLE budget, at `kv = 3500` and `5000`. All ceilings are ANALYSIS-ONLY and
+optimistic by construction, since each is fitted in-sample on the rows it scores; the
+comparison between them is the object of interest, not their absolute level.
+
+**Interpretation fixed in advance.** If `repo+cmd_depth_4` exceeds `cmd_depth_4` by
+more than 15 percentage points of the budget in both cells, keying is the lever and
+richer keys are worth building. If it gains under 5 points in both, the within-key
+variance is irreducible by keying and the entire per-key empirical family is bounded
+near its current ceiling. Between 5 and 15 is inconclusive and is not resolved by
+moving the band.
+
+**Expected secondary result, recorded before the run.** `tool_name` should score
+lowest, quantifying how much Continuum's granularity leaves on the table relative to
+a command-prefix key. That comparison is the point of including it.
+
+**Premise, binding.** Forced eviction; with no memory pressure every arm including
+every oracle scores zero. Fresh-277 cannot exhibit contention. Hidden-swap
+milliseconds, not wall clock.
+
+**Causal contract.** Ceilings are in-sample per key within each evaluation fold and
+are labelled as oracles; no ceiling is presented as achievable. The five task-grouped
+folds partition task ids, so fold disjointness is structural.
+
 ## Explicit non-claims
 
 - No live W5 or headline systems result exists.
