@@ -1,0 +1,85 @@
+{
+  "artifact_type": "development_exposed_runtime_activity_landmark",
+  "date": "2026-07-29",
+  "claim_bearing": false,
+  "criterion_frozen_in": "b23b9d7",
+  "verdict": "NO_GO in both KV cells",
+  "result": {
+    "criterion_frozen_in": "b23b9d7",
+    "trace": "traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl",
+    "landmark_ms": 1000.0,
+    "restore_cost_fraction": 0.94,
+    "folds": 5,
+    "rows_scored": 1794,
+    "cells": {
+      "3500": {
+        "kv_cost_ms": 3500.0,
+        "survivors": 1794,
+        "survivor_p_long": 0.48439241917502784,
+        "acceptance_bar": 0.4845360824742268,
+        "net_saved_s": {
+          "cpu_state@1s": 1643.7784000000001,
+          "deadline_only": 1655.0328,
+          "elapsed_only@1s": -2574.414100000001
+        },
+        "fired": 29,
+        "fired_long": 20,
+        "fired_subgroup_p_long": 0.6896551724137931,
+        "fired_subgroup_clears_bar": true,
+        "margin_vs_deadline": {
+          "point_s": -11.254399999999999,
+          "ci_low_s": -36.500899999999994,
+          "ci_high_s": 14.501200000000004,
+          "fraction_positive": 0.1803
+        },
+        "margin_vs_elapsed": {
+          "point_s": 4218.1925,
+          "ci_low_s": 3574.1637,
+          "ci_high_s": 4906.348099999999,
+          "fraction_positive": 1.0
+        }
+      },
+      "5000": {
+        "kv_cost_ms": 5000.0,
+        "survivors": 1794,
+        "survivor_p_long": 0.37402452619843923,
+        "acceptance_bar": 0.4845360824742268,
+        "net_saved_s": {
+          "cpu_state@1s": 1856.3112999999987,
+          "deadline_only": 1865.6787999999985,
+          "elapsed_only@1s": -6178.379899999989
+        },
+        "fired": 3,
+        "fired_long": 2,
+        "fired_subgroup_p_long": 0.6666666666666666,
+        "fired_subgroup_clears_bar": true,
+        "margin_vs_deadline": {
+          "point_s": -9.3675,
+          "ci_low_s": -28.1025,
+          "ci_high_s": 0.0,
+          "fraction_positive": 0.0
+        },
+        "margin_vs_elapsed": {
+          "point_s": 8034.6912,
+          "ci_low_s": 6994.9492,
+          "ci_high_s": 9114.7288,
+          "fraction_positive": 1.0
+        }
+      }
+    }
+  },
+  "premise_the_numbers_are_conditional_on": "The utility functional credits min(kv, remaining) for hiding swap-out under a running tool call, and charges the differential restore only on short calls. That is coherent ONLY under forced eviction: it assumes a long call would have been evicted anyway, so its restore cancels across arms, while a short call's eviction was created by the policy. With no memory pressure the optimal policy is never swap and every arm scores 0. CLOSED-QUESTIONS.md states Fresh-277 cannot measure contention, so this lane is scored under a premise its corpus cannot exhibit. Between-arm comparisons remain valid; the absolute seconds are hidden-swap-ms under an assumed forced-eviction regime, NOT wall clock saved.",
+  "why": {
+    "subgroup_purity_achieved": "the stump isolated a subgroup above the frozen 48.5% bar (fired P(long)=69.0% at kv=3500, 66.7% at kv=5000), so the CPU trajectory carries real signal.",
+    "volume_collapses": "it fires on 29 of 1794 survivors at kv=3500 and 3 of 1794 at kv=5000, approaching never-fire, which is deadline_only.",
+    "frozen_bar_was_mis_specified": "rho/(1+rho) assumes a long call hides the full K. Firing at t hides only min(K, latency-t), so a call ending at 4 s fired at 1 s with K=3500 hides 2.6 s and still eats 0.9 s exposure. A 69%-pure subgroup can be net-negative. The correct condition involves the remaining-time distribution given long, not P(long) alone. Recorded, not repaired.",
+    "elapsed_only_corroborates": "firing on every survivor at 1 s loses 2574 s and 6178 s despite survivor P(long)=48.4% at kv=3500, right at the nominal bar."
+  },
+  "correction": {
+    "landmark_prose": "the frozen text called t=1000 ms 'the first point with two complete 500 ms windows'. Windows END at 0.501/1.002/1.504 s, so 1000 ms admits exactly ONE complete window. Landmark and pre-recorded population (1794 survivors, P(long) 48.4%/37.4%) unchanged; only the prose was wrong."
+  },
+  "limitations": [
+    "Development-exposed; replay corpus with container and eBPF overhead.",
+    "Closes the single-landmark mean-active-cores form only, not runtime activity in general."
+  ]
+}
