@@ -1,0 +1,29 @@
+{
+  "artifact_type": "development_exposed_clause_rss_label_coverage",
+  "date": "2026-07-29",
+  "claim_bearing": false,
+  "question": "Clause-level RSS labels are null for a majority of clauses. Is that the sampler's two-sample floor on short clauses, or a real telemetry gap that biases clause-level claims?",
+  "counts": {
+    "clauses": 13940,
+    "rss_available": 6510,
+    "rss_null": 7430,
+    "null_fraction": 0.5329985652797704
+  },
+  "single_cause": "every one of the 7430 nulls carries availability.memory = 'unknown:insufficient_rss_samples'; telemetry.py returns None when fewer than two 20 ms RSS bins are observed",
+  "duration_split": {
+    "rss_available": {
+      "median_ms": 354.6676875,
+      "p90_ms": 6765.299526,
+      "max_ms": 556964.385606
+    },
+    "rss_null": {
+      "median_ms": 1.820027,
+      "p90_ms": 2042.467649,
+      "p99_ms": 20431.997057,
+      "max_ms": 279966.019324
+    }
+  },
+  "finding": "Two distinct populations. 73.8% of nulls are under 40 ms, exactly the two-sample floor at 20 ms bins, and are benign. But nulls still hold 29.4% of all clause latency, their p99 is 20432 ms and their maximum is 279966 ms, and 1089 null clauses run at least 1 s. A 280-second clause with insufficient RSS samples is a sampler failure, not a duration floor.",
+  "bias_direction_on_prior_result": "For 7335a82's within-call peak/min RSS ratio the excluded clauses are overwhelmingly short and would supply tiny denominators, so including them would RAISE the ratio: the 36x median is conservative. For the 48.8% wasted-envelope figure the excluded 29.4% of clause-time includes long clauses, so that number carries a genuine coverage caveat and could move in either direction.",
+  "consequence": "Any clause-granular resource control claim must either close this gap or bound itself to the 70.6% of clause-time that carries labels. This is also a prerequisite for the capacity experiment, which integrates resource over time and is therefore sensitive to the missing long clauses specifically."
+}
