@@ -1,0 +1,34 @@
+{
+  "artifact_type": "development_exposed_heterogeneity_replication",
+  "date": "2026-07-29",
+  "claim_bearing": false,
+  "question": "Does the intra-tool-call heterogeneity finding in 7335a82 replicate on an independent cohort, or is it a property of one trace?",
+  "cohorts": {
+    "SWE277": {
+      "exec_calls": 8690,
+      "multi_clause": 4203,
+      "multi_clause_frac": 0.484,
+      "clause_rss_null_frac": 0.533,
+      "usable_multi_clause": 768,
+      "peak_over_min_median": 36.0,
+      "peak_over_min_p90": 586.2,
+      "envelope_waste": 0.488
+    },
+    "SWE100": {
+      "exec_calls": 2890,
+      "multi_clause": 1281,
+      "multi_clause_frac": 0.443,
+      "clause_rss_null_frac": 0.518,
+      "usable_multi_clause": 246,
+      "peak_over_min_median": 13.2,
+      "peak_over_min_p90": 461.0,
+      "envelope_waste": 0.481
+    }
+  },
+  "finding": "Replicates. The headline quantity is nearly identical across cohorts: a single call-level limit wastes 48.8% of the RSS resource-time envelope on SWE277 and 48.1% on SWE100. Multi-clause fraction (48.4% vs 44.3%), null-label fraction (53.3% vs 51.8%) and p90 dispersion (586x vs 461x) all agree closely.",
+  "the_one_statistic_that_does_not_replicate_well": "The peak/min MEDIAN moves from 36.0x to 13.2x. It is computed over only 768 and 246 usable multi-clause calls and is sensitive to the smallest clause in each call, so it is the least stable of the reported statistics. The envelope figure, which is duration-weighted, is the one to quote.",
+  "limitations": [
+    "Both cohorts are the same benchmark, agent scaffold and model, so this is replication across traces, NOT across workloads. It does not establish that the property holds for non-SWE agents.",
+    "Both inherit the 29.4% clause resource-time coverage gap documented in 9d1db84."
+  ]
+}
