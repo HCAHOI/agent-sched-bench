@@ -307,6 +307,51 @@ milliseconds, not wall clock.
 are labelled as oracles; no ceiling is presented as achievable. The five task-grouped
 folds partition task ids, so fold disjointness is structural.
 
+## Open question — the fine-key gain under an unconfounded estimator
+
+**Criterion frozen 2026-07-29, before the numbers exist.**
+
+Visible when frozen: `8e7ed28`, where the same measurement gave GO by the letter of
+its criterion (repo gain 38.5 / 45.7 pp) and INCONCLUSIVE once restricted to groups
+of five or more rows (15.0 / 13.9 pp). The disagreement is caused by a defect I
+recorded there: in-sample per-key ceilings are confounded with key cardinality, and
+singleton groups contribute 25.6% and 35.6% of the fine-key ceiling while carrying
+zero information.
+
+**Question.** Settle the fine-key gain with leave-one-out, which removes the
+degeneracy exactly rather than by restriction. For each row, fit the trigger on the
+key's **other** rows within the same evaluation fold and score the held-out row. A
+singleton group then has no other rows and correctly falls back to the deadline,
+contributing nothing.
+
+**Scope, and why it is narrower than the previous ladder.** Only `cmd_depth_4` and
+`repo+cmd_depth_4` are evaluated. Those are the two rungs in dispute, and their
+groups are small (about 10 and 3 rows per key) so exact LOO is tractable. The coarse
+rungs are excluded deliberately: `tool_name` holds roughly 2682 rows per key, where
+LOO is both computationally quadratic and numerically pointless because removing one
+of 2682 samples cannot move the fitted trigger materially. The previous attempt
+timed out precisely because it included them.
+
+**Metric.** LOO ceiling for each key, as a fraction of the per-call ORACLE budget, at
+`kv = 3500` and `5000`. Also report the in-sample ceiling alongside so the size of
+the overfit is visible.
+
+**Interpretation, bands unchanged from `817edc7` so the two runs are comparable.**
+`repo+cmd_depth_4` beating `cmd_depth_4` by more than 15 percentage points of the
+budget in both cells means keying is the lever. Under 5 points in both means the
+within-key variance is not materially reducible by adding repository identity.
+Between 5 and 15 is inconclusive and is not resolved by moving the band.
+
+**Premise, binding.** Forced eviction; with no memory pressure every arm including
+the oracle scores zero. Fresh-277 cannot exhibit contention. Hidden-swap
+milliseconds, not wall clock.
+
+**Causal contract.** LOO is computed within an evaluation fold, so no profile-fold
+information is used and no row informs its own trigger. The five task-grouped folds
+partition task ids. The LOO ceiling remains an ORACLE in the sense that it uses
+evaluation-fold rows of the same key; it is analysis-only and is not a deployable
+result.
+
 ## Explicit non-claims
 
 - No live W5 or headline systems result exists.
