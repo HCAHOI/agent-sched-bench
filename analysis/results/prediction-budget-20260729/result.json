@@ -1,0 +1,109 @@
+{
+  "criterion_frozen_in": "f81890f",
+  "premise": "forced eviction; hidden-swap-ms, not wall clock; Fresh-277 cannot exhibit contention",
+  "manifest": "configs/corpora/swe-277.json",
+  "tasks": 277,
+  "restore_cost_fraction": 0.94,
+  "oracle_is_analysis_only": true,
+  "cells": {
+    "3500": {
+      "kv_cost_ms": 3500.0,
+      "rows": 13410,
+      "net_saved_s": {
+        "ORACLE": 2957.5,
+        "deadline_only": 1565.4090399742126,
+        "mean_hazard": 1512.8817748069764,
+        "robust_clock": 1585.5496357154846
+      },
+      "never_act_s": 0.0,
+      "budget_oracle_minus_deadline_s": 1392.0909600257874,
+      "budget_as_fraction_of_deadline_utility": 0.889282560964845,
+      "robust_capture_s": 20.140595741271973,
+      "robust_fraction_of_budget": 0.014467873378689914,
+      "bootstrap_oracle_minus_deadline": {
+        "ci_low_s": 1160.601010799408,
+        "ci_high_s": 1640.4895629882812
+      },
+      "bootstrap_robust_minus_deadline": {
+        "ci_low_s": -48.45887049674988,
+        "ci_high_s": 83.80441143035888
+      }
+    },
+    "5000": {
+      "kv_cost_ms": 5000.0,
+      "rows": 13410,
+      "net_saved_s": {
+        "ORACLE": 3220.0,
+        "deadline_only": 1742.3890233039856,
+        "mean_hazard": 1765.730331659317,
+        "robust_clock": 1860.3870544433594
+      },
+      "never_act_s": 0.0,
+      "budget_oracle_minus_deadline_s": 1477.6109766960144,
+      "budget_as_fraction_of_deadline_utility": 0.8480373538477137,
+      "robust_capture_s": 117.99803113937378,
+      "robust_fraction_of_budget": 0.07985730547509952,
+      "bootstrap_oracle_minus_deadline": {
+        "ci_low_s": 1160.2463703155518,
+        "ci_high_s": 1870.4617071151733
+      },
+      "bootstrap_robust_minus_deadline": {
+        "ci_low_s": 35.18202648162842,
+        "ci_high_s": 201.7323194503784
+      }
+    }
+  },
+  "mechanism": {
+    "headline": "100% of the prediction budget lies in calls whose latency falls between 1x and 2x the KV cost. Calls beyond 2x contribute EXACTLY ZERO.",
+    "why": "For L >= 2*kv the deadline fires at kv with remaining L-kv >= kv, so it already hides the full swap with zero exposure and the oracle cannot improve on it. For L just above the threshold the deadline fires with almost no remaining time and is exposed by nearly the whole kv, while the oracle fires at L-kv and hides all of it. The budget is the exposure the deadline eats on calls that only just outlive it.",
+    "band_split": {
+      "3500": {
+        "1-1.5x": {
+          "n": 221,
+          "budget_s": 1203.2,
+          "share": 0.864
+        },
+        "1.5-2x": {
+          "n": 88,
+          "budget_s": 188.9,
+          "share": 0.136
+        },
+        "2-4x": {
+          "n": 310,
+          "budget_s": 0.0,
+          "share": 0.0
+        },
+        "4x+": {
+          "n": 226,
+          "budget_s": 0.0,
+          "share": 0.0
+        }
+      },
+      "5000": {
+        "1-1.5x": {
+          "n": 128,
+          "budget_s": 1022.8,
+          "share": 0.692
+        },
+        "1.5-2x": {
+          "n": 197,
+          "budget_s": 454.8,
+          "share": 0.308
+        },
+        "2-4x": {
+          "n": 144,
+          "budget_s": 0.0,
+          "share": 0.0
+        },
+        "4x+": {
+          "n": 175,
+          "budget_s": 0.0,
+          "share": 0.0
+        }
+      }
+    },
+    "target_population": "309 of 13410 rows at kv=3500 and 325 of 13410 at kv=5000, i.e. 2.3-2.4% of calls. Capturing the budget requires deciding at t~0 that a call will land in that narrow band, not merely that it will be long.",
+    "reframes_the_whole_lane": "Every predictor built in this repo targets P(long), i.e. P(L > kv). That is the WRONG target: among long calls, those beyond 2x kv carry no budget at all. The correct target is P(kv < L < 2*kv), a narrow-band discrimination on ~2.4% of calls. This explains why four committed NO-GOs all failed while the budget was large the whole time."
+  },
+  "verdict": "Budget is 88.9% of deadline utility at kv=3500 and 84.8% at kv=5000, both CIs excluding zero, so under the frozen bands prediction is worth continued investment. But the shipped robust_clock captures 1.4% and 8.0% of it. The barrier is not that prediction is impossible; it is that every predictor here optimised the wrong target."
+}
