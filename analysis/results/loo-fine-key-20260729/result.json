@@ -1,0 +1,66 @@
+{
+  "criterion_frozen_in": "82287e2",
+  "premise": "forced eviction; hidden-swap-ms not wall clock; Fresh-277 cannot exhibit contention",
+  "loo_ceiling_is_still_an_oracle": true,
+  "tasks": 277,
+  "cells": {
+    "3500": {
+      "kv_cost_ms": 3500.0,
+      "deadline_only_s": 1565.4090399742126,
+      "oracle_s": 2957.5,
+      "budget_s": 1392.0909600257874,
+      "keys": {
+        "cmd_depth_4": {
+          "in_sample_ceiling_s": 446.83535711288454,
+          "in_sample_fraction": 0.3209814372364053,
+          "loo_ceiling_s": -83.57281590461731,
+          "loo_fraction": -0.06003401954644486,
+          "overfit_s": 530.4081730175018,
+          "singleton_rows": 1310
+        },
+        "repo+cmd_depth_4": {
+          "in_sample_ceiling_s": 982.3989435768127,
+          "in_sample_fraction": 0.7057002536376032,
+          "loo_ceiling_s": -232.4699241542816,
+          "loo_fraction": -0.16699334370361496,
+          "overfit_s": 1214.8688677310943,
+          "singleton_rows": 3174
+        }
+      },
+      "repo_gain_pp_loo": -10.69593241571701
+    },
+    "5000": {
+      "kv_cost_ms": 5000.0,
+      "deadline_only_s": 1742.3890233039856,
+      "oracle_s": 3220.0,
+      "budget_s": 1477.6109766960144,
+      "keys": {
+        "cmd_depth_4": {
+          "in_sample_ceiling_s": 432.3835217952728,
+          "in_sample_fraction": 0.29262338234796836,
+          "loo_ceiling_s": -145.3497911453247,
+          "loo_fraction": -0.09836810462137437,
+          "overfit_s": 577.7333129405976,
+          "singleton_rows": 1310
+        },
+        "repo+cmd_depth_4": {
+          "in_sample_ceiling_s": 1108.9189809799195,
+          "in_sample_fraction": 0.7504810118963098,
+          "loo_ceiling_s": -307.19048595428467,
+          "loo_fraction": -0.20789672708115126,
+          "overfit_s": 1416.1094669342042,
+          "singleton_rows": 3174
+        }
+      },
+      "repo_gain_pp_loo": -10.95286224597769
+    }
+  },
+  "verdict": "Repo gain is -10.7 pp (kv=3500) and -11.0 pp (kv=5000), under the frozen 5 pp bar, so repository identity does NOT materially reduce within-key variance. The stronger result is that BOTH fine keys have NEGATIVE leave-one-out ceilings: honestly evaluated, they lose to the plain deadline.",
+  "what_this_corrects": {
+    "8e7ed28": "Its as-frozen GO, repo gain 38.5 and 45.7 pp, was entirely an overfitting artifact. The overfit is 1214.9 s and 1416.1 s for repo+cmd, larger than the whole budget of 1392.1 s and 1477.6 s. Its debiased inconclusive reading, 15.0 and 13.9 pp, was closer but still optimistic because the size-5 restriction leaves the scored row inside its own fit.",
+    "3bc4906": "Its framing of roughly 70% unreachable and roughly 30% reachable in principle is wrong in the optimistic direction. Honestly evaluated the reachable share is not 30% but negative, so effectively 100% of the budget is out of reach for per-key empirical methods on this corpus."
+  },
+  "bounds_interpretation": "In-sample and LOO bracket the truth from opposite sides and the bracket is enormous for fine keys: -232 s to +982 s at kv=3500 for repo+cmd. In-sample leaks because the scored row is inside its own fit. LOO is pessimistic because with about 3 rows per key it fits on roughly 2 samples. The honest reading is not a point estimate but the diagnosis that fine keys are TOO SPARSE TO ESTIMATE at this corpus size: coverage, not information, is the binding constraint.",
+  "not_merely_a_LOO_artifact": "profile_trigger in 3bc4906 fits on the profile folds, four fifths of the corpus, far more data than LOO, and it too loses to deadline_only at kv=3500 (1515.6 s against 1565.4 s). Two independent honest estimators, one fitting on more data and one on less, both fail to beat the deadline. That is not a sample-size quirk of LOO.",
+  "transfers_to_continuum": "Continuum's P(tau,f) is a per-key empirical CDF, a member of exactly this family. On this workload, evaluated without leakage, the family does not beat a fixed deadline. Combined with 8e7ed28's unconfounded finding that a tool_name key reaches 0.9% of the budget even in-sample, the estimator class is bounded near zero here."
+}
