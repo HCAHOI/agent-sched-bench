@@ -1,0 +1,32 @@
+{
+  "artifact_type": "development_exposed_reasoning_text_signal",
+  "date": "2026-07-29",
+  "claim_bearing": false,
+  "verdict": "NO_GO",
+  "question": "None of the seven surveyed systems reads the model's own reasoning text preceding a tool call. Does it separate long from short exec calls where command text provably cannot?",
+  "coverage": {
+    "exec_calls": 8976,
+    "with_preceding_text": 1723,
+    "fraction": 0.192,
+    "long_calls": 671,
+    "long_calls_with_text": 116,
+    "fraction_of_long_with_text": 0.173
+  },
+  "association": {
+    "p_long_given_text": 0.067,
+    "p_long_given_no_text": 0.077,
+    "note": "text presence is slightly NEGATIVELY associated with being long"
+  },
+  "oof_token_rule": {
+    "support_threshold": 40,
+    "train_purity_threshold": 0.485,
+    "fires_out_of_fold": 0,
+    "note": "no token with support >= 40 reached train P(long) > 48.5% in any of five task-grouped folds, so the rule never fires out-of-fold"
+  },
+  "finding": "Falsified on two independent grounds. Coverage is 19.2% overall and WORSE on the calls that matter, 17.3% of long calls, so most long exec calls are preceded by no reasoning text at all. And among text-bearing calls the base rate is 6.7%, below the 7.7% of text-free calls, with no token reaching the 48.5% acceptance bar at usable support.",
+  "why": "The agent writes reasoning before some turns but long-running exec calls -- test suites, installs -- frequently follow terse turns. More fundamentally the model does not know how long its own command will take either, so its prose carries intent, not duration.",
+  "limitations": [
+    "Single corpus, single agent scaffold and model.",
+    "Lexical unigram rule only. A stronger text model is not authorized by this result, but the coverage ceiling of 17.3% on long calls bounds any text-based method regardless of model."
+  ]
+}
