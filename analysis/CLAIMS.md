@@ -528,6 +528,48 @@ per-request `kv` values are derived from a measured bandwidth and a measured con
 distribution, but the pairing of the two is mine and is not itself a measured
 quantity.
 
+## Open question — does the KV-lane negative replicate on a second corpus?
+
+**Criterion frozen 2026-07-30, before the numbers exist.**
+
+Visible when frozen: the entire closed KV lane, consolidated in
+`analysis/development/research-directions-20260729.md` at `03a55fd`. Every result in
+it — the budget, the narrow band, the near-optimal deadline, the negative per-key
+outcome, the scale collapse — was computed on **Fresh-277 alone**, via
+`configs/corpora/swe-277.json`. A second declared corpus exists,
+`configs/corpora/swe-100.json` (100 tasks, same scaffold and model, trace root
+`offline-gated-confirm-100-v2`), and has never been used in this lane.
+
+**Why run it.** Replication caught a defective statistic once already this run:
+`c211b37` established that the duration-weighted envelope figure replicated across
+cohorts to within 0.7 pp while the median peak/min ratio moved from 36x to 13x, which
+is why the median was dropped as a headline. A single-corpus negative result is weaker
+than it needs to be when a second corpus is sitting unused.
+
+**Arms and cells**, identical to `8968434` so the two corpora are directly comparable:
+`deadline_only`, `best_constant` fitted out-of-fold, per-key `cmd_depth_4`
+leave-one-out, and the per-call `ORACLE`, at `kv` in `{56, 100, 160, 3500, 5000}` ms,
+`rho = 0.94`, `guard = 0`, five task-grouped folds.
+
+**Interpretation fixed in advance.** The claim under test is qualitative and has two
+parts. First, that no deployable arm reliably beats `deadline_only` at any cell.
+Second, that the budget as a fraction of deadline utility is small at per-request
+scale (56–160 ms) and large at the campaign cells (3500–5000 ms). If both hold on
+SWE100, the negative result is **corpus-robust across traces** and should be stated
+that way. If either fails, the negative result is **corpus-specific** and every
+committed conclusion in the lane must be qualified to Fresh-277.
+
+**What replication here does and does not buy.** Both corpora share benchmark,
+scaffold and model, so this is replication **across traces, not across workloads**. It
+cannot establish that the conclusion holds for non-SWE agents, and the write-up must
+say so.
+
+**Premise, binding.** Forced eviction; with no memory pressure every arm scores zero.
+Neither corpus can exhibit contention. Hidden-swap milliseconds, not wall clock. The
+per-request `kv` values were derived from Fresh-277's context distribution and are
+reused unchanged here rather than re-derived, so they are held fixed across corpora by
+construction.
+
 ## Explicit non-claims
 
 - No live W5 or headline systems result exists.
