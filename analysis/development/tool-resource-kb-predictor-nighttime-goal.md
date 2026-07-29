@@ -486,6 +486,73 @@ review, and only then read the outer result once. Do not tune the arbitration,
 this returns is development evidence, not a confirmation claim, and the untouched
 corpus remains reserved.
 
+### 2026-07-29 sequential remaining-time head amendment
+
+Frozen and committed before the evaluation exists. No remaining-time result had
+been produced when this was written.
+
+Visible before this amendment: everything above, plus all six committed results
+of 2026-07-29, including the repository-by-binary NO-GO and the task-barrier
+correction in `c75702f`. Also visible are the existing latency numbers: Candidate
+S at alpha 16 reaches `85.1010%` against majority `84.4472%` and current
+`84.5126%` on SWE277, and `88.2234%` against majority `87.5280%` and current
+`87.1018%` on SWE100, with node-oracle ceilings of `86.7354%` and `89.3001%`.
+The leave-one-out representation ceiling agrees with those oracles. No sequential
+remaining-time result exists.
+
+**What is new.** The fixed-landmark variant of this idea was already tested above
+and latency failed at both `100` and `500 ms`. That test predicted the **total**
+latency bucket on a conditioned population. This one predicts a different
+quantity: the **remaining** duration after the landmark. It is a distinct
+mechanism and is frozen and evaluated separately.
+
+**Target.** For a clause still running at rung `t`, the bucket of
+`latency_ms - t` under the canonical edges `2000` and `8000 ms`. No new
+threshold is introduced.
+
+**Rungs.** From the doubling ladder already declared above. The primary rung is
+`1000 ms`, chosen before the run because the median remaining duration there is
+about `2 s`, comfortably above any declared action latency, and roughly a fifth
+of clauses survive. Rungs `2000`, `4000` and `8000 ms` are reported as
+pre-declared secondary evidence and do not decide the gate.
+
+**Arms**, scored on identical survivor rows:
+
+1. `majority` — always predict the modal remaining bucket among the same
+   survivors. The strong constant baseline.
+2. `no_recondition` — the clause-start head, unchanged: its total-latency
+   argmax is read as if it described the remaining duration. This is what a
+   system that predicts once and never updates actually delivers at `t`.
+3. `conditional_remaining` — the same predictor over an evidence stream whose
+   latency values are `latency_ms - t`, restricted to clauses that survived `t`.
+
+Conditioning the evidence at fit time and renormalising the node at query time
+select the same set of values, so they are one arm, not two.
+
+**Metric.** Exact three-class accuracy, identical to the canonical latency
+objective. The cost-weighted utility gate used for the resource targets does
+**not** transfer here and is not used: it was justified by a one-to-four percent
+positive rate where an argmax at `0.5` needs twenty-five-fold enrichment, and
+latency is a three-class argmax against an `84-88%` majority.
+
+**Gate.** Development GO only if `conditional_remaining` is strictly more
+accurate than **both** `majority` and `no_recondition`, in **both** fit and
+evaluation orientations, at the primary rung, with the margin over the stronger
+of the two positive under a paired repository-cluster bootstrap.
+
+**Causal contract.** The task settlement barrier is mandatory: every clause in a
+task is predicted before any observation from that task settles. The barrier is
+what exposed the leak corrected in `c75702f`, and any arm reported without it is
+invalid. Public fit excludes the evaluated repository, manifest task order is
+preserved, and row identity and labels are identical across arms.
+
+**Not authorized.** Tuning the rung, bucket edges, arm definitions or evidence
+policy after reading; substituting a different metric; or treating a secondary
+rung as the verdict.
+
+**Exposure.** This is declared as the final planned read of the two SWE corpora.
+Whatever it returns is development evidence; the untouched corpus stays reserved.
+
 ## 2. Authority and required amendment
 
 Before reading any new three-bin result, rewrite
