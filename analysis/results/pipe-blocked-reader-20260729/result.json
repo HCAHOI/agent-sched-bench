@@ -1,0 +1,33 @@
+{
+  "artifact_type": "development_exposed_pipe_blocked_reader_pattern",
+  "date": "2026-07-29",
+  "claim_bearing": false,
+  "finding": "The dominant intra-call heterogeneity pattern is a heavy command piped to a blocked reader. 1018 of 4203 multi-clause exec calls (24.2%) pair a labelled >50MB clause with a blocked reader clause running at least one second. Those readers hold 8,519 s of wall time at the heavy clause's peak under a call-level limit, i.e. 6,512,407 MB-seconds (6,512 GB-seconds) of memory-time that a clause-granular limit would release.",
+  "counts": {
+    "multi_clause_calls": 4203,
+    "calls_with_pattern": 1018,
+    "fraction": 0.24220794670473472,
+    "blocked_reader_seconds": 8518.925312720994,
+    "mb_seconds_held": 6512406.6955854725
+  },
+  "top_patterns": {
+    "python3 | tail": 352,
+    "pip3 | tail": 251,
+    "apt-get | tail": 167,
+    "python | tail": 66,
+    "pytest | tail": 48,
+    "python3 | grep": 40,
+    "python3 | head": 39,
+    "timeout | tail": 15,
+    "pip | tail": 14,
+    "pytest | head": 8
+  },
+  "why_this_is_agent_specific": "Agents pipe heavy commands to tail/head/grep because tool output must fit an LLM context window. The heavy phase allocates, the reader phase blocks on the pipe with no measurable RSS, and the call stays alive throughout. Classic phase-aware resource management in HPC or serverless would not encounter this idiom, because it is created by the context limit, not by the computation.",
+  "resolves_the_coverage_worry": "The 29.4% clause resource-time coverage gap from 9d1db84 is NOT the instrument failing on the clauses that matter. Long null-RSS clauses are 963 tail, 72 head, 52 grep, 1 sort, 1 cat; the labelled long clauses are python3, apt-get, pip3, pytest, timeout, python. A blocked reader has no distinct-mm RSS samples because nothing is allocating, which is correct behaviour rather than a defect.",
+  "consequence_for_the_headline": "Excluding these clauses makes the 48.8% envelope figure CONSERVATIVE. Including a long near-zero-memory clause held at the call peak would raise the waste, not lower it.",
+  "limitations": [
+    "Single cohort for this specific pattern analysis.",
+    "The >50MB and >=1s cutoffs are descriptive thresholds chosen to name the pattern, not fitted to any gate; the pattern's existence does not depend on their exact values.",
+    "MB-seconds released is an upper bound on what clause-granular control could reclaim; actually reclaiming it requires a co-tenant, which this corpus cannot exhibit."
+  ]
+}
