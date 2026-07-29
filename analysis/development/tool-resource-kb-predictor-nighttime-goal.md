@@ -2,7 +2,8 @@
 
 **Date:** 2026-07-28
 
-**Time budget:** at most 8 hours of wall time
+**Time budget:** the original eight-hour window, followed by a human-authorized
+two-hour recovery window ending before the 2026-07-29 meeting
 
 **Mode:** unattended development exploration; no confirmation claim
 
@@ -60,6 +61,42 @@ until one wins is not.
 
 The data scope is SWE-ReBench only. Do not evaluate, inspect, collect, or use
 another benchmark during this goal.
+
+### 2026-07-29 recovery amendment
+
+Visible before this amendment: all baseline, Candidate R, and Candidate S
+outer development results. Candidate S improved latency and Disk in both
+orientations but regressed CPU and RSS; its latency-selected alpha was 16.
+Candidate C lacked an authorized context with 90% coverage. The prior agent
+incorrectly treated those facts as a reason to end after about one hour,
+despite the human's intent to continue mechanism exploration.
+
+Use the remaining two-hour recovery window for one bounded, fit-only
+falsification before proposing another architecture:
+
+1. Use only the fixed alpha grid `1, 4, 16, 64`.
+2. For SWE100 and SWE277 separately, assign repositories to the existing five
+   deterministic repository-grouped folds. Preserve manifest task order and
+   trace-close causal updates inside validation.
+3. Produce pooled out-of-fold predictions for current raw hard-backoff and
+   structured posterior shrinkage at every alpha.
+4. On the identical out-of-fold rows, report exact latency accuracy and each
+   resource accuracy against current and the same-fold majority or
+   majority-Light baseline.
+5. A shared alpha is feasible only if it is strictly better than both current
+   and majority for latency, CPU, RSS, and Disk in both cohorts. If multiple
+   alphas are feasible, select the one with the largest minimum percentage-
+   point margin across those eight gates; ties select the larger alpha.
+6. Do not read or rerun another outer result to choose the alpha. These folds
+   are development-exposed diagnostics, not fresh validation.
+
+If no alpha is feasible, do not scan more weights. Diagnose whether the
+failure is driven by false positives, false negatives, representation, or the
+shared-arbitration constraint, and produce a meeting-ready decision artifact.
+If one is feasible, freeze the selection rule, add the minimum reusable
+implementation, obtain bounded independent review, and only then run a
+development-only comparison. The recovery window is a hard deadline: prefer
+one complete, committed falsification over unfinished breadth.
 
 ## 2. Authority and required amendment
 
