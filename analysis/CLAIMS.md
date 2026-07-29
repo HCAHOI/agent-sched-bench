@@ -159,6 +159,57 @@ task-clustered bootstrap interval.
 substituting a fit metric for the utility gate; or reporting the fired subgroup's
 purity without the utility comparison.
 
+## Open question — what is the total budget available to any duration predictor?
+
+**Criterion frozen 2026-07-29, before the numbers exist.**
+
+Visible when frozen: C1-C3, the closed-questions register, the container-artifact
+attribution (`04ef2bd`), four committed NO-GOs, and tonight's correction (`adeccb2`)
+retracting the intra-call envelope figure. No oracle-versus-deadline gap has been
+computed on this corpus under this functional.
+
+**Question.** Published agent-serving systems attribute their gains to prediction
+without isolating it. Fix the mechanism — a single stopping time under the utility
+functional — and vary only the predictor, from none to perfect. The gap between a
+fixed deadline and perfect foreknowledge is the entire budget any predictor can ever
+claim.
+
+**Arms**, identical rows, `guard_ms = 0`, `restore = 0.94*kv`, cells `kv = 3500` and
+`5000 ms`:
+
+1. `never_act` — utility 0 by construction.
+2. `deadline_only` — fire at the threshold. No prediction.
+3. `mean_hazard`, `robust_clock` — the shipped predictors.
+4. `ORACLE` — perfect foreknowledge of the realised latency `L`. Fires only when
+   `L > threshold`, at `max(0, L - kv)`, the latest trigger that still hides the full
+   swap. Analysis-only, never deployable, never a feature.
+
+**Primary quantity.** `ORACLE - deadline_only`, in `s/277`. That is the budget.
+Secondary: `(robust_clock - deadline_only) / (ORACLE - deadline_only)`, the fraction
+of the budget the shipped predictor captures.
+
+**Interpretation fixed in advance.** If the budget is under 10% of `deadline_only`'s
+own utility, prediction is structurally marginal for this workload regardless of
+predictor quality, and no future predictor result on this corpus should be presented
+as a system contribution. If it exceeds 30%, prediction is worth continued
+investment. Between 10% and 30% is reported as inconclusive and not resolved by
+moving the band.
+
+**Premise, binding on every number.** The functional credits `min(kv, remaining)` for
+hiding swap-out and charges the differential restore only on short calls. That is
+coherent only under forced eviction. With no memory pressure the optimal policy is
+never swap and every arm scores zero. `CLOSED-QUESTIONS.md` establishes Fresh-277
+cannot exhibit contention. The budget computed here is therefore in
+hidden-swap-milliseconds under an assumed forced-eviction regime, **not** wall clock,
+and the ORACLE bound is conditional on that same regime.
+
+**Causal contract.** The oracle reads the realised latency and is labelled
+analysis-only; the deployable arms read profile-fold evidence only, with the task
+settlement barrier enforced by `evaluate_utility_clock_policy`.
+
+**Not authorized.** Reporting the oracle as an achievable result; using its per-call
+triggers as features; or moving the interpretation bands after reading.
+
 ## Explicit non-claims
 
 - No live W5 or headline systems result exists.
