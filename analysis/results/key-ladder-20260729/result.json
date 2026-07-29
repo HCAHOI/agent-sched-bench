@@ -1,0 +1,156 @@
+{
+  "criterion_frozen_in": "817edc7",
+  "premise": "forced eviction; hidden-swap-ms not wall clock; Fresh-277 cannot exhibit contention",
+  "all_ceilings_are_in_sample_oracles": true,
+  "tasks": 277,
+  "cells": {
+    "3500": {
+      "kv_cost_ms": 3500.0,
+      "deadline_only_s": 1565.4090399742126,
+      "oracle_s": 2957.5,
+      "budget_s": 1392.0909600257874,
+      "ladder": {
+        "tool_name": {
+          "ceiling_s": 43.98940132141113,
+          "fraction_of_budget": 0.031599516543513985,
+          "distinct_keys": 5
+        },
+        "cmd_depth_1": {
+          "ceiling_s": 135.62936178207397,
+          "fraction_of_budget": 0.09742851988605798,
+          "distinct_keys": 34
+        },
+        "cmd_depth_2": {
+          "ceiling_s": 207.2662744808197,
+          "fraction_of_budget": 0.14888845659695993,
+          "distinct_keys": 229
+        },
+        "cmd_depth_4": {
+          "ceiling_s": 446.83535711288454,
+          "fraction_of_budget": 0.3209814372364053,
+          "distinct_keys": 1323
+        },
+        "repo+cmd_depth_4": {
+          "ceiling_s": 982.3989435768127,
+          "fraction_of_budget": 0.7057002536376032,
+          "distinct_keys": 4415
+        }
+      }
+    },
+    "5000": {
+      "kv_cost_ms": 5000.0,
+      "deadline_only_s": 1742.3890233039856,
+      "oracle_s": 3220.0,
+      "budget_s": 1477.6109766960144,
+      "ladder": {
+        "tool_name": {
+          "ceiling_s": 13.229400491714477,
+          "fraction_of_budget": 0.00895323647452582,
+          "distinct_keys": 5
+        },
+        "cmd_depth_1": {
+          "ceiling_s": 168.7770407676697,
+          "fraction_of_budget": 0.11422292026082573,
+          "distinct_keys": 34
+        },
+        "cmd_depth_2": {
+          "ceiling_s": 227.14601306915284,
+          "fraction_of_budget": 0.1537251798014242,
+          "distinct_keys": 229
+        },
+        "cmd_depth_4": {
+          "ceiling_s": 432.3835217952728,
+          "fraction_of_budget": 0.29262338234796836,
+          "distinct_keys": 1323
+        },
+        "repo+cmd_depth_4": {
+          "ceiling_s": 1108.9189809799195,
+          "fraction_of_budget": 0.7504810118963098,
+          "distinct_keys": 4415
+        }
+      }
+    }
+  },
+  "as_frozen_verdict": "GO by the letter of 817edc7: repo+cmd_depth_4 beats cmd_depth_4 by 38.5 pp (kv=3500) and 45.7 pp (kv=5000) of the budget, far above the 15 pp bar. But see the defect below; I do not claim 'keying is the lever' on this basis.",
+  "criterion_defect": "The frozen criterion compared IN-SAMPLE per-key ceilings across keys of very different cardinality without guarding against the confound. Rows per key fall from 2682 (tool_name) to 3 (repo+cmd_depth_4), and an in-sample optimal trigger on a SINGLETON group is fitted to the single row it scores, carrying zero information. The ladder therefore measures key cardinality as much as key informativeness. This is a defect in the criterion I wrote, recorded rather than repaired by moving the band.",
+  "group_size_decomposition": {
+    "3500": {
+      "cmd_depth_4": {
+        "size_1": {
+          "rows": 1310,
+          "gain_s": 135.4,
+          "share_of_ceiling": 0.303
+        },
+        "size_2_4": {
+          "rows": 420,
+          "gain_s": 38.9,
+          "share_of_ceiling": 0.087
+        },
+        "size_5plus": {
+          "rows": 11680,
+          "gain_s": 272.6,
+          "share_of_ceiling": 0.61
+        }
+      },
+      "repo+cmd_depth_4": {
+        "size_1": {
+          "rows": 3174,
+          "gain_s": 251.7,
+          "share_of_ceiling": 0.256
+        },
+        "size_2_4": {
+          "rows": 2518,
+          "gain_s": 249.5,
+          "share_of_ceiling": 0.254
+        },
+        "size_5plus": {
+          "rows": 7718,
+          "gain_s": 481.2,
+          "share_of_ceiling": 0.49
+        }
+      }
+    },
+    "5000": {
+      "cmd_depth_4": {
+        "size_1": {
+          "rows": 1310,
+          "gain_s": 79.2,
+          "share_of_ceiling": 0.183
+        },
+        "size_2_4": {
+          "rows": 420,
+          "gain_s": 40.9,
+          "share_of_ceiling": 0.095
+        },
+        "size_5plus": {
+          "rows": 11680,
+          "gain_s": 312.3,
+          "share_of_ceiling": 0.722
+        }
+      },
+      "repo+cmd_depth_4": {
+        "size_1": {
+          "rows": 3174,
+          "gain_s": 395.1,
+          "share_of_ceiling": 0.356
+        },
+        "size_2_4": {
+          "rows": 2518,
+          "gain_s": 195.9,
+          "share_of_ceiling": 0.177
+        },
+        "size_5plus": {
+          "rows": 7718,
+          "gain_s": 517.9,
+          "share_of_ceiling": 0.467
+        }
+      }
+    }
+  },
+  "debiased_verdict": "INCONCLUSIVE. Restricting to groups of five or more rows, where in-sample fitting is least degenerate, the repo gain is 34.6% - 19.6% = 15.0 pp at kv=3500 and 35.0% - 21.1% = 13.9 pp at kv=5000. That fails the frozen 'more than 15 pp in BOTH cells' bar and lands in the 5-15 pp inconclusive range. The size_5plus restriction is itself not a clean debias, since the scored row remains in its own fit, so 15.0 and 13.9 are still optimistic.",
+  "robust_regardless": [
+    "tool_name, Continuum's granularity, reaches 0.9% of the budget at kv=5000 (13.2 s of 1477.6 s) over 5 keys with ~2682 rows each. At that support the in-sample ceiling is essentially honest, so this number is NOT confounded: on this workload a tool-name key captures almost none of the available budget.",
+    "The ladder is monotone increasing across all five rungs in both cells, so finer keys do carry real information; only the magnitude at the fine end is unresolved.",
+    "Even the most optimistic fine-key ceiling, 75.0%, leaves a quarter of the budget beyond any per-key method."
+  ]
+}
