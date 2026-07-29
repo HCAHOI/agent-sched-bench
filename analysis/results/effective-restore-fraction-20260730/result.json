@@ -1,0 +1,67 @@
+{
+  "artifact_type": "derived_effective_restore_fraction",
+  "date": "2026-07-30",
+  "criterion_frozen_in": "d53094a",
+  "claim_bearing": false,
+  "verdict": "rho_effective = 0.940 at every kv on the grid. min(reload, recompute) never selects recompute for this model and device, so the 0.94 charged throughout this lane is CORRECT and the negative results are confirmed rather than withdrawn.",
+  "inputs": {
+    "swap_out_tokens_per_ms_bf16": 551,
+    "bytes_per_token_bf16": 98304,
+    "bytes_per_token_fp8": 49152,
+    "rho_measured": 0.94,
+    "measured_swap_out_range_ms": [
+      238.19,
+      1070.97
+    ],
+    "measured_swap_out_token_range": [
+      131072,
+      589824
+    ],
+    "prefill_measured_to_tokens": 32768,
+    "prefill_slope_ms_per_token_top_end": 0.06558,
+    "prefill_slope_ms_per_token_whole_curve_from_findings": 0.04861
+  },
+  "table": [
+    {
+      "kv_ms": 500,
+      "tokens": 275417,
+      "reload_ms": 470.0,
+      "recompute_ms": 17599,
+      "rho_eff": 0.94
+    },
+    {
+      "kv_ms": 1000,
+      "tokens": 550835,
+      "reload_ms": 940.0,
+      "recompute_ms": 35661,
+      "rho_eff": 0.94
+    },
+    {
+      "kv_ms": 2000,
+      "tokens": 1101669,
+      "reload_ms": 1880.0,
+      "recompute_ms": 71784,
+      "rho_eff": 0.94
+    },
+    {
+      "kv_ms": 3500,
+      "tokens": 1927921,
+      "reload_ms": 3290.0,
+      "recompute_ms": 125970,
+      "rho_eff": 0.94
+    },
+    {
+      "kv_ms": 5000,
+      "tokens": 2754173,
+      "reload_ms": 4700.0,
+      "recompute_ms": 180155,
+      "rho_eff": 0.94
+    }
+  ],
+  "mechanism": "Both costs are LINEAR in tokens, so their ratio is scale-invariant and rho_eff cannot vary with kv. Per token, swapping out costs 98304 bytes / 54.1 GB/s = 0.00182 ms while prefilling costs 0.06558 ms. Reload therefore beats recompute by 38.4x at every KV size. Recompute would win only if KV per token exceeded 3.77 MB; this model has 98 KB, a 38x gap.",
+  "corrects_my_own_hypothesis": "2316693 recorded the hypothesis that 0.94 was probably too high because the repo's prefill findings describe the restore as the cheaper of reload or recompute. That hypothesis is WRONG for this configuration. The minimum always selects reload, so there was no overcharge.",
+  "status_of_the_contingency": "2316693's finding that per-key methods beat the deadline below rho ~ 0.3 (kv=3500) and ~0.6 (kv=5000) remains numerically valid but describes a regime this deployment cannot reach. Attaining rho_eff <= 0.6 would require KV per token roughly 38x larger than this model's. The lane's negative results therefore stand for this hardware and model, and the regime caveat is real but not actionable here.",
+  "conservative_direction": "The top-end prefill slope of 0.06558 ms/token was used rather than the findings' whole-curve 0.04861, because extrapolation to millions of tokens should use the high-context regime. With 0.04861 the ratio would be 28.4x instead of 38.4x -- still reload by a wide margin. The two-point fit also produced an unphysical negative intercept of -463 ms, which makes recompute look CHEAPER than a proper fit would, so the conclusion is conservative in the direction that favours recompute.",
+  "scope": "One model and one device: Qwen3-Coder-30B-A3B-Instruct-FP8 on H100 PCIe, 54.1 GB/s measured swap-out. Architectures with much smaller KV per token, such as MLA, make reload even cheaper and strengthen the conclusion. No current architecture approaches 3.77 MB per token. Slower interconnects would shift the balance and are untested.",
+  "extrapolation_warning": "Evaluating the prefill curve at 1.9 to 2.8 million tokens is an extrapolation beyond its 32768-token measurement range, and attention cost grows faster than linearly, so true recompute cost is HIGHER than tabulated. The 38.4x margin is a lower bound."
+}
