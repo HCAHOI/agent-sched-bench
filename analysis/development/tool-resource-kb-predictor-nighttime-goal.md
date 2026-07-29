@@ -426,6 +426,66 @@ scheduler utility; those require time-resolved post-landmark telemetry and a
 concrete action cost/benefit model. The durable result is
 `analysis/results/tool-resource-nighttime-3bucket-20260728/landmark-conditional-current-fit-only.json`.
 
+### 2026-07-29 repository-by-binary arbitration amendment
+
+This criterion is frozen and committed before the candidate implementation
+exists. No repository-by-binary arbitration result had been produced when it was
+written.
+
+Visible before this amendment: every result above, plus four same-day
+development-exposed diagnostics — the leave-one-out representation ceiling, the
+causal operating curves, the survival hazard table, and threshold sweeps at
+`theta` in `0.05, 0.1, 0.2, 0.3, 0.5` on both orientations — together with the
+three committed results of 2026-07-29: the cost-weighted decision gate
+(`653a85a`, `ef91ed8`), the agentd wiring (`a9b3ea1`), and the repository-scale
+feature ceiling (`4ca04bb`). In particular the diagnostic that motivates this
+candidate is already visible: a causal `repository x binary` aggregate reached
+utility `564` against `242` for command-only on SWE100 CPU, and `1790` against
+`629` on SWE277 CPU. That diagnostic carried no public prior, no exact or prefix
+layer, and ran as a single within-cohort pass, so it is not a candidate result
+and its numbers do not transfer.
+
+**Candidate.** One additional arbitration mode on the existing
+`ClauseResourceKB`: select the repository-scope node at binary granularity when
+it holds evidence, instead of the deepest non-empty repository node, and
+otherwise fall back to the current chain unchanged. This adds no dependency,
+model, index, or second predictor, so invariant 10 is untouched. It is opt-in;
+the shipped default arbitration does not change.
+
+**Motivating mechanism, stated before the result.** Deepest-non-empty selects
+sparse exact and prefix nodes that usually hold no Heavy observation, and
+otherwise falls through to a cross-repository binary prior that is diluted.
+Repository-by-binary is predicted to have both coverage and purity. The
+falsifiable prediction is that this helps CPU and RSS and does **not** help Disk,
+because Disk command evidence generalises across repositories while CPU and RSS
+evidence does not.
+
+**Metric.** Primary `theta = C/(B+C) = 1/6` from the human-declared `B:C = 5:1`
+capacity-reservation ratio, identical to the committed gate so the two are
+directly comparable. Utility is `U = 5*TP - 1*FP`.
+
+**Pre-declared sensitivity grid.** Also report `B:C` of `2:1, 3:1, 5:1, 10:1`,
+that is `theta` of `1/3, 1/4, 1/6, 1/11`. The grid is declared here, before the
+run. GO/NO-GO is read from the primary `theta` only. The grid is reported for
+sensitivity and is never selected from; choosing the ratio that favours the
+candidate is gaming and is not authorized.
+
+**Gate.** A target is a development GO only if candidate utility at the primary
+`theta` is strictly greater than all four of: current arbitration at
+`theta = 0.5`; current arbitration at `theta = 1/6`, the already-passed
+comparator; never-act; and always-act — in **both** fit/evaluation orientations,
+with the sign of the margin over the strongest comparator positive under a
+paired repository-cluster bootstrap. Rows and labels must be identical across
+arms, and no unavailable prediction may be converted to a synthetic fallback.
+
+**Procedure.** Implement, run the focused tests, obtain one bounded independent
+review, and only then read the outer result once. Do not tune the arbitration,
+`theta`, node granularity, or any support rule after reading.
+
+**Status.** Both SWE corpora are development-exposed and heavily read. Whatever
+this returns is development evidence, not a confirmation claim, and the untouched
+corpus remains reserved.
+
 ## 2. Authority and required amendment
 
 Before reading any new three-bin result, rewrite
