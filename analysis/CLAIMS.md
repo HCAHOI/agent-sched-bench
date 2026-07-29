@@ -488,6 +488,46 @@ is an extrapolation and must be labelled as one; note that attention cost grows
 faster than linearly, so a linear extrapolation *understates* recompute cost and is
 therefore conservative in the direction of favouring recompute.
 
+## Open question — do the conclusions hold at the per-request KV scale?
+
+**Criterion frozen 2026-07-30, before the numbers exist.**
+
+Visible when frozen: the whole negative chain, plus `8e5fc7d` which established
+`tokens(kv) = 551 * kv` from the measured swap-out curve. Applying that mapping to
+this corpus's contexts produces a scope fact nobody has recorded: a single request at
+the measured p50 final context of 30,900 tokens costs about **56 ms** to swap out, and
+at the max 88,200 tokens about **160 ms**. The campaign grid starts at **500 ms**,
+which is nine requests' worth at p50, and its headline cells at 3500 and 5000 ms are
+**62 and 89 requests' worth**. The grid therefore never includes the per-request
+scale, and 3500/5000 also sit outside the measured swap range of 238–1071 ms.
+
+**Question.** Every conclusion in this lane — the budget, the narrow band, the
+near-optimal deadline, the negative per-key result — was measured at 3500 and 5000 ms.
+Do they hold at the per-request scale a system would actually face when evicting one
+request's cache?
+
+**Cells.** `kv` in `{56, 100, 160}` ms, chosen from the corpus's own context
+distribution: p50 context, a round intermediate, and max context. Reported alongside
+the existing 3500 and 5000 for continuity.
+
+**Arms**, unchanged so results are comparable: `deadline_only`, `best_constant` fitted
+out-of-fold, per-key `cmd_depth_4` leave-one-out, and the per-call `ORACLE`. All at
+`rho = 0.94`, which `8e5fc7d` established is scale-invariant and therefore still
+correct at these cells.
+
+**Interpretation fixed in advance.** For each new cell report the budget as a fraction
+of `deadline_only` utility, and whether either deployable arm beats `deadline_only`.
+If the per-key arm beats the deadline at any per-request cell, the lane's negative
+result is **scale-contingent** and must be restated as applying only to batch-scale
+eviction. If it loses at every cell, the negative result is confirmed across two
+orders of magnitude of KV cost, which is materially stronger than the present claim.
+
+**Premise, binding.** Forced eviction; with no memory pressure every arm scores zero.
+Fresh-277 cannot exhibit contention. Hidden-swap milliseconds, not wall clock. The
+per-request `kv` values are derived from a measured bandwidth and a measured context
+distribution, but the pairing of the two is mine and is not itself a measured
+quantity.
+
 ## Explicit non-claims
 
 - No live W5 or headline systems result exists.
