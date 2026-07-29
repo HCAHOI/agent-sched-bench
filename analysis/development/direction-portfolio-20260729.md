@@ -64,15 +64,16 @@ concretely violated by 87.7% rather than merely unexamined.
 
 ## D1 — Clause-granular prediction-free resource control
 
-**Evidence in hand.** Multi-clause exec calls are 48.4% (SWE277) and 44.3%
-(SWE100). A single call-level limit wastes **48.8% / 48.1%** of the RSS
-resource-time envelope — replicated across cohorts to within 0.7 pp (`c211b37`).
-The dominant pattern is named and quantified: a heavy command piped to a blocked
-reader, 24.2% of multi-clause calls, `python3|tail` 352, `pip3|tail` 251,
-`apt-get|tail` 167, `pytest|tail` 48, holding **6,512 GB-seconds** of memory-time
-(`2886683`). The 29.4% label-coverage gap is resolved, not merely bounded: long
-null-RSS clauses are blocked readers with nothing to sample, which makes the
-envelope figure conservative.
+**Evidence in hand, after the `adeccb2` correction.** Multi-clause exec calls are
+48.4% (SWE277) and 44.3% (SWE100) — unchanged. But the envelope figure is
+**10.6%**, not 48.8%, and applies only to the **12.3%** of multi-clause calls that
+are sequential-only; the earlier number summed a sequential time integral over
+concurrent pipeline clauses. The `heavy | reader` pattern is real and verified from
+`clause_telemetry.command` (all 1018 pairs are pipes), but its resource reading is
+**retracted**: pipeline members are concurrent, so the heavy command needs its
+memory for its own duration and the reader adds no additional hold. There are no
+6,512 GB-seconds to release. The 29.4% label-coverage gap is still explained —
+long null-RSS clauses are blocked readers with nothing to sample.
 
 **Novelty, narrowed by direct search — this is the important update.**
 Dynamic cgroup resizing on phase transitions is **prior art**: Kubernetes
@@ -108,8 +109,11 @@ number: max concurrent sandboxes under a fixed memory budget, call-granular vs
 clause-granular reservation, from real per-clause envelopes. Offline, no testbed.
 Directly answers the likeliest rejection.
 
-**Kill it if.** Downward resizing proves unsafe in cgroup v2, or the capacity gain
-under realistic budgets is in the low single-digit percent.
+**Kill condition — now substantially met.** Downward `memory.max` resizing *is*
+unsafe: below current usage the kernel reclaims and then OOM-kills inside the
+cgroup. And the corrected over-provisioning, 10.6% on 12.3% of multi-clause calls,
+is in the low single-digit percent of overall call volume. A `memory.high` variant
+under a reserving admission controller is the only surviving form.
 
 ---
 
@@ -128,11 +132,12 @@ net-negative (`7ea7ea7`). A corrected closed-form bar from the remaining-time
 distribution is not yet derived, and whether it is a contribution or bookkeeping is
 open.
 
-**The central threat.** Its numbers come from a functional conditional on forced
-eviction; with no pressure the optimal policy is never swap and every arm scores
-zero. **Possible resolution found tonight:** `2886683` is measured occupancy, not a
-swap utility, so it does not depend on that premise. D2 may have a premise-free core
-if rebuilt on occupancy rather than hidden-swap-ms.
+**The central threat, unresolved.** Its numbers come from a functional conditional
+on forced eviction; with no pressure the optimal policy is never swap and every arm
+scores zero. An earlier note tonight claimed `2886683` supplied a premise-free core
+because occupancy is measured rather than derived from swap utility. That is
+**retracted** — the occupancy reading rested on the same broken integral. D2's
+premise problem stands.
 
 **Next discriminating experiment.** Derive the corrected bar in closed form and test
 whether it predicts, ex ante, which of our four NO-GOs would fail. A bar that
