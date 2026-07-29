@@ -1,0 +1,131 @@
+{
+  "artifact_type": "tool_resource_multi_head_recovery_decision",
+  "claim_bearing": false,
+  "date": "2026-07-29",
+  "branch": "exp/tool-resource-3bucket-swe",
+  "question": "Can one causal KB/service use different target heads, and which heads are supported by the existing SWE development evidence?",
+  "evidence_boundary": {
+    "corpora": [
+      "swe100",
+      "swe277"
+    ],
+    "all_rows_development_exposed": true,
+    "new_outer_result_read_or_rerun": false,
+    "new_data_collected": false,
+    "confirmation_claim": false
+  },
+  "shared_alpha_falsification": {
+    "alpha_grid": [
+      1,
+      4,
+      16,
+      64
+    ],
+    "folds": "five repository-grouped causal folds per cohort",
+    "decision": "NO-GO",
+    "mechanism": {
+      "latency": "all four alphas pass current and majority in both cohorts",
+      "cpu": "alpha 4 alone passes current and majority-Light in both cohorts",
+      "disk": "all four alphas pass current and majority-Light in both cohorts",
+      "rss": "no alpha adds a true positive; each adds false positives"
+    },
+    "artifact": "analysis/results/tool-resource-nighttime-3bucket-20260728/shared-alpha-fit-only-feasibility.json"
+  },
+  "target_heads": {
+    "latency": {
+      "development_candidate": "generic-argv-v3-role plus public-local posterior, alpha 16",
+      "evidence": "existing cross-cohort outer development result",
+      "swe100_fit_swe277_eval": {
+        "candidate_accuracy": 0.8510097341275606,
+        "current_accuracy": 0.8451256719453727,
+        "majority_accuracy": 0.8444718872584629
+      },
+      "swe277_fit_swe100_eval": {
+        "candidate_accuracy": 0.8822341857335128,
+        "current_accuracy": 0.8710183938986092,
+        "majority_accuracy": 0.8752803947958726
+      },
+      "decision": "development GO"
+    },
+    "peak_cpu_cores": {
+      "development_candidate": "current raw-argv-prefix hard-backoff",
+      "research_candidate": "generic-argv-v3-role posterior, alpha 4",
+      "evidence": "alpha 4 passes internal fit folds, but the existing outer resource results used alpha 16 and both structured candidates regress",
+      "decision": "retain current; alpha 4 is fit-only and not runtime evidence"
+    },
+    "sampled_peak_rss_mb": {
+      "development_candidate": "current raw-argv-prefix hard-backoff",
+      "argv_only_mlp": {
+        "swe100_tp_tn_fp_fn": [
+          0,
+          4048,
+          0,
+          42
+        ],
+        "swe277_tp_tn_fp_fn": [
+          0,
+          12237,
+          0,
+          121
+        ],
+        "decision": "NO-GO"
+      },
+      "argv_plus_predicted_latency_mlp": {
+        "swe100_tp_tn_fp_fn": [
+          0,
+          4048,
+          0,
+          42
+        ],
+        "swe277_tp_tn_fp_fn": [
+          0,
+          12233,
+          4,
+          121
+        ],
+        "decision": "NO-GO"
+      },
+      "mechanism": "Heavy is concentrated in Python test, execution, and install families, but repeatable preexecution argv groups are only about 2-5 percent Heavy. The roughly one-percent base rate requires greater than 50 percent positive precision merely to beat all-Light accuracy.",
+      "decision": "retain current; stop MLP, loss, seed, and threshold tuning on these exposed data",
+      "artifact": "analysis/results/tool-resource-nighttime-3bucket-20260728/rss-head-fit-only-diagnosis.json"
+    },
+    "disk_read_write_bytes_total": {
+      "development_candidate": "generic-argv-v3-role structured hard-backoff Candidate R",
+      "evidence": "existing cross-cohort outer development result; Candidate R is at least as accurate as alpha-16 Candidate S in both orientations and has the simpler arbitration",
+      "swe100_fit_swe277_eval": {
+        "candidate_accuracy": 0.9807622240034978,
+        "current_accuracy": 0.9779202798221963,
+        "majority_light_accuracy": 0.9760985207316184
+      },
+      "swe277_fit_swe100_eval": {
+        "candidate_accuracy": 0.983142279163857,
+        "current_accuracy": 0.9777478084962913,
+        "majority_light_accuracy": 0.9777478084962913
+      },
+      "decision": "development GO"
+    }
+  },
+  "architecture_decision": {
+    "shared_stem": [
+      "telemetry eligibility and short-null policy",
+      "causal observation visibility",
+      "repository-local state and public snapshot evidence",
+      "privacy-safe canonicalization machinery",
+      "online and offline service boundary"
+    ],
+    "target_specific_heads": {
+      "latency": "structured posterior alpha 16",
+      "peak_cpu_cores": "current raw hard-backoff",
+      "sampled_peak_rss_mb": "current raw hard-backoff",
+      "disk_read_write_bytes_total": "structured hard-backoff Candidate R"
+    },
+    "runtime_status": "not integrated in this recovery window",
+    "reason_not_integrated": "The task established the per-head evidence boundary and falsified RSS alternatives; it did not produce reviewed multi-head runtime wiring or fresh confirmation evidence."
+  },
+  "next_action": "If runtime implementation is authorized, add the smallest target-head router over the existing ClauseResourceKB semantics, preserve identical causal evidence, review the behavioral change, and evaluate only against a predeclared independent decision set. Future RSS work requires a new inference-time high-precision workload-size or execution-plan signal, not more argv tuning.",
+  "source_artifacts": [
+    "analysis/results/tool-resource-nighttime-3bucket-20260728/final-decision.json",
+    "analysis/results/tool-resource-nighttime-3bucket-20260728/shared-alpha-fit-only-feasibility.json",
+    "analysis/results/tool-resource-nighttime-3bucket-20260728/rss-head-fit-only-diagnosis.json"
+  ]
+}

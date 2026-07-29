@@ -142,6 +142,54 @@ Before runtime integration, run exactly one fit-only RSS-head falsification:
 This is a development-only architecture probe, not runtime integration or a
 confirmation claim. A failure ends MLP tuning for this recovery window.
 
+The fixed argv-only MLP then returned all-Light predictions in both cohorts.
+An analysis-only threshold oracle also preferred all Light, so this is
+insufficient ranking signal rather than a missed 0.5 calibration threshold.
+A mechanism audit, visible before the following amendment, found repeatable
+Python test/install argv associations but low positive precision; actual
+latency separated Heavy from Light strongly but is postexecution-only.
+
+Run exactly one final fit-only feature falsification, without changing the
+network or training recipe:
+
+1. Keep the same five outer repository folds, RSS labels, 256 hashed argv
+   dimensions, `32`-unit ReLU head, seed, optimizer, loss, epochs, and fixed
+   threshold.
+2. Add the three probabilities from the alpha-16 structured latency head,
+   producing 259 input dimensions. These are predictions available before
+   execution; actual latency, CPU, Disk, and RSS remain forbidden features.
+3. For each outer validation fold, fit its latency KB only on outer-training
+   repositories. Generate MLP-training latency features with four nested
+   repository folds inside the outer-training set: each row's PMF comes from a
+   KB whose public corpus excludes both its inner group and the outer
+   validation group.
+4. Within each predicted repository, preserve task order and predict every
+   clause in a task before settling any clause from that task. Pool outer
+   out-of-fold TP/TN/FP/FN; never average fold accuracies.
+5. Use one KB per public/target split because local state is already keyed by
+   repository, and run at most four outer folds concurrently with one Torch
+   thread per worker.
+6. GO only if accuracy is strictly greater than current and majority-Light in
+   each cohort, with at least one true positive and no unavailable prediction.
+   A failure ends RSS-head experimentation in this recovery window.
+
+The augmented probe was also NO-GO: it recovered no Heavy row in either
+cohort and added four false positives in SWE277. The alpha-16 latency PMF had
+moderate Heavy/Light rank signal, but its argmax remained Short for 34/42
+SWE100 Heavy rows and 109/121 SWE277 Heavy rows. At the roughly one-percent
+Heavy base rate, the fixed accuracy objective requires new positive
+predictions to exceed 50% precision; the repeatable argv families reach only
+about 2-5%.
+
+The recovery decision is therefore architectural, not a runtime integration:
+keep one causal evidence/service stem with target-specific heads, use the
+already development-GO alpha-16 structured posterior as the latency candidate,
+use structured hard-backoff Candidate R as the Disk candidate because the
+existing outer results are at least as good as alpha-16 in both orientations,
+and retain current raw hard-backoff for CPU and RSS. Alpha 4 remains a
+fit-only CPU research candidate, not deployment evidence. No additional RSS
+MLP, loss, seed, or threshold tuning is authorized from these exposed data.
+
 ## 2. Authority and required amendment
 
 Before reading any new three-bin result, rewrite

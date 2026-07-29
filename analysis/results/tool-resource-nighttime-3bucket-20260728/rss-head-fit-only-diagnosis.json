@@ -1,0 +1,493 @@
+{
+  "artifact_type": "tool_resource_rss_head_fit_only_diagnosis",
+  "claim_bearing": false,
+  "date": "2026-07-29",
+  "code_commit": "ce9bab479370bf4715022360fbde68d3d5206200",
+  "inputs": {
+    "swe100": "traces/swe-rebench/qwen3.7-max/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+    "swe277": "traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl"
+  },
+  "label_contract": {
+    "heavy": "sampled_peak_rss_mb > 500 decimal MB",
+    "light": "observed sampled_peak_rss_mb <= 500 decimal MB, plus null resource rows with latency_ms < 500",
+    "unavailable": "null resource rows with latency_ms >= 500",
+    "evaluation_unit": "eligible clause"
+  },
+  "fixed_mlp_probe": {
+    "method": {
+      "folds": "five repository-grouped folds per cohort",
+      "public_scope": "training repositories only; validation repositories excluded",
+      "features": "generic-argv-v3-role tokens with fold-fit stable subcommands, signed SHA-256 hashing into 256 dimensions",
+      "network": "256 -> 32 ReLU -> 1",
+      "seed": 0,
+      "optimizer": "Adam",
+      "learning_rate": 0.001,
+      "weight_decay": 0.0001,
+      "epochs": 50,
+      "batching": "full batch",
+      "loss": "BCEWithLogitsLoss(pos_weight=sqrt(Light/Heavy))",
+      "decision_threshold": 0.5,
+      "aggregation": "pooled out-of-fold confusion counts"
+    },
+    "execution": {
+      "workers": 4,
+      "torch_threads_per_worker": 1,
+      "elapsed_seconds": 25.917,
+      "first_attempt": "discarded before any result artifact because reused workers called torch.set_num_interop_threads after parallel work had started",
+      "fixed_attempt": "ProcessPoolExecutor initializer set Torch thread counts once per worker"
+    },
+    "cohorts": {
+      "swe100": {
+        "eligible_n": 4090,
+        "heavy_n": 42,
+        "tp": 0,
+        "tn": 4048,
+        "fp": 0,
+        "fn": 42,
+        "prediction_unavailable": 0,
+        "accuracy": 0.9897310513447433,
+        "current_accuracy": 0.9902200488997555,
+        "majority_light_accuracy": 0.9897310513447433,
+        "strictly_beats_current": false,
+        "strictly_beats_majority": false,
+        "has_true_positive": false
+      },
+      "swe277": {
+        "eligible_n": 12358,
+        "heavy_n": 121,
+        "tp": 0,
+        "tn": 12237,
+        "fp": 0,
+        "fn": 121,
+        "prediction_unavailable": 0,
+        "accuracy": 0.9902087716458974,
+        "current_accuracy": 0.9902087716458974,
+        "majority_light_accuracy": 0.9902087716458974,
+        "strictly_beats_current": false,
+        "strictly_beats_majority": false,
+        "has_true_positive": false
+      }
+    },
+    "decision": "NO-GO",
+    "reason": "The fixed classifier predicts Light for every eligible row in both cohorts."
+  },
+  "analysis_only_threshold_oracle": {
+    "deployable": false,
+    "outer_results_used": false,
+    "purpose": "Distinguish a fixed-threshold calibration failure from insufficient ranking signal; no threshold is selected for a candidate.",
+    "execution": {
+      "workers": 4,
+      "torch_threads_per_worker": 1,
+      "elapsed_seconds": 25.956
+    },
+    "swe100": {
+      "best_hindsight_threshold": "positive_infinity",
+      "prediction": "all Light",
+      "accuracy": 0.9897310513447433,
+      "beats_current": false,
+      "beats_majority": false
+    },
+    "swe277": {
+      "best_hindsight_threshold": "positive_infinity",
+      "prediction": "all Light",
+      "accuracy": 0.9902087716458974,
+      "beats_current": false,
+      "beats_majority": false,
+      "maximum_fold_probability": 0.467877
+    },
+    "diagnosis": "insufficient_ranking_signal, not a 0.5-threshold calibration problem"
+  },
+  "argv_plus_predicted_latency_probe": {
+    "method": {
+      "outer_folds": "the same five repository-grouped folds as the argv-only probe",
+      "training_feature_cross_fit": "four nested repository folds within each outer-training set",
+      "outer_validation_exclusion": "outer validation repositories are absent from every latency KB and MLP training row",
+      "causal_order": "all clauses in a task predict before any clause from that task settles",
+      "latency_feature": "three preexecution probabilities from the alpha-16 structured posterior latency head",
+      "input_dimensions": 259,
+      "unchanged_recipe": "same argv hashing, 32-unit ReLU head, seed, optimizer, loss, epochs, and 0.5 threshold as the fixed argv-only probe",
+      "aggregation": "pooled outer out-of-fold confusion counts"
+    },
+    "execution": {
+      "workers": 4,
+      "torch_threads_per_worker": 1,
+      "trace_load_elapsed_seconds": 20.0,
+      "ten_outer_folds_elapsed_seconds": 4.802823800127953,
+      "optimization": "one KB per public/target split; repository-keyed local state avoids rebuilding an identical public KB per target repository"
+    },
+    "cohorts": {
+      "swe100": {
+        "eligible_n": 4090,
+        "tp": 0,
+        "tn": 4048,
+        "fp": 0,
+        "fn": 42,
+        "prediction_unavailable": 0,
+        "maximum_probability": 0.4462639391422272,
+        "accuracy": 0.9897310513447433,
+        "current_accuracy": 0.9902200488997555,
+        "majority_light_accuracy": 0.9897310513447433,
+        "strictly_beats_current": false,
+        "strictly_beats_majority": false,
+        "has_true_positive": false
+      },
+      "swe277": {
+        "eligible_n": 12358,
+        "tp": 0,
+        "tn": 12233,
+        "fp": 4,
+        "fn": 121,
+        "prediction_unavailable": 0,
+        "maximum_probability": 0.5342453718185425,
+        "accuracy": 0.9898850946755139,
+        "current_accuracy": 0.9902087716458974,
+        "majority_light_accuracy": 0.9902087716458974,
+        "strictly_beats_current": false,
+        "strictly_beats_majority": false,
+        "has_true_positive": false
+      }
+    },
+    "decision": "NO-GO",
+    "reason": "Adding the causal latency PMF recovers no Heavy row in either cohort and adds four false positives in SWE277."
+  },
+  "latency_feature_mechanism_diagnosis": {
+    "selection_role": "analysis only; no model or threshold is selected from these labels",
+    "swe100": {
+      "heavy_n": 42,
+      "heavy_argmax_short_middle_long": [
+        34,
+        3,
+        5
+      ],
+      "heavy_p_long_p50_p90": [
+        0.036447534090301624,
+        0.5249999999999996
+      ],
+      "light_p_long_p50_p90": [
+        0.0,
+        0.12611467139351035
+      ],
+      "auc_p_long_heavy_vs_light": 0.698049007152268,
+      "auc_p_middle_or_long_heavy_vs_light": 0.7373805994729907
+    },
+    "swe277": {
+      "heavy_n": 121,
+      "heavy_argmax_short_middle_long": [
+        109,
+        5,
+        7
+      ],
+      "heavy_p_long_p50_p90": [
+        0.04219409282700422,
+        0.28125
+      ],
+      "light_p_long_p50_p90": [
+        0.0,
+        0.14955223880596988
+      ],
+      "auc_p_long_heavy_vs_light": 0.6754666953022165,
+      "auc_p_middle_or_long_heavy_vs_light": 0.7038479695436615
+    },
+    "diagnosis": [
+      "The latency PMF contains moderate rank signal but assigns the short bucket the largest probability for 34 of 42 and 109 of 121 RSS-Heavy rows.",
+      "At an approximately one-percent Heavy base rate, beating all-Light accuracy with added positive predictions requires more new true positives than false positives, equivalently greater than 50 percent precision.",
+      "The repeatable argv families have roughly 2-5 percent Heavy rates, so their lift is real but far below the precision required by the fixed accuracy objective."
+    ]
+  },
+  "heavy_light_mechanism_audit": {
+    "feature_boundary": {
+      "inference_available": [
+        "bin",
+        "privacy-safe role-aware argv tokens",
+        "argv length"
+      ],
+      "diagnosis_only_postexecution": [
+        "actual latency_ms",
+        "actual peak_cpu_cores",
+        "actual disk_read_write_bytes_total",
+        "actual sampled_peak_rss_mb"
+      ],
+      "prohibition": "Postexecution values below must not be used as direct inference features."
+    },
+    "swe100": {
+      "rows": 4458,
+      "eligible": 4090,
+      "observed_heavy": 42,
+      "heavy_rate": 0.010268948655256724,
+      "observed_light": 2116,
+      "short_null_imputed_light": 1932,
+      "null_unavailable": 368,
+      "concentration": {
+        "heavy_bins": 8,
+        "top_bin_share": 0.4523809523809524,
+        "top_five_bin_share": 0.8333333333333334,
+        "heavy_repositories": 12,
+        "top_five_repository_share": 0.7142857142857143,
+        "heavy_tasks": 13,
+        "top_five_task_share": 0.6190476190476191
+      },
+      "cross_repository_support": {
+        "heavy_rows_with_same_bin_heavy_in_another_repository": {
+          "count": 32,
+          "denominator": 42,
+          "rate": 0.7619047619047619
+        },
+        "heavy_rows_with_same_role_token_set_heavy_in_another_repository": {
+          "count": 12,
+          "denominator": 42,
+          "rate": 0.2857142857142857
+        }
+      },
+      "heavy_shape_and_postexecution_quantiles_p50_p90": {
+        "argv_length": [
+          5.0,
+          6.0
+        ],
+        "latency_ms": [
+          25544.5170105,
+          58694.43954549998
+        ],
+        "peak_cpu_cores": [
+          3.113765553,
+          7.769391723999999
+        ],
+        "disk_read_write_bytes_total": [
+          56569856.0,
+          973345587.1999991
+        ],
+        "sampled_peak_rss_mb": [
+          962.064384,
+          1398.1282303999994
+        ]
+      },
+      "observed_light_shape_and_postexecution_quantiles_p50_p90": {
+        "argv_length": [
+          4.0,
+          6.0
+        ],
+        "latency_ms": [
+          233.996567,
+          4033.7158525
+        ],
+        "peak_cpu_cores": [
+          1.0017120947693523,
+          2.5617512409192975
+        ],
+        "disk_read_write_bytes_total": [
+          45056.0,
+          22868787.200000003
+        ],
+        "sampled_peak_rss_mb": [
+          21.037056,
+          126.83264
+        ]
+      },
+      "top_heavy_bins": [
+        {
+          "bin": "python3",
+          "heavy": 19,
+          "total": 999,
+          "heavy_rate": 0.01901901901901902,
+          "lift_over_cohort": 1.8520901854235188,
+          "heavy_repositories": 7
+        },
+        {
+          "bin": "pytest",
+          "heavy": 4,
+          "total": 81,
+          "heavy_rate": 0.04938271604938271,
+          "lift_over_cohort": 4.8089359200470305,
+          "heavy_repositories": 2
+        },
+        {
+          "bin": "python",
+          "heavy": 3,
+          "total": 141,
+          "heavy_rate": 0.02127659574468085,
+          "lift_over_cohort": 2.07193515704154,
+          "heavy_repositories": 3
+        },
+        {
+          "bin": "pip3",
+          "heavy": 3,
+          "total": 158,
+          "heavy_rate": 0.0189873417721519,
+          "lift_over_cohort": 1.849005424954792,
+          "heavy_repositories": 2
+        }
+      ]
+    },
+    "swe277": {
+      "rows": 13766,
+      "eligible": 12358,
+      "observed_heavy": 121,
+      "heavy_rate": 0.009791228354102606,
+      "observed_light": 6345,
+      "short_null_imputed_light": 5892,
+      "null_unavailable": 1408,
+      "concentration": {
+        "heavy_bins": 7,
+        "top_bin_share": 0.6942148760330579,
+        "top_five_bin_share": 0.9669421487603306,
+        "heavy_repositories": 36,
+        "top_five_repository_share": 0.5371900826446281,
+        "heavy_tasks": 38,
+        "top_five_task_share": 0.5289256198347108
+      },
+      "cross_repository_support": {
+        "heavy_rows_with_same_bin_heavy_in_another_repository": {
+          "count": 120,
+          "denominator": 121,
+          "rate": 0.9917355371900827
+        },
+        "heavy_rows_with_same_role_token_set_heavy_in_another_repository": {
+          "count": 68,
+          "denominator": 121,
+          "rate": 0.5619834710743802
+        }
+      },
+      "heavy_shape_and_postexecution_quantiles_p50_p90": {
+        "argv_length": [
+          5.0,
+          7.0
+        ],
+        "latency_ms": [
+          28011.793436,
+          90293.633751
+        ],
+        "peak_cpu_cores": [
+          2.701670505070025,
+          6.797707522
+        ],
+        "disk_read_write_bytes_total": [
+          6836224.0,
+          1448645017.6000001
+        ],
+        "sampled_peak_rss_mb": [
+          823.8161920000002,
+          1908.4533760000004
+        ]
+      },
+      "observed_light_shape_and_postexecution_quantiles_p50_p90": {
+        "argv_length": [
+          4.0,
+          6.0
+        ],
+        "latency_ms": [
+          340.899826,
+          5505.745571400003
+        ],
+        "peak_cpu_cores": [
+          1.0001774311921845,
+          2.5244138447999998
+        ],
+        "disk_read_write_bytes_total": [
+          53248.0,
+          30217420.800000016
+        ],
+        "sampled_peak_rss_mb": [
+          31.55968,
+          135.00743680000002
+        ]
+      },
+      "top_heavy_bins": [
+        {
+          "bin": "python3",
+          "heavy": 84,
+          "total": 3463,
+          "heavy_rate": 0.024256425064972567,
+          "lift_over_cohort": 2.477362817792818,
+          "heavy_repositories": 18
+        },
+        {
+          "bin": "python",
+          "heavy": 13,
+          "total": 274,
+          "heavy_rate": 0.04744525547445255,
+          "lift_over_cohort": 4.845689811184171,
+          "heavy_repositories": 6
+        },
+        {
+          "bin": "apt-get",
+          "heavy": 9,
+          "total": 426,
+          "heavy_rate": 0.02112676056338028,
+          "lift_over_cohort": 2.15772319869631,
+          "heavy_repositories": 8
+        },
+        {
+          "bin": "pytest",
+          "heavy": 6,
+          "total": 127,
+          "heavy_rate": 0.047244094488188976,
+          "lift_over_cohort": 4.8251447907854494,
+          "heavy_repositories": 2
+        }
+      ]
+    },
+    "cross_cohort_role_token_associations": [
+      {
+        "token": "bin:pytest",
+        "swe100_heavy_rate": 0.04938271604938271,
+        "swe100_lift": 4.8089359200470305,
+        "swe277_heavy_rate": 0.047244094488188976,
+        "swe277_lift": 4.8251447907854494
+      },
+      {
+        "token": "option:-x",
+        "swe100_heavy_rate": 0.04,
+        "swe100_lift": 3.895238095238095,
+        "swe277_heavy_rate": 0.05660377358490566,
+        "swe277_lift": 5.781069702167472
+      },
+      {
+        "token": "option:-v",
+        "swe100_heavy_rate": 0.03131991051454139,
+        "swe100_lift": 3.0499627143922448,
+        "swe277_heavy_rate": 0.035441278665740095,
+        "swe277_lift": 3.6196968739769924
+      },
+      {
+        "token": "option:-m=<ARG>",
+        "swe100_heavy_rate": 0.02263083451202263,
+        "swe100_lift": 2.2038122179564894,
+        "swe277_heavy_rate": 0.029960920538428137,
+        "swe277_lift": 3.0599756695363216
+      },
+      {
+        "token": "bin:python",
+        "swe100_heavy_rate": 0.02127659574468085,
+        "swe100_lift": 2.07193515704154,
+        "swe277_heavy_rate": 0.04744525547445255,
+        "swe277_lift": 4.845689811184171
+      },
+      {
+        "token": "bin:python3",
+        "swe100_heavy_rate": 0.01901901901901902,
+        "swe100_lift": 1.8520901854235188,
+        "swe277_heavy_rate": 0.024256425064972567,
+        "swe277_lift": 2.477362817792818
+      },
+      {
+        "token": "subcommand:install",
+        "swe100_heavy_rate": 0.021212121212121213,
+        "swe100_lift": 2.0656565656565657,
+        "swe277_heavy_rate": 0.015429122468659595,
+        "swe277_lift": 1.5758107063445892
+      }
+    ],
+    "observations": [
+      "Heavy has a cross-repository Python test, execution, and install command-family signal.",
+      "Argument length differs little, so length is not the missing mechanism.",
+      "Bin-level support transfers better than exact role-token-set signatures, but even pytest remains Light about 95 percent of the time.",
+      "Actual latency, CPU, and Disk separate Heavy from Light strongly, but are postexecution outcomes and therefore diagnosis-only."
+    ]
+  },
+  "mechanism_decision": {
+    "plain_argv_mlp": "NO-GO; stop architecture, loss-weight, seed, and threshold tuning in this recovery window.",
+    "argv_plus_predicted_latency_mlp": "NO-GO; the preexecution latency PMF has moderate rank signal but does not supply the high-precision positives required by the fixed accuracy objective.",
+    "current_rss_head": "Retain raw hard-backoff until a separate head passes.",
+    "next_falsifiable_hypothesis": "Future RSS work needs a new inference-time signal that identifies high-memory work at greater than 50 percent precision, such as causally available workload-size or execution-plan context. More argv, loss-weight, seed, or threshold tuning is not supported.",
+    "integrity_note": "The mechanism audit is development-exposed and may motivate a newly predeclared fit-only probe; it is not confirmation evidence."
+  }
+}
