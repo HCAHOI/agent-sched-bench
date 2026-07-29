@@ -1,0 +1,44 @@
+{
+  "artifact_type": "development_exposed_intra_tool_call_heterogeneity",
+  "date": "2026-07-29",
+  "claim_bearing": false,
+  "question": "AgentCgroup argues a granularity mismatch (container-level policy vs tool-call-level dynamics) and aligns cgroups with TOOL-CALL boundaries. Is a tool call itself internally homogeneous in resource demand? If not, its own argument applies one level down.",
+  "corpus": "SWE277 replay trace clause telemetry",
+  "structure": {
+    "exec_calls_with_timed_clauses": 8690,
+    "single_clause": 4487,
+    "multi_clause": 4203,
+    "multi_clause_fraction": 0.48365937859608743
+  },
+  "targets": {
+    "sampled_peak_rss_mb": {
+      "usable_multi_clause_calls": 768,
+      "coverage_of_multi_clause_calls": 0.1827266238401142,
+      "peak_over_min_ratio": {
+        "median": 35.963123644251624,
+        "p75": 149.85714285714286,
+        "p90": 586.1545064377685,
+        "max": 494995.0
+      },
+      "headroom_wasted_by_one_call_level_limit": 0.4882707441824455
+    },
+    "peak_cpu_cores": {
+      "usable_multi_clause_calls": 272,
+      "coverage_of_multi_clause_calls": 0.06471567927670711,
+      "peak_over_min_ratio": {
+        "median": 1.0921226545657452,
+        "p75": 316.3240271241144,
+        "p90": 1810.5893672371114,
+        "max": 64430.61007307574
+      },
+      "headroom_wasted_by_one_call_level_limit": 0.4580083165388815
+    }
+  },
+  "finding": "A tool call is NOT internally homogeneous. Within-call peak/min sampled RSS is 36x at the median and 586x at p90; a single call-level limit held for the whole call wastes 48.8% of the RSS resource-time envelope and 45.8% of the CPU envelope. CPU is bimodal: median 1.09x, so most calls are homogeneous, but p75 is 316x and p90 1811x.",
+  "limitations": [
+    "COVERAGE IS THE MAIN CAVEAT: only 768 of 4203 multi-clause calls carry two or more non-null RSS values, and 272 for CPU. The dispersion statistics describe 18% and 6% of multi-clause calls respectively; the rest have unavailable clause-level resource labels.",
+    "Extreme ratios come from tiny denominators (a clause at ~0.001 MB), so the median is the load-bearing statistic and the max is not meaningful.",
+    "This is characterization, not a demonstrated system gain. Recovering the headroom requires that another tenant can use it, which is the same memory-pressure premise the KV lane is conditional on and which this corpus cannot exhibit.",
+    "Replay corpus; container and eBPF overhead inflate durations."
+  ]
+}
