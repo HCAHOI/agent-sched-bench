@@ -1,0 +1,112 @@
+{
+  "artifact_type": "per_request_kv_scale_replication",
+  "date": "2026-07-30",
+  "criterion_frozen_in": "c7f4fac",
+  "claim_bearing": false,
+  "cells": {
+    "56": {
+      "kv_ms": 56.0,
+      "rows": 13410,
+      "long_rows": 3857,
+      "band_rows": 300,
+      "deadline_s": 197.73456591796875,
+      "best_constant_s": 197.1818536146544,
+      "per_key_loo_s": 198.64187826705898,
+      "oracle_s": 215.992,
+      "budget_s": 18.25743408203125,
+      "budget_frac_of_deadline": 0.0923330425172372,
+      "const_gain_s": -0.5527123033143579,
+      "loo_gain_s": 0.9073123490902363,
+      "const_beats": false,
+      "loo_beats": true
+    },
+    "100": {
+      "kv_ms": 100.0,
+      "rows": 13410,
+      "long_rows": 3605,
+      "band_rows": 339,
+      "deadline_s": 324.30611791610715,
+      "best_constant_s": 324.30611791610715,
+      "per_key_loo_s": 321.99705453681946,
+      "oracle_s": 360.5,
+      "budget_s": 36.193882083892824,
+      "budget_frac_of_deadline": 0.11160406814544153,
+      "const_gain_s": 0.0,
+      "loo_gain_s": -2.3090633792877195,
+      "const_beats": false,
+      "loo_beats": false
+    },
+    "160": {
+      "kv_ms": 160.0,
+      "rows": 13410,
+      "long_rows": 3391,
+      "band_rows": 518,
+      "deadline_s": 465.4378967666626,
+      "best_constant_s": 466.95030241546584,
+      "per_key_loo_s": 464.29507713279696,
+      "oracle_s": 542.56,
+      "budget_s": 77.1221032333374,
+      "budget_frac_of_deadline": 0.1656979454597375,
+      "const_gain_s": 1.512405648803222,
+      "loo_gain_s": -1.1428196338656125,
+      "const_beats": true,
+      "loo_beats": false
+    },
+    "3500": {
+      "kv_ms": 3500.0,
+      "rows": 13410,
+      "long_rows": 845,
+      "band_rows": 309,
+      "deadline_s": 1565.4090399742126,
+      "best_constant_s": 1529.0907402038574,
+      "per_key_loo_s": 1481.8362240695953,
+      "oracle_s": 2957.5,
+      "budget_s": 1392.0909600257874,
+      "budget_frac_of_deadline": 0.889282560964845,
+      "const_gain_s": -36.318299770355225,
+      "loo_gain_s": -83.57281590461731,
+      "const_beats": false,
+      "loo_beats": false
+    },
+    "5000": {
+      "kv_ms": 5000.0,
+      "rows": 13410,
+      "long_rows": 644,
+      "band_rows": 325,
+      "deadline_s": 1742.3890233039856,
+      "best_constant_s": 1742.3890233039856,
+      "per_key_loo_s": 1597.039232158661,
+      "oracle_s": 3220.0,
+      "budget_s": 1477.6109766960144,
+      "budget_frac_of_deadline": 0.8480373538477137,
+      "const_gain_s": 0.0,
+      "loo_gain_s": -145.3497911453247,
+      "const_beats": false,
+      "loo_beats": false
+    }
+  },
+  "bootstrap": {
+    "56": {
+      "point_s": 0.9073123490905761,
+      "ci_low_s": -1.7067176544952392,
+      "ci_high_s": 3.6446843910980222,
+      "frac_positive": 0.744
+    },
+    "160": {
+      "point_s": -1.1428196338653556,
+      "ci_low_s": -10.581358742904662,
+      "ci_high_s": 6.946708143615724,
+      "frac_positive": 0.4236
+    }
+  },
+  "letter_verdict": "By the letter of c7f4fac the result is SCALE-CONTINGENT: per_key_loo beats deadline_only at kv=56 ms by +0.91 s. That is the criterion's stated trigger and it is reported as such.",
+  "substance_verdict": "The margin is not distinguishable from zero. +0.91 s is 0.46% of the 197.7 s deadline utility, its task-clustered 95% interval is [-1.71, +3.64] and only 74.4% of bootstrap draws are positive. The sign is also inconsistent across cells: per_key_loo wins at 56 ms, loses at 100 and 160; best_constant loses at 56 and 100, wins at 160 by +1.5 s. Inconsistent signs at sub-1% magnitudes are the signature of noise, not an effect. No arm reliably beats the deadline at any per-request scale.",
+  "the_substantive_finding": "The BUDGET ITSELF collapses at per-request scale. As a fraction of deadline utility it is 9.2% at kv=56, 11.2% at 100 and 16.6% at 160, against 88.9% at 3500 and 84.8% at 5000. The large budget that motivated six iterations of this lane is largely a scale artifact.",
+  "mechanism": "At kv=56 ms, 28.8% of calls outlive the threshold and nearly all of them have L far above 2*kv = 112 ms, so the deadline already fires with enough remaining time to hide the entire swap and incurs almost no exposure. The band kv<L<2kv where all budget lives holds only 2.2% of calls. At kv=5000 ms only 4.8% of calls are long, but the band calls carry exposure close to a full swap each, which is what inflates the batch-scale budget. The budget is therefore large exactly when the swap is large relative to tool durations, and that is the batch-eviction regime, not the per-request one.",
+  "scope_fact_worth_carrying": "The campaign grid never includes the per-request scale. One request at the measured p50 context of 30900 tokens swaps in about 56 ms; the grid starts at 500 ms, nine requests' worth, and its headline cells are 62 and 89 requests' worth. The headline cells additionally lie outside the measured swap-out range of 238 to 1071 ms.",
+  "limitations": [
+    "The per-request kv values pair a measured bandwidth with a measured context distribution; that pairing is mine and is not itself a measured quantity.",
+    "Only cmd_depth_4 per-key and a single fitted constant were re-run; the key ladder was not repeated at the new cells.",
+    "PREMISE unchanged: forced eviction; with no memory pressure every arm scores zero; Fresh-277 cannot exhibit contention; hidden-swap milliseconds, not wall clock."
+  ]
+}
