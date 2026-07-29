@@ -210,6 +210,55 @@ settlement barrier enforced by `evaluate_utility_clock_policy`.
 **Not authorized.** Reporting the oracle as an achievable result; using its per-call
 triggers as features; or moving the interpretation bands after reading.
 
+## Open question — can any per-key empirical method reach the prediction budget?
+
+**Criterion frozen 2026-07-29, before the numbers exist.**
+
+Visible when frozen: everything above, plus `57cbbbb` — the budget is 1392.1 s
+(88.9% of deadline utility) at `kv=3500` and 1477.6 s (84.8%) at `kv=5000`, it lies
+**entirely** in calls with `kv < L < 2*kv`, and the shipped `robust_clock` captures
+1.4% and 8.0% of it. Also visible: `hazard_recheck_ms` in `src/tool_time/prior.py`
+already computes the EXACT expected-utility-maximising trigger over a node's sample
+distribution, enumerating breakpoints at `L` and `L - kv` with no grid and no tuning,
+and it is shipped as `mean_hazard`, which scores 1512.9 s against `deadline_only`'s
+1565.4 s at `kv=3500`.
+
+**Why this is the right question.** The exact maximiser over per-key empirical
+evidence already exists and loses to a fixed deadline. Either the per-key evidence
+does not transfer from profile to evaluation folds, or the key itself carries no
+information about band membership. These have opposite consequences: the first
+argues for better estimation, the second kills the entire per-key empirical family —
+including Continuum's `P(tau,f)`, which is exactly a per-key empirical CDF.
+
+**Decomposition to compute.** For each command key with support in both splits:
+
+1. `profile_trigger` — the utility-maximising trigger from profile-fold samples.
+2. `eval_optimal_trigger` — the utility-maximising trigger computed in-sample on the
+   evaluation rows for that key. **Analysis-only**, a per-key oracle, never
+   deployable and never used as a feature.
+3. `ORACLE` — per-call perfect foreknowledge, from `57cbbbb`.
+
+Report utility for each and split the gap: `ORACLE - eval_optimal` is the part no
+per-key method can ever reach because it is within-key variance; `eval_optimal -
+profile_trigger` is the part attributable to estimation error and is in principle
+recoverable.
+
+**Interpretation fixed in advance.** If `eval_optimal` captures under 20% of the
+budget in both cells, the per-key empirical family is dead for this workload
+regardless of estimator quality, and that conclusion transfers to Continuum's
+estimator by construction. If it captures over 50%, estimation is the bottleneck and
+better per-key estimation is worth building. Between is inconclusive and is not
+resolved by moving the band.
+
+**Premise, binding.** The functional is conditional on forced eviction; with no
+memory pressure every arm including both oracles scores zero. Fresh-277 cannot
+exhibit contention. All numbers are hidden-swap-milliseconds under an assumed
+regime, not wall clock.
+
+**Causal contract.** `profile_trigger` uses profile-fold samples only, under the
+existing five task-grouped folds with disjointness asserted. Both oracles are
+labelled analysis-only and reported separately.
+
 ## Explicit non-claims
 
 - No live W5 or headline systems result exists.
