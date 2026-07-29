@@ -254,7 +254,7 @@ margin, mining, `k`, or vote threshold on these exposed rows.
 Visible before this amendment: the Heavy/Light mechanism audit, both RSS MLP
 failures, the in-progress full-population contrastive retrieval folds, and the
 following latency and conditional-label diagnostics. No landmark-conditioned
-model result exists yet.
+model result existed when the protocol below was frozen.
 
 The prediction unit remains one eligible clause. Across the two locked SWE
 inputs there are 18,224 such clauses. The observed strict latency CDF is:
@@ -402,6 +402,29 @@ The completed full-population contrastive experiment remains an unchanged
 NO-GO representation baseline. Do not reinterpret it as landmark evidence;
 landmark conditioning changes the decision population and must be frozen and
 evaluated as a separate mechanism.
+
+The fixed-predictor landmark falsification subsequently completed under
+protocol commit `f01fff9`, after an independent pre-result review returned GO.
+All 18,224 clauses launched both predictions at clause start. The 100 ms gate
+applied to 7,756 survivors and discarded 10,468 results; the 500 ms gate
+applied to 5,511 survivors and discarded 12,713 results.
+
+No 100 ms target passed the frozen two-cohort gate. At 500 ms, only Disk
+passed: conditional accuracy versus unconditional current versus
+same-survivor majority-Light was `92.3140% / 92.1488% / 91.9835%` on SWE100
+and `93.0337% / 93.0101% / 92.3747%` on SWE277. SWE100 changed from
+`TP/TN/FP/FN = 4/1111/2/93` to `7/1110/3/90`; SWE277 changed from
+`34/3918/7/290` to `35/3918/7/289`. The improvement is therefore real under
+the frozen exact-accuracy gate but small in absolute terms.
+
+The 500 ms latency and RSS heads failed, while CPU was cohort-inconsistent:
+conditional CPU lost `3.19 pp` to unconditional current on SWE100 and gained
+`2.29 pp` on SWE277. Treat 500 ms conditionalization as a development GO only
+for the current Disk head, not as a global landmark selection. The result uses
+whole-clause Disk I/O and does not establish future-after-500-ms Disk delta or
+scheduler utility; those require time-resolved post-landmark telemetry and a
+concrete action cost/benefit model. The durable result is
+`analysis/results/tool-resource-nighttime-3bucket-20260728/landmark-conditional-current-fit-only.json`.
 
 ## 2. Authority and required amendment
 
