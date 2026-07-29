@@ -9,15 +9,56 @@ Scores below are my own judgement. Three parallel evaluators were spawned; two
 returned nothing usable (repeated idle-without-delivery), so the novelty searches
 that decide D1 were run directly and are cited inline.
 
-## Status at a glance
+## Status at a glance — REVISED after the correction in adeccb2
 
 | # | Direction | Status | Blocking dependency |
 |---|---|---|---|
-| D1 | Clause-granular prediction-free resource control | **OPEN, narrowed** | Cap-vs-reservation framing; needs a capacity number |
+| D1 | Clause-granular prediction-free resource control | **DEMOTED, near-dead** | Headline was wrong by 5x; primitive is unsafe |
 | D2 | Predictability boundary as a limits result | **OPEN** | Metric presupposes forced eviction |
 | D3 | Heterogeneous multi-tenant composition | **PARKED** | Needs contention; corpus cannot exhibit it |
-| D4 | Mechanism-vs-prediction ablation harness | **OPEN** | Cost of faithful reimplementation |
+| D4 | Mechanism-vs-prediction ablation harness | **OPEN, now strongest** | Cost of faithful reimplementation |
 | D5 | Clause-attribution instrument | **FOLDED INTO D1** | Not standalone |
+| **D6** | **Pipeline-dominated agent shell workloads** | **NEW, open** | Needs a consumer for the observation |
+
+### What the correction changed
+
+`adeccb2` retracted the 48.8% envelope figure. The calculation assumed sequential
+clauses; 87.7% of multi-clause exec calls are pipelines with concurrent clauses, so
+the integral double-counted wall time. Corrected, over-provisioning is **10.6%** and
+only on the **12.3%** of multi-clause calls that are sequential-only.
+
+Two further findings compound against D1: `memory.max` is a cap not a reservation, so
+over-provisioning costs nothing physical without a reserving admission controller; and
+lowering `memory.max` below current usage triggers reclaim and then **OOM kills**
+inside the cgroup, so the naive downward-resize primitive is unsafe and would have to
+use `memory.high`.
+
+**D1 is demoted below D2 and D4.** It is not formally killed — a `memory.high` design
+under a reserving admission controller remains conceivable — but it should not consume
+further compute without a new argument.
+
+Also retracted: the claim that `2886683` gave D2 a premise-free core. That rested on
+the same broken memory-time reading, so D2's forced-eviction problem is **unresolved**.
+
+### D6 — Pipeline-dominated agent shell workloads (new)
+
+**Observation, robust to the correction.** 87.7% of multi-clause exec calls are
+pipelines. Agents compose with `|` far more than with `&&`, largely to truncate output
+into a context window. This is measured, not modelled, and does not depend on the
+broken integral.
+
+**Why it may matter.** It refutes the sequential-phase framing that both AgentCgroup's
+tool-call-granular control and my own clause-granular proposal assume. A tool call is
+not a sequence of phases; it is a concurrent process group. That also makes per-clause
+resource attribution intrinsically ambiguous, because concurrent members share one
+wall-clock window — which is a caveat every clause-level measurement paper would need.
+
+**Uncertainty.** No consumer yet. An observation without a decision it changes is a
+statistic, not a contribution.
+
+**Next discriminating experiment.** Ask what a pipeline-aware resource or scheduling
+decision would even look like, and whether any published system's design assumption is
+concretely violated by 87.7% rather than merely unexamined.
 
 ---
 
