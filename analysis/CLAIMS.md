@@ -447,6 +447,47 @@ from any specific context length in this corpus.
 the scored row's fit, as in `24d4344` and `f1cbee3` respectively. The five
 task-grouped folds partition task ids.
 
+## Open question — what is the effective restore fraction, and is 0.94 right?
+
+**Criterion frozen 2026-07-30, before the derivation is computed.**
+
+Visible when frozen: `2316693`, which showed the per-key negative result flips below
+`rho ~ 0.3` (kv=3500) and `rho ~ 0.6` (kv=5000), and recorded that the decisive
+follow-up — computing `rho_effective = min(reload, recompute)/kv` — was blocked on
+the `kv_cost_ms`-to-token mapping. Also visible, found while framing this: the
+mapping exists. `interpolate_cost_grid` in `scripts/serving/measure_kv_swap_cost.py`
+interpolates target swap-out cost onto measured `(tokens, swap_out_ms)` points and
+refuses to extrapolate, and `rho_bf16kv_large.json` records `target_swap_out_ms=500`
+mapping to `275587` tokens.
+
+**Derivation to compute**, from two already-measured artifacts, with no new
+experiment on the corpus:
+
+1. `tokens(kv)` from the measured swap-out curve.
+2. `reload_ms(kv) = rho_measured * kv`, with `rho_measured = 0.94`.
+3. `recompute_ms(kv) = prefill(tokens(kv))` from
+   `analysis/serving/tool-time-prefill-cost-20260716/`, floor `74.80 ms` plus
+   `0.04861 ms/token`.
+4. `rho_effective(kv) = min(reload_ms, recompute_ms) / kv`.
+
+Then compare `rho_effective` against the flip boundaries from `2316693`.
+
+**What the answer decides.** If `rho_effective` is materially below the flip boundary
+at the headline cells, this lane's negative results are an artifact of an overcharged
+restore and must be withdrawn. If `rho_effective` equals `0.94` there, the negative
+results are confirmed and `2316693`'s contingency, while numerically valid, describes
+a regime this cost grid does not represent. Report the crossover KV size at which
+recompute would become cheaper than reload, and state whether any realistic
+configuration reaches it.
+
+**Premise.** Both inputs are single-measurement hardware constants on one model and
+one device: Qwen3-Coder-30B-A3B-Instruct-FP8 on H100 PCIe. The derivation inherits
+that scope and is not a claim about other models, KV layouts, or interconnects. The
+prefill curve was measured to 32,768 tokens, so evaluating it at millions of tokens
+is an extrapolation and must be labelled as one; note that attention cost grows
+faster than linearly, so a linear extrapolation *understates* recompute cost and is
+therefore conservative in the direction of favouring recompute.
+
 ## Explicit non-claims
 
 - No live W5 or headline systems result exists.
