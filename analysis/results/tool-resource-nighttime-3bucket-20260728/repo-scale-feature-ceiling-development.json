@@ -2,20 +2,392 @@
   "artifact_type": "development_exposed_repo_scale_feature_ceiling",
   "date": "2026-07-29",
   "claim_bearing": false,
-  "question": "Is a repository-scale feature -- repository size, file count, test count, anything computable only by checking out the repository -- worth collecting for Heavy/Light prediction?",
-  "method": "Any repo-scale feature is a function of the repository, so a hindsight oracle that knows each repository's true Heavy rate upper-bounds every such feature simultaneously. If that oracle cannot beat the command-only arm, no repo-scale feature can, and 213 repository checkouts are not worth performing. Arms are causal prior-rows-only except the two labelled ORACLE, which are analysis-only ceilings and never deployable.",
+  "supersedes": "The first version of this file, committed in 4ca04bb, was WRONG. Its causal arms omitted the task settlement barrier, so a clause could see earlier clauses of its own task. Agents re-run the same command within a task, so the leak was concentrated exactly in the repository-by-binary arm this file was assessing. All causal arms are restated below; the ORACLE arms are hindsight over all rows and are barrier-independent, so they are unchanged.",
+  "correction_magnitude": {
+    "SWE277_CPU_repo_bin_utility": {
+      "as_committed": 1790,
+      "corrected": 100
+    },
+    "SWE277_CPU_bin_utility": {
+      "as_committed": 629,
+      "corrected": 333
+    },
+    "SWE100_CPU_repo_bin_utility": {
+      "as_committed": 564,
+      "corrected": 24
+    },
+    "SWE277_RSS_repo_bin_utility": {
+      "as_committed": 241,
+      "corrected": -2
+    }
+  },
+  "question": "Is a repository-scale feature -- repository size, file count, test count, anything needing a checkout -- worth collecting?",
+  "method": "Any repo-scale feature is a function of the repository, so a hindsight per-repository Heavy-rate oracle upper-bounds every such feature at once. Causal arms enforce the task settlement barrier.",
   "scoring": {
     "theta": 0.16666666666666666,
     "utility": "5*TP - 1*FP",
     "cost_ratio_B_to_C": "5:1 declared by the human"
   },
   "answer": {
-    "standalone_repo_scale_feature": "NOT worth collecting",
-    "evidence": "The repository-level oracle is beaten by the command-only arm for CPU in both cohorts (SWE100 115 vs 242; SWE277 588 vs 629) and is exactly zero for Disk in both cohorts and for RSS on SWE100, because no repository's Heavy rate reaches theta at all: Disk per-repository Heavy rate peaks at 12.9% and 12.8% against a 1/6 cut. A perfect repository descriptor therefore cannot fire.",
-    "actionable_finding_instead": "repository x binary is the productive aggregate and needs no new data. Causal repo_bin beats the command-only arm by 2.3x utility on SWE100 CPU (564 vs 242, precision 81.9%, recall 70.7%) and 2.8x on SWE277 CPU (1790 vs 629, precision 79.9%, recall 73.8%), and it reaches 85% of its own hindsight ceiling on CPU.",
-    "per_target_divergence": "CPU and RSS want repository-local aggregation; Disk does not. Disk command-only beats repo_bin in both cohorts (SWE277 706 vs 167), so Disk evidence generalises across repositories while CPU and RSS evidence does not."
+    "verdict": "still do not collect, but for a WEAKER reason than first stated",
+    "corrected_reasoning": "The original claim -- that the repository oracle loses to command-only everywhere -- does not survive correction. With the barrier enforced the repository oracle BEATS command-only for CPU on SWE277 (588 vs 333) and for RSS on SWE277 (112 vs -10), because correcting the leak deflated the command-only arm too. It still loses for CPU on SWE100 (115 vs 135). So a repository-level feature has a real but COHORT-INCONSISTENT ceiling, and would fail the two-orientation consistency any gate here requires.",
+    "unchanged_and_structural": "The repository oracle is exactly zero for Disk in BOTH cohorts and for RSS on SWE100, because no repository's Heavy rate reaches theta at all: Disk per-repository Heavy rate peaks at 12.9% and 12.8% against a 1/6 cut. This is hindsight and barrier-independent, so it stands as originally reported."
   },
-  "cohorts": {
+  "cohorts_corrected": {
+    "SWE100": {
+      "peak_cpu_cores": {
+        "n": 3866,
+        "heavy": 167,
+        "base_rate": 0.043197102948784274,
+        "repositories": 93,
+        "repo_heavy_rate_dispersion": {
+          "repos_with_at_least_5_rows": 92,
+          "mean": 0.048352767866084174,
+          "stdev": 0.0833792799155954,
+          "max": 0.4838709677419355,
+          "frac_repos_above_theta": 0.09782608695652174
+        },
+        "arms": {
+          "global": {
+            "tp": 0,
+            "fp": 0,
+            "utility": 0.0,
+            "precision": null,
+            "recall": 0.0
+          },
+          "bin": {
+            "tp": 57,
+            "fp": 150,
+            "utility": 135.0,
+            "precision": 0.2753623188405797,
+            "recall": 0.3413173652694611
+          },
+          "repo": {
+            "tp": 0,
+            "fp": 0,
+            "utility": 0.0,
+            "precision": null,
+            "recall": 0.0
+          },
+          "repo_bin": {
+            "tp": 6,
+            "fp": 6,
+            "utility": 24.0,
+            "precision": 0.5,
+            "recall": 0.03592814371257485
+          },
+          "ORACLE_repo": {
+            "tp": 64,
+            "fp": 205,
+            "utility": 115.0,
+            "precision": 0.2379182156133829,
+            "recall": 0.38323353293413176
+          },
+          "ORACLE_bin_x_repo": {
+            "tp": 166,
+            "fp": 120,
+            "utility": 710.0,
+            "precision": 0.5804195804195804,
+            "recall": 0.9940119760479041
+          }
+        },
+        "never_act_utility": 0.0
+      },
+      "sampled_peak_rss_mb": {
+        "n": 4090,
+        "heavy": 42,
+        "base_rate": 0.010268948655256724,
+        "repositories": 93,
+        "repo_heavy_rate_dispersion": {
+          "repos_with_at_least_5_rows": 92,
+          "mean": 0.008714753230133732,
+          "stdev": 0.02688595835851075,
+          "max": 0.13333333333333333,
+          "frac_repos_above_theta": 0.0
+        },
+        "arms": {
+          "global": {
+            "tp": 0,
+            "fp": 0,
+            "utility": 0.0,
+            "precision": null,
+            "recall": 0.0
+          },
+          "bin": {
+            "tp": 1,
+            "fp": 8,
+            "utility": -3.0,
+            "precision": 0.1111111111111111,
+            "recall": 0.023809523809523808
+          },
+          "repo": {
+            "tp": 0,
+            "fp": 0,
+            "utility": 0.0,
+            "precision": null,
+            "recall": 0.0
+          },
+          "repo_bin": {
+            "tp": 0,
+            "fp": 0,
+            "utility": 0.0,
+            "precision": null,
+            "recall": 0.0
+          },
+          "ORACLE_repo": {
+            "tp": 0,
+            "fp": 0,
+            "utility": 0.0,
+            "precision": null,
+            "recall": 0.0
+          },
+          "ORACLE_bin_x_repo": {
+            "tp": 36,
+            "fp": 58,
+            "utility": 122.0,
+            "precision": 0.3829787234042553,
+            "recall": 0.8571428571428571
+          }
+        },
+        "never_act_utility": 0.0
+      },
+      "disk_read_write_bytes_total": {
+        "n": 4449,
+        "heavy": 99,
+        "base_rate": 0.022252191503708697,
+        "repositories": 93,
+        "repo_heavy_rate_dispersion": {
+          "repos_with_at_least_5_rows": 92,
+          "mean": 0.023714166940127904,
+          "stdev": 0.02451547729889475,
+          "max": 0.12903225806451613,
+          "frac_repos_above_theta": 0.0
+        },
+        "arms": {
+          "global": {
+            "tp": 0,
+            "fp": 0,
+            "utility": 0.0,
+            "precision": null,
+            "recall": 0.0
+          },
+          "bin": {
+            "tp": 54,
+            "fp": 88,
+            "utility": 182.0,
+            "precision": 0.38028169014084506,
+            "recall": 0.5454545454545454
+          },
+          "repo": {
+            "tp": 0,
+            "fp": 0,
+            "utility": 0.0,
+            "precision": null,
+            "recall": 0.0
+          },
+          "repo_bin": {
+            "tp": 1,
+            "fp": 2,
+            "utility": 3.0,
+            "precision": 0.3333333333333333,
+            "recall": 0.010101010101010102
+          },
+          "ORACLE_repo": {
+            "tp": 0,
+            "fp": 0,
+            "utility": 0.0,
+            "precision": null,
+            "recall": 0.0
+          },
+          "ORACLE_bin_x_repo": {
+            "tp": 90,
+            "fp": 129,
+            "utility": 321.0,
+            "precision": 0.410958904109589,
+            "recall": 0.9090909090909091
+          }
+        },
+        "never_act_utility": 0.0
+      }
+    },
+    "SWE277": {
+      "peak_cpu_cores": {
+        "n": 11610,
+        "heavy": 511,
+        "base_rate": 0.044013781223083547,
+        "repositories": 213,
+        "repo_heavy_rate_dispersion": {
+          "repos_with_at_least_5_rows": 213,
+          "mean": 0.04533100968828608,
+          "stdev": 0.08308479427834706,
+          "max": 0.35,
+          "frac_repos_above_theta": 0.11737089201877934
+        },
+        "arms": {
+          "global": {
+            "tp": 0,
+            "fp": 0,
+            "utility": 0.0,
+            "precision": null,
+            "recall": 0.0
+          },
+          "bin": {
+            "tp": 175,
+            "fp": 542,
+            "utility": 333.0,
+            "precision": 0.24407252440725244,
+            "recall": 0.3424657534246575
+          },
+          "repo": {
+            "tp": 46,
+            "fp": 245,
+            "utility": -15.0,
+            "precision": 0.15807560137457044,
+            "recall": 0.09001956947162426
+          },
+          "repo_bin": {
+            "tp": 24,
+            "fp": 20,
+            "utility": 100.0,
+            "precision": 0.5454545454545454,
+            "recall": 0.046966731898238745
+          },
+          "ORACLE_repo": {
+            "tp": 322,
+            "fp": 1022,
+            "utility": 588.0,
+            "precision": 0.23958333333333334,
+            "recall": 0.6301369863013698
+          },
+          "ORACLE_bin_x_repo": {
+            "tp": 488,
+            "fp": 340,
+            "utility": 2100.0,
+            "precision": 0.5893719806763285,
+            "recall": 0.9549902152641878
+          }
+        },
+        "never_act_utility": 0.0
+      },
+      "sampled_peak_rss_mb": {
+        "n": 12358,
+        "heavy": 121,
+        "base_rate": 0.009791228354102606,
+        "repositories": 213,
+        "repo_heavy_rate_dispersion": {
+          "repos_with_at_least_5_rows": 213,
+          "mean": 0.010124056141192894,
+          "stdev": 0.035917486135708644,
+          "max": 0.3157894736842105,
+          "frac_repos_above_theta": 0.014084507042253521
+        },
+        "arms": {
+          "global": {
+            "tp": 0,
+            "fp": 0,
+            "utility": 0.0,
+            "precision": null,
+            "recall": 0.0
+          },
+          "bin": {
+            "tp": 0,
+            "fp": 10,
+            "utility": -10.0,
+            "precision": 0.0,
+            "recall": 0.0
+          },
+          "repo": {
+            "tp": 0,
+            "fp": 0,
+            "utility": 0.0,
+            "precision": null,
+            "recall": 0.0
+          },
+          "repo_bin": {
+            "tp": 0,
+            "fp": 2,
+            "utility": -2.0,
+            "precision": 0.0,
+            "recall": 0.0
+          },
+          "ORACLE_repo": {
+            "tp": 53,
+            "fp": 153,
+            "utility": 112.0,
+            "precision": 0.25728155339805825,
+            "recall": 0.4380165289256198
+          },
+          "ORACLE_bin_x_repo": {
+            "tp": 94,
+            "fp": 131,
+            "utility": 339.0,
+            "precision": 0.4177777777777778,
+            "recall": 0.7768595041322314
+          }
+        },
+        "never_act_utility": 0.0
+      },
+      "disk_read_write_bytes_total": {
+        "n": 13723,
+        "heavy": 328,
+        "base_rate": 0.02390147926838155,
+        "repositories": 213,
+        "repo_heavy_rate_dispersion": {
+          "repos_with_at_least_5_rows": 213,
+          "mean": 0.02679546572024731,
+          "stdev": 0.024991881633042314,
+          "max": 0.1276595744680851,
+          "frac_repos_above_theta": 0.0
+        },
+        "arms": {
+          "global": {
+            "tp": 0,
+            "fp": 0,
+            "utility": 0.0,
+            "precision": null,
+            "recall": 0.0
+          },
+          "bin": {
+            "tp": 275,
+            "fp": 682,
+            "utility": 693.0,
+            "precision": 0.28735632183908044,
+            "recall": 0.8384146341463414
+          },
+          "repo": {
+            "tp": 0,
+            "fp": 0,
+            "utility": 0.0,
+            "precision": null,
+            "recall": 0.0
+          },
+          "repo_bin": {
+            "tp": 40,
+            "fp": 60,
+            "utility": 140.0,
+            "precision": 0.4,
+            "recall": 0.12195121951219512
+          },
+          "ORACLE_repo": {
+            "tp": 0,
+            "fp": 0,
+            "utility": 0.0,
+            "precision": null,
+            "recall": 0.0
+          },
+          "ORACLE_bin_x_repo": {
+            "tp": 292,
+            "fp": 415,
+            "utility": 1045.0,
+            "precision": 0.413012729844413,
+            "recall": 0.8902439024390244
+          }
+        },
+        "never_act_utility": 0.0
+      }
+    }
+  },
+  "cohorts_as_originally_committed_do_not_use": {
     "SWE100": {
       "peak_cpu_cores": {
         "n": 3866,
@@ -371,8 +743,6 @@
   },
   "limitations": [
     "Development-exposed on both SWE corpora; not a confirmation claim.",
-    "The repo_bin arm is a diagnostic aggregate, NOT the shipped predictor: it carries no public prior and no exact/prefix layer, and it was scored in a single within-cohort causal pass. Its utility is therefore NOT comparable to the fit/eval-orientation gate result, and it is not a candidate.",
-    "Turning repo x binary into runtime arbitration requires implementation, independent review, and a gated read before any of these numbers transfer.",
-    "The oracle bounds features that are functions of the repository alone. It does not bound a feature interacting with the command, such as how many test files a specific argv path expands to."
+    "The oracle bounds features that are functions of the repository alone. It does not bound a feature interacting with the command."
   ]
 }

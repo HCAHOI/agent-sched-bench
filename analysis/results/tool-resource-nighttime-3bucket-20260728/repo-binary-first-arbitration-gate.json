@@ -1,0 +1,402 @@
+{
+  "artifact_type": "development_exposed_repo_binary_first_arbitration_gate",
+  "date": "2026-07-29",
+  "claim_bearing": false,
+  "criterion_frozen_in": "13d927a, committed before the implementation existed",
+  "implementation_commit": "02c3b77",
+  "verdict": {
+    "peak_cpu_cores": {
+      "fit-SWE100-eval-SWE277": {
+        "verdict": "development_GO",
+        "candidate_utility": 675.0,
+        "current_theta_half_utility": 84.0,
+        "current_theta_sixth_utility": 670.0,
+        "bootstrap_fraction_margin_positive": 0.6285
+      },
+      "fit-SWE277-eval-SWE100": {
+        "verdict": "NO_GO",
+        "candidate_utility": 247.0,
+        "current_theta_half_utility": 41.0,
+        "current_theta_sixth_utility": 247.0,
+        "bootstrap_fraction_margin_positive": 0.0
+      },
+      "both_orientations": "NO_GO"
+    },
+    "sampled_peak_rss_mb": {
+      "fit-SWE100-eval-SWE277": {
+        "verdict": "NO_GO",
+        "candidate_utility": -81.0,
+        "current_theta_half_utility": -1.0,
+        "current_theta_sixth_utility": -81.0,
+        "bootstrap_fraction_margin_positive": 0.0
+      },
+      "fit-SWE277-eval-SWE100": {
+        "verdict": "NO_GO",
+        "candidate_utility": 0.0,
+        "current_theta_half_utility": 0.0,
+        "current_theta_sixth_utility": 0.0,
+        "bootstrap_fraction_margin_positive": 0.0
+      },
+      "both_orientations": "NO_GO"
+    },
+    "disk_read_write_bytes_total": {
+      "fit-SWE100-eval-SWE277": {
+        "verdict": "NO_GO",
+        "candidate_utility": 611.0,
+        "current_theta_half_utility": 161.0,
+        "current_theta_sixth_utility": 643.0,
+        "bootstrap_fraction_margin_positive": 0.0
+      },
+      "fit-SWE277-eval-SWE100": {
+        "verdict": "NO_GO",
+        "candidate_utility": 143.0,
+        "current_theta_half_utility": 4.0,
+        "current_theta_sixth_utility": 144.0,
+        "bootstrap_fraction_margin_positive": 0.0
+      },
+      "both_orientations": "NO_GO"
+    }
+  },
+  "results": {
+    "fit-SWE100-eval-SWE277": {
+      "peak_cpu_cores": {
+        "n": 11610,
+        "heavy": 511,
+        "prediction_unavailable": 0,
+        "candidate": {
+          "theta": 0.16666666666666666,
+          "tp": 184,
+          "fp": 245,
+          "utility": 675.0
+        },
+        "current_theta_half": {
+          "theta": 0.5,
+          "tp": 21,
+          "fp": 21,
+          "utility": 84.0
+        },
+        "current_theta_sixth": {
+          "theta": 0.16666666666666666,
+          "tp": 181,
+          "fp": 235,
+          "utility": 670.0
+        },
+        "sensitivity_grid_declared_13d927a": {
+          "2:1": {
+            "theta": 0.3333333333333333,
+            "candidate_utility": 529.0,
+            "current_utility": 577.0
+          },
+          "3:1": {
+            "theta": 0.25,
+            "candidate_utility": 688.0,
+            "current_utility": 681.0
+          },
+          "5:1": {
+            "theta": 0.16666666666666666,
+            "candidate_utility": 675.0,
+            "current_utility": 670.0
+          },
+          "10:1": {
+            "theta": 0.09090909090909091,
+            "candidate_utility": -37.0,
+            "current_utility": -24.0
+          }
+        },
+        "never_act_utility": 0.0,
+        "always_act_utility": -8544.0,
+        "beats_current_theta_half": true,
+        "beats_current_theta_sixth": true,
+        "beats_never_act": true,
+        "beats_always_act": true,
+        "bootstrap_repo_clusters": 213,
+        "bootstrap_draws": 2000,
+        "bootstrap_fraction_margin_positive": 0.6285
+      },
+      "sampled_peak_rss_mb": {
+        "n": 12358,
+        "heavy": 121,
+        "prediction_unavailable": 0,
+        "candidate": {
+          "theta": 0.16666666666666666,
+          "tp": 1,
+          "fp": 86,
+          "utility": -81.0
+        },
+        "current_theta_half": {
+          "theta": 0.5,
+          "tp": 0,
+          "fp": 1,
+          "utility": -1.0
+        },
+        "current_theta_sixth": {
+          "theta": 0.16666666666666666,
+          "tp": 1,
+          "fp": 86,
+          "utility": -81.0
+        },
+        "sensitivity_grid_declared_13d927a": {
+          "2:1": {
+            "theta": 0.3333333333333333,
+            "candidate_utility": -1.0,
+            "current_utility": -1.0
+          },
+          "3:1": {
+            "theta": 0.25,
+            "candidate_utility": -1.0,
+            "current_utility": -3.0
+          },
+          "5:1": {
+            "theta": 0.16666666666666666,
+            "candidate_utility": -81.0,
+            "current_utility": -81.0
+          },
+          "10:1": {
+            "theta": 0.09090909090909091,
+            "candidate_utility": -79.0,
+            "current_utility": -79.0
+          }
+        },
+        "never_act_utility": 0.0,
+        "always_act_utility": -11632.0,
+        "beats_current_theta_half": false,
+        "beats_current_theta_sixth": false,
+        "beats_never_act": false,
+        "beats_always_act": true,
+        "bootstrap_repo_clusters": 213,
+        "bootstrap_draws": 2000,
+        "bootstrap_fraction_margin_positive": 0.0
+      },
+      "disk_read_write_bytes_total": {
+        "n": 13723,
+        "heavy": 328,
+        "prediction_unavailable": 0,
+        "candidate": {
+          "theta": 0.16666666666666666,
+          "tp": 193,
+          "fp": 354,
+          "utility": 611.0
+        },
+        "current_theta_half": {
+          "theta": 0.5,
+          "tp": 34,
+          "fp": 9,
+          "utility": 161.0
+        },
+        "current_theta_sixth": {
+          "theta": 0.16666666666666666,
+          "tp": 192,
+          "fp": 317,
+          "utility": 643.0
+        },
+        "sensitivity_grid_declared_13d927a": {
+          "2:1": {
+            "theta": 0.3333333333333333,
+            "candidate_utility": 576.0,
+            "current_utility": 636.0
+          },
+          "3:1": {
+            "theta": 0.25,
+            "candidate_utility": 586.0,
+            "current_utility": 650.0
+          },
+          "5:1": {
+            "theta": 0.16666666666666666,
+            "candidate_utility": 611.0,
+            "current_utility": 643.0
+          },
+          "10:1": {
+            "theta": 0.09090909090909091,
+            "candidate_utility": 693.0,
+            "current_utility": 727.0
+          }
+        },
+        "never_act_utility": 0.0,
+        "always_act_utility": -11755.0,
+        "beats_current_theta_half": true,
+        "beats_current_theta_sixth": false,
+        "beats_never_act": true,
+        "beats_always_act": true,
+        "bootstrap_repo_clusters": 213,
+        "bootstrap_draws": 2000,
+        "bootstrap_fraction_margin_positive": 0.0
+      }
+    },
+    "fit-SWE277-eval-SWE100": {
+      "peak_cpu_cores": {
+        "n": 3866,
+        "heavy": 167,
+        "prediction_unavailable": 0,
+        "candidate": {
+          "theta": 0.16666666666666666,
+          "tp": 71,
+          "fp": 108,
+          "utility": 247.0
+        },
+        "current_theta_half": {
+          "theta": 0.5,
+          "tp": 14,
+          "fp": 29,
+          "utility": 41.0
+        },
+        "current_theta_sixth": {
+          "theta": 0.16666666666666666,
+          "tp": 71,
+          "fp": 108,
+          "utility": 247.0
+        },
+        "sensitivity_grid_declared_13d927a": {
+          "2:1": {
+            "theta": 0.3333333333333333,
+            "candidate_utility": 216.0,
+            "current_utility": 216.0
+          },
+          "3:1": {
+            "theta": 0.25,
+            "candidate_utility": 247.0,
+            "current_utility": 247.0
+          },
+          "5:1": {
+            "theta": 0.16666666666666666,
+            "candidate_utility": 247.0,
+            "current_utility": 247.0
+          },
+          "10:1": {
+            "theta": 0.09090909090909091,
+            "candidate_utility": -81.0,
+            "current_utility": -81.0
+          }
+        },
+        "never_act_utility": 0.0,
+        "always_act_utility": -2864.0,
+        "beats_current_theta_half": true,
+        "beats_current_theta_sixth": false,
+        "beats_never_act": true,
+        "beats_always_act": true,
+        "bootstrap_repo_clusters": 93,
+        "bootstrap_draws": 2000,
+        "bootstrap_fraction_margin_positive": 0.0
+      },
+      "sampled_peak_rss_mb": {
+        "n": 4090,
+        "heavy": 42,
+        "prediction_unavailable": 0,
+        "candidate": {
+          "theta": 0.16666666666666666,
+          "tp": 0,
+          "fp": 0,
+          "utility": 0.0
+        },
+        "current_theta_half": {
+          "theta": 0.5,
+          "tp": 0,
+          "fp": 0,
+          "utility": 0.0
+        },
+        "current_theta_sixth": {
+          "theta": 0.16666666666666666,
+          "tp": 0,
+          "fp": 0,
+          "utility": 0.0
+        },
+        "sensitivity_grid_declared_13d927a": {
+          "2:1": {
+            "theta": 0.3333333333333333,
+            "candidate_utility": 0.0,
+            "current_utility": 0.0
+          },
+          "3:1": {
+            "theta": 0.25,
+            "candidate_utility": 0.0,
+            "current_utility": 0.0
+          },
+          "5:1": {
+            "theta": 0.16666666666666666,
+            "candidate_utility": 0.0,
+            "current_utility": 0.0
+          },
+          "10:1": {
+            "theta": 0.09090909090909091,
+            "candidate_utility": 0.0,
+            "current_utility": 0.0
+          }
+        },
+        "never_act_utility": 0.0,
+        "always_act_utility": -3838.0,
+        "beats_current_theta_half": false,
+        "beats_current_theta_sixth": false,
+        "beats_never_act": false,
+        "beats_always_act": true,
+        "bootstrap_repo_clusters": 93,
+        "bootstrap_draws": 2000,
+        "bootstrap_fraction_margin_positive": 0.0
+      },
+      "disk_read_write_bytes_total": {
+        "n": 4449,
+        "heavy": 99,
+        "prediction_unavailable": 0,
+        "candidate": {
+          "theta": 0.16666666666666666,
+          "tp": 71,
+          "fp": 212,
+          "utility": 143.0
+        },
+        "current_theta_half": {
+          "theta": 0.5,
+          "tp": 1,
+          "fp": 1,
+          "utility": 4.0
+        },
+        "current_theta_sixth": {
+          "theta": 0.16666666666666666,
+          "tp": 71,
+          "fp": 211,
+          "utility": 144.0
+        },
+        "sensitivity_grid_declared_13d927a": {
+          "2:1": {
+            "theta": 0.3333333333333333,
+            "candidate_utility": 184.0,
+            "current_utility": 185.0
+          },
+          "3:1": {
+            "theta": 0.25,
+            "candidate_utility": 184.0,
+            "current_utility": 185.0
+          },
+          "5:1": {
+            "theta": 0.16666666666666666,
+            "candidate_utility": 143.0,
+            "current_utility": 144.0
+          },
+          "10:1": {
+            "theta": 0.09090909090909091,
+            "candidate_utility": 150.0,
+            "current_utility": 151.0
+          }
+        },
+        "never_act_utility": 0.0,
+        "always_act_utility": -3855.0,
+        "beats_current_theta_half": true,
+        "beats_current_theta_sixth": false,
+        "beats_never_act": true,
+        "beats_always_act": true,
+        "bootstrap_repo_clusters": 93,
+        "bootstrap_draws": 2000,
+        "bootstrap_fraction_margin_positive": 0.0
+      }
+    }
+  },
+  "mechanism": {
+    "headline": "NO-GO on every target. The motivating diagnostic was inflated by an absent task settlement barrier in MY analysis script, not by any property of the candidate.",
+    "leak_quantified": "Re-running the motivating repository-by-binary diagnostic on SWE277 CPU with and without the barrier: utility 1787 without it (TP 376 / FP 93) against 100 with it (TP 24 / FP 20). RSS collapses 241 -> -2. Disk, which was never the claim, moves only 165 -> 140.",
+    "why": "Agents re-run the same command repeatedly WITHIN a task. Repository-by-binary aggregation looks powerful precisely because it captures that repetition, and the causal contract forbids it: every clause in a task is predicted before any observation from that task settles. Across the barrier, most repositories simply have too little prior cross-task history -- SWE277 holds 277 tasks over 213 repositories.",
+    "oracle_gap": "The hindsight repository-by-command oracle remains high (CPU SWE277 2100) while its causal realisation reaches 100, about 5%. The information exists but is not causally available at prediction time. That gap, not representation, is the ceiling.",
+    "prediction_check": "The frozen amendment predicted this would help CPU and RSS and not Disk. It helped none of them, so the mechanism claim is falsified as stated, not merely unsupported."
+  },
+  "limitations": [
+    "Development-exposed; not a confirmation claim.",
+    "Runtime arbitration is unchanged: repo_binary_first ships default-off and no caller sets it.",
+    "The pre-declared sensitivity grid is reported in results and was not used to select anything; the primary theta=1/6 governs the verdict."
+  ]
+}
