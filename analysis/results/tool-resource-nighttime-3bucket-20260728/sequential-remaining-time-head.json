@@ -1,0 +1,481 @@
+{
+  "artifact_type": "development_exposed_sequential_remaining_time_head",
+  "date": "2026-07-29",
+  "claim_bearing": false,
+  "criterion_frozen_in": "45cac5b, committed before the evaluation existed",
+  "verdict": {
+    "primary_rung_ms": 1000.0,
+    "result": "NO_GO in both orientations",
+    "detail": {
+      "fit-SWE100-eval-SWE277": {
+        "majority": 0.4857928505957837,
+        "no_recondition": 0.4995417048579285,
+        "conditional_remaining": 0.49068133211121295,
+        "beats_majority": true,
+        "beats_no_recondition": false,
+        "bootstrap_fraction_margin_positive": 0.0955
+      },
+      "fit-SWE277-eval-SWE100": {
+        "majority": 0.5010989010989011,
+        "no_recondition": 0.4879120879120879,
+        "conditional_remaining": 0.4879120879120879,
+        "beats_majority": false,
+        "beats_no_recondition": false,
+        "bootstrap_fraction_margin_positive": 0.1585
+      }
+    }
+  },
+  "failure_mechanism": {
+    "headline": "At the primary rung the conditional head is degenerate: it predicts the short-remaining bucket for 92% of survivors on SWE277 (3006 of 3273) and 95% on SWE100 (865 of 910), so it collapses onto the majority classifier it was supposed to beat.",
+    "why": "At 1000 ms the surviving population is still dominated by short remaining durations, so every backoff node's values are mostly short and the argmax lands on bucket 0 regardless of the key. There is not yet enough elapsed time for survival to have reshaped the evidence.",
+    "confusion_truth_by_conditional_at_primary_rung": {
+      "fit-SWE100-eval-SWE277": [
+        [
+          1494,
+          74,
+          22
+        ],
+        [
+          941,
+          89,
+          24
+        ],
+        [
+          571,
+          35,
+          23
+        ]
+      ],
+      "fit-SWE277-eval-SWE100": [
+        [
+          432,
+          17,
+          7
+        ],
+        [
+          271,
+          5,
+          3
+        ],
+        [
+          162,
+          6,
+          7
+        ]
+      ]
+    }
+  },
+  "mechanism_that_IS_supported": {
+    "claim": "The premise behind the proposal -- that a prediction made at clause start goes stale -- is strongly confirmed, even though the gate fails.",
+    "conditional_minus_no_recondition_percentage_points": {
+      "fit-SWE100-eval-SWE277": {
+        "rung_1000": -0.89,
+        "rung_2000": 6.31,
+        "rung_4000": 22.83,
+        "rung_8000": 21.68
+      },
+      "fit-SWE277-eval-SWE100": {
+        "rung_1000": 0.0,
+        "rung_2000": 9.53,
+        "rung_4000": 24.39,
+        "rung_8000": 27.14
+      }
+    },
+    "reading": "Not re-conditioning costs about 22 to 27 percentage points once a clause has run 4 s or more: the clause-start head falls to roughly 24-30% accuracy while the conditional head holds near 47-57%. The cost of never updating grows monotonically with elapsed time, which is exactly the proposed mechanism. It is simply not yet visible at the rung that was declared primary."
+  },
+  "secondary_rungs_reported_not_deciding": {
+    "fit-SWE100-eval-SWE277": {
+      "rung_1000": {
+        "survivors": 3273,
+        "majority": 0.4857928505957837,
+        "no_recondition": 0.4995417048579285,
+        "conditional_remaining": 0.49068133211121295,
+        "beats_majority": true,
+        "beats_no_recondition": false,
+        "bootstrap": 0.0955
+      },
+      "rung_2000": {
+        "survivors": 2141,
+        "majority": 0.39000467071461936,
+        "no_recondition": 0.3773937412424101,
+        "conditional_remaining": 0.4404483886034563,
+        "beats_majority": true,
+        "beats_no_recondition": true,
+        "bootstrap": 0.942
+      },
+      "rung_4000": {
+        "survivors": 1358,
+        "majority": 0.47496318114874814,
+        "no_recondition": 0.24153166421207659,
+        "conditional_remaining": 0.4698085419734904,
+        "beats_majority": false,
+        "beats_no_recondition": true,
+        "bootstrap": 0.393
+      },
+      "rung_8000": {
+        "survivors": 752,
+        "majority": 0.4574468085106383,
+        "no_recondition": 0.27925531914893614,
+        "conditional_remaining": 0.49601063829787234,
+        "beats_majority": true,
+        "beats_no_recondition": true,
+        "bootstrap": 0.9675
+      }
+    },
+    "fit-SWE277-eval-SWE100": {
+      "rung_1000": {
+        "survivors": 910,
+        "majority": 0.5010989010989011,
+        "no_recondition": 0.4879120879120879,
+        "conditional_remaining": 0.4879120879120879,
+        "beats_majority": false,
+        "beats_no_recondition": false,
+        "bootstrap": 0.1585
+      },
+      "rung_2000": {
+        "survivors": 556,
+        "majority": 0.40827338129496404,
+        "no_recondition": 0.34172661870503596,
+        "conditional_remaining": 0.4370503597122302,
+        "beats_majority": true,
+        "beats_no_recondition": true,
+        "bootstrap": 0.8125
+      },
+      "rung_4000": {
+        "survivors": 369,
+        "majority": 0.47696476964769646,
+        "no_recondition": 0.22493224932249323,
+        "conditional_remaining": 0.46883468834688347,
+        "beats_majority": false,
+        "beats_no_recondition": true,
+        "bootstrap": 0.331
+      },
+      "rung_8000": {
+        "survivors": 199,
+        "majority": 0.48743718592964824,
+        "no_recondition": 0.2964824120603015,
+        "conditional_remaining": 0.5678391959798995,
+        "beats_majority": true,
+        "beats_no_recondition": true,
+        "bootstrap": 1.0
+      }
+    }
+  },
+  "design_error_owned": "The primary rung was chosen on action-utility grounds -- median remaining duration about 2 s, roughly a fifth of clauses surviving -- rather than on where the mechanism could be detected. That was the wrong basis. Rungs 2000 and 8000 ms pass in both orientations and 4000 ms fails, but these are pre-declared SECONDARY evidence and the frozen criterion forbids treating them as the verdict. Moving the primary rung now would be selecting the rung that favours the candidate.",
+  "raw": {
+    "criterion_frozen_in": "45cac5b",
+    "bucket_edges_ms": [
+      2000.0,
+      8000.0
+    ],
+    "primary_rung_ms": 1000.0,
+    "orientations": {
+      "fit-SWE100-eval-SWE277": {
+        "rung_1000": {
+          "rung_ms": 1000.0,
+          "survivors_scored": 3273,
+          "prediction_unavailable": 0,
+          "remaining_bucket_counts": {
+            "0": 1590,
+            "1": 1054,
+            "2": 629
+          },
+          "majority_bucket": 0,
+          "accuracy": {
+            "majority": 0.4857928505957837,
+            "no_recondition": 0.4995417048579285,
+            "conditional_remaining": 0.49068133211121295
+          },
+          "beats_majority": true,
+          "beats_no_recondition": false,
+          "bootstrap_repo_clusters": 205,
+          "bootstrap_fraction_margin_positive": 0.0955,
+          "confusion_truth_by_conditional": [
+            [
+              1494,
+              74,
+              22
+            ],
+            [
+              941,
+              89,
+              24
+            ],
+            [
+              571,
+              35,
+              23
+            ]
+          ]
+        },
+        "rung_2000": {
+          "rung_ms": 2000.0,
+          "survivors_scored": 2141,
+          "prediction_unavailable": 0,
+          "remaining_bucket_counts": {
+            "0": 783,
+            "1": 835,
+            "2": 523
+          },
+          "majority_bucket": 1,
+          "accuracy": {
+            "majority": 0.39000467071461936,
+            "no_recondition": 0.3773937412424101,
+            "conditional_remaining": 0.4404483886034563
+          },
+          "beats_majority": true,
+          "beats_no_recondition": true,
+          "bootstrap_repo_clusters": 199,
+          "bootstrap_fraction_margin_positive": 0.942,
+          "confusion_truth_by_conditional": [
+            [
+              423,
+              316,
+              44
+            ],
+            [
+              318,
+              476,
+              41
+            ],
+            [
+              220,
+              259,
+              44
+            ]
+          ]
+        },
+        "rung_4000": {
+          "rung_ms": 4000.0,
+          "survivors_scored": 1358,
+          "prediction_unavailable": 0,
+          "remaining_bucket_counts": {
+            "0": 298,
+            "1": 645,
+            "2": 415
+          },
+          "majority_bucket": 1,
+          "accuracy": {
+            "majority": 0.47496318114874814,
+            "no_recondition": 0.24153166421207659,
+            "conditional_remaining": 0.4698085419734904
+          },
+          "beats_majority": false,
+          "beats_no_recondition": true,
+          "bootstrap_repo_clusters": 183,
+          "bootstrap_fraction_margin_positive": 0.393,
+          "confusion_truth_by_conditional": [
+            [
+              113,
+              120,
+              65
+            ],
+            [
+              127,
+              449,
+              69
+            ],
+            [
+              141,
+              198,
+              76
+            ]
+          ]
+        },
+        "rung_8000": {
+          "rung_ms": 8000.0,
+          "survivors_scored": 752,
+          "prediction_unavailable": 0,
+          "remaining_bucket_counts": {
+            "0": 229,
+            "1": 179,
+            "2": 344
+          },
+          "majority_bucket": 2,
+          "accuracy": {
+            "majority": 0.4574468085106383,
+            "no_recondition": 0.27925531914893614,
+            "conditional_remaining": 0.49601063829787234
+          },
+          "beats_majority": true,
+          "beats_no_recondition": true,
+          "bootstrap_repo_clusters": 139,
+          "bootstrap_fraction_margin_positive": 0.9675,
+          "confusion_truth_by_conditional": [
+            [
+              70,
+              7,
+              152
+            ],
+            [
+              22,
+              10,
+              147
+            ],
+            [
+              24,
+              27,
+              293
+            ]
+          ]
+        }
+      },
+      "fit-SWE277-eval-SWE100": {
+        "rung_1000": {
+          "rung_ms": 1000.0,
+          "survivors_scored": 910,
+          "prediction_unavailable": 0,
+          "remaining_bucket_counts": {
+            "0": 456,
+            "1": 279,
+            "2": 175
+          },
+          "majority_bucket": 0,
+          "accuracy": {
+            "majority": 0.5010989010989011,
+            "no_recondition": 0.4879120879120879,
+            "conditional_remaining": 0.4879120879120879
+          },
+          "beats_majority": false,
+          "beats_no_recondition": false,
+          "bootstrap_repo_clusters": 87,
+          "bootstrap_fraction_margin_positive": 0.1585,
+          "confusion_truth_by_conditional": [
+            [
+              432,
+              17,
+              7
+            ],
+            [
+              271,
+              5,
+              3
+            ],
+            [
+              162,
+              6,
+              7
+            ]
+          ]
+        },
+        "rung_2000": {
+          "rung_ms": 2000.0,
+          "survivors_scored": 556,
+          "prediction_unavailable": 0,
+          "remaining_bucket_counts": {
+            "0": 187,
+            "1": 227,
+            "2": 142
+          },
+          "majority_bucket": 1,
+          "accuracy": {
+            "majority": 0.40827338129496404,
+            "no_recondition": 0.34172661870503596,
+            "conditional_remaining": 0.4370503597122302
+          },
+          "beats_majority": true,
+          "beats_no_recondition": true,
+          "bootstrap_repo_clusters": 84,
+          "bootstrap_fraction_margin_positive": 0.8125,
+          "confusion_truth_by_conditional": [
+            [
+              84,
+              91,
+              12
+            ],
+            [
+              62,
+              147,
+              18
+            ],
+            [
+              52,
+              78,
+              12
+            ]
+          ]
+        },
+        "rung_4000": {
+          "rung_ms": 4000.0,
+          "survivors_scored": 369,
+          "prediction_unavailable": 0,
+          "remaining_bucket_counts": {
+            "0": 80,
+            "1": 176,
+            "2": 113
+          },
+          "majority_bucket": 1,
+          "accuracy": {
+            "majority": 0.47696476964769646,
+            "no_recondition": 0.22493224932249323,
+            "conditional_remaining": 0.46883468834688347
+          },
+          "beats_majority": false,
+          "beats_no_recondition": true,
+          "bootstrap_repo_clusters": 71,
+          "bootstrap_fraction_margin_positive": 0.331,
+          "confusion_truth_by_conditional": [
+            [
+              2,
+              59,
+              19
+            ],
+            [
+              8,
+              147,
+              21
+            ],
+            [
+              8,
+              81,
+              24
+            ]
+          ]
+        },
+        "rung_8000": {
+          "rung_ms": 8000.0,
+          "survivors_scored": 199,
+          "prediction_unavailable": 0,
+          "remaining_bucket_counts": {
+            "0": 57,
+            "1": 45,
+            "2": 97
+          },
+          "majority_bucket": 2,
+          "accuracy": {
+            "majority": 0.48743718592964824,
+            "no_recondition": 0.2964824120603015,
+            "conditional_remaining": 0.5678391959798995
+          },
+          "beats_majority": true,
+          "beats_no_recondition": true,
+          "bootstrap_repo_clusters": 49,
+          "bootstrap_fraction_margin_positive": 1.0,
+          "confusion_truth_by_conditional": [
+            [
+              18,
+              0,
+              39
+            ],
+            [
+              1,
+              0,
+              44
+            ],
+            [
+              2,
+              0,
+              95
+            ]
+          ]
+        }
+      }
+    }
+  },
+  "limitations": [
+    "Development-exposed; not a confirmation claim. Declared as the final planned read of the two SWE corpora.",
+    "Remaining-duration prediction is a much harder and better-balanced task than total-latency bucketing: majority is 39-50% here against 84-88% there. Accuracy figures are not comparable between the two objectives.",
+    "The secondary-rung pattern is non-monotone (2000 passes, 4000 fails, 8000 passes) and tracks how peaked the class mix is at each rung, so it should not be read as a clean trend.",
+    "A properly powered test of the later rungs needs a criterion frozen in advance and data not yet used; these corpora are spent."
+  ]
+}
