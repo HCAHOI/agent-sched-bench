@@ -1,0 +1,255 @@
+{
+  "criterion_frozen_in": "e99f439",
+  "premise": "forced eviction; hidden-swap-ms not wall clock; Fresh-277 cannot exhibit contention; rho and kv are swept cost-model parameters",
+  "tasks": 277,
+  "cells": {
+    "3500": {
+      "kv_cost_ms": 3500.0,
+      "by_rho": {
+        "0.00": {
+          "deadline_only_s": 1565.4090399742126,
+          "best_constant_s": 1509.520832157135,
+          "per_key_loo_s": 1645.8764717578888,
+          "oracle_s": 2957.5,
+          "budget_s": 1392.0909600257874,
+          "best_constant_gain_s": -55.888207817077635,
+          "per_key_loo_gain_s": 80.46743178367615,
+          "best_constant_beats_deadline": false,
+          "per_key_loo_beats_deadline": true
+        },
+        "0.10": {
+          "deadline_only_s": 1565.4090399742126,
+          "best_constant_s": 1501.5919354438781,
+          "per_key_loo_s": 1682.6222437858582,
+          "oracle_s": 2957.5,
+          "budget_s": 1392.0909600257874,
+          "best_constant_gain_s": -63.817104530334475,
+          "per_key_loo_gain_s": 117.21320381164551,
+          "best_constant_beats_deadline": false,
+          "per_key_loo_beats_deadline": true
+        },
+        "0.20": {
+          "deadline_only_s": 1565.4090399742126,
+          "best_constant_s": 1500.4874010562896,
+          "per_key_loo_s": 1646.2279734134675,
+          "oracle_s": 2957.5,
+          "budget_s": 1392.0909600257874,
+          "best_constant_gain_s": -64.92163891792298,
+          "per_key_loo_gain_s": 80.81893343925476,
+          "best_constant_beats_deadline": false,
+          "per_key_loo_beats_deadline": true
+        },
+        "0.30": {
+          "deadline_only_s": 1565.4090399742126,
+          "best_constant_s": 1529.3543363571166,
+          "per_key_loo_s": 1577.3286947727204,
+          "oracle_s": 2957.5,
+          "budget_s": 1392.0909600257874,
+          "best_constant_gain_s": -36.054703617095946,
+          "per_key_loo_gain_s": 11.91965479850769,
+          "best_constant_beats_deadline": false,
+          "per_key_loo_beats_deadline": true
+        },
+        "0.40": {
+          "deadline_only_s": 1565.4090399742126,
+          "best_constant_s": 1529.0907402038574,
+          "per_key_loo_s": 1556.2712165355683,
+          "oracle_s": 2957.5,
+          "budget_s": 1392.0909600257874,
+          "best_constant_gain_s": -36.318299770355225,
+          "per_key_loo_gain_s": -9.137823438644409,
+          "best_constant_beats_deadline": false,
+          "per_key_loo_beats_deadline": false
+        },
+        "0.50": {
+          "deadline_only_s": 1565.4090399742126,
+          "best_constant_s": 1529.0907402038574,
+          "per_key_loo_s": 1526.1153287887573,
+          "oracle_s": 2957.5,
+          "budget_s": 1392.0909600257874,
+          "best_constant_gain_s": -36.318299770355225,
+          "per_key_loo_gain_s": -39.29371118545532,
+          "best_constant_beats_deadline": false,
+          "per_key_loo_beats_deadline": false
+        },
+        "0.60": {
+          "deadline_only_s": 1565.4090399742126,
+          "best_constant_s": 1529.0907402038574,
+          "per_key_loo_s": 1557.3104419708252,
+          "oracle_s": 2957.5,
+          "budget_s": 1392.0909600257874,
+          "best_constant_gain_s": -36.318299770355225,
+          "per_key_loo_gain_s": -8.098598003387451,
+          "best_constant_beats_deadline": false,
+          "per_key_loo_beats_deadline": false
+        },
+        "0.70": {
+          "deadline_only_s": 1565.4090399742126,
+          "best_constant_s": 1529.0907402038574,
+          "per_key_loo_s": 1541.9461989879608,
+          "oracle_s": 2957.5,
+          "budget_s": 1392.0909600257874,
+          "best_constant_gain_s": -36.318299770355225,
+          "per_key_loo_gain_s": -23.46284098625183,
+          "best_constant_beats_deadline": false,
+          "per_key_loo_beats_deadline": false
+        },
+        "0.80": {
+          "deadline_only_s": 1565.4090399742126,
+          "best_constant_s": 1529.0907402038574,
+          "per_key_loo_s": 1533.1489435195922,
+          "oracle_s": 2957.5,
+          "budget_s": 1392.0909600257874,
+          "best_constant_gain_s": -36.318299770355225,
+          "per_key_loo_gain_s": -32.26009645462036,
+          "best_constant_beats_deadline": false,
+          "per_key_loo_beats_deadline": false
+        },
+        "0.94": {
+          "deadline_only_s": 1565.4090399742126,
+          "best_constant_s": 1529.0907402038574,
+          "per_key_loo_s": 1481.8362240695953,
+          "oracle_s": 2957.5,
+          "budget_s": 1392.0909600257874,
+          "best_constant_gain_s": -36.318299770355225,
+          "per_key_loo_gain_s": -83.57281590461731,
+          "best_constant_beats_deadline": false,
+          "per_key_loo_beats_deadline": false
+        }
+      },
+      "lowest_rho_that_beats_deadline": {
+        "best_constant": null,
+        "per_key_loo": "0.00"
+      }
+    },
+    "5000": {
+      "kv_cost_ms": 5000.0,
+      "by_rho": {
+        "0.00": {
+          "deadline_only_s": 1742.3890233039856,
+          "best_constant_s": 1774.4827773571014,
+          "per_key_loo_s": 1899.15705037117,
+          "oracle_s": 3220.0,
+          "budget_s": 1477.6109766960144,
+          "best_constant_gain_s": 32.093754053115845,
+          "per_key_loo_gain_s": 156.76802706718445,
+          "best_constant_beats_deadline": true,
+          "per_key_loo_beats_deadline": true
+        },
+        "0.10": {
+          "deadline_only_s": 1742.3890233039856,
+          "best_constant_s": 1668.7870720386504,
+          "per_key_loo_s": 1945.3036403656006,
+          "oracle_s": 3220.0,
+          "budget_s": 1477.6109766960144,
+          "best_constant_gain_s": -73.60195126533509,
+          "per_key_loo_gain_s": 202.914617061615,
+          "best_constant_beats_deadline": false,
+          "per_key_loo_beats_deadline": true
+        },
+        "0.20": {
+          "deadline_only_s": 1742.3890233039856,
+          "best_constant_s": 1663.886116695404,
+          "per_key_loo_s": 1827.1891024112701,
+          "oracle_s": 3220.0,
+          "budget_s": 1477.6109766960144,
+          "best_constant_gain_s": -78.50290660858154,
+          "per_key_loo_gain_s": 84.80007910728455,
+          "best_constant_beats_deadline": false,
+          "per_key_loo_beats_deadline": true
+        },
+        "0.30": {
+          "deadline_only_s": 1742.3890233039856,
+          "best_constant_s": 1735.0890233039856,
+          "per_key_loo_s": 1868.1625695228577,
+          "oracle_s": 3220.0,
+          "budget_s": 1477.6109766960144,
+          "best_constant_gain_s": -7.3,
+          "per_key_loo_gain_s": 125.77354621887207,
+          "best_constant_beats_deadline": false,
+          "per_key_loo_beats_deadline": true
+        },
+        "0.40": {
+          "deadline_only_s": 1742.3890233039856,
+          "best_constant_s": 1735.0890233039856,
+          "per_key_loo_s": 1870.9998090267181,
+          "oracle_s": 3220.0,
+          "budget_s": 1477.6109766960144,
+          "best_constant_gain_s": -7.3,
+          "per_key_loo_gain_s": 128.61078572273254,
+          "best_constant_beats_deadline": false,
+          "per_key_loo_beats_deadline": true
+        },
+        "0.50": {
+          "deadline_only_s": 1742.3890233039856,
+          "best_constant_s": 1735.0890233039856,
+          "per_key_loo_s": 1824.6402611732483,
+          "oracle_s": 3220.0,
+          "budget_s": 1477.6109766960144,
+          "best_constant_gain_s": -7.3,
+          "per_key_loo_gain_s": 82.2512378692627,
+          "best_constant_beats_deadline": false,
+          "per_key_loo_beats_deadline": true
+        },
+        "0.60": {
+          "deadline_only_s": 1742.3890233039856,
+          "best_constant_s": 1735.0890233039856,
+          "per_key_loo_s": 1755.6419684886932,
+          "oracle_s": 3220.0,
+          "budget_s": 1477.6109766960144,
+          "best_constant_gain_s": -7.3,
+          "per_key_loo_gain_s": 13.252945184707642,
+          "best_constant_beats_deadline": false,
+          "per_key_loo_beats_deadline": true
+        },
+        "0.70": {
+          "deadline_only_s": 1742.3890233039856,
+          "best_constant_s": 1735.0890233039856,
+          "per_key_loo_s": 1661.0135226249695,
+          "oracle_s": 3220.0,
+          "budget_s": 1477.6109766960144,
+          "best_constant_gain_s": -7.3,
+          "per_key_loo_gain_s": -81.37550067901611,
+          "best_constant_beats_deadline": false,
+          "per_key_loo_beats_deadline": false
+        },
+        "0.80": {
+          "deadline_only_s": 1742.3890233039856,
+          "best_constant_s": 1735.0890233039856,
+          "per_key_loo_s": 1649.614402770996,
+          "oracle_s": 3220.0,
+          "budget_s": 1477.6109766960144,
+          "best_constant_gain_s": -7.3,
+          "per_key_loo_gain_s": -92.7746205329895,
+          "best_constant_beats_deadline": false,
+          "per_key_loo_beats_deadline": false
+        },
+        "0.94": {
+          "deadline_only_s": 1742.3890233039856,
+          "best_constant_s": 1735.0890233039856,
+          "per_key_loo_s": 1597.039232158661,
+          "oracle_s": 3220.0,
+          "budget_s": 1477.6109766960144,
+          "best_constant_gain_s": -7.3,
+          "per_key_loo_gain_s": -145.3497911453247,
+          "best_constant_beats_deadline": false,
+          "per_key_loo_beats_deadline": false
+        }
+      },
+      "lowest_rho_that_beats_deadline": {
+        "best_constant": "0.00",
+        "per_key_loo": "0.00"
+      }
+    }
+  },
+  "verdict": "CONTINGENT, not unconditional. The per-key negative result flips: per_key_loo beats deadline_only for rho <= 0.30 at kv=3500 and rho <= 0.60 at kv=5000, by 80-200 s, and only fails above those boundaries. At the charged rho = 0.94 it fails, which is what every prior commit reported. The best_constant negative is robust: it beats deadline_only in exactly one cell of twenty (kv=5000, rho=0).",
+  "boundaries": {
+    "kv3500_per_key_rho_star": "between 0.30 and 0.40",
+    "kv5000_per_key_rho_star": "between 0.60 and 0.70",
+    "best_constant": "no boundary; negative at every rho except kv=5000 rho=0"
+  },
+  "what_must_be_restated": "Every negative conclusion in this lane -- 3bc4906, 8e7ed28, f1cbee3 and the per-key half of 24d4344 -- was computed at rho = 0.94 and must be restated as holding only for SWAP-BACK-EXPENSIVE regimes. They are not statements about agent workloads in general. The statement that survives unconditionally is the constant-threshold one: tuning a single global trigger does not beat firing at T = kv at any restore charge tested.",
+  "why_this_matters": "analysis/serving/tool-time-prefill-cost-20260716/findings.md states the intended restore action is the CHEAPER of reload (rho*kv over PCIe) or recompute (prefill the context). This lane never implemented that minimum and always charged reload, so 0.94 is an upper bound on the true effective fraction. If recompute is cheaper for realistic contexts, rho_effective could sit at or below the flip boundaries, in which case per-key prediction works and the lane's headline negative is an artifact of an overcharged restore.",
+  "decisive_follow_up_not_done": "Compute rho_effective = min(rho*kv, prefill(context)) / kv properly. That requires resolving how the swept kv_cost_ms grid maps to context tokens, which is not established: at the measured 49152 bytes per token and roughly 54 GB/s, a 5000 ms swap implies millions of tokens, far beyond any single request in this corpus. Until that mapping is pinned down, rho_effective cannot be computed and the lane's verdict cannot be settled.",
+  "noise_caveat": "The per-key gains are non-monotone in rho (80.5, 117.2, 80.8, 11.9 at kv=3500; 156.8, 202.9, 84.8, 125.8, 128.6, 82.3, 13.3 at kv=5000), which indicates these are noisy point estimates. No confidence intervals were computed in this sweep, so the boundaries are located to within one grid step at best and should not be quoted more precisely than that."
+}
