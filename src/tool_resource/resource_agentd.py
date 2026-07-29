@@ -2150,9 +2150,13 @@ def _parse_mode(value: str) -> int:
     return mode
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    if os.geteuid() == 0:
-        raise PermissionError("resource-agentd must not run as root")
+def build_cli_parser() -> argparse.ArgumentParser:
+    """Daemon CLI. Split out so the shipped defaults are directly testable.
+
+    The root check stays in :func:`main`: it guards daemon startup, not argument
+    parsing, and must fire even if a caller never builds a parser.
+    """
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--socket", type=Path, required=True)
     parser.add_argument("--database", type=Path, required=True)
@@ -2163,11 +2167,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--socket-mode", type=_parse_mode, default=0o600)
     parser.add_argument("--result-ttl", type=float, default=DEFAULT_RESULT_TTL_S)
     parser.add_argument(
+        "--heavy-decision-threshold",
+        type=float,
+        default=DEFAULT_HEAVY_DECISION_THRESHOLD,
+        help=(
+            "Cut on P(Heavy) for the resource classes. Declare it as C/(B+C) from "
+            "the cost of a wrong action against a missed Heavy; the 0.5 default is "
+            "correct only when those cost the same. Recorded per run and per "
+            "prediction. Never select this value from an evaluation result."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose logging.",
     )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    if os.geteuid() == 0:
+        raise PermissionError("resource-agentd must not run as root")
+    args = build_cli_parser().parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -2182,6 +2203,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             expected_peer_uid=args.telemetry_peer_uid,
         ),
         result_ttl_s=args.result_ttl,
+        kb_heavy_decision_threshold=args.heavy_decision_threshold,
     )
     with ResourceServer(
         args.socket,

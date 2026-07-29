@@ -25,6 +25,7 @@ from tool_resource.resource_agentd import (
     ResourceServer,
     ResourceService,
     _clause_observations,
+    build_cli_parser,
 )
 from tool_resource.resource_protocol import (
     RESOURCE_PROTOCOL_VERSION,
@@ -3158,3 +3159,98 @@ def test_resource_close_timeouts_outlast_telemetry_finalize() -> None:
     assert transport.operation_timeouts_s["CloseRun"] > transport.timeout_s
     assert "OpenTrace" not in transport.operation_timeouts_s
     assert "Ping" not in transport.operation_timeouts_s
+
+
+def _cpu_envelope(
+    observation_id: str, *, cores: float, end: float, scope: str = "repo"
+) -> dict[str, Any]:
+    envelope = _envelope(observation_id, scope=scope, end=end)
+    measurement = envelope["normalized_measurements"][0]
+    measurement["peak_cpu_cores"] = cores
+    measurement["availability"] = {"latency": "ok", "cpu": "ok"}
+    return envelope
+
+
+def _seeded_cpu_service(
+    tmp_path: Path, *, threshold: float
+) -> tuple[ResourceService, str]:
+    """One repo node holding 1 Heavy and 3 Light CPU observations, so P = 0.25."""
+
+    store = ObservationStore(tmp_path / "observations.sqlite3")
+    seeded = []
+    for index, cores in enumerate((8.0, 0.1, 0.1, 0.1)):
+        observation_id = f"seed-{index}"
+        store.insert_observation(
+            _cpu_envelope(observation_id, cores=cores, end=1.0 + index)
+        )
+        seeded.append(observation_id)
+    assert store.promote_observations(set(seeded)) == len(seeded)
+    snapshot = store.create_snapshot()
+    service = ResourceService(
+        store,
+        _DirectTransport(
+            TelemetryService(
+                collector_factory=_FakeCollector,
+                state_dir=tmp_path / f"telemetry-{threshold:.4f}",
+            )
+        ),
+        kb_heavy_decision_threshold=threshold,
+    )
+    return service, snapshot
+
+
+def _cpu_label(seeded: tuple[ResourceService, str]) -> str:
+    service, snapshot = seeded
+    run = _open_run(service, behavior="predict", snapshot=snapshot)
+    trace = _open_trace(service, run["run_token"])
+    begun = service.dispatch(
+        "BeginCall",
+        {
+            "trace_token": trace["trace_token"],
+            "call_id": "predict",
+            "command": "printf old",
+            "query_timestamp": 100.0,
+        },
+    )
+    classifications = begun["resource_classifications"]["classifications"]
+    prediction = classifications["peak_cpu_cores"]
+    assert prediction["probability_heavy"] == pytest.approx(0.25)
+    return prediction["label"]
+
+
+def test_agentd_default_threshold_calls_a_quarter_heavy_light(tmp_path: Path) -> None:
+    assert _cpu_label(_seeded_cpu_service(tmp_path, threshold=0.5)) == "light"
+
+
+def test_agentd_declared_threshold_calls_the_same_evidence_heavy(
+    tmp_path: Path,
+) -> None:
+    """Identical evidence, identical probability; only the declared cut differs."""
+
+    assert _cpu_label(_seeded_cpu_service(tmp_path, threshold=1.0 / 6.0)) == "heavy"
+
+
+def test_run_manifest_records_the_declared_threshold(tmp_path: Path) -> None:
+    service, snapshot = _seeded_cpu_service(tmp_path, threshold=1.0 / 6.0)
+    run = _open_run(service, behavior="predict", snapshot=snapshot)
+    closed = service.dispatch(
+        "CloseRun", {"run_token": run["run_token"], "workload_status": "completed"}
+    )
+    assert closed["run_manifest"]["kb_heavy_decision_threshold"] == pytest.approx(
+        1.0 / 6.0
+    )
+
+
+def test_agentd_cli_defaults_to_the_symmetric_cut() -> None:
+    """The declared cut is opt-in; the shipped daemon must not change behaviour."""
+
+    minimal = [
+        "--socket", "/tmp/s.sock",
+        "--database", "/tmp/o.sqlite3",
+        "--telemetry-socket", "/tmp/t.sock",
+    ]
+    parser = build_cli_parser()
+    assert parser.parse_args(minimal).heavy_decision_threshold == 0.5
+    assert parser.parse_args(
+        [*minimal, "--heavy-decision-threshold", "0.1667"]
+    ).heavy_decision_threshold == pytest.approx(0.1667)
