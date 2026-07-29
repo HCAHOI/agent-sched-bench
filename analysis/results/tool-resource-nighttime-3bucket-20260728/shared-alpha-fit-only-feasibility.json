@@ -1,0 +1,242 @@
+{
+  "artifact_type": "tool_resource_shared_alpha_fit_only_feasibility",
+  "claim_bearing": false,
+  "date": "2026-07-29",
+  "code_commit": "65ce0156035b41e150a58e9d0b8aa9f6bd3ec038",
+  "inputs": {
+    "swe100": "traces/swe-rebench/qwen3.7-max/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+    "swe277": "traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl"
+  },
+  "method": {
+    "fold_assignment": "sha256(repository) order, round-robin over five folds",
+    "causal_order": "manifest task order; all task clauses predict before task observations settle",
+    "public_scope": "training repositories only; every validation repository is excluded",
+    "alpha_grid": [
+      1,
+      4,
+      16,
+      64
+    ],
+    "same_alpha_all_targets_and_cohorts": true,
+    "feasibility": "strictly greater than current and same-fold majority on latency, CPU, RSS, and Disk in both cohorts",
+    "aggregation": "pooled out-of-fold confusion counts, never unweighted fold means",
+    "outer_results_rerun_or_read_for_selection": false,
+    "runtime_core": "ClauseResourceKB predictions and causal updates; no analytic prediction substitute"
+  },
+  "execution": {
+    "elapsed_seconds": 519.1870732507668,
+    "exit_code": 0,
+    "implementation": "one-off orchestration over reviewed evaluator functions",
+    "performance_limitation": "single-process and inefficient: each alpha rebuilt alpha-invariant current and Candidate R states",
+    "correct_optimized_plan": "build each fold/repository state once, evaluate all alphas from one selected local/public node pair, and run at most four independent folds concurrently"
+  },
+  "cohorts": {
+    "swe100": {
+      "rows": 4458,
+      "repositories": 93,
+      "latency_class_counts_short_middle_long": [
+        3902,
+        357,
+        199
+      ],
+      "fold_validation_rows": [
+        953,
+        836,
+        757,
+        797,
+        1115
+      ],
+      "fold_validation_repositories": [
+        19,
+        19,
+        19,
+        18,
+        18
+      ],
+      "baselines": {
+        "latency_current": 0.8703454463885151,
+        "latency_majority": 0.8752803947958726,
+        "cpu_current": 0.954216244180031,
+        "cpu_majority_light": 0.9568028970512157,
+        "rss_current": 0.9902200488997555,
+        "rss_majority_light": 0.9897310513447433,
+        "disk_current": 0.9781973477185885,
+        "disk_majority_light": 0.9777478084962913
+      },
+      "by_alpha": {
+        "1": {
+          "latency_accuracy": 0.8761776581426649,
+          "cpu_accuracy": 0.9562855664769788,
+          "rss_accuracy": 0.9885085574572127,
+          "disk_accuracy": 0.9844908968307485,
+          "passes": {
+            "latency": true,
+            "cpu": false,
+            "rss": false,
+            "disk": true
+          }
+        },
+        "4": {
+          "latency_accuracy": 0.8799910273665321,
+          "cpu_accuracy": 0.9573202276254527,
+          "rss_accuracy": 0.9885085574572127,
+          "disk_accuracy": 0.9844908968307485,
+          "passes": {
+            "latency": true,
+            "cpu": true,
+            "rss": false,
+            "disk": true
+          }
+        },
+        "16": {
+          "latency_accuracy": 0.8799910273665321,
+          "cpu_accuracy": 0.9568028970512157,
+          "rss_accuracy": 0.9885085574572127,
+          "disk_accuracy": 0.9844908968307485,
+          "passes": {
+            "latency": true,
+            "cpu": false,
+            "rss": false,
+            "disk": true
+          }
+        },
+        "64": {
+          "latency_accuracy": 0.879542395693136,
+          "cpu_accuracy": 0.9560269011898603,
+          "rss_accuracy": 0.9885085574572127,
+          "disk_accuracy": 0.9844908968307485,
+          "passes": {
+            "latency": true,
+            "cpu": false,
+            "rss": false,
+            "disk": true
+          }
+        }
+      },
+      "rss_current_confusion": {
+        "tp": 3,
+        "tn": 4047,
+        "fp": 1,
+        "fn": 39
+      },
+      "rss_candidate_confusion_alpha_1_4_16_64": {
+        "tp": 3,
+        "tn": 4040,
+        "fp": 8,
+        "fn": 39
+      }
+    },
+    "swe277": {
+      "rows": 13766,
+      "repositories": 213,
+      "latency_class_counts_short_middle_long": [
+        11625,
+        1389,
+        752
+      ],
+      "fold_validation_rows": [
+        2613,
+        3758,
+        2272,
+        2735,
+        2388
+      ],
+      "fold_validation_repositories": [
+        43,
+        43,
+        43,
+        42,
+        42
+      ],
+      "baselines": {
+        "latency_current": 0.8447624582304227,
+        "latency_majority": 0.8444718872584629,
+        "cpu_current": 0.9555555555555556,
+        "cpu_majority_light": 0.9559862187769165,
+        "rss_current": 0.9902087716458974,
+        "rss_majority_light": 0.9902087716458974,
+        "disk_current": 0.9780660205494426,
+        "disk_majority_light": 0.9760985207316184
+      },
+      "by_alpha": {
+        "1": {
+          "latency_accuracy": 0.8554409414499492,
+          "cpu_accuracy": 0.9571920757967269,
+          "rss_accuracy": 0.9897232561903221,
+          "disk_accuracy": 0.984770094002769,
+          "passes": {
+            "latency": true,
+            "cpu": true,
+            "rss": false,
+            "disk": true
+          }
+        },
+        "4": {
+          "latency_accuracy": 0.8568937963097486,
+          "cpu_accuracy": 0.9564168819982773,
+          "rss_accuracy": 0.9897232561903221,
+          "disk_accuracy": 0.9846972236391459,
+          "passes": {
+            "latency": true,
+            "cpu": true,
+            "rss": false,
+            "disk": true
+          }
+        },
+        "16": {
+          "latency_accuracy": 0.8581287229405782,
+          "cpu_accuracy": 0.9568475452196382,
+          "rss_accuracy": 0.9897232561903221,
+          "disk_accuracy": 0.9844786125482766,
+          "passes": {
+            "latency": true,
+            "cpu": true,
+            "rss": false,
+            "disk": true
+          }
+        },
+        "64": {
+          "latency_accuracy": 0.8578381519686183,
+          "cpu_accuracy": 0.9565891472868217,
+          "rss_accuracy": 0.9896423369477262,
+          "disk_accuracy": 0.9844786125482766,
+          "passes": {
+            "latency": true,
+            "cpu": true,
+            "rss": false,
+            "disk": true
+          }
+        }
+      },
+      "rss_current_confusion": {
+        "tp": 0,
+        "tn": 12237,
+        "fp": 0,
+        "fn": 121
+      },
+      "rss_candidate_confusion_alpha_1_4_16": {
+        "tp": 0,
+        "tn": 12231,
+        "fp": 6,
+        "fn": 121
+      },
+      "rss_candidate_confusion_alpha_64": {
+        "tp": 0,
+        "tn": 12230,
+        "fp": 7,
+        "fn": 121
+      }
+    }
+  },
+  "feasible_alphas": [],
+  "selected_alpha": null,
+  "decision": "NO-GO",
+  "mechanism_diagnosis": {
+    "latency": "Every alpha beats current and majority in both cohorts.",
+    "cpu": "Alpha 4 is the only alpha that beats current and majority-Light in both cohorts.",
+    "disk": "Every alpha beats current and majority-Light in both cohorts.",
+    "rss": "No alpha produces an additional true positive. Structured posterior shrinkage preserves all false negatives while adding 6-7 false positives, so prior strength is not the missing RSS mechanism.",
+    "shared_alpha": "Alpha 4 passes latency, CPU, and Disk in both cohorts. RSS alone falsifies the entire structured-posterior shared candidate family over the fixed grid."
+  },
+  "next_decision": "Replace the one-shared-head constraint with one causal KB and target-specific prediction heads; retain the same evidence, snapshot, and online/offline core."
+}

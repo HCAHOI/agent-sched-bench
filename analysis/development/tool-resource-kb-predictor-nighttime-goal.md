@@ -98,6 +98,50 @@ implementation, obtain bounded independent review, and only then run a
 development-only comparison. The recovery window is a hard deadline: prefer
 one complete, committed falsification over unfinished breadth.
 
+The shared-alpha diagnostic completed after this amendment and before the
+following human instruction. No alpha was feasible: latency and Disk passed
+for all four values, CPU required alpha 4 across both cohorts, and RSS gained
+no true positives while adding false positives for every alpha.
+
+### 2026-07-29 multi-head amendment
+
+Visible before this amendment: the full shared-alpha fit-fold result described
+above and all earlier outer results. The human explicitly authorized different
+predictors for different targets, analogous to task-specific heads on a shared
+model. The earlier same-alpha and no-second-head rules were experimental scope
+controls, not architectural truths, and are superseded here.
+
+Keep one causal KB/service boundary and share canonicalization, evidence
+eligibility, timestamps, snapshots, and online/offline entry points. Permit
+target-specific heads above that shared stem. The minimum evidence-supported
+hybrid is:
+
+- latency: structured posterior head, alpha 16;
+- CPU: structured posterior head, alpha 4;
+- Disk: structured posterior head, alpha 16 (all fixed-grid values passed, so
+  reuse the reviewed latency value rather than introduce another choice);
+- RSS: retain current raw hard-backoff until a separate RSS head passes.
+
+Before runtime integration, run exactly one fit-only RSS-head falsification:
+
+1. Use the existing `generic-argv-v3-role` privacy-safe semantic tokens and
+   fit-only stable-subcommand vocabulary.
+2. Hash token counts deterministically into 256 signed dimensions with SHA-256;
+   do not expose raw paths, IDs, or opaque values.
+3. Train one RSS-only MLP per repository fold: `256 -> 32 ReLU -> 1`, seed 0,
+   Adam learning rate `1e-3`, weight decay `1e-4`, 50 full-batch epochs, and
+   `BCEWithLogitsLoss(pos_weight=sqrt(Light/Heavy))`.
+4. Use a fixed 0.5 Heavy threshold. Do not sweep architecture, seed, loss
+   weight, epoch count, or threshold after reading results.
+5. Public training repositories exclude validation repositories. Report pooled
+   out-of-fold TP/TN/FP/FN and exact accuracy on the same eligible RSS labels.
+6. GO only if accuracy is strictly greater than both current and
+   majority-Light in each cohort, with at least one true positive and no
+   unavailable prediction.
+
+This is a development-only architecture probe, not runtime integration or a
+confirmation claim. A failure ends MLP tuning for this recovery window.
+
 ## 2. Authority and required amendment
 
 Before reading any new three-bin result, rewrite
