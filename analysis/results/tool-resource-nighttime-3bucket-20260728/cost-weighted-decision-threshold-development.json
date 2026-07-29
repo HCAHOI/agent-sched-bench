@@ -1,0 +1,1153 @@
+{
+  "artifact_type": "development_exposed_cost_weighted_decision_gate",
+  "date": "2026-07-29",
+  "claim_bearing": false,
+  "criterion": {
+    "declared": "2026-07-29, in the task response, before the implementation existed",
+    "visible_when_declared": "All prior results in the nighttime goal, plus same-day diagnostics: the leave-one-out representation ceiling, causal operating curves, the survival hazard table, and threshold sweeps at theta in {0.05,0.1,0.2,0.3,0.5} on BOTH orientations. The outcome reported here was therefore anticipated in writing before it was computed. This is an exposed read of a pre-declared rule, NOT a confirmation, and not a pre-registration.",
+    "action": "capacity reservation / co-scheduling avoidance",
+    "cost_ratio_B_to_C": "5:1",
+    "cost_ratio_source": "declared by the human, not derived from any evaluation",
+    "theta": 0.16666666666666666,
+    "theta_source": "C/(B+C), derived from the declared ratio; never fitted",
+    "tie_decides": "light",
+    "utility": "U = 5*TP - 1*FP",
+    "gate": "U strictly greater than current(theta=0.5), never-act and always-act in BOTH orientations, with a positive margin sign under a paired repository-cluster bootstrap",
+    "reconciliation_only": [
+      "precision",
+      "recall",
+      "accuracy",
+      "coverage",
+      "node support"
+    ]
+  },
+  "inputs": {
+    "swe100": {
+      "path": "traces/swe-rebench/qwen3.7-max/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+      "rows": 4458,
+      "tasks": 99,
+      "repos": 93
+    },
+    "swe277": {
+      "path": "traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl",
+      "rows": 13766,
+      "tasks": 277,
+      "repos": 213
+    },
+    "row_counts_reconciled_with_prior_extraction": true
+  },
+  "implementation": {
+    "commit": "653a85a",
+    "change": "ClauseResourceKB.heavy_decision_threshold; the Heavy/Light cut is a declared parameter instead of a hardcoded 0.5. Plumbed through both resource-agentd and the offline evaluator so the lanes cannot diverge.",
+    "default_preserves_current_behaviour": true,
+    "independent_review": "no critical or major findings; three minors fixed"
+  },
+  "results": {
+    "fit-SWE100-eval-SWE277": {
+      "peak_cpu_cores": {
+        "n": 11610,
+        "heavy": 511,
+        "prediction_unavailable": 0,
+        "candidate": {
+          "theta": 0.16666666666666666,
+          "tp": 181,
+          "fp": 235,
+          "utility": 670.0
+        },
+        "current": {
+          "theta": 0.5,
+          "tp": 21,
+          "fp": 21,
+          "utility": 84.0
+        },
+        "never_act_utility": 0.0,
+        "always_act_utility": -8544.0,
+        "beats_current": true,
+        "beats_never_act": true,
+        "beats_always_act": true,
+        "bootstrap_repo_clusters": 213,
+        "bootstrap_draws": 2000,
+        "bootstrap_fraction_margin_positive": 1.0
+      },
+      "sampled_peak_rss_mb": {
+        "n": 12358,
+        "heavy": 121,
+        "prediction_unavailable": 0,
+        "candidate": {
+          "theta": 0.16666666666666666,
+          "tp": 1,
+          "fp": 86,
+          "utility": -81.0
+        },
+        "current": {
+          "theta": 0.5,
+          "tp": 0,
+          "fp": 1,
+          "utility": -1.0
+        },
+        "never_act_utility": 0.0,
+        "always_act_utility": -11632.0,
+        "beats_current": false,
+        "beats_never_act": false,
+        "beats_always_act": true,
+        "bootstrap_repo_clusters": 213,
+        "bootstrap_draws": 2000,
+        "bootstrap_fraction_margin_positive": 0.0
+      },
+      "disk_read_write_bytes_total": {
+        "n": 13723,
+        "heavy": 328,
+        "prediction_unavailable": 0,
+        "candidate": {
+          "theta": 0.16666666666666666,
+          "tp": 192,
+          "fp": 317,
+          "utility": 643.0
+        },
+        "current": {
+          "theta": 0.5,
+          "tp": 34,
+          "fp": 9,
+          "utility": 161.0
+        },
+        "never_act_utility": 0.0,
+        "always_act_utility": -11755.0,
+        "beats_current": true,
+        "beats_never_act": true,
+        "beats_always_act": true,
+        "bootstrap_repo_clusters": 213,
+        "bootstrap_draws": 2000,
+        "bootstrap_fraction_margin_positive": 1.0
+      }
+    },
+    "fit-SWE277-eval-SWE100": {
+      "peak_cpu_cores": {
+        "n": 3866,
+        "heavy": 167,
+        "prediction_unavailable": 0,
+        "candidate": {
+          "theta": 0.16666666666666666,
+          "tp": 71,
+          "fp": 108,
+          "utility": 247.0
+        },
+        "current": {
+          "theta": 0.5,
+          "tp": 14,
+          "fp": 29,
+          "utility": 41.0
+        },
+        "never_act_utility": 0.0,
+        "always_act_utility": -2864.0,
+        "beats_current": true,
+        "beats_never_act": true,
+        "beats_always_act": true,
+        "bootstrap_repo_clusters": 93,
+        "bootstrap_draws": 2000,
+        "bootstrap_fraction_margin_positive": 0.9985
+      },
+      "sampled_peak_rss_mb": {
+        "n": 4090,
+        "heavy": 42,
+        "prediction_unavailable": 0,
+        "candidate": {
+          "theta": 0.16666666666666666,
+          "tp": 0,
+          "fp": 0,
+          "utility": 0.0
+        },
+        "current": {
+          "theta": 0.5,
+          "tp": 0,
+          "fp": 0,
+          "utility": 0.0
+        },
+        "never_act_utility": 0.0,
+        "always_act_utility": -3838.0,
+        "beats_current": false,
+        "beats_never_act": false,
+        "beats_always_act": true,
+        "bootstrap_repo_clusters": 93,
+        "bootstrap_draws": 2000,
+        "bootstrap_fraction_margin_positive": 0.0
+      },
+      "disk_read_write_bytes_total": {
+        "n": 4449,
+        "heavy": 99,
+        "prediction_unavailable": 0,
+        "candidate": {
+          "theta": 0.16666666666666666,
+          "tp": 71,
+          "fp": 211,
+          "utility": 144.0
+        },
+        "current": {
+          "theta": 0.5,
+          "tp": 1,
+          "fp": 1,
+          "utility": 4.0
+        },
+        "never_act_utility": 0.0,
+        "always_act_utility": -3855.0,
+        "beats_current": true,
+        "beats_never_act": true,
+        "beats_always_act": true,
+        "bootstrap_repo_clusters": 93,
+        "bootstrap_draws": 2000,
+        "bootstrap_fraction_margin_positive": 1.0
+      }
+    }
+  },
+  "verdicts": {
+    "peak_cpu_cores": {
+      "fit-SWE100-eval-SWE277": {
+        "verdict": "development_GO",
+        "utility_candidate": 670.0,
+        "utility_current": 84.0,
+        "precision": 0.43509615384615385,
+        "recall": 0.3542074363992172,
+        "bootstrap_fraction_margin_positive": 1.0
+      },
+      "fit-SWE277-eval-SWE100": {
+        "verdict": "development_GO",
+        "utility_candidate": 247.0,
+        "utility_current": 41.0,
+        "precision": 0.39664804469273746,
+        "recall": 0.4251497005988024,
+        "bootstrap_fraction_margin_positive": 0.9985
+      },
+      "both_orientations": "development_GO"
+    },
+    "sampled_peak_rss_mb": {
+      "fit-SWE100-eval-SWE277": {
+        "verdict": "NO_GO",
+        "utility_candidate": -81.0,
+        "utility_current": -1.0,
+        "precision": 0.011494252873563218,
+        "recall": 0.008264462809917356,
+        "bootstrap_fraction_margin_positive": 0.0
+      },
+      "fit-SWE277-eval-SWE100": {
+        "verdict": "NO_GO",
+        "utility_candidate": 0.0,
+        "utility_current": 0.0,
+        "precision": null,
+        "recall": 0.0,
+        "bootstrap_fraction_margin_positive": 0.0
+      },
+      "both_orientations": "NO_GO"
+    },
+    "disk_read_write_bytes_total": {
+      "fit-SWE100-eval-SWE277": {
+        "verdict": "development_GO",
+        "utility_candidate": 643.0,
+        "utility_current": 161.0,
+        "precision": 0.37721021611001965,
+        "recall": 0.5853658536585366,
+        "bootstrap_fraction_margin_positive": 1.0
+      },
+      "fit-SWE277-eval-SWE100": {
+        "verdict": "development_GO",
+        "utility_candidate": 144.0,
+        "utility_current": 4.0,
+        "precision": 0.25177304964539005,
+        "recall": 0.7171717171717171,
+        "bootstrap_fraction_margin_positive": 1.0
+      },
+      "both_orientations": "development_GO"
+    }
+  },
+  "mechanism": {
+    "support_floor": {
+      "question": "is there a node support level below which firing at theta is unreliable",
+      "answer": "no; a support floor would remove the most precise predictions",
+      "evidence": "Precision runs opposite to support because support correlates with shallowness. fit-SWE100-eval-SWE277 Disk: repo:exact_clause fires 13 with 13 TP and 0 FP, repo:argv_prefix_depth_4 fires 10 with 10 TP and 0 FP, while public:bin carries 153 TP against 294 FP. CPU support band 3-5 reaches 90.0% precision against 32.7% at 101+.",
+      "consequence": "The reverted Jeffreys smoothing and any ceil(1/theta) floor would have deleted the high-precision deep local nodes and kept the diluted shallow ones. Question closed by measurement.",
+      "by_support_band": {
+        "fit-SWE100-eval-SWE277": {
+          "disk_read_write_bytes_total": {
+            "1": {
+              "n": 902,
+              "heavy": 34,
+              "fires": 35,
+              "tp": 28,
+              "fp": 7,
+              "precision": 0.8,
+              "share_of_all_tp": 0.14583333333333334,
+              "recall_of_all_heavy": 0.08536585365853659
+            },
+            "101+": {
+              "n": 10102,
+              "heavy": 270,
+              "fires": 362,
+              "tp": 147,
+              "fp": 215,
+              "precision": 0.40607734806629836,
+              "share_of_all_tp": 0.765625,
+              "recall_of_all_heavy": 0.4481707317073171
+            },
+            "11-25": {
+              "n": 510,
+              "heavy": 7,
+              "fires": 89,
+              "tp": 6,
+              "fp": 83,
+              "precision": 0.06741573033707865,
+              "share_of_all_tp": 0.03125,
+              "recall_of_all_heavy": 0.018292682926829267
+            },
+            "2": {
+              "n": 515,
+              "heavy": 6,
+              "fires": 5,
+              "tp": 4,
+              "fp": 1,
+              "precision": 0.8,
+              "share_of_all_tp": 0.020833333333333332,
+              "recall_of_all_heavy": 0.012195121951219513
+            },
+            "26-100": {
+              "n": 484,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "3-5": {
+              "n": 768,
+              "heavy": 9,
+              "fires": 18,
+              "tp": 7,
+              "fp": 11,
+              "precision": 0.3888888888888889,
+              "share_of_all_tp": 0.036458333333333336,
+              "recall_of_all_heavy": 0.021341463414634148
+            },
+            "6-10": {
+              "n": 442,
+              "heavy": 2,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            }
+          },
+          "peak_cpu_cores": {
+            "1": {
+              "n": 835,
+              "heavy": 6,
+              "fires": 3,
+              "tp": 0,
+              "fp": 3,
+              "precision": 0.0,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "101+": {
+              "n": 8502,
+              "heavy": 344,
+              "fires": 171,
+              "tp": 56,
+              "fp": 115,
+              "precision": 0.32748538011695905,
+              "share_of_all_tp": 0.30939226519337015,
+              "recall_of_all_heavy": 0.1095890410958904
+            },
+            "11-25": {
+              "n": 389,
+              "heavy": 31,
+              "fires": 72,
+              "tp": 31,
+              "fp": 41,
+              "precision": 0.4305555555555556,
+              "share_of_all_tp": 0.1712707182320442,
+              "recall_of_all_heavy": 0.060665362035225046
+            },
+            "2": {
+              "n": 463,
+              "heavy": 15,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "26-100": {
+              "n": 446,
+              "heavy": 75,
+              "fires": 149,
+              "tp": 75,
+              "fp": 74,
+              "precision": 0.5033557046979866,
+              "share_of_all_tp": 0.4143646408839779,
+              "recall_of_all_heavy": 0.14677103718199608
+            },
+            "3-5": {
+              "n": 651,
+              "heavy": 30,
+              "fires": 10,
+              "tp": 9,
+              "fp": 1,
+              "precision": 0.9,
+              "share_of_all_tp": 0.049723756906077346,
+              "recall_of_all_heavy": 0.01761252446183953
+            },
+            "6-10": {
+              "n": 324,
+              "heavy": 10,
+              "fires": 11,
+              "tp": 10,
+              "fp": 1,
+              "precision": 0.9090909090909091,
+              "share_of_all_tp": 0.055248618784530384,
+              "recall_of_all_heavy": 0.019569471624266144
+            }
+          },
+          "sampled_peak_rss_mb": {
+            "1": {
+              "n": 888,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "101+": {
+              "n": 9047,
+              "heavy": 99,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "11-25": {
+              "n": 448,
+              "heavy": 1,
+              "fires": 84,
+              "tp": 1,
+              "fp": 83,
+              "precision": 0.011904761904761904,
+              "share_of_all_tp": 1.0,
+              "recall_of_all_heavy": 0.008264462809917356
+            },
+            "2": {
+              "n": 478,
+              "heavy": 5,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "26-100": {
+              "n": 456,
+              "heavy": 6,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "3-5": {
+              "n": 677,
+              "heavy": 9,
+              "fires": 3,
+              "tp": 0,
+              "fp": 3,
+              "precision": 0.0,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "6-10": {
+              "n": 364,
+              "heavy": 1,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            }
+          }
+        },
+        "fit-SWE277-eval-SWE100": {
+          "disk_read_write_bytes_total": {
+            "1": {
+              "n": 159,
+              "heavy": 5,
+              "fires": 2,
+              "tp": 1,
+              "fp": 1,
+              "precision": 0.5,
+              "share_of_all_tp": 0.014084507042253521,
+              "recall_of_all_heavy": 0.010101010101010102
+            },
+            "101+": {
+              "n": 3865,
+              "heavy": 83,
+              "fires": 279,
+              "tp": 70,
+              "fp": 209,
+              "precision": 0.25089605734767023,
+              "share_of_all_tp": 0.9859154929577465,
+              "recall_of_all_heavy": 0.7070707070707071
+            },
+            "11-25": {
+              "n": 67,
+              "heavy": 4,
+              "fires": 1,
+              "tp": 0,
+              "fp": 1,
+              "precision": 0.0,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "2": {
+              "n": 78,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "26-100": {
+              "n": 67,
+              "heavy": 7,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "3-5": {
+              "n": 147,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "6-10": {
+              "n": 66,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            }
+          },
+          "peak_cpu_cores": {
+            "1": {
+              "n": 142,
+              "heavy": 1,
+              "fires": 5,
+              "tp": 1,
+              "fp": 4,
+              "precision": 0.2,
+              "share_of_all_tp": 0.014084507042253521,
+              "recall_of_all_heavy": 0.005988023952095809
+            },
+            "101+": {
+              "n": 3345,
+              "heavy": 148,
+              "fires": 133,
+              "tp": 57,
+              "fp": 76,
+              "precision": 0.42857142857142855,
+              "share_of_all_tp": 0.8028169014084507,
+              "recall_of_all_heavy": 0.3413173652694611
+            },
+            "11-25": {
+              "n": 38,
+              "heavy": 5,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "2": {
+              "n": 62,
+              "heavy": 1,
+              "fires": 1,
+              "tp": 1,
+              "fp": 0,
+              "precision": 1.0,
+              "share_of_all_tp": 0.014084507042253521,
+              "recall_of_all_heavy": 0.005988023952095809
+            },
+            "26-100": {
+              "n": 78,
+              "heavy": 8,
+              "fires": 34,
+              "tp": 8,
+              "fp": 26,
+              "precision": 0.23529411764705882,
+              "share_of_all_tp": 0.11267605633802817,
+              "recall_of_all_heavy": 0.04790419161676647
+            },
+            "3-5": {
+              "n": 153,
+              "heavy": 4,
+              "fires": 6,
+              "tp": 4,
+              "fp": 2,
+              "precision": 0.6666666666666666,
+              "share_of_all_tp": 0.056338028169014086,
+              "recall_of_all_heavy": 0.023952095808383235
+            },
+            "6-10": {
+              "n": 48,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            }
+          },
+          "sampled_peak_rss_mb": {
+            "1": {
+              "n": 148,
+              "heavy": 3,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": null,
+              "recall_of_all_heavy": 0.0
+            },
+            "101+": {
+              "n": 3548,
+              "heavy": 27,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": null,
+              "recall_of_all_heavy": 0.0
+            },
+            "11-25": {
+              "n": 60,
+              "heavy": 7,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": null,
+              "recall_of_all_heavy": 0.0
+            },
+            "2": {
+              "n": 68,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": null,
+              "recall_of_all_heavy": 0.0
+            },
+            "26-100": {
+              "n": 68,
+              "heavy": 5,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": null,
+              "recall_of_all_heavy": 0.0
+            },
+            "3-5": {
+              "n": 151,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": null,
+              "recall_of_all_heavy": 0.0
+            },
+            "6-10": {
+              "n": 47,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": null,
+              "recall_of_all_heavy": 0.0
+            }
+          }
+        }
+      },
+      "by_scope_and_key": {
+        "fit-SWE100-eval-SWE277": {
+          "disk_read_write_bytes_total": {
+            "public:bin": {
+              "n": 10373,
+              "heavy": 276,
+              "fires": 447,
+              "tp": 153,
+              "fp": 294,
+              "precision": 0.3422818791946309,
+              "share_of_all_tp": 0.796875,
+              "recall_of_all_heavy": 0.46646341463414637
+            },
+            "public:global": {
+              "n": 74,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:argv_prefix_depth_2": {
+              "n": 824,
+              "heavy": 3,
+              "fires": 12,
+              "tp": 1,
+              "fp": 11,
+              "precision": 0.08333333333333333,
+              "share_of_all_tp": 0.005208333333333333,
+              "recall_of_all_heavy": 0.003048780487804878
+            },
+            "repo:argv_prefix_depth_3": {
+              "n": 462,
+              "heavy": 17,
+              "fires": 27,
+              "tp": 15,
+              "fp": 12,
+              "precision": 0.5555555555555556,
+              "share_of_all_tp": 0.078125,
+              "recall_of_all_heavy": 0.04573170731707317
+            },
+            "repo:argv_prefix_depth_4": {
+              "n": 145,
+              "heavy": 14,
+              "fires": 10,
+              "tp": 10,
+              "fp": 0,
+              "precision": 1.0,
+              "share_of_all_tp": 0.052083333333333336,
+              "recall_of_all_heavy": 0.03048780487804878
+            },
+            "repo:bin": {
+              "n": 713,
+              "heavy": 4,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:exact_clause": {
+              "n": 1132,
+              "heavy": 14,
+              "fires": 13,
+              "tp": 13,
+              "fp": 0,
+              "precision": 1.0,
+              "share_of_all_tp": 0.06770833333333333,
+              "recall_of_all_heavy": 0.039634146341463415
+            }
+          },
+          "peak_cpu_cores": {
+            "public:bin": {
+              "n": 8788,
+              "heavy": 465,
+              "fires": 385,
+              "tp": 160,
+              "fp": 225,
+              "precision": 0.4155844155844156,
+              "share_of_all_tp": 0.8839779005524862,
+              "recall_of_all_heavy": 0.3131115459882583
+            },
+            "public:global": {
+              "n": 66,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:argv_prefix_depth_2": {
+              "n": 774,
+              "heavy": 3,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:argv_prefix_depth_3": {
+              "n": 384,
+              "heavy": 30,
+              "fires": 22,
+              "tp": 18,
+              "fp": 4,
+              "precision": 0.8181818181818182,
+              "share_of_all_tp": 0.09944751381215469,
+              "recall_of_all_heavy": 0.03522504892367906
+            },
+            "repo:argv_prefix_depth_4": {
+              "n": 123,
+              "heavy": 1,
+              "fires": 3,
+              "tp": 0,
+              "fp": 3,
+              "precision": 0.0,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:bin": {
+              "n": 619,
+              "heavy": 12,
+              "fires": 6,
+              "tp": 3,
+              "fp": 3,
+              "precision": 0.5,
+              "share_of_all_tp": 0.016574585635359115,
+              "recall_of_all_heavy": 0.005870841487279843
+            },
+            "repo:exact_clause": {
+              "n": 856,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            }
+          },
+          "sampled_peak_rss_mb": {
+            "public:bin": {
+              "n": 9328,
+              "heavy": 109,
+              "fires": 85,
+              "tp": 1,
+              "fp": 84,
+              "precision": 0.011764705882352941,
+              "share_of_all_tp": 1.0,
+              "recall_of_all_heavy": 0.008264462809917356
+            },
+            "public:global": {
+              "n": 73,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:argv_prefix_depth_2": {
+              "n": 811,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:argv_prefix_depth_3": {
+              "n": 462,
+              "heavy": 7,
+              "fires": 1,
+              "tp": 0,
+              "fp": 1,
+              "precision": 0.0,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:argv_prefix_depth_4": {
+              "n": 145,
+              "heavy": 0,
+              "fires": 1,
+              "tp": 0,
+              "fp": 1,
+              "precision": 0.0,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:bin": {
+              "n": 648,
+              "heavy": 5,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:exact_clause": {
+              "n": 891,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            }
+          }
+        },
+        "fit-SWE277-eval-SWE100": {
+          "disk_read_write_bytes_total": {
+            "public:bin": {
+              "n": 3957,
+              "heavy": 97,
+              "fires": 280,
+              "tp": 70,
+              "fp": 210,
+              "precision": 0.25,
+              "share_of_all_tp": 0.9859154929577465,
+              "recall_of_all_heavy": 0.7070707070707071
+            },
+            "public:global": {
+              "n": 14,
+              "heavy": 1,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:argv_prefix_depth_2": {
+              "n": 130,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:argv_prefix_depth_3": {
+              "n": 41,
+              "heavy": 1,
+              "fires": 2,
+              "tp": 1,
+              "fp": 1,
+              "precision": 0.5,
+              "share_of_all_tp": 0.014084507042253521,
+              "recall_of_all_heavy": 0.010101010101010102
+            },
+            "repo:argv_prefix_depth_4": {
+              "n": 3,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:bin": {
+              "n": 166,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:exact_clause": {
+              "n": 138,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            }
+          },
+          "peak_cpu_cores": {
+            "public:bin": {
+              "n": 3438,
+              "heavy": 154,
+              "fires": 167,
+              "tp": 65,
+              "fp": 102,
+              "precision": 0.38922155688622756,
+              "share_of_all_tp": 0.9154929577464789,
+              "recall_of_all_heavy": 0.38922155688622756
+            },
+            "public:global": {
+              "n": 15,
+              "heavy": 6,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:argv_prefix_depth_2": {
+              "n": 128,
+              "heavy": 1,
+              "fires": 5,
+              "tp": 1,
+              "fp": 4,
+              "precision": 0.2,
+              "share_of_all_tp": 0.014084507042253521,
+              "recall_of_all_heavy": 0.005988023952095809
+            },
+            "repo:argv_prefix_depth_3": {
+              "n": 32,
+              "heavy": 4,
+              "fires": 4,
+              "tp": 4,
+              "fp": 0,
+              "precision": 1.0,
+              "share_of_all_tp": 0.056338028169014086,
+              "recall_of_all_heavy": 0.023952095808383235
+            },
+            "repo:argv_prefix_depth_4": {
+              "n": 2,
+              "heavy": 1,
+              "fires": 1,
+              "tp": 1,
+              "fp": 0,
+              "precision": 1.0,
+              "share_of_all_tp": 0.014084507042253521,
+              "recall_of_all_heavy": 0.005988023952095809
+            },
+            "repo:bin": {
+              "n": 147,
+              "heavy": 1,
+              "fires": 2,
+              "tp": 0,
+              "fp": 2,
+              "precision": 0.0,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:exact_clause": {
+              "n": 104,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": 0.0,
+              "recall_of_all_heavy": 0.0
+            }
+          },
+          "sampled_peak_rss_mb": {
+            "public:bin": {
+              "n": 3641,
+              "heavy": 38,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": null,
+              "recall_of_all_heavy": 0.0
+            },
+            "public:global": {
+              "n": 14,
+              "heavy": 1,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": null,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:argv_prefix_depth_2": {
+              "n": 130,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": null,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:argv_prefix_depth_3": {
+              "n": 41,
+              "heavy": 1,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": null,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:argv_prefix_depth_4": {
+              "n": 3,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": null,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:bin": {
+              "n": 153,
+              "heavy": 2,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": null,
+              "recall_of_all_heavy": 0.0
+            },
+            "repo:exact_clause": {
+              "n": 108,
+              "heavy": 0,
+              "fires": 0,
+              "tp": 0,
+              "fp": 0,
+              "precision": null,
+              "share_of_all_tp": null,
+              "recall_of_all_heavy": 0.0
+            }
+          }
+        }
+      }
+    },
+    "coverage_is_binding": "465 of 511 CPU-Heavy rows in SWE277 are served by public:bin, i.e. their command has no local history in that repository at prediction time. Deep local nodes are near-perfect but rare, which reproduces the leave-one-out ceiling result through runtime provenance.",
+    "rss_failure": "RSS repo:exact_clause holds zero Heavy observations in both orientations, and public:bin sits near the 1% base rate, so no node reaches theta on SWE100 and the only firing band on SWE277 yields 1 TP against 84 FP. RSS-Heavy clauses do not recur as the same command within a repository in causal order, consistent with their 28 s median latency. Third independent line of evidence for RSS NO-GO, after the near-zero representation ceiling and the zero-true-positive cascade."
+  },
+  "limitations": [
+    "Development-exposed on both SWE corpora; cannot support a confirmation claim.",
+    "The outcome was predicted in writing from exposed operating curves before being computed, so the gate confirms an expectation rather than testing a hypothesis.",
+    "Whole-clause labels only. No future-after-t target; that needs the bounded resource timeline requested against clause_bridge.py, which is not retained.",
+    "The bootstrap covers the candidate-vs-current margin at the repository cluster level; it does not correct for corpus exposure.",
+    "Utility magnitudes are large mainly because current fires almost never (Disk SWE100 current TP=1 of 99), not because candidate precision is high."
+  ]
+}
