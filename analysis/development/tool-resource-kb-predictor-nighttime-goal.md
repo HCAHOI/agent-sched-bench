@@ -240,6 +240,121 @@ high-purity Heavy neighborhood. Failure ends embedding and contrastive tuning
 on these exposed corpora. Success permits a reviewed reusable implementation;
 it is not confirmation evidence.
 
+### 2026-07-29 landmark and speculative-execution amendment
+
+Visible before this amendment: the Heavy/Light mechanism audit, both RSS MLP
+failures, the in-progress full-population contrastive retrieval folds, and the
+following latency and conditional-label diagnostics. No landmark-conditioned
+model result exists yet.
+
+The prediction unit remains one eligible clause. Across the two locked SWE
+inputs there are 18,224 such clauses. The observed strict latency CDF is:
+
+| threshold | clauses below threshold | fraction |
+|---|---:|---:|
+| 50 ms | 10,035 | 55.06% |
+| 100 ms | 10,468 | 57.44% |
+| 250 ms | 11,309 | 62.06% |
+| 500 ms | 12,713 | 69.76% |
+
+Actions take nonzero time, so resource prediction should target the population
+for which an action can still matter. Introduce a deployment landmark `h`,
+initially considering 100 and 500 ms. The clause may be treated speculatively
+as if it will survive to `h`: compute a prediction during the window, but apply
+it only if the same clause is still running at `h`. A clause that ends earlier
+completes normally and its speculative result is discarded. Survival at the
+actual landmark is a causal application gate, not an inference feature known
+at clause start and not hindsight.
+
+The empirical landmark populations and canonical resource labels are:
+
+| population | clauses | CPU Heavy | RSS Heavy | Disk Heavy |
+|---|---:|---:|---:|---:|
+| `T > 100 ms` | 7,756 (42.56%) | 678/5,008 (13.54%) | 163/5,980 (2.73%) | 427/7,704 (5.54%) |
+| `T > 500 ms` | 5,511 (30.24%) | 678/2,763 (24.54%) | 163/3,735 (4.36%) | 421/5,459 (7.71%) |
+
+At 500 ms the canonical short-null-imputed Light rows are gone. Missing
+post-landmark resource labels remain unavailable: 2,748 CPU, 1,776 RSS, and 52
+Disk rows in the joint corpus. Do not convert them to Light.
+
+An action is useful only when the clause remains alive after the action
+finishes. For fixed action latency `L_action`, the observed opportunity counts
+are:
+
+| landmark | `L_action=100 ms` | `L_action=250 ms` | `L_action=500 ms` |
+|---|---:|---:|---:|
+| 100 ms | 7,180 (92.57% of survivors) | 6,190 (79.81%) | 5,171 (66.67%) |
+| 500 ms | 5,171 (93.83% of survivors) | 4,736 (85.94%) | 4,183 (75.90%) |
+
+Waiting to 500 ms therefore does lose some opportunities relative to a 100 ms
+decision; it cannot be described as lossless. It also reduces the expensive
+resource-head population, removes short-null label mass, and aligns with the
+first nominal 500 ms eBPF CPU/RSS sample.
+
+Use this speculative state machine:
+
+```text
+t = 0:
+    bind clause_id, command features, and the intended KB snapshot
+    schedule the landmark timer
+
+t = h - predictor_p99_latency - safety_margin:
+    if the clause ended: do not launch the predictor
+    if it is alive: launch the conditional predictor asynchronously
+
+t = h:
+    if the clause ended: discard any result
+    if alive and the result is valid and ready: apply the action
+    if alive but result is late, invalid, or unavailable: no-op/current fallback
+```
+
+Launching the full predictor at `t=0` for every clause hides prediction latency
+but does not save compute: predictions for 57.44% and 69.76% of clauses would
+be discarded at the 100 and 500 ms landmarks. Launch as late as the measured
+p99 permits. Measure persistent single-clause predictor p50/p95/p99 on the
+actual scheduler hardware before selecting a landmark; do not infer it from
+offline batch throughput.
+
+The static conditional head may be computed later but must use the frozen
+start-time command features and declared KB snapshot. A separate dynamic
+refinement may use telemetry with `sample_ts <= decision_ts`; never silently
+mix post-start telemetry into the static head. Prediction compute must be
+resource-isolated from the workload so it cannot change the clause latency,
+CPU, or RSS being predicted.
+
+For action utility, the landmark target should describe the future after `h`,
+not a peak that already happened:
+
+```text
+P(
+    remaining_duration,
+    future_cpu_peak,
+    future_rss_peak,
+    future_disk_delta
+  | clause_alive_at_h, evidence_available_by_h
+)
+```
+
+The practical staged architecture is:
+
+1. `t=0`: cheap latency/survival head for early planning;
+2. near 100 ms: optional lightweight preparation or command
+   embedding/retrieval if its measured p99 fits the window;
+3. near 500 ms: CPU/RSS/Disk decision using survival and, only when valid,
+   the first eBPF telemetry.
+
+Train and score each landmark head only on clauses alive at that landmark, but
+charge every launched and discarded prediction to system cost. Preserve whole
+repository folds, task settlement barriers, identical eligible rows across
+arms, and cohort-separated reporting. The primary deployment gate must be
+action utility at the operating point, including predictor cost, action
+latency, useful remaining-runtime coverage, and harmful false actions; higher
+conditional classification accuracy alone is insufficient.
+
+The already-running full-population contrastive experiment remains an
+unchanged representation baseline. Do not reinterpret its partially visible
+folds as landmark evidence or modify its frozen protocol.
+
 ## 2. Authority and required amendment
 
 Before reading any new three-bin result, rewrite
