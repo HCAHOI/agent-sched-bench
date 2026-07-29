@@ -1,0 +1,35 @@
+{
+  "artifact_type": "CORRECTION_to_intra_tool_call_heterogeneity",
+  "date": "2026-07-29",
+  "claim_bearing": false,
+  "supersedes": [
+    "7335a82 (48.8% envelope waste)",
+    "c211b37 (replication of that figure)",
+    "2886683 (6512 GB-s from the pipe pattern)"
+  ],
+  "what_was_wrong": "The envelope calculation summed each clause's (call_peak - clause_peak) * clause_duration, which is a time integral valid ONLY if clauses execute sequentially. 87.7% of multi-clause exec calls are PIPELINES, whose clauses run CONCURRENTLY, so their durations overlap and the sum double-counts wall time. The headline 48.8% is therefore dominated by calls to which the calculation does not apply.",
+  "corrected_numbers": {
+    "multi_clause_calls": 4203,
+    "pipeline": {
+      "count": 3684,
+      "fraction": 0.877,
+      "envelope_figure_status": "INVALID, concurrent clauses"
+    },
+    "sequential_only": {
+      "count": 519,
+      "fraction": 0.123,
+      "envelope_waste": 0.106,
+      "status": "VALID; this is the only structure where a clause-granular limit can resize over time"
+    }
+  },
+  "corrected_headline": "For the 12.3% of multi-clause calls that are sequential-only, a single call-level limit over-provisions by 10.6% of the resource-time envelope, not 48.8%. The overstatement is roughly fivefold.",
+  "pipe_pattern_reinterpreted": "All 1018 heavy-plus-long-reader pairs are joined by a pipe, verified from clause_telemetry.command, e.g. 'apt-get update -qq && apt-get install -y -qq python3-pip 2>&1 | tail -5'. Because a pipeline is concurrent, the heavy command needs its memory for its own duration and the blocked reader adds NO additional hold. The claim in 2886683 that 6512 GB-seconds would be released by a clause-granular limit is WRONG. There is nothing to release: the memory is required for exactly as long as it is held.",
+  "what_survives": [
+    "48.4% of exec calls contain two or more timed clauses; tool calls are compositionally heterogeneous. Unchanged.",
+    "Clause-level resource demands within a call differ widely (peak/min dispersion). Unchanged as a descriptive fact about demands.",
+    "NEW and structurally important: 87.7% of multi-clause exec calls are pipelines. Agents overwhelmingly compose with | rather than &&, which is itself a workload characterization nobody has reported.",
+    "The blocked-reader phenomenon is real and verified; only its resource interpretation was wrong."
+  ],
+  "consequence_for_D1": "Materially weakened. The mechanism can only recover over-provisioning where clauses are sequential, which is 12.3% of multi-clause calls, and there the waste is 10.6%. Combined with the cap-versus-reservation problem and the cgroup-v2 finding that lowering memory.max below usage triggers reclaim and then OOM kills, D1's remaining value is small enough that it should not be pursued on this evidence without a new argument.",
+  "how_it_was_caught": "By checking whether the heavy and reader clauses overlap in time. The serialized clause records carry no timestamps and never populate in_pipe/in_loop/in_subst (0 of 13960), so an initial inference of 'sequential' from in_pipe=False was itself invalid. The structure was finally recovered from clause_telemetry.command."
+}
