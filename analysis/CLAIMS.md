@@ -352,6 +352,54 @@ partition task ids. The LOO ceiling remains an ORACLE in the sense that it uses
 evaluation-fold rows of the same key; it is analysis-only and is not a deployable
 result.
 
+## Open question — is the deadline itself the best constant policy?
+
+**Criterion frozen 2026-07-29, before the numbers exist.**
+
+Visible when frozen: the budget (`57cbbbb`), the per-key ceiling (`3bc4906`), the key
+ladder (`8e7ed28`) and the leave-one-out refutation (`f1cbee3`), which together show
+that no per-key empirical method beats `deadline_only` on this corpus without
+leakage. Every one of those comparisons used the same baseline: fire at
+`trigger = threshold = kv + guard`. That choice has never been tested.
+
+**Question.** The budget lies entirely in calls with `kv < L < 2*kv`, and a *lower*
+constant trigger would reach them earlier, at the price of firing on calls that end
+before `kv` and paying the differential restore. So there is a one-parameter,
+prediction-free family — fire at a fixed `T` for every call — and `deadline_only` is
+one member of it. Is it the best member?
+
+This matters beyond our own baseline. Continuum reports no fixed-TTL baseline at all,
+and ThunderAgent's ablation reports only that a fixed-threshold variant achieves "a
+significant portion" without saying which threshold or how much. If a tuned constant
+captures a material share of the budget, then every predictive result in this area is
+being compared against an unnecessarily weak reference.
+
+**Arms.** `deadline_only` at `T = kv`, against `best_constant`, where `T` is a single
+global scalar **fitted on the profile folds** by maximising net utility and applied
+unchanged to the evaluation fold. Fitting one scalar out-of-fold makes this a
+genuinely deployable prediction-free policy, not an oracle. An analysis-only
+`ORACLE_constant`, the best `T` fitted in-sample on the evaluation rows, is reported
+alongside to expose any overfit, exactly as `f1cbee3` required.
+
+**Metric.** Net utility in `s/277`, and the gain over `deadline_only` as a fraction of
+the per-call ORACLE budget, at `kv = 3500` and `5000`.
+
+**Interpretation fixed in advance.** If `best_constant` beats `deadline_only` by more
+than 10% of the budget in both cells, the standard baseline is suboptimal and every
+prediction-versus-deadline comparison in this lane and in the cited literature is
+understated in the predictor's favour. If it gains under 3% in both, the deadline is
+confirmed near-optimal among constants and the negative results stand as reported.
+Between 3% and 10% is inconclusive and is not resolved by moving the band.
+
+**Premise, binding.** Forced eviction; with no memory pressure every arm including
+every oracle scores zero. Fresh-277 cannot exhibit contention. Hidden-swap
+milliseconds, not wall clock. The label threshold separating long from short stays at
+`kv`, since that is the physical condition for a call to be able to hide the swap;
+only the trigger varies.
+
+**Causal contract.** `best_constant` reads profile-fold rows only; the five
+task-grouped folds partition task ids. `ORACLE_constant` is labelled analysis-only.
+
 ## Explicit non-claims
 
 - No live W5 or headline systems result exists.
