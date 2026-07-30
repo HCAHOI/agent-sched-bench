@@ -1,0 +1,65 @@
+{
+  "arms": ["fixed", "elastic"],
+  "asb_commit": "f004af4f890a179395dfd4c7353b44118928a765",
+  "cohort_role": "development positive-control feasibility mix",
+  "concurrency": 8,
+  "cpu_policy": {
+    "elastic_cpu_lease": false,
+    "reason": "Eight 1-core leases saturate the physical 8-core pool; c8 therefore tests memory elasticity only.",
+    "per_task_cores": 1,
+    "pool_cores": 8
+  },
+  "ear_commit": "14049d3abf62bcd178623023abc2ca80abebe968",
+  "fixed_memory_gib_per_task": 1.25,
+  "host_preflight": {
+    "available_memory_bytes": 12639014912,
+    "swap_bytes": 0,
+    "total_memory_bytes": 16759181312
+  },
+  "image_ids": {
+    "adaptive-rejection-sampler": "sha256:ff48325f8480731027953d933c66d50579bc4ae5853814e614b43dffa9116839",
+    "countdown-game": "sha256:a678c2d1659250d603c98f0a43425c8c1fbed334eb475020ddec14d9d4f95894",
+    "git-workflow-hack": "sha256:9983404ad1c7477eb7c2c432b2327d535dd76167dc368fb8974c767f67b66cbd",
+    "llm-spec-decoding": "sha256:a70f4707f45d9b33236a52f0f7f04d017aa0533e54e9d991a2dfde9a9094e84b",
+    "make-mips-interpreter": "sha256:4716cb74594c60f62e7626491a7b4a84dc43b89422bddf926136b2419f853fb0",
+    "modernize-scientific-stack": "sha256:eb9a7db2ea8984079f48c80a05e00beedbc839a97d0e8e02d9b3eb10a01881d7",
+    "speech-to-text": "sha256:3552595f34a14455a75fe656c08dc8a7eb25bb9193ee83eaec5827fee454a64b",
+    "video-processing": "sha256:033a0564f9d139d4f8750f730890093789776deb0391d1eecb7539cc5d4bc39e"
+  },
+  "manifest": "manifest.yaml",
+  "memory_policy": {
+    "elastic_initial_gib_per_task": 1,
+    "effective_growth_trigger_memory_current_mib": 768,
+    "first_step_growth_headroom_gib": 2,
+    "max_gib_per_task": 1.25,
+    "memory_grow_available_mib": 256,
+    "memory_grow_available_ratio": 0.2,
+    "memory_grow_step_mib": 256,
+    "pool_gib": 10,
+    "simultaneous_first_step_growth_capacity": 8,
+    "total_hotplug_mib_per_task": 256
+  },
+  "policy_path": "configs/policies/docker_elastic_c8_mixed.yaml",
+  "policy_sha256": "41ee7f9a1e8d1501aa82ef2a83b24e38a358f9c3316f68c678ac776df229dd8d",
+  "replay_speed": 50,
+  "selection": {
+    "method": "Manual pre-run stratification by existing source CPU, memory, I/O, media, and duration profiles, restricted to cached images.",
+    "population_claim": "None; the selected mix is intentionally outcome-informed and must not be treated as an unbiased Terminal-Bench estimate.",
+    "split_method": "random.Random(42).shuffle(manifest_task_ids_sorted); prefix 100",
+    "split_path": "/home/chiyu/workspace/agent-sched-bench/analysis/development/tb-dev100-audit-20260724/tb-dev100-split.json",
+    "split_seed": 42,
+    "split_sha256": "77b90afd4e5bef89df324ce22978fc2396b78087a2f159bcde34340aea7b85dd"
+  },
+  "stage": "one fixed/elastic feasibility pair before deciding repeat count",
+  "tasks": [
+    "countdown-game",
+    "speech-to-text",
+    "llm-spec-decoding",
+    "adaptive-rejection-sampler",
+    "video-processing",
+    "modernize-scientific-stack",
+    "git-workflow-hack",
+    "make-mips-interpreter"
+  ],
+  "workers": 1
+}
