@@ -57,6 +57,7 @@ def _write_trace(
     tool_args: dict | None = None,
     checkpoint_after: str | dict | None = None,
     extra_tool_data: dict[str, Any] | None = None,
+    tool_container_workdir: str | None = None,
 ) -> None:
     path.write_text(
         "\n".join(
@@ -70,6 +71,11 @@ def _write_trace(
                         "model": "claude-haiku",
                         "mode": "collect",
                         "execution_environment": execution_environment,
+                        **(
+                            {"tool_container_workdir": tool_container_workdir}
+                            if tool_container_workdir is not None
+                            else {}
+                        ),
                     }
                 ),
                 json.dumps(
@@ -3124,9 +3130,11 @@ def test_cloud_model_replay_passes_source_container_exec_env(
         executable: str,
         network_mode: str,
         extra_args: list[str] | None = None,
+        workdir: str = "/testbed",
     ) -> str:
         assert executable == "docker"
         assert network_mode == "host"
+        assert workdir == "/testbed"
         assert extra_args is not None
         start_extra_args.extend(extra_args)
         return "fake-cid"
@@ -3179,6 +3187,7 @@ def test_cloud_model_replay_passes_source_container_exec_env(
 
     assert agent_kwargs == [
         {
+            "workdir": "/testbed",
             "pythonpath": env["pythonpath"],
             "path": env["path"],
             "pythonuserbase": env["pythonuserbase"],
@@ -3247,9 +3256,11 @@ def test_cloud_model_records_missing_bootstrap_cache_env_parity(
         executable: str,
         network_mode: str,
         extra_args: list[str] | None = None,
+        workdir: str = "/testbed",
     ) -> str:
         assert executable == "docker"
         assert network_mode == "host"
+        assert workdir == "/testbed"
         assert extra_args is not None
         start_extra_args.extend(extra_args)
         return "fake-cid"
@@ -4429,9 +4440,11 @@ def test_cloud_model_prefetches_images_before_container_prepare(
         executable: str,
         network_mode: str,
         extra_args: list[str] | None = None,
+        workdir: str = "/testbed",
     ) -> str:
         assert executable == "docker"
         assert network_mode == "host"
+        assert workdir == "/testbed"
         assert extra_args is not None
         assert "agent-sched-bench.component=simulate-replay" in extra_args
         cas_root = str(Path.home() / ".cache" / "agent-checkpoint-cas")
@@ -4754,7 +4767,11 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
     trace_path = tmp_path / "trace.jsonl"
     task_source = tmp_path / "tasks.json"
     output_dir = tmp_path / "out"
-    _write_trace(trace_path, agent_id="task-a")
+    _write_trace(
+        trace_path,
+        agent_id="task-a",
+        tool_container_workdir="/app",
+    )
     _write_tasks(task_source, "task-a")
 
     agent_kwargs: list[dict[str, object]] = []
@@ -4819,6 +4836,7 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
         return ("ok", 1.0, True)
 
     ensure_calls: list[dict[str, object]] = []
+    start_calls: list[dict[str, object]] = []
     removed_images: list[str] = []
     bootstrap_commands: list[list[str]] = []
 
@@ -4828,7 +4846,7 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
         container_executable: str,
         fixed_image_name: str,
         rebuild: bool,
-        **_kwargs,
+        workspace_root: str,
     ) -> tuple[str, float]:
         ensure_calls.append(
             {
@@ -4836,9 +4854,28 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
                 "container_executable": container_executable,
                 "fixed_image_name": fixed_image_name,
                 "rebuild": rebuild,
+                "workspace_root": workspace_root,
             }
         )
         return (fixed_image_name, 0.125)
+
+    def fake_start_task_container(
+        image: str,
+        *,
+        executable: str,
+        extra_args: list[str],
+        network_mode: str,
+        workdir: str,
+    ) -> str:
+        start_calls.append(
+            {
+                "image": image,
+                "executable": executable,
+                "network_mode": network_mode,
+                "workdir": workdir,
+            }
+        )
+        return "fake-cid"
 
     def fake_remove_image(image: str, *, container_executable: str) -> bool:
         assert container_executable == "docker"
@@ -4856,7 +4893,7 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
     monkeypatch.setattr("trace_collect.simulator.remove_image", fake_remove_image)
     monkeypatch.setattr(
         "trace_collect.simulator.start_task_container",
-        lambda *args, **kwargs: "fake-cid",
+        fake_start_task_container,
     )
     monkeypatch.setattr("trace_collect.simulator.stop_task_container", lambda *args, **kwargs: "")
     monkeypatch.setattr(
@@ -4902,6 +4939,7 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
     ]
     assert startup["phases"][0]["prebuilt"] is True
     assert startup["phases"][0]["reported_elapsed_s"] == pytest.approx(0.0)
+    assert startup["phases"][0]["workspace_root"] == "/app"
     assert startup["phases"][2]["status"] == "skipped"
     assert startup["phases"][2]["reason"] == "TASK_CONTAINER_APT_MIRROR unset"
     assert startup["resources"]["samples"] == []
@@ -4910,13 +4948,22 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
     assert resources["summary"]["sample_count"] == 1
     assert resources["summary"]["monitoring_disabled"] is False
     assert resources["summary"]["monitoring"]["status"] == "collected"
-    assert agent_kwargs == [{}]
+    assert agent_kwargs == [{"workdir": "/app"}]
     assert ensure_calls == [
         {
             "source_image": "docker.io/swebench-test/task-a",
             "container_executable": "docker",
             "fixed_image_name": startup["fixed_image"],
             "rebuild": True,
+            "workspace_root": "/app",
+        }
+    ]
+    assert start_calls == [
+        {
+            "image": startup["fixed_image"],
+            "executable": "docker",
+            "network_mode": "host",
+            "workdir": "/app",
         }
     ]
     assert removed_images == [startup["fixed_image"]]

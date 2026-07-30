@@ -132,6 +132,7 @@ class EarReplayRuntime:
         extra_args: list[str] | None = None,
         network_mode: str = "host",
         bootstrap_userbase_bin: str | None = None,
+        workdir: str = "/testbed",
     ) -> str:
         try:
             lease = self.controller.acquire(
@@ -164,6 +165,7 @@ class EarReplayRuntime:
                 extra_args=[*(extra_args or []), *resource_args],
                 network_mode=network_mode,
                 bootstrap_userbase_bin=bootstrap_userbase_bin,
+                workdir=workdir,
             )
             lease = self.controller.bind_vm(lease, container_id)
             manager_config = self.policy.docker.resource_manager

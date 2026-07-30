@@ -226,6 +226,7 @@ def start_task_container(
     extra_args: list[str] | None = None,
     network_mode: str = "host",
     bootstrap_userbase_bin: str | None = None,
+    workdir: str = "/testbed",
 ) -> str:
     """Launch the task container and return its id.
 
@@ -257,7 +258,7 @@ def start_task_container(
         "--rm",
         f"--network={network_mode}",
         "-w",
-        "/testbed",
+        workdir,
     ]
     if not _extra_args_mount_bootstrap_cache(extra_args):
         _TASK_CONTAINER_BOOTSTRAP_CACHE_ROOT.mkdir(parents=True, exist_ok=True)

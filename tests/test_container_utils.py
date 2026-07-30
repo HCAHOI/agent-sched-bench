@@ -205,11 +205,13 @@ def test_ensure_fixed_image_serializes_builds_per_source_image(
         fixed_name: str,
         executable: str,
         image_platform: str | None,
+        workspace_root: str,
     ) -> None:
         nonlocal active, max_active
         assert source_image == "docker.io/swerebench/shared:latest"
         assert executable == "docker"
         assert image_platform is None
+        assert workspace_root == "/testbed"
         with active_lock:
             active += 1
             max_active = max(max_active, active)
@@ -263,7 +265,9 @@ def test_ensure_fixed_image_cache_is_scoped_by_container_runtime(
         fixed_name: str,
         executable: str,
         image_platform: str | None,
+        workspace_root: str,
     ) -> None:
+        assert workspace_root == "/testbed"
         build_calls.append((executable, fixed_name))
 
     monkeypatch.setattr("harness.container_image_prep._build_fixed_image", fake_build_fixed_image)

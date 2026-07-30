@@ -1125,6 +1125,7 @@ class DockerBackend(SandboxBackend):
             self._agent = ContainerAgent(
                 self.container_id,
                 self.container_executable,
+                workdir=self.root,
                 **self.agent_env_kwargs,
             )
             phase = self._start_phase("container_agent_start")
@@ -1283,6 +1284,7 @@ class DockerBackend(SandboxBackend):
                     "fixed_image": fixed_name,
                     "reported_elapsed_s": 0.0,
                     "prebuilt": True,
+                    "workspace_root": self.root,
                 }
             else:
                 if self.fixed_image_name is None:
@@ -1293,11 +1295,13 @@ class DockerBackend(SandboxBackend):
                     container_executable=self.container_executable,
                     fixed_image_name=self.fixed_image_name,
                     rebuild=True,
+                    workspace_root=self.root,
                 )
                 extra = {
                     "fixed_image": fixed_name,
                     "reported_elapsed_s": elapsed_s,
                     "prebuilt": False,
+                    "workspace_root": self.root,
                 }
             self._fixed_image = fixed_name
             if self.startup_recorder is not None:
@@ -1333,6 +1337,7 @@ class DockerBackend(SandboxBackend):
                     executable=self.container_executable,
                     extra_args=extra_args,
                     network_mode=self.network_mode,
+                    workdir=self.root,
                 )
             )
             try:

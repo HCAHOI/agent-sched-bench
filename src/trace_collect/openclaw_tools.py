@@ -143,6 +143,8 @@ def remap_source_runtime_artifact_tool_args(
 _REPLAY_AGENT_SCRIPT = textwrap.dedent(r"""
 import json, os, sys, subprocess, difflib, signal, time
 
+_WORKDIR = os.environ.get("REPLAY_WORKDIR", "/testbed")
+
 def _find_match(content, old_text):
     if old_text in content:
         return old_text, content.count(old_text)
@@ -386,7 +388,7 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
     process = subprocess.Popen(
         cmd,
         shell=True,
-        cwd="/testbed",
+        cwd=_WORKDIR,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -475,7 +477,7 @@ def handle_exec(args):
     if resource_response is not None:
         return resource_response
     try:
-        r = subprocess.run(cmd, shell=True, cwd="/testbed",
+        r = subprocess.run(cmd, shell=True, cwd=_WORKDIR,
                            capture_output=True, text=True, timeout=timeout, env=env)
         output = _format_exec_result(r.stdout or "", r.stderr or "", r.returncode)
         return {"ok": True, "result": _truncate_output(output), "returncode": r.returncode, "timed_out": False}
@@ -492,7 +494,7 @@ def handle_commands(args):
     any_timeout = False
     for i, cmd in enumerate(cmds):
         try:
-            r = subprocess.run(cmd, shell=True, cwd="/testbed",
+            r = subprocess.run(cmd, shell=True, cwd=_WORKDIR,
                                capture_output=True, text=True, timeout=timeout, env=env)
             all_output.append(_format_exec_result(r.stdout or "", r.stderr or "", r.returncode))
             last_rc = r.returncode
@@ -677,6 +679,7 @@ class ContainerAgent:
         pythonpath: str | None = None,
         path: str | None = None,
         pythonuserbase: str | None = None,
+        workdir: str = "/testbed",
     ) -> None:
         self._container_id = container_id
         self._executable = container_executable
@@ -685,6 +688,7 @@ class ContainerAgent:
         self._pythonpath: str | None = pythonpath
         self._path: str | None = path
         self._pythonuserbase: str | None = pythonuserbase
+        self._workdir = workdir
 
     async def _probe_python(self) -> str:
         """Find a working Python >=3.11 interpreter inside the container."""
@@ -699,7 +703,7 @@ class ContainerAgent:
                     "exec",
                     "-i",
                     "-w",
-                    "/testbed",
+                    self._workdir,
                     self._container_id,
                     cand,
                     "-c",
@@ -757,7 +761,9 @@ class ContainerAgent:
             "exec",
             "-i",
             "-w",
-            "/testbed",
+            self._workdir,
+            "-e",
+            f"REPLAY_WORKDIR={self._workdir}",
         ]
         # Propagate PYTHONPATH so replayed subprocesses (e.g. pytest)
         # can find packages installed by bootstrap_task_container_python.

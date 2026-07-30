@@ -1,8 +1,4 @@
-"""Helpers for preparing writable derivative container images.
-
-The derivative keeps the upstream image content while making ``/testbed``
-writeable for agent runs.
-"""
+"""Helpers for preparing writable derivative container images."""
 
 from __future__ import annotations
 
@@ -13,7 +9,7 @@ import time
 
 from harness.container_runtime import image_exists_command
 
-_IMAGE_CACHE: dict[tuple[str, str, str], tuple[str, float]] = {}
+_IMAGE_CACHE: dict[tuple[str, str, str, str], tuple[str, float]] = {}
 _BUILD_LOCKS: dict[tuple[str, str], threading.Lock] = {}
 _BUILD_LOCKS_GUARD = threading.Lock()
 _PULL_ATTEMPTS = 3
@@ -200,8 +196,9 @@ def _build_fixed_image(
     fixed_name: str,
     executable: str,
     image_platform: str | None,
+    workspace_root: str,
 ) -> None:
-    """Commit a writable derivative with /testbed owned by container root."""
+    """Commit a writable derivative with its workspace owned by container root."""
     run_cmd = [executable, "run", "-d"]
     if image_platform:
         run_cmd.extend(["--platform", image_platform])
@@ -217,7 +214,7 @@ def _build_fixed_image(
                 "chown",
                 "-R",
                 "0:0",
-                "/testbed",
+                workspace_root,
             ],
             check=True,
             timeout=120,
@@ -248,6 +245,7 @@ def ensure_fixed_image(
     container_executable: str,
     fixed_image_name: str | None = None,
     rebuild: bool = False,
+    workspace_root: str = "/testbed",
 ) -> tuple[str, float]:
     """Return ``(fixed_image_name, elapsed_seconds)``.
 
@@ -256,7 +254,7 @@ def ensure_fixed_image(
     """
     source_image = normalize_image_reference(source_image)
     fixed_name = fixed_image_name or fixed_image_name_for(source_image)
-    cache_key = (container_executable, source_image, fixed_name)
+    cache_key = (container_executable, source_image, fixed_name, workspace_root)
 
     if not rebuild and cache_key in _IMAGE_CACHE:
         return _IMAGE_CACHE[cache_key]
@@ -286,6 +284,7 @@ def ensure_fixed_image(
                 fixed_name,
                 container_executable,
                 image_platform,
+                workspace_root,
             )
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError(

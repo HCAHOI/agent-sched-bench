@@ -17,7 +17,7 @@ import uuid
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from threading import BrokenBarrierError
 from typing import TYPE_CHECKING, Any
 
@@ -3043,6 +3043,26 @@ def _resolve_docker_image(loaded: LoadedTraceSession) -> str | None:
     )
 
 
+def _source_workspace_root(loaded: LoadedTraceSession) -> str:
+    metadata = loaded.metadata or {}
+    raw_root = (
+        metadata.get("tool_container_workdir")
+        or metadata.get("terminal_bench_workdir")
+        or "/testbed"
+    )
+    if not isinstance(raw_root, str) or not raw_root:
+        raise SimulateError(
+            f"Task {loaded.source_agent_id!r} has invalid container workdir"
+        )
+    root = PurePosixPath(raw_root)
+    if not root.is_absolute() or ".." in root.parts:
+        raise SimulateError(
+            f"Task {loaded.source_agent_id!r} has unsafe container workdir: "
+            f"{raw_root!r}"
+        )
+    return root.as_posix()
+
+
 def _execution_environment(loaded: LoadedTraceSession) -> str:
     metadata = loaded.metadata or {}
     value = metadata.get("execution_environment")
@@ -3095,6 +3115,7 @@ def _validate_loaded_sessions(
                 f"Task {session.source_agent_id!r} has no resolvable docker_image "
                 "(set docker_image in manifest or ensure task has image_name)"
             )
+        _source_workspace_root(session)
 
     seen_run_instance_ids: set[str] = set()
     for session in sessions:
@@ -3180,22 +3201,37 @@ async def _prebuild_sweep_fixed_images(
 ) -> dict[str, str]:
     if container_executable is None:
         return {}
-    images = _container_source_images(sessions)
-    if not images:
+    workspace_by_image: dict[str, str] = {}
+    for session in sessions:
+        if _is_host_mode(session) or session.sandbox_backend == "fake":
+            continue
+        docker_image = _resolve_docker_image(session)
+        if docker_image is None:
+            continue
+        image = normalize_image_reference(docker_image)
+        workspace_root = _source_workspace_root(session)
+        existing_root = workspace_by_image.setdefault(image, workspace_root)
+        if existing_root != workspace_root:
+            raise SimulateError(
+                f"Container image {image!r} has conflicting replay workdirs: "
+                f"{existing_root!r} and {workspace_root!r}"
+            )
+    if not workspace_by_image:
         return {}
-    logger.info("Prebuilding %d sweep fixed image(s)", len(images))
+    logger.info("Prebuilding %d sweep fixed image(s)", len(workspace_by_image))
     fixed_images: dict[str, str] = {}
     sweep_id = uuid.uuid4().hex
-    for source_image in images:
+    for source_image, workspace_root in sorted(workspace_by_image.items()):
         fixed_image_name = _sweep_fixed_image_name(
             source_image=source_image,
             output_path=output_path,
             sweep_id=sweep_id,
         )
         logger.info(
-            "Prebuilding sweep fixed image: source=%s fixed=%s",
+            "Prebuilding sweep fixed image: source=%s fixed=%s workspace=%s",
             source_image,
             fixed_image_name,
+            workspace_root,
         )
         fixed_name, elapsed_s = await asyncio.to_thread(
             ensure_fixed_image,
@@ -3203,6 +3239,7 @@ async def _prebuild_sweep_fixed_images(
             container_executable=container_executable,
             fixed_image_name=fixed_image_name,
             rebuild=True,
+            workspace_root=workspace_root,
         )
         fixed_images[source_image] = fixed_name
         logger.info(
@@ -3301,6 +3338,7 @@ async def _prepare_container_session(
             f"Task {loaded.source_agent_id!r} has no resolvable docker_image"
         )
     normalized = normalize_image_reference(docker_image)
+    workspace_root = _source_workspace_root(loaded)
     recorder = ContainerStartupRecorder(
         loaded=loaded,
         task_output_dir=task_output_dir,
@@ -3334,6 +3372,7 @@ async def _prepare_container_session(
         task_output_dir=task_output_dir,
         container_executable=container_executable,
         network_mode=network_mode,
+        root=workspace_root,
         fixed_images_by_source=fixed_images_by_source,
         bootstrap_mount_args=bootstrap_mount_args,
         agent_env_kwargs=agent_env_kwargs,
