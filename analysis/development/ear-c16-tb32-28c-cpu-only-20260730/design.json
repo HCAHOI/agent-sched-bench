@@ -12,7 +12,8 @@
       "elastic": "4ac7844525c0d19161e3f25b480541325d1441f5",
       "elastic_max24": "b13909415c4719023a4903d1f67d7ec3cd435c54",
       "quota_only": "9e93a75f478ab8f2ae2a419bd938fe98383b608e",
-      "quota_only_no_guard": "d6a3d12aded41356be8edceb59024f1b288a7c30"
+      "quota_only_no_guard": "d6a3d12aded41356be8edceb59024f1b288a7c30",
+      "quota_only_guard_disabled": "36559f08e7847a55be32d48c551cccfc96e723c5"
     }
   },
   "host": {
@@ -126,6 +127,12 @@
       "question": "Does the targeted concurrency-8 recovery generalize to the original 32-trace, concurrency-16 replay?",
       "output": "/tmp/asb-ear-tb32-c16-28c-cpu-only-20260730/block-1/quota-only-no-guard",
       "configuration": "Original 32-trace manifest and concurrency 16; quota-only CPU elasticity with marginal_growth_min_cores set to zero; shared pool unchanged at 24 CPU and 60 GiB."
+    },
+    {
+      "name": "quota-only-guard-disabled-c16",
+      "question": "Does treating a zero marginal-growth threshold as a true guard disable remove the remaining source-valid replay failure?",
+      "output": "/tmp/asb-ear-tb32-c16-28c-cpu-only-20260730/block-1/quota-only-guard-disabled",
+      "configuration": "Original 32-trace manifest and concurrency 16; quota-only CPU elasticity with marginal_growth_min_cores set to zero and zero-threshold probe recording disabled; shared pool unchanged at 24 CPU and 60 GiB."
     }
   ],
   "followup_results": [
@@ -355,6 +362,84 @@
       },
       "interpretation": "The full replay confirms the magsac-install mechanism and reduces wall time by 34.4 percent versus quota-only with the 0.5-core guard, but it does not fully generalize: llm-spec-decoding remained at two cores and repeated its four source-valid replay action failures. The controller implementation still trips the marginal guard at a zero threshold when the two-sample observed-CPU improvement is negative, so this policy is threshold-zero rather than a true no-guard policy.",
       "limitation": "This is one development run per arm on one host. The matched manifest and concurrency support a direct system-run comparison, but not a population or repeated-run claim. The threshold-zero run also generated 571 controller-level global-pool-exhausted retry rejections."
+    },
+    {
+      "name": "quota-only-guard-disabled-c16",
+      "wall_time_s": 802.3960641749982,
+      "completed_traces": 30,
+      "attempted_traces": 32,
+      "successful_traces_per_s": 0.037388019881235565,
+      "ear_status": "invalid_due_to_pool_exhausted_resize_rejections",
+      "cpu_resize_count": 91,
+      "cpu_resize_rejected_count": 772,
+      "memory_resize_count": 37,
+      "memory_resize_rejected_count": 0,
+      "admission_rejected_count": 0,
+      "oom_kill_count": 0,
+      "released_lease_count": 32,
+      "peak_leased_cpu_cores": 24,
+      "peak_leased_memory_gb": 38.0,
+      "observed_cpu_core_seconds_estimate": 9111.448,
+      "observed_memory_gib_seconds_estimate": 2468.775,
+      "observed_integral_method": "Sum of each container resource summary arithmetic sample mean times its monitored duration.",
+      "reserved_cpu_core_seconds": 13321.618252981989,
+      "reserved_memory_gb_seconds": 14920.241654889021,
+      "failed_tasks": [
+        "catch-me-if-you-can",
+        "solve-sudoku"
+      ],
+      "source_valid_replay_failures": [],
+      "comparison": {
+        "fixed": {
+          "wall_time_s": 2368.4480593960006,
+          "completed_traces": 27,
+          "successful_traces_per_s": 0.011399870008922853
+        },
+        "elastic_max8": {
+          "wall_time_s": 1250.34620774,
+          "completed_traces": 29,
+          "successful_traces_per_s": 0.023193576163531127
+        },
+        "elastic_max24": {
+          "wall_time_s": 1471.6152014960007,
+          "completed_traces": 28,
+          "successful_traces_per_s": 0.019026712942035406
+        },
+        "free": {
+          "wall_time_s": 579.7301288279996,
+          "completed_traces": 30,
+          "successful_traces_per_s": 0.051748216123679705
+        },
+        "quota_only_guard": {
+          "wall_time_s": 1406.7811534770008,
+          "completed_traces": 28,
+          "successful_traces_per_s": 0.019903593342002906
+        },
+        "quota_only_threshold_zero": {
+          "wall_time_s": 922.5245895749977,
+          "completed_traces": 29,
+          "successful_traces_per_s": 0.031435476439018444
+        }
+      },
+      "key_tasks": {
+        "llm-spec-decoding": {
+          "threshold_zero_elapsed_s": 602.806,
+          "guard_disabled_elapsed_s": 417.574,
+          "threshold_zero_success": false,
+          "guard_disabled_success": true,
+          "peak_leased_cpu_cores": 8
+        },
+        "magsac-install": {
+          "threshold_zero_elapsed_s": 864.286,
+          "guard_disabled_elapsed_s": 748.386,
+          "threshold_zero_success": true,
+          "guard_disabled_success": true,
+          "peak_leased_cpu_cores": 24
+        }
+      },
+      "mechanism_evidence": "llm-spec-decoding grew 1-to-2 at 5.5 seconds, 2-to-4 at 8.5 seconds, and 4-to-8 at 361.4 seconds; it completed with zero failed actions. magsac-install repeatedly reclaimed newly available capacity and reached 24 cores at 518.4 seconds. Both tasks succeeded, all 32 leases were released, and no OOM, admission failure, memory resize rejection, sampler error, or residual container remained.",
+      "interpretation": "The true-disable fix removes the remaining source-valid replay failure and reduces matched wall time by 13.0 percent versus threshold-zero and 43.0 percent versus the original 0.5-core guard. The 30 successful traces match Free, although Free remains 38.4 percent faster by wall time.",
+      "limitation": "This is one development run per arm on one host, not a repeated-run or population result. The guard-disabled controller retries aggressively under contention, producing 772 global-pool-exhausted CPU resize rejections and therefore an invalid strict EAR lifecycle status despite clean workload completion and cleanup."
     }
   ],
   "gates": {
