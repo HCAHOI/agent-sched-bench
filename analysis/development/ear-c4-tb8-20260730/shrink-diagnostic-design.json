@@ -1,0 +1,253 @@
+{
+  "analysis": {
+    "aggregate": "For each pre-registered ratio, report all three block values plus median and min-max; do not compute a p-value or population interval.",
+    "fixed_reference": "Secondarily report each Elastic arm relative to its within-block Fixed arm.",
+    "observed_metric_source": "For each arm, resolve exactly one *.container_resources_summary.json and run the observed_metric_jq_filter against it after sampler validation.",
+    "observed_metric_jq_filter": "[.containers[].summary] | {observed_cpu_core_seconds:(map(.cpu_percent.avg / 100 * .duration_seconds) | add), observed_memory_gib_seconds:(map(.memory_mb.avg / 1024 * .duration_seconds) | add)}",
+    "primary_comparison": "Within each block compare elastic_command_end/elastic_current using wall_time_s, observed_cpu_core_seconds, observed_memory_gib_seconds, total_reserved_cpu_core_seconds, and total_reserved_memory_gb_seconds.",
+    "treatment_check": "From lease_events.jsonl, separately count applied cpu_resized events with reason=low_util_no_throttle and reason=command_end_idle_reclaim. Do not use aggregate cpu_shrink_events as the treatment measure.",
+    "workload_diagnostic": "Report adaptive-rejection-sampler elapsed_s and its applied CPU grow, low-util shrink, and command-end reclaim counts per arm as an explicitly outcome-informed secondary diagnostic."
+  },
+  "arm_command_templates": {
+    "elastic_command_end": [
+      "uv",
+      "run",
+      "python",
+      "-m",
+      "trace_collect.cli",
+      "simulate",
+      "--manifest",
+      "analysis/development/ear-c4-tb8-20260730/manifest.yaml",
+      "--concurrency",
+      "4",
+      "--workers",
+      "1",
+      "--ear-mode",
+      "elastic",
+      "--ear-policy",
+      "/home/chiyu/workspace/elastic-agent-runtime-py312/configs/policies/docker_elastic_c4_cpu_command_end_reclaim.yaml",
+      "--resource-monitoring",
+      "on",
+      "--pmu-monitoring",
+      "off",
+      "--memory-bandwidth-monitoring",
+      "off",
+      "--container",
+      "docker",
+      "--replay-speed",
+      "50",
+      "--output-dir",
+      "{output_dir}"
+    ],
+    "elastic_current": [
+      "uv",
+      "run",
+      "python",
+      "-m",
+      "trace_collect.cli",
+      "simulate",
+      "--manifest",
+      "analysis/development/ear-c4-tb8-20260730/manifest.yaml",
+      "--concurrency",
+      "4",
+      "--workers",
+      "1",
+      "--ear-mode",
+      "elastic",
+      "--ear-policy",
+      "/home/chiyu/workspace/elastic-agent-runtime-py312/configs/policies/docker_elastic_c4_mixed.yaml",
+      "--resource-monitoring",
+      "on",
+      "--pmu-monitoring",
+      "off",
+      "--memory-bandwidth-monitoring",
+      "off",
+      "--container",
+      "docker",
+      "--replay-speed",
+      "50",
+      "--output-dir",
+      "{output_dir}"
+    ],
+    "fixed": [
+      "uv",
+      "run",
+      "python",
+      "-m",
+      "trace_collect.cli",
+      "simulate",
+      "--manifest",
+      "analysis/development/ear-c4-tb8-20260730/manifest.yaml",
+      "--concurrency",
+      "4",
+      "--workers",
+      "1",
+      "--ear-mode",
+      "fixed",
+      "--ear-policy",
+      "/home/chiyu/workspace/elastic-agent-runtime-py312/configs/policies/docker_elastic_c4_mixed.yaml",
+      "--resource-monitoring",
+      "on",
+      "--pmu-monitoring",
+      "off",
+      "--memory-bandwidth-monitoring",
+      "off",
+      "--container",
+      "docker",
+      "--replay-speed",
+      "50",
+      "--output-dir",
+      "{output_dir}"
+    ]
+  },
+  "asb_code_commit": "181fbb020d0b5952c764bc69022de16d82045414",
+  "blocks": [
+    {
+      "block": 1,
+      "order": [
+        "fixed",
+        "elastic_current",
+        "elastic_command_end"
+      ],
+      "runs": [
+        {
+          "arm": "fixed",
+          "output_dir": "/tmp/asb-ear-tb8-c4-shrink-diagnostic-r3-20260730/block-1/fixed"
+        },
+        {
+          "arm": "elastic_current",
+          "output_dir": "/tmp/asb-ear-tb8-c4-shrink-diagnostic-r3-20260730/block-1/elastic-current"
+        },
+        {
+          "arm": "elastic_command_end",
+          "output_dir": "/tmp/asb-ear-tb8-c4-shrink-diagnostic-r3-20260730/block-1/elastic-command-end"
+        }
+      ]
+    },
+    {
+      "block": 2,
+      "order": [
+        "elastic_current",
+        "elastic_command_end",
+        "fixed"
+      ],
+      "runs": [
+        {
+          "arm": "elastic_current",
+          "output_dir": "/tmp/asb-ear-tb8-c4-shrink-diagnostic-r3-20260730/block-2/elastic-current"
+        },
+        {
+          "arm": "elastic_command_end",
+          "output_dir": "/tmp/asb-ear-tb8-c4-shrink-diagnostic-r3-20260730/block-2/elastic-command-end"
+        },
+        {
+          "arm": "fixed",
+          "output_dir": "/tmp/asb-ear-tb8-c4-shrink-diagnostic-r3-20260730/block-2/fixed"
+        }
+      ]
+    },
+    {
+      "block": 3,
+      "order": [
+        "elastic_command_end",
+        "fixed",
+        "elastic_current"
+      ],
+      "runs": [
+        {
+          "arm": "elastic_command_end",
+          "output_dir": "/tmp/asb-ear-tb8-c4-shrink-diagnostic-r3-20260730/block-3/elastic-command-end"
+        },
+        {
+          "arm": "fixed",
+          "output_dir": "/tmp/asb-ear-tb8-c4-shrink-diagnostic-r3-20260730/block-3/fixed"
+        },
+        {
+          "arm": "elastic_current",
+          "output_dir": "/tmp/asb-ear-tb8-c4-shrink-diagnostic-r3-20260730/block-3/elastic-current"
+        }
+      ]
+    }
+  ],
+  "claim_scope": "Outcome-informed c4 mechanism diagnostic on the same eight development traces. The schedule balances ordinal position but not transition or carryover; it supports no population claim.",
+  "execution": {
+    "command_expansion": "For each run, take the selected arm_command_templates argv array and replace the single {output_dir} element with the run output_dir string; do not insert, remove, split, or join any other argv element.",
+    "cwd": "/home/chiyu/workspace/agent-sched-bench-ear-replay",
+    "intentional_cooldown": false,
+    "output_root": "/tmp/asb-ear-tb8-c4-shrink-diagnostic-r3-20260730",
+    "retry_policy": "No automatic retry. Stop on any command or gate failure, preserve evidence, and remove only exact residual objects created by the failed arm.",
+    "run_count": 9,
+    "stop_condition": "Stop immediately if a command exits nonzero or any required after-arm or after-block gate fails."
+  },
+  "inputs": {
+    "base_free_design": "free-design.json",
+    "base_free_design_sha256": "9b2507d48a699105e4e6ca56956898d68c5de25c976a7bf62e017d1dff761cfd",
+    "manifest_sha256": "94e29a6d8c4c13c389db5decd3179ce58ea5ec44f4a4da0020d8d42168cce0d0",
+    "source_trace_repo_commit": "19b2abb37e94658bde9f39701023d74ae43c23b4",
+    "tasks_sha256": "98c4cfb905b3bbc6a04a4524d835dc155aa2b81a57279e8ba11049ace3888950"
+  },
+  "policies": {
+    "current": {
+      "path": "/home/chiyu/workspace/elastic-agent-runtime-py312/configs/policies/docker_elastic_c4_mixed.yaml",
+      "sha256": "51e72a78d000132bdd398d5ff015bcb76ac463827caf6cc07ebd577513277c80"
+    },
+    "ear_commit": "6f991dec79f1ab2d2ee71d436a28bd77d2772375",
+    "elastic_command_end": {
+      "path": "/home/chiyu/workspace/elastic-agent-runtime-py312/configs/policies/docker_elastic_c4_cpu_command_end_reclaim.yaml",
+      "sha256": "162730a9b2b810f84db9f16de86534cf74db04344efc3d63831f4c8d943a44de"
+    },
+    "sole_intentional_difference": "elastic_command_end sets in_command_cpu_shrink_enabled=false; all other resource-manager, pool, token-service, and executor values match current."
+  },
+  "plot_command_templates": {
+    "fixed_vs_command_end": [
+      "uv",
+      "run",
+      "python",
+      "scripts/plot_ear_replay.py",
+      "{fixed_dir}",
+      "{elastic_command_end_dir}",
+      "analysis/development/ear-c4-tb8-20260730/results/shrink-diagnostic/{block}/fixed-vs-command-end"
+    ],
+    "fixed_vs_current": [
+      "uv",
+      "run",
+      "python",
+      "scripts/plot_ear_replay.py",
+      "{fixed_dir}",
+      "{elastic_current_dir}",
+      "analysis/development/ear-c4-tb8-20260730/results/shrink-diagnostic/{block}/fixed-vs-current"
+    ]
+  },
+  "preflight_gates": [
+    "Output root does not exist.",
+    "The base Free design, manifest, and tasks SHA256 values match the explicit hashes in this design.",
+    "The source trace repository commit matches this design and has no changes to the eight locked trace paths.",
+    "The eight source trace SHA256 values and eight Docker image IDs match the maps in the hash-locked base Free design.",
+    "The ASB worktree is clean after committing this design; all ASB paths other than this design match asb_code_commit. The EAR worktree is clean at the locked EAR commit, and both EAR policy SHA256 values match this design.",
+    "A structural comparison of the two policy YAML objects shows exactly three differing paths: name, docker.resource_manager.policy_id, and docker.resource_manager.in_command_cpu_shrink_enabled (default true versus explicit false).",
+    "No container or sweep fixed image recorded by a prior arm in this experiment remains."
+  ],
+  "validity_gates": {
+    "after_all_blocks": [
+      "Report all three block values plus median and min-max exactly as pre-registered; do not combine any earlier replay result.",
+      "Report treatment checks separately from performance outcomes."
+    ],
+    "after_each_arm_before_next_arm": [
+      "The command exits zero and throughput reports attempted=completed=8, failed=0, action_count=142, llm_call_count=75, and tool_exec_count=67.",
+      "The arm has 67/67 replay tool outcomes matched and zero mismatches.",
+      "The arm has one monitored container per completed trace, at least two samples and positive sample-window duration per container, and no sampler errors or drops.",
+      "The arm has valid EAR lifecycle artifacts with zero OOM kills, admission rejects, and resize rejects.",
+      "Fixed uses mode=fixed and the current policy SHA; each Elastic arm uses mode=elastic and its locked policy SHA.",
+      "Fixed has zero cpu_resized lease events with reason=low_util_no_throttle and zero with reason=command_end_idle_reclaim.",
+      "elastic_current has at least one applied cpu_resized lease event with reason=low_util_no_throttle; otherwise stop because the block has no treatment exposure.",
+      "elastic_command_end has zero applied cpu_resized lease events with reason=low_util_no_throttle and at least one with reason=command_end_idle_reclaim.",
+      "No task container ID or sweep fixed image name recorded by this arm remains."
+    ],
+    "after_each_block_before_next_block": [
+      "The three throughput summaries have the same 142 actions, 75 LLM calls, 67 tool executions, source trace entries, and replay configuration.",
+      "The three mismatch reports have 67/67 matched outcomes, zero mismatches, and the same normalized-output match pattern.",
+      "Expand and run both plot_command_templates with this block's three exact arm directories and block=block-N. The distinct output directories must each contain ear_timeline.png, ear_fixed_vs_elastic.png, and ear_comparison.json.",
+      "The pair plot JSONs provide wall and reserved metrics only. Compute observed CPU and memory metrics separately with observed_metric_jq_filter; do not attribute observed metrics to the pair plot output."
+    ]
+  }
+}
