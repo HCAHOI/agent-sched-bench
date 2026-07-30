@@ -116,10 +116,16 @@
     },
     {
       "name": "quota-only-no-guard-c8",
-      "question": "Does disabling the marginal-growth guard let long-running survivors grow again when contested CPU capacity becomes available?",
+      "question": "Does setting the marginal-growth threshold to zero let long-running survivors grow again when contested CPU capacity becomes available?",
       "output": "/tmp/asb-ear-tb32-c16-28c-cpu-only-20260730/quota-only-no-guard-c8",
       "configuration": "The eight long-tail tasks from quota-only-c16 at concurrency 8; quota-only CPU elasticity with marginal_growth_min_cores set to zero; shared pool unchanged at 24 CPU and 60 GiB.",
       "manifest_sha256": "e2f45704fe8dc74acb691f0c85d37af270bfd2f5e060b706816e3cfa3b6744ef"
+    },
+    {
+      "name": "quota-only-no-guard-c16",
+      "question": "Does the targeted concurrency-8 recovery generalize to the original 32-trace, concurrency-16 replay?",
+      "output": "/tmp/asb-ear-tb32-c16-28c-cpu-only-20260730/block-1/quota-only-no-guard",
+      "configuration": "Original 32-trace manifest and concurrency 16; quota-only CPU elasticity with marginal_growth_min_cores set to zero; shared pool unchanged at 24 CPU and 60 GiB."
     }
   ],
   "followup_results": [
@@ -273,7 +279,82 @@
         }
       },
       "mechanism_evidence": "The survivor growth path was restored: magsac-install grew 2-to-4 at 247.0 seconds, 4-to-8 at 334.1 seconds, 8-to-16 at 455.9 seconds, and 16-to-24 at 541.2 seconds as capacity became available. llm-spec-decoding reached eight cores by 10.7 seconds. Both previously source-valid replay failures succeeded, with no OOM, admission failure, memory resize rejection, or leaked lease.",
-      "limitation": "This targeted eight-task concurrency-8 probe reuses the long-tail cohort from the earlier 32-task concurrency-16 run. Per-task mechanism outcomes are informative, but aggregate wall time and throughput are not a matched arm comparison. Disabling the guard also caused 714 controller-level global-pool-exhausted retry rejections."
+      "limitation": "This targeted eight-task concurrency-8 probe reuses the long-tail cohort from the earlier 32-task concurrency-16 run. Per-task mechanism outcomes are informative, but aggregate wall time and throughput are not a matched arm comparison. A zero threshold is not a hard guard disable: a negative two-sample observed-CPU delta can still set avoid_growth_until_idle. The run also caused 714 controller-level global-pool-exhausted retry rejections."
+    },
+    {
+      "name": "quota-only-no-guard-c16",
+      "wall_time_s": 922.5245895749977,
+      "completed_traces": 29,
+      "attempted_traces": 32,
+      "successful_traces_per_s": 0.031435476439018444,
+      "ear_status": "invalid_due_to_pool_exhausted_resize_rejections",
+      "cpu_resize_count": 96,
+      "cpu_resize_rejected_count": 571,
+      "memory_resize_count": 37,
+      "memory_resize_rejected_count": 0,
+      "admission_rejected_count": 0,
+      "oom_kill_count": 0,
+      "released_lease_count": 32,
+      "peak_leased_cpu_cores": 24,
+      "peak_leased_memory_gb": 38.0,
+      "observed_cpu_core_seconds_estimate": 9765.112,
+      "observed_memory_gib_seconds_estimate": 2891.115,
+      "observed_integral_method": "Sum of each container resource summary arithmetic sample mean times its monitored duration.",
+      "reserved_cpu_core_seconds": 14699.971370618961,
+      "reserved_memory_gb_seconds": 17292.17082834099,
+      "failed_tasks": [
+        "catch-me-if-you-can",
+        "solve-sudoku",
+        "llm-spec-decoding"
+      ],
+      "source_valid_replay_failures": [
+        "llm-spec-decoding"
+      ],
+      "comparison": {
+        "fixed": {
+          "wall_time_s": 2368.4480593960006,
+          "completed_traces": 27,
+          "successful_traces_per_s": 0.011399870008922853
+        },
+        "elastic_max8": {
+          "wall_time_s": 1250.34620774,
+          "completed_traces": 29,
+          "successful_traces_per_s": 0.023193576163531127
+        },
+        "elastic_max24": {
+          "wall_time_s": 1471.6152014960007,
+          "completed_traces": 28,
+          "successful_traces_per_s": 0.019026712942035406
+        },
+        "free": {
+          "wall_time_s": 579.7301288279996,
+          "completed_traces": 30,
+          "successful_traces_per_s": 0.051748216123679705
+        },
+        "quota_only_guard": {
+          "wall_time_s": 1406.7811534770008,
+          "completed_traces": 28,
+          "successful_traces_per_s": 0.019903593342002906
+        }
+      },
+      "key_tasks": {
+        "magsac-install": {
+          "guard_elapsed_s": 1351.953,
+          "threshold_zero_elapsed_s": 864.286,
+          "guard_success": false,
+          "threshold_zero_success": true,
+          "peak_leased_cpu_cores": 24
+        },
+        "llm-spec-decoding": {
+          "guard_elapsed_s": 602.852,
+          "threshold_zero_elapsed_s": 602.806,
+          "guard_success": false,
+          "threshold_zero_success": false,
+          "peak_leased_cpu_cores": 2
+        }
+      },
+      "interpretation": "The full replay confirms the magsac-install mechanism and reduces wall time by 34.4 percent versus quota-only with the 0.5-core guard, but it does not fully generalize: llm-spec-decoding remained at two cores and repeated its four source-valid replay action failures. The controller implementation still trips the marginal guard at a zero threshold when the two-sample observed-CPU improvement is negative, so this policy is threshold-zero rather than a true no-guard policy.",
+      "limitation": "This is one development run per arm on one host. The matched manifest and concurrency support a direct system-run comparison, but not a population or repeated-run claim. The threshold-zero run also generated 571 controller-level global-pool-exhausted retry rejections."
     }
   ],
   "gates": {
