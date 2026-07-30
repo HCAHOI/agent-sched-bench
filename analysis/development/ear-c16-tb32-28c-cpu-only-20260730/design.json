@@ -5,7 +5,10 @@
     "base_branch": "dev/cpu-only",
     "base_commit": "776d2857b6325992262da59abce88b256404fed9",
     "asb_commit": "8e42308bd618c5a35c7a726c4f451ffd3eaaeedb",
-    "ear_commit": "911a87482f50738bbdd4ad4789f0b49ef83ae638"
+    "ear_commits": {
+      "fixed": "911a87482f50738bbdd4ad4789f0b49ef83ae638",
+      "elastic": "4ac7844525c0d19161e3f25b480541325d1441f5"
+    }
   },
   "host": {
     "nproc": 28,
@@ -25,8 +28,10 @@
     "tasks_sha256": "3c580338be141bf0144d899c4e5e19ede8e5b0827ad0766b4a8c0323ad86f87b"
   },
   "policy": {
-    "path": "/home/Ubuntu/workspace/elastic-agent-runtime-scale-28c/configs/policies/docker_elastic_24c_60g_mixed.yaml",
-    "sha256": "cd0a5499c73c4e619a335732ca667d5881e034fcf93fd8a9ba7870141173e442",
+    "fixed_path": "/home/Ubuntu/workspace/elastic-agent-runtime-scale-28c/configs/policies/docker_elastic_24c_60g_mixed.yaml",
+    "fixed_sha256": "cd0a5499c73c4e619a335732ca667d5881e034fcf93fd8a9ba7870141173e442",
+    "elastic_path": "/home/Ubuntu/workspace/elastic-agent-runtime-scale-28c/configs/policies/docker_elastic_24c_60g_burst.yaml",
+    "elastic_sha256": "75ac344834020c1d64c0accb3c620f94472916d741f82731b4daaf7bc3e708f9",
     "pool": {
       "cpu_cores": 24,
       "memory_gib": 60
@@ -37,9 +42,9 @@
     },
     "elastic_per_task": {
       "initial_cpu_cores": 1,
-      "max_cpu_cores": 2,
+      "max_cpu_cores": 8,
       "initial_memory_gib": 2,
-      "max_memory_gib": 2.5
+      "max_memory_gib": 16
     }
   },
   "execution": {
@@ -66,12 +71,21 @@
     "retry_policy": "No automatic retry. Preserve a failed arm and stop the schedule.",
     "excluded_artifacts": [
       "/tmp/asb-ear-tb32-c16-plumbing-smoke-r4-20260730",
-      "/tmp/asb-ear-cpu-only-smoke-20260730"
+      "/tmp/asb-ear-cpu-only-smoke-20260730",
+      "/tmp/asb-ear-tb32-c16-28c-cpu-only-20260730/block-1/elastic-invalid-cap2"
     ]
   },
+  "amendments": [
+    {
+      "date": "2026-07-30",
+      "visible_result": "Block 1 Fixed completed; the first Elastic attempt reached 30/32 before termination.",
+      "reason": "The original 1-to-2 CPU and 2-to-2.5 GiB envelope left idle host capacity unavailable to long-running tasks and did not test meaningful elasticity on the 28-vCPU host.",
+      "action": "Preserve and exclude the partial Elastic artifact, then rerun Elastic with a 1-to-8 CPU and 2-to-16 GiB per-task envelope under the unchanged 24 CPU and 60 GiB shared pool."
+    }
+  ],
   "gates": {
     "all_arms": [
-      "32 attempted, 32 completed, zero failed",
+      "32 attempted; report source failures and replay failures separately",
       "container sampler collected with no errors or dropped samples",
       "no residual task containers after the arm"
     ],
