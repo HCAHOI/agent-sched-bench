@@ -97,7 +97,7 @@
       "{output_dir}"
     ]
   },
-  "asb_executable_code_commit": "f4ef69b40862d7fe8bf8675612de1eb153f760dc",
+  "asb_executable_code_commit": "62f5df7482490dcbbf553c330188c91cb4002686",
   "blocks": [
     {
       "block": 1,
@@ -272,11 +272,18 @@
   ],
   "smoke": {
     "claim_status": "Plumbing only; exclude from every performance table and claim.",
-    "prior_failed_attempt": {
-      "output_dir": "/tmp/asb-ear-tb32-c16-plumbing-smoke-20260730",
-      "result": "1/2 completed with 9/62 replay tool outcome mismatches",
-      "root_cause": "Seven source images were built before nested task-context files finished syncing; all 32 formal image tags were rebuilt from the complete contexts and re-pinned before this smoke."
-    },
+    "prior_failed_attempts": [
+      {
+        "output_dir": "/tmp/asb-ear-tb32-c16-plumbing-smoke-20260730",
+        "result": "1/2 completed with 53/62 replay tool outcomes matched and 9 mismatched",
+        "root_cause": "Seven source images were built before nested task-context files finished syncing; all 32 formal image tags were rebuilt from the complete contexts and re-pinned before smoke r2."
+      },
+      {
+        "output_dir": "/tmp/asb-ear-tb32-c16-plumbing-smoke-r2-20260730",
+        "result": "1/2 completed with 56/62 replay tool outcomes matched and 6 mismatched",
+        "root_cause": "Replay request construction and injected exec handlers ignored the trace working_dir, so commands declared for /app/lean_project ran from /app; the shared request and handler paths were fixed before smoke r3."
+      }
+    ],
     "command": [
       "/home/Ubuntu/.local/bin/uv",
       "run",
@@ -305,7 +312,7 @@
       "--replay-speed",
       "50",
       "--output-dir",
-      "/tmp/asb-ear-tb32-c16-plumbing-smoke-r2-20260730"
+      "/tmp/asb-ear-tb32-c16-plumbing-smoke-r3-20260730"
     ],
     "expected": {"attempted": 2, "completed": 2, "failed": 0, "actions": 126, "llm_calls": 64, "tool_execs": 62}
   },

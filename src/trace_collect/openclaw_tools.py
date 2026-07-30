@@ -466,12 +466,16 @@ def _run_shell_command_with_resource_timeout(
             last_counters = current_counters
 
 
+def _command_workdir(args):
+    workdir = args.get("working_dir")
+    if isinstance(workdir, str) and workdir and os.path.isdir(workdir):
+        return workdir
+    return _WORKDIR
+
 def handle_exec(args):
     cmd = args.get("command", "")
     timeout = args.get("timeout", 600)
-    workdir = args.get("working_dir")
-    if not isinstance(workdir, str) or not workdir:
-        workdir = _WORKDIR
+    workdir = _command_workdir(args)
     env = {**os.environ}
     resource_response = _run_shell_command_with_resource_timeout(
         cmd,
@@ -493,9 +497,7 @@ def handle_exec(args):
 def handle_commands(args):
     cmds = args.get("commands", [])
     timeout = args.get("timeout", 600)
-    workdir = args.get("working_dir")
-    if not isinstance(workdir, str) or not workdir:
-        workdir = _WORKDIR
+    workdir = _command_workdir(args)
     env = {**os.environ}
     all_output = []
     last_rc = 0

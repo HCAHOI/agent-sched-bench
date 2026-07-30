@@ -481,6 +481,19 @@ def test_replay_agent_honors_explicit_working_dir(
     assert result["result"].splitlines()[0] == str(tmp_path)
 
 
+def test_replay_agent_falls_back_from_missing_working_dir(tmp_path) -> None:
+    namespace: dict[str, object] = {}
+    exec(_REPLAY_AGENT_SCRIPT.split("\nHANDLERS = ", 1)[0], namespace)
+    namespace["_WORKDIR"] = str(tmp_path)
+
+    result = namespace["handle_exec"](
+        {"command": "pwd", "working_dir": str(tmp_path / "missing")}
+    )
+
+    assert result["returncode"] == 0
+    assert result["result"].splitlines()[0] == str(tmp_path)
+
+
 def test_exec_command_source_timeout_does_not_override_trace_timeout() -> None:
     agent = FakeAgent({"exec": {"ok": False, "result": "[timeout]", "returncode": 124}})
     result, success, _ = asyncio.run(
