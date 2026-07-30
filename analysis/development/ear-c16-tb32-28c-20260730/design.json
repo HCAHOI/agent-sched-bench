@@ -160,13 +160,13 @@
     },
     "image_ids": {
       "cpp-compatibility": "sha256:3d0c000454f55da85c2580d9431e05a3744d45f8f5e24d3ba1fbc749acf974a9",
-      "lean4-proof": "sha256:3e95e9c68a442f2c4785bf48a1826a5daa96ea06e44b2293a6205573b6221f7d",
-      "assign-seats": "sha256:0d31e968c7a1d5ed2a0ca8e271a2071a263d28831c845608c216d45e4de5c1cd",
+      "lean4-proof": "sha256:bd7c1f9bb54b3b5d4b2911494901fd23c0714361b8ad6d1dd4da3267358d8c40",
+      "assign-seats": "sha256:22f7a4f0f45167757d5bdb9cff593a33136ba1bd1a16cfbba7ef48bb52d37a76",
       "speech-to-text": "sha256:034e654b654f909fc8ea2e762ca2c150d0df0d67e32f2e069e8f7d0736726b60",
-      "modernize-scientific-stack": "sha256:d54d8ed6ff1b39a008c13007972c269c3a09dff5b9f564b1084b3190b7e352f2",
+      "modernize-scientific-stack": "sha256:3aa4cd2457999b1950913f7c38e08ace27ed012f932f45c1710d99c3acdf3641",
       "video-processing": "sha256:71e980d4545273de22bc7115a5fc065b29922a2d69485d03bd55f3e4fafa2169",
-      "countdown-game": "sha256:36c05051d243b76e8386cdd62f6d2106bb143fdfc99c3fc05bd599e7caaed794",
-      "merge-diff-arc-agi-task": "sha256:d08106a1eca68ee8a79d26e86bc22434d0dd8c5b2bef26f4484eb653ceffcd81",
+      "countdown-game": "sha256:52a56cbe48524bdf641cd1a48bea7b87eefe9643438c8f75269483bbb2120393",
+      "merge-diff-arc-agi-task": "sha256:6b376d3fa5f3c5caf97251590c5895cd68c9967f568ff9c8cb98b7c3dd93eb77",
       "schedule-vacation": "sha256:b82725450069fecf4c332872905676d0b3f3e2e59ea2812f793345742e6571ce",
       "catch-me-if-you-can": "sha256:be5fd213e7212a254cb7df997f6a7ed7611c1a154faa6ad20d00ba3127248361",
       "fmri-encoding-r": "sha256:539c02aecc22f878e925726a980faf8c4262e7a90a7bbac6910993599af48790",
@@ -177,7 +177,7 @@
       "run-pdp11-code": "sha256:712db4214cb38965884e4901186e634942d384efed80309198b9d2c08b453f83",
       "solve-sudoku": "sha256:df2ba0a602efe16a515757694f035c932dcbbe9e959200f7facef23a799d41fb",
       "path-tracing": "sha256:62aa08d2fa2e05eb8367be1458e801ce209e05618164aa2ed9357ed7bab2ab07",
-      "pytorch-model-cli": "sha256:d0203567d1b4c5862dea9f61d92f5ebf7255179321d58def4e53fead0dfa342a",
+      "pytorch-model-cli": "sha256:cc53de373860ad419e9c9e6213290ddc5db7b9fd3b4e5142c1f639b4d771e985",
       "feal-linear-cryptanalysis": "sha256:867a2ea6cf571d6262aa4ff594df8dd7023af48caef10450111d74a97c82fbac",
       "make-doom-for-mips": "sha256:fddad4445f65e0393f526df4d05e158a17d401ccf2cfe1e215e7d7bf2298280f",
       "pandas-etl": "sha256:070db0cf7e4e214613e40ae257ab574eda554ea8783663e2fe4e4abb2cd74f62",
@@ -187,7 +187,7 @@
       "magsac-install": "sha256:75cb41dc2d4f832786b0d4be2c474eb2177ece9d173bdfdff74af6509484dcc9",
       "polyglot-c-py": "sha256:c9677bff35a58d20e6487e8b47b0607d4e74b752c5b974054f439dfbf6aeed5e",
       "enemy-grid-escape": "sha256:c00a164df192e159e57e3087551b805f63978dccb7fefdc53667ebd997f8ec82",
-      "fix-git": "sha256:e365b29e537bd82c648ce5f7e3cba5b40f2ac9038c5418bac6bed32f28bfa368",
+      "fix-git": "sha256:1a1028fd06594351494050e1580e9e9b9f34b15ed9f9489c38d8ece56717cdc6",
       "vul-flask": "sha256:e1f02d83b8e97ad40fff945f99635500ee0ea25b4a7a9f8d673ffc81ab92d65e",
       "bank-trans-filter": "sha256:25b8031d47833d4bb8da80f72e863b6a0b6e862a3de10fd4649b4d79e66aaf2f",
       "write-compressor": "sha256:32c73033bfc8389e86b5b1d7a67feee2835b7e1d09ab16020f4f3dab21e0b038"
@@ -272,6 +272,11 @@
   ],
   "smoke": {
     "claim_status": "Plumbing only; exclude from every performance table and claim.",
+    "prior_failed_attempt": {
+      "output_dir": "/tmp/asb-ear-tb32-c16-plumbing-smoke-20260730",
+      "result": "1/2 completed with 9/62 replay tool outcome mismatches",
+      "root_cause": "Seven source images were built before nested task-context files finished syncing; all 32 formal image tags were rebuilt from the complete contexts and re-pinned before this smoke."
+    },
     "command": [
       "/home/Ubuntu/.local/bin/uv",
       "run",
@@ -300,7 +305,7 @@
       "--replay-speed",
       "50",
       "--output-dir",
-      "/tmp/asb-ear-tb32-c16-plumbing-smoke-20260730"
+      "/tmp/asb-ear-tb32-c16-plumbing-smoke-r2-20260730"
     ],
     "expected": {"attempted": 2, "completed": 2, "failed": 0, "actions": 126, "llm_calls": 64, "tool_execs": 62}
   },
