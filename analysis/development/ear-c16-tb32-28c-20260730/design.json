@@ -97,7 +97,7 @@
       "{output_dir}"
     ]
   },
-  "asb_code_commit": "f4ef69b40862d7fe8bf8675612de1eb153f760dc",
+  "asb_executable_code_commit": "f4ef69b40862d7fe8bf8675612de1eb153f760dc",
   "blocks": [
     {
       "block": 1,
@@ -263,7 +263,7 @@
   },
   "preflight_gates": [
     "The formal output root and smoke output root do not exist.",
-    "The ASB code commit, EAR commit, policy SHA256, manifest SHA256, smoke manifest SHA256, tasks SHA256, and pinned TB-dev100 split SHA256 match this design.",
+    "The declared ASB executable-code commit is an ancestor of the clean ASB HEAD, and git diff from that commit through HEAD is empty for src, scripts, tests, pyproject.toml, and uv.lock; the EAR commit, policy SHA256, manifest SHA256, smoke manifest SHA256, tasks SHA256, and pinned TB-dev100 split SHA256 match this design.",
     "The remote host signature has 28 online CPUs, at least 75 GiB total memory, cgroup v2, working unprivileged Docker access, and no other trace_collect.cli simulate process.",
     "All 32 source trace paths exist as regular files and match the source_trace_sha256 map.",
     "All 32 mutable Docker image tags resolve to the exact image_ids map.",
