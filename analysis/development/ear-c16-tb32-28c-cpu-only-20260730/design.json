@@ -5,10 +5,12 @@
     "base_branch": "dev/cpu-only",
     "base_commit": "776d2857b6325992262da59abce88b256404fed9",
     "asb_commit": "8e42308bd618c5a35c7a726c4f451ffd3eaaeedb",
+    "quota_only_asb_commit": "fc118a5e64ebacfebdb408af35d300d3622ce1cf",
     "ear_commits": {
       "fixed": "911a87482f50738bbdd4ad4789f0b49ef83ae638",
       "elastic": "4ac7844525c0d19161e3f25b480541325d1441f5",
-      "elastic_max24": "b13909415c4719023a4903d1f67d7ec3cd435c54"
+      "elastic_max24": "b13909415c4719023a4903d1f67d7ec3cd435c54",
+      "quota_only": "9e93a75f478ab8f2ae2a419bd938fe98383b608e"
     }
   },
   "host": {
@@ -35,6 +37,8 @@
     "elastic_sha256": "75ac344834020c1d64c0accb3c620f94472916d741f82731b4daaf7bc3e708f9",
     "elastic_max24_path": "/home/Ubuntu/workspace/elastic-agent-runtime-scale-28c/configs/policies/docker_elastic_24c_60g_full.yaml",
     "elastic_max24_sha256": "0dacbe5002b6b0686ce7a93a48e69c114d445267b24699eec33515693b6226d3",
+    "quota_only_path": "/home/Ubuntu/workspace/elastic-agent-runtime-quota-probe/configs/policies/docker_elastic_24c_60g_quota_only.yaml",
+    "quota_only_sha256": "0dc9b2bb4038a9333692a493b32e7d9387651bdaa346ac7595bd48f7a84f487b",
     "pool": {
       "cpu_cores": 24,
       "memory_gib": 60
@@ -92,6 +96,99 @@
       "question": "Was Free faster primarily because Elastic capped each task at 8 CPU cores?",
       "output": "/tmp/asb-ear-tb32-c16-28c-cpu-only-20260730/block-1/elastic-max24",
       "configuration": "Initial 1 CPU and 2 GiB per task; maximum 24 CPU and 16 GiB per task; shared pool unchanged at 24 CPU and 60 GiB."
+    },
+    {
+      "name": "quota-only-c1",
+      "question": "Can a full initial cpuset keep nproc-based build parallelism available while EAR controls actual CPU time only through quota?",
+      "output": "/tmp/asb-ear-tb32-c16-28c-cpu-only-20260730/quota-only-c1",
+      "configuration": "magsac-install and build-linux-kernel-qemu only; concurrency 1; cpuset 0-23 from container start; dynamic 1-to-24 CPU quota and 2-to-16 GiB memory; shared pool 24 CPU and 60 GiB.",
+      "manifest_sha256": "65bc2245ca6a8a688e6e98ad98faccb293f58ec0b9ad035c10f4e98a43fed17e"
+    },
+    {
+      "name": "quota-only-c16",
+      "question": "Does quota-only CPU elasticity retain the c1 mechanism benefit under the original 32-trace, concurrency-16 contention?",
+      "output": "/tmp/asb-ear-tb32-c16-28c-cpu-only-20260730/block-1/quota-only",
+      "configuration": "Original 32-trace manifest and concurrency 16; cpuset 0-23 from container start; dynamic 1-to-24 CPU quota and 2-to-16 GiB memory; shared pool 24 CPU and 60 GiB."
+    }
+  ],
+  "followup_results": [
+    {
+      "name": "quota-only-c1",
+      "wall_time_s": 673.1790500280003,
+      "completed_traces": 2,
+      "attempted_traces": 2,
+      "ear_status": "valid",
+      "cpu_resize_rejected_count": 0,
+      "memory_resize_rejected_count": 0,
+      "oom_kill_count": 0,
+      "tasks": {
+        "magsac-install": {
+          "success": true,
+          "elapsed_s": 505.8972260951996,
+          "peak_cpu_cores": 24.0345,
+          "avg_cpu_cores": 5.212374015748031,
+          "peak_memory_mb": 5370.88
+        },
+        "build-linux-kernel-qemu": {
+          "success": true,
+          "elapsed_s": 135.2850911617279,
+          "peak_cpu_cores": 24.0573,
+          "avg_cpu_cores": 11.045472463768114,
+          "peak_memory_mb": 2194.432
+        }
+      },
+      "interpretation": "Mechanism gate passed: nproc reported 24 with an initial one-core quota, both tasks reached about 24 observed cores, both succeeded, and all leases were released without OOM or resize rejection."
+    },
+    {
+      "name": "quota-only-c16",
+      "wall_time_s": 1406.7811534770008,
+      "completed_traces": 28,
+      "attempted_traces": 32,
+      "successful_traces_per_s": 0.019903593342002906,
+      "ear_status": "invalid_due_to_pool_exhausted_resize_rejections",
+      "cpu_resize_rejected_count": 248,
+      "memory_resize_rejected_count": 0,
+      "admission_rejected_count": 0,
+      "oom_kill_count": 0,
+      "released_lease_count": 32,
+      "observed_cpu_core_seconds_estimate": 8364.62333408446,
+      "observed_memory_gib_seconds_estimate": 5425.8510302636705,
+      "observed_integral_method": "Sum of each resources.json arithmetic sample mean times its monitored duration.",
+      "reserved_cpu_core_seconds": 11774.485628747996,
+      "reserved_memory_gb_seconds": 21910.795107386977,
+      "failed_tasks": [
+        "catch-me-if-you-can",
+        "solve-sudoku",
+        "llm-spec-decoding",
+        "magsac-install"
+      ],
+      "source_valid_replay_failures": [
+        "llm-spec-decoding",
+        "magsac-install"
+      ],
+      "comparison": {
+        "fixed": {
+          "wall_time_s": 2368.4480593960006,
+          "completed_traces": 27,
+          "successful_traces_per_s": 0.011399870008922853
+        },
+        "elastic_max8": {
+          "wall_time_s": 1250.34620774,
+          "completed_traces": 29,
+          "successful_traces_per_s": 0.023193576163531127
+        },
+        "elastic_max24": {
+          "wall_time_s": 1471.6152014960007,
+          "completed_traces": 28,
+          "successful_traces_per_s": 0.019026712942035406
+        },
+        "free": {
+          "wall_time_s": 579.7301288279996,
+          "completed_traces": 30,
+          "successful_traces_per_s": 0.051748216123679705
+        }
+      },
+      "mechanism_evidence": "magsac-install launched 24-way builds but remained at a two-core quota for 1218.5 continuous seconds after its last early grow; after every other container had exited it still remained at two cores for about 763 seconds. Its OpenCV build then hit the 600-second tool timeout. Full initial CPU visibility is necessary for nproc-based commands but is insufficient while the v2 marginal-growth guard suppresses retries after an early contention-limited probe."
     }
   ],
   "gates": {
