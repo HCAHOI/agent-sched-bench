@@ -1,0 +1,100 @@
+{
+  "arm": "free",
+  "asb_commit": "dcee46f34d6295cad5a4a03ae26e5a5763dd119a",
+  "cohort_role": "third arm appended to one outcome-informed c4 development feasibility pair",
+  "command": [
+    "uv",
+    "run",
+    "python",
+    "-m",
+    "trace_collect.cli",
+    "simulate",
+    "--manifest",
+    "analysis/development/ear-c4-tb8-20260730/manifest.yaml",
+    "--concurrency",
+    "4",
+    "--workers",
+    "1",
+    "--ear-mode",
+    "off",
+    "--resource-monitoring",
+    "on",
+    "--pmu-monitoring",
+    "off",
+    "--memory-bandwidth-monitoring",
+    "off",
+    "--container",
+    "docker",
+    "--replay-speed",
+    "50",
+    "--output-dir",
+    "/tmp/asb-ear-tb8-c4-cpumem-20260730/free"
+  ],
+  "comparison": {
+    "arms": [
+      "fixed",
+      "elastic",
+      "free"
+    ],
+    "fixed_output": "/tmp/asb-ear-tb8-c4-cpumem-20260730/fixed",
+    "elastic_output": "/tmp/asb-ear-tb8-c4-cpumem-20260730/elastic",
+    "metrics": {
+      "observed_cpu_core_seconds": "sum per container of sampled average CPU percent / 100 multiplied by the interval from first to last sample",
+      "observed_memory_gib_seconds": "sum per container of sampled average memory MiB / 1024 multiplied by the interval from first to last sample",
+      "wall_time_s": "simulator run wall clock"
+    },
+    "resource_metric_scope": "all three arms use the same one-second global Docker sampler; reserved resource integrals are not used in the three-arm chart",
+    "run_order": "Free is appended after the previously completed Fixed and Elastic runs; order is not randomized"
+  },
+  "concurrency": 4,
+  "definition": {
+    "ear_mode": "off",
+    "host_boundary": "containers remain bounded by the shared host and its parent cgroup",
+    "per_container_cpu_quota": false,
+    "per_container_cpuset": false,
+    "per_container_memory_limit": false,
+    "per_container_memory_swap_limit": false
+  },
+  "inputs": {
+    "image_ids": {
+      "adaptive-rejection-sampler": "sha256:ff48325f8480731027953d933c66d50579bc4ae5853814e614b43dffa9116839",
+      "assign-seats": "sha256:f6701f2339caacb7f4d5cedf0aa985a29fda1bc8035d75902ec58fdd0ebd4245",
+      "countdown-game": "sha256:a678c2d1659250d603c98f0a43425c8c1fbed334eb475020ddec14d9d4f95894",
+      "llm-spec-decoding": "sha256:a70f4707f45d9b33236a52f0f7f04d017aa0533e54e9d991a2dfde9a9094e84b",
+      "modernize-scientific-stack": "sha256:eb9a7db2ea8984079f48c80a05e00beedbc839a97d0e8e02d9b3eb10a01881d7",
+      "run-pdp11-code": "sha256:e106a0b8aefe2133302ed552a3d611fda1ad8f9669e4b80c8f9e4935e8bb3d04",
+      "speech-to-text": "sha256:3552595f34a14455a75fe656c08dc8a7eb25bb9193ee83eaec5827fee454a64b",
+      "video-processing": "sha256:033a0564f9d139d4f8750f730890093789776deb0391d1eecb7539cc5d4bc39e"
+    },
+    "manifest": "manifest.yaml",
+    "manifest_sha256": "94e29a6d8c4c13c389db5decd3179ce58ea5ec44f4a4da0020d8d42168cce0d0",
+    "pair_design": "design.json",
+    "pair_design_sha256": "c5929407d53e9ec372aa2ee44430c595fd854058b6573e1e3656cb1a32d51d3d",
+    "source_trace_repo_commit": "19b2abb37e94658bde9f39701023d74ae43c23b4",
+    "source_trace_sha256": {
+      "adaptive-rejection-sampler": "8d95ee6741780afd3ec98777b5faa2a067220b2c47536e98a3ee512edde6be1f",
+      "assign-seats": "577d179c87ae4440ff6a5dae819ca20e1996e1612a955b04a6a9d80f09b7f3fc",
+      "countdown-game": "96e9e70ea04562ed414c82e22fed89b41c930548480142e2d5f620052fe5c459",
+      "llm-spec-decoding": "00fb4db2a60ed0351bbab010c170acd9dec9e6883a934fdcc392270e1dfaa8e0",
+      "modernize-scientific-stack": "67b93502171e7b504d9fbf6a50127c1b113228805d8a6a7c1540e06d4b8bc70c",
+      "run-pdp11-code": "9751986d998abb74fbb1b6ae61378fd5642ab4866f92bb2cc3150ebb4d9f4e51",
+      "speech-to-text": "91de493e540b9a92f01c4a80a36dd5c4ccd9953a168235839d2a51c3036d7e95",
+      "video-processing": "4dda51b3cc48110b6c914176daeb5e635a879d4745dd44b11707784d38e7cb86"
+    },
+    "task_source": "tasks.json",
+    "task_source_sha256": "98c4cfb905b3bbc6a04a4524d835dc155aa2b81a57279e8ba11049ace3888950"
+  },
+  "replay_speed": 50,
+  "stage": "one unrestricted c4 replay appended to the existing outcome-informed development feasibility pair",
+  "validity_gates": [
+    "Before launch, all eight source trace SHA256 values and all eight mutable image tags match the locked values",
+    "Free throughput reports attempted=completed=8 and failed=0",
+    "Free throughput and trace metadata contain no ear_runtime and the output contains no controller_summary.json or lease_events.jsonl",
+    "Fixed, Elastic, and Free have identical source trace entries and replay configuration",
+    "Fixed and Elastic retain valid matching EAR policy provenance",
+    "Each arm has one monitored container per completed trace, at least two samples per container, positive sample-window duration, and no sampler errors",
+    "All three arms have identical action, LLM-call, and tool-exec counts with no replay mismatches",
+    "No Free-run task container ID recorded in its artifacts, nor Free-run sweep fixed image name, remains after completion"
+  ],
+  "workers": 1
+}
