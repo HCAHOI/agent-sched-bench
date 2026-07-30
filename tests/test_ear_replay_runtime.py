@@ -17,7 +17,12 @@ from trace_collect.simulator import (
 )
 
 
-def _policy(tmp_path: Path, *, quota_only_cpu: bool = False) -> Path:
+def _policy(
+    tmp_path: Path,
+    *,
+    quota_only_cpu: bool = False,
+    work_conserving_cpu: bool = False,
+) -> Path:
     path = tmp_path / "policy.yaml"
     path.write_text(
         yaml.safe_dump(
@@ -28,6 +33,7 @@ def _policy(tmp_path: Path, *, quota_only_cpu: bool = False) -> Path:
                     "run_timeout_s": 1.0,
                     "oom_score_adj": -1000,
                     "quota_only_cpu": quota_only_cpu,
+                    "work_conserving_cpu": work_conserving_cpu,
                     "resource_manager": {
                         "enabled": True,
                         "mode": "adaptive",
@@ -35,10 +41,10 @@ def _policy(tmp_path: Path, *, quota_only_cpu: bool = False) -> Path:
                         "guest_vcpus": 8,
                         "base_memory_mib": 2048,
                         "hotplug_total_mib": 6144,
-                        "cpu_pages": [1, 2, 4, 8],
+                        "cpu_pages": [1] if work_conserving_cpu else [1, 2, 4, 8],
                         "initial_cpu_pages": 1,
                         "sample_interval_s": 0.01,
-                        "elastic_cpu_lease": True,
+                        "elastic_cpu_lease": not work_conserving_cpu,
                         "elastic_memory_lease": True,
                         "memory_reclaim_guest_hints": False,
                         "memory_reclaim_deadline_s": 0.0,
@@ -65,7 +71,7 @@ def _policy(tmp_path: Path, *, quota_only_cpu: bool = False) -> Path:
 def _cgroup(
     tmp_path: Path,
     *,
-    cpu_cores: int,
+    cpu_cores: int | None,
     memory_bytes: int,
     oom_kill: int = 0,
 ) -> Path:
@@ -75,10 +81,8 @@ def _cgroup(
         "usage_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\n",
         encoding="utf-8",
     )
-    (cgroup / "cpu.max").write_text(
-        f"{cpu_cores * 100000} 100000\n",
-        encoding="utf-8",
-    )
+    cpu_max = "max 100000" if cpu_cores is None else f"{cpu_cores * 100000} 100000"
+    (cgroup / "cpu.max").write_text(f"{cpu_max}\n", encoding="utf-8")
     (cgroup / "memory.current").write_text("0\n", encoding="utf-8")
     (cgroup / "memory.max").write_text(f"{memory_bytes}\n", encoding="utf-8")
     (cgroup / "memory.events").write_text(
@@ -240,6 +244,47 @@ def test_quota_only_cpu_exposes_shared_pool_at_initial_quota(
     assert reservation.cpuset == "0,1,2,3,4,5,6,7"
     assert reservation.cpu_cores == 1
     runtime.cancel_reservation(reservation)
+
+
+def test_work_conserving_cpu_omits_quota_and_keeps_memory_lifecycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cgroup = _cgroup(
+        tmp_path,
+        cpu_cores=None,
+        memory_bytes=2 * 1024**3,
+    )
+    monkeypatch.setattr(
+        "trace_collect.ear_replay_runtime.resolve_docker_container_cgroup",
+        lambda *args, **kwargs: cgroup,
+    )
+    runtime = EarReplayRuntime(
+        policy_path=_policy(tmp_path, work_conserving_cpu=True),
+        mode="elastic",
+        concurrency=2,
+        container_executable="docker",
+    )
+    starts: list[list[str]] = []
+
+    def start(_image: str, **kwargs: Any) -> str:
+        starts.append(kwargs["extra_args"])
+        return "container-work-conserving"
+
+    container_id = runtime.start_task_container(
+        "image",
+        agent_id="task-work-conserving",
+        start_fn=start,
+        stop_fn=lambda _container_id: None,
+    )
+    runtime.stop_task_container(container_id, stop_fn=lambda _container_id: None)
+    runtime.write_artifacts(tmp_path / "out")
+
+    assert runtime.valid is True
+    assert starts[0][starts[0].index("--cpuset-cpus") + 1] == ",".join(
+        str(cpu) for cpu in range(8)
+    )
+    assert "--cpus" not in starts[0]
 
 
 def test_ear_replay_oom_is_invalid(

@@ -73,6 +73,7 @@ class EarReplayRuntime:
         self.total_cpus = controller_config.total_cpus
         self.total_memory_gb = controller_config.total_memory_gb
         self.quota_only_cpu = self.policy.docker.quota_only_cpu
+        self.work_conserving_cpu = self.policy.docker.work_conserving_cpu
         manager = self.policy.docker.resource_manager
         if mode == "elastic" and not manager.enabled:
             raise ValueError(
@@ -127,6 +128,7 @@ class EarReplayRuntime:
                 "cpu_cores": self.total_cpus,
                 "memory_gb": self.total_memory_gb,
             },
+            "work_conserving_cpu": self.work_conserving_cpu,
             "initial_lease": {
                 "cpu_cores": self.initial_cpus,
                 "memory_gb": self.initial_memory_gb,
@@ -153,7 +155,7 @@ class EarReplayRuntime:
             lease=lease,
             cpuset=(
                 ",".join(str(cpu) for cpu in range(self.total_cpus))
-                if self.quota_only_cpu
+                if self.quota_only_cpu or self.work_conserving_cpu
                 else self.controller.cpuset_string(lease)
             ),
             cpu_cores=len(lease.cpus),
@@ -197,7 +199,10 @@ class EarReplayRuntime:
                 docker_executable=self.container_executable,
                 update_timeout_s=self.policy.docker.run_timeout_s,
             )
-            if cgroup.read_cpu_limit() != reservation.cpu_cores:
+            if (
+                not self.work_conserving_cpu
+                and cgroup.read_cpu_limit() != reservation.cpu_cores
+            ):
                 raise ValueError("Docker CPU limit does not match EAR reservation")
             if cgroup.read_memory_limit() != reservation.memory_bytes:
                 raise ValueError("Docker memory limit does not match EAR reservation")
@@ -208,6 +213,7 @@ class EarReplayRuntime:
                     resource_controller=self.controller,
                     lease=lease,
                     quota_only_cpu=self.quota_only_cpu,
+                    work_conserving_cpu=self.work_conserving_cpu,
                 )
                 if self.mode == "elastic"
                 else None
@@ -252,8 +258,11 @@ class EarReplayRuntime:
         resource_args = [
             "--cpuset-cpus",
             reservation.cpuset,
-            "--cpus",
-            str(reservation.cpu_cores),
+            *(
+                []
+                if self.work_conserving_cpu
+                else ["--cpus", str(reservation.cpu_cores)]
+            ),
             "--memory",
             str(reservation.memory_bytes),
             "--memory-swap",
