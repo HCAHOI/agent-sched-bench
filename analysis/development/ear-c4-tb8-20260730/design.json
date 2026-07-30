@@ -1,0 +1,61 @@
+{
+  "arms": ["fixed", "elastic"],
+  "asb_commit": "f004af4f890a179395dfd4c7353b44118928a765",
+  "c8_predecessor": {
+    "outcome": "invalid and interrupted; not comparable",
+    "output_root": "/tmp/asb-ear-tb8-c8-memory-20260730/fixed",
+    "reason": "git-workflow-hack emitted tool outcome status=checkpoint_missing"
+  },
+  "cohort_role": "development fallback feasibility mix; outcome-informed after c8 invalidation",
+  "concurrency": 4,
+  "cpu_policy": {
+    "elastic_initial_cores_per_task": 1,
+    "fixed_and_elastic_max_cores_per_task": 2,
+    "pool_cores": 8,
+    "simultaneous_max_growth_capacity": 4
+  },
+  "ear_commit": "9ca5baa7434c44fd90036035e93a92381a6355ea",
+  "image_ids": {
+    "adaptive-rejection-sampler": "sha256:ff48325f8480731027953d933c66d50579bc4ae5853814e614b43dffa9116839",
+    "assign-seats": "sha256:f6701f2339caacb7f4d5cedf0aa985a29fda1bc8035d75902ec58fdd0ebd4245",
+    "countdown-game": "sha256:a678c2d1659250d603c98f0a43425c8c1fbed334eb475020ddec14d9d4f95894",
+    "llm-spec-decoding": "sha256:a70f4707f45d9b33236a52f0f7f04d017aa0533e54e9d991a2dfde9a9094e84b",
+    "modernize-scientific-stack": "sha256:eb9a7db2ea8984079f48c80a05e00beedbc839a97d0e8e02d9b3eb10a01881d7",
+    "run-pdp11-code": "sha256:e106a0b8aefe2133302ed552a3d611fda1ad8f9669e4b80c8f9e4935e8bb3d04",
+    "speech-to-text": "sha256:3552595f34a14455a75fe656c08dc8a7eb25bb9193ee83eaec5827fee454a64b",
+    "video-processing": "sha256:033a0564f9d139d4f8750f730890093789776deb0391d1eecb7539cc5d4bc39e"
+  },
+  "manifest": "manifest.yaml",
+  "memory_policy": {
+    "elastic_initial_gib_per_task": 2,
+    "fixed_and_elastic_max_gib_per_task": 2.5,
+    "pool_gib": 10,
+    "simultaneous_max_growth_capacity": 4
+  },
+  "policy_path": "configs/policies/docker_elastic_c4_mixed.yaml",
+  "policy_sha256": "51e72a78d000132bdd398d5ff015bcb76ac463827caf6cc07ebd577513277c80",
+  "replay_speed": 50,
+  "selection": {
+    "population_claim": "None; c4 replacements are explicitly outcome-informed and only test replay feasibility.",
+    "replacements": {
+      "git-workflow-hack": "assign-seats; removed after deterministic per-call working-directory mismatch",
+      "make-mips-interpreter": "run-pdp11-code; removed after host-network-sensitive timeout exceeded 20 minutes"
+    },
+    "source_design": "../ear-c8-tb8-20260730/design.json",
+    "source_design_sha256": "916f83fd65c00377d9c5b1a77776a97fe4d495e0f6ea37260ee80c1fbd95c3b7",
+    "task_source": "tasks.json",
+    "task_source_sha256": "98c4cfb905b3bbc6a04a4524d835dc155aa2b81a57279e8ba11049ace3888950"
+  },
+  "stage": "one fixed/elastic c4 fallback pair",
+  "tasks": [
+    "countdown-game",
+    "speech-to-text",
+    "llm-spec-decoding",
+    "adaptive-rejection-sampler",
+    "video-processing",
+    "modernize-scientific-stack",
+    "assign-seats",
+    "run-pdp11-code"
+  ],
+  "workers": 1
+}

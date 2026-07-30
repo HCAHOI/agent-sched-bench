@@ -1,0 +1,10 @@
+[
+  {"instance_id": "countdown-game", "repo": null, "docker_image": null},
+  {"instance_id": "speech-to-text", "repo": null, "docker_image": null},
+  {"instance_id": "llm-spec-decoding", "repo": null, "docker_image": null},
+  {"instance_id": "adaptive-rejection-sampler", "repo": null, "docker_image": null},
+  {"instance_id": "video-processing", "repo": null, "docker_image": null},
+  {"instance_id": "modernize-scientific-stack", "repo": null, "docker_image": null},
+  {"instance_id": "assign-seats", "repo": null, "docker_image": null},
+  {"instance_id": "run-pdp11-code", "repo": null, "docker_image": null}
+]

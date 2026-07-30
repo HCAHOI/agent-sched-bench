@@ -1,0 +1,27 @@
+defaults:
+  task_source: tasks.json
+traces:
+  - trace: /home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/canonical/countdown-game/trace.jsonl
+    docker_image: tb__countdown-game__client:latest
+    label: ear-c4-countdown-game
+  - trace: /home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/canonical/speech-to-text/trace.jsonl
+    docker_image: tb__speech-to-text__client:latest
+    label: ear-c4-speech-to-text
+  - trace: /home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/canonical/llm-spec-decoding/trace.jsonl
+    docker_image: tb__llm-spec-decoding__client:latest
+    label: ear-c4-llm-spec-decoding
+  - trace: /home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/canonical/adaptive-rejection-sampler/trace.jsonl
+    docker_image: tb__adaptive-rejection-sampler__client:latest
+    label: ear-c4-adaptive-rejection-sampler
+  - trace: /home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/canonical/video-processing/trace.jsonl
+    docker_image: tb__video-processing__client:latest
+    label: ear-c4-video-processing
+  - trace: /home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/canonical/modernize-scientific-stack/trace.jsonl
+    docker_image: tb__modernize-scientific-stack__client:latest
+    label: ear-c4-modernize-scientific-stack
+  - trace: /home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/canonical/assign-seats/trace.jsonl
+    docker_image: tb__assign-seats__client:latest
+    label: ear-c4-assign-seats
+  - trace: /home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/canonical/run-pdp11-code/trace.jsonl
+    docker_image: tb__run-pdp11-code__client:latest
+    label: ear-c4-run-pdp11-code
