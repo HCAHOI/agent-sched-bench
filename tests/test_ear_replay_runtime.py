@@ -10,7 +10,11 @@ import yaml
 from ear.controller import ResourceController
 from ear.executor.docker import DockerCgroupView, DockerResourceManager
 
-from scripts.plot_ear_replay import _load_run
+from scripts.plot_ear_replay import (
+    _load_free_run,
+    _load_run,
+    _validate_three_arm_comparison,
+)
 from trace_collect.ear_replay_runtime import EarReplayRuntime, _ear_git_commit
 from trace_collect.simulator import _parse_trace_session_file
 
@@ -319,13 +323,40 @@ def test_collect_trace_maps_tool_container_to_task_identity(tmp_path: Path) -> N
     }
 
 
-def test_plot_loader_keeps_container_series_separate(tmp_path: Path) -> None:
+def test_plot_loader_keeps_container_series_separate(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    runtime = {
+        "status": "valid",
+        "mode": "fixed",
+        "policy_sha256": "policy-sha",
+        "pool": {"cpu_cores": 4, "memory_gb": 8},
+        "ear_git_commit": "ear-commit",
+        "clock_anchor": {"monotonic_s": 10.0, "epoch_s": 100.0},
+        "initial_lease": {"cpu_cores": 2, "memory_gb": 4},
+        "artifacts": {
+            "controller_summary": "controller_summary.json",
+            "lease_events": "lease_events.jsonl",
+        },
+        "oom_kill_count": 0,
+    }
     (tmp_path / "throughput_summary.json").write_text(
         json.dumps(
             {
                 "wall_time_s": 2.0,
+                "attempted_traces": 2,
                 "completed_traces": 2,
                 "failed_traces": 0,
+                "container_resources": {
+                    "status": "collected",
+                    "errors": [],
+                    "summary_path": "run.container_resources_summary.json",
+                    "sample_count": 4,
+                    "sampling": {"interval_s": 1, "stop_complete": True},
+                },
+                "ear_runtime": runtime,
+                "trace_file": "run.jsonl",
             }
         ),
         encoding="utf-8",
@@ -335,14 +366,14 @@ def test_plot_loader_keeps_container_series_separate(tmp_path: Path) -> None:
             {
                 "total_reserved_cpu_core_seconds": 4.0,
                 "total_reserved_memory_gb_seconds": 8.0,
-                "ear_runtime": {
-                    "status": "valid",
-                    "oom_kill_count": 0,
-                    "clock_anchor": {"monotonic_s": 10.0, "epoch_s": 100.0},
-                },
+                "ear_runtime": runtime,
             }
         ),
         encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "scripts.plot_ear_replay._load_trace_metadata",
+        lambda _path, _throughput: {"ear_runtime": runtime},
     )
     events = [
         {
@@ -364,6 +395,35 @@ def test_plot_loader_keeps_container_series_separate(tmp_path: Path) -> None:
         "".join(json.dumps(event) + "\n" for event in events),
         encoding="utf-8",
     )
+    (tmp_path / "run.container_resources_summary.json").write_text(
+        json.dumps(
+            {
+                "sample_count": 4,
+                "errors": [],
+                "dropped_error_count": 0,
+                "sampling": {"interval_s": 1, "stop_complete": True},
+                "containers": [
+                    {
+                        "summary": {
+                            "sample_count": 2,
+                            "duration_seconds": 2.0,
+                            "cpu_percent": {"avg": 100.0},
+                            "memory_mb": {"avg": 1024.0},
+                        }
+                    },
+                    {
+                        "summary": {
+                            "sample_count": 2,
+                            "duration_seconds": 2.0,
+                            "cpu_percent": {"avg": 200.0},
+                            "memory_mb": {"avg": 2048.0},
+                        }
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     for agent_id, cpu_percent in (("task-a", "100%"), ("task-b", "200%")):
         resources = tmp_path / agent_id / "attempt_1" / "resources.json"
         resources.parent.mkdir(parents=True)
@@ -382,7 +442,7 @@ def test_plot_loader_keeps_container_series_separate(tmp_path: Path) -> None:
             encoding="utf-8",
         )
 
-    run = _load_run(tmp_path)
+    run = _load_run(tmp_path, observed_required=True)
 
     assert [series["agent_id"] for series in run["series"]] == ["task-a", "task-b"]
     assert [series["cpu_steps"][0][1] for series in run["series"]] == [1.0, 2.0]
@@ -390,6 +450,13 @@ def test_plot_loader_keeps_container_series_separate(tmp_path: Path) -> None:
         1.0,
         2.0,
     ]
+    assert run["observed_cpu_core_seconds"] == 6.0
+    assert run["observed_memory_gib_seconds"] == 6.0
+    with pytest.raises(ValueError, match="invalid unrestricted"):
+        _load_free_run(tmp_path)
+    summary_path = tmp_path / "run.container_resources_summary.json"
+    summary_path.unlink()
+    assert "observed_cpu_core_seconds" not in _load_run(tmp_path)
 
     (tmp_path / "lease_events.jsonl").write_text(
         json.dumps(
@@ -404,6 +471,40 @@ def test_plot_loader_keeps_container_series_separate(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert _load_run(tmp_path)["series"] == []
+
+
+def test_three_arm_comparison_gate(monkeypatch: Any, tmp_path: Path) -> None:
+    runs = {
+        label: {
+            "status": "valid",
+            "_arm_mode": label,
+            "_attempted_traces": 2,
+            "completed_traces": 2,
+            "failed_traces": 0,
+        }
+        for label in ("fixed", "elastic", "free")
+    }
+    for label in ("fixed", "elastic"):
+        runtime = {
+            "policy_sha256": "policy-sha",
+            "pool": {"cpu_cores": 4, "memory_gb": 8},
+            "ear_git_commit": "ear-commit",
+        }
+        runs[label].update(
+            {
+                "_ear_runtime": runtime,
+            }
+        )
+    paths = {label: tmp_path / label for label in runs}
+    monkeypatch.setattr(
+        "scripts.plot_ear_replay._comparison_key",
+        lambda _path: {"cohort": "same"},
+    )
+
+    _validate_three_arm_comparison(runs, paths)
+    runs["free"]["_arm_mode"] = "elastic"
+    with pytest.raises(ValueError, match="arm roles"):
+        _validate_three_arm_comparison(runs, paths)
 
 
 def test_ear_git_commit_is_optional_without_git(monkeypatch: Any) -> None:
