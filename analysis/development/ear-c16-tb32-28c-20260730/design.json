@@ -97,7 +97,7 @@
       "{output_dir}"
     ]
   },
-  "asb_executable_code_commit": "62f5df7482490dcbbf553c330188c91cb4002686",
+  "asb_executable_code_commit": "3ec3268b6927c29049ee14763df1c117d61b90aa",
   "blocks": [
     {
       "block": 1,
@@ -282,6 +282,11 @@
         "output_dir": "/tmp/asb-ear-tb32-c16-plumbing-smoke-r2-20260730",
         "result": "1/2 completed with 56/62 replay tool outcomes matched and 6 mismatched",
         "root_cause": "Replay request construction and injected exec handlers ignored the trace working_dir, so commands declared for /app/lean_project ran from /app; the shared request and handler paths were fixed before smoke r3."
+      },
+      {
+        "output_dir": "/tmp/asb-ear-tb32-c16-plumbing-smoke-r3-20260730",
+        "result": "1/2 completed with 51/62 replay tool outcomes matched and 11 mismatched",
+        "root_cause": "The first command targeting /app/lean_project also creates that directory, but replay rejected the missing cwd before executing it; missing explicit directories now fall back to the existing replay workdir as in the source behavior."
       }
     ],
     "command": [
@@ -312,7 +317,7 @@
       "--replay-speed",
       "50",
       "--output-dir",
-      "/tmp/asb-ear-tb32-c16-plumbing-smoke-r3-20260730"
+      "/tmp/asb-ear-tb32-c16-plumbing-smoke-r4-20260730"
     ],
     "expected": {"attempted": 2, "completed": 2, "failed": 0, "actions": 126, "llm_calls": 64, "tool_execs": 62}
   },
