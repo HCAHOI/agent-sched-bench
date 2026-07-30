@@ -375,7 +375,9 @@ def _kill_process_group(process):
             pass
 
 
-def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_timeline):
+def _run_shell_command_with_resource_timeout(
+    cmd, timeout, env, source_resource_timeline, workdir
+):
     samples = _resource_source_samples(source_resource_timeline)
     if not samples:
         return None
@@ -388,7 +390,7 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
     process = subprocess.Popen(
         cmd,
         shell=True,
-        cwd=_WORKDIR,
+        cwd=workdir,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -467,17 +469,21 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
 def handle_exec(args):
     cmd = args.get("command", "")
     timeout = args.get("timeout", 600)
+    workdir = args.get("working_dir")
+    if not isinstance(workdir, str) or not workdir:
+        workdir = _WORKDIR
     env = {**os.environ}
     resource_response = _run_shell_command_with_resource_timeout(
         cmd,
         timeout,
         env,
         args.get("source_resource_timeline"),
+        workdir,
     )
     if resource_response is not None:
         return resource_response
     try:
-        r = subprocess.run(cmd, shell=True, cwd=_WORKDIR,
+        r = subprocess.run(cmd, shell=True, cwd=workdir,
                            capture_output=True, text=True, timeout=timeout, env=env)
         output = _format_exec_result(r.stdout or "", r.stderr or "", r.returncode)
         return {"ok": True, "result": _truncate_output(output), "returncode": r.returncode, "timed_out": False}
@@ -487,6 +493,9 @@ def handle_exec(args):
 def handle_commands(args):
     cmds = args.get("commands", [])
     timeout = args.get("timeout", 600)
+    workdir = args.get("working_dir")
+    if not isinstance(workdir, str) or not workdir:
+        workdir = _WORKDIR
     env = {**os.environ}
     all_output = []
     last_rc = 0
@@ -494,7 +503,7 @@ def handle_commands(args):
     any_timeout = False
     for i, cmd in enumerate(cmds):
         try:
-            r = subprocess.run(cmd, shell=True, cwd=_WORKDIR,
+            r = subprocess.run(cmd, shell=True, cwd=workdir,
                                capture_output=True, text=True, timeout=timeout, env=env)
             all_output.append(_format_exec_result(r.stdout or "", r.stderr or "", r.returncode))
             last_rc = r.returncode
@@ -924,8 +933,11 @@ def _resource_timed_exec_request(
     command: str,
     timeout_s: float,
     source_resource_timeline: dict[str, Any] | None,
+    working_dir: str | None,
 ) -> tuple[dict[str, Any], float | None]:
     request = {"tool": "exec", "args": {"command": command, "timeout": timeout_s}}
+    if working_dir is not None:
+        request["args"]["working_dir"] = working_dir
     resource_timeline = valid_resource_timeline(source_resource_timeline)
     if resource_timeline is None:
         return request, timeout_s
@@ -947,6 +959,9 @@ def _resolve_tool_request(
         if source_exec_timeout_s is not None
         else command_timeout_s
     )
+    working_dir = params.get("working_dir")
+    if not isinstance(working_dir, str) or not working_dir:
+        working_dir = None
 
     # Shell commands
     if "command" in params:
@@ -958,6 +973,7 @@ def _resolve_tool_request(
             command=params["command"],
             timeout_s=timeout_s,
             source_resource_timeline=source_resource_timeline,
+            working_dir=working_dir,
         )
     if "commands" in params:
         timeout_s = _resolve_exec_timeout_s(
@@ -967,7 +983,11 @@ def _resolve_tool_request(
         return (
             {
                 "tool": "commands",
-                "args": {"commands": list(params["commands"]), "timeout": timeout_s},
+                "args": {
+                    "commands": list(params["commands"]),
+                    "timeout": timeout_s,
+                    **({"working_dir": working_dir} if working_dir else {}),
+                },
             },
             timeout_s,
         )
@@ -984,6 +1004,7 @@ def _resolve_tool_request(
                 command=command,
                 timeout_s=timeout_s,
                 source_resource_timeline=source_resource_timeline,
+                working_dir=working_dir,
             )
         if commands:
             timeout_s = _resolve_exec_timeout_s(
@@ -993,7 +1014,11 @@ def _resolve_tool_request(
             return (
                 {
                     "tool": "commands",
-                    "args": {"commands": list(commands), "timeout": timeout_s},
+                    "args": {
+                        "commands": list(commands),
+                        "timeout": timeout_s,
+                        **({"working_dir": working_dir} if working_dir else {}),
+                    },
                 },
                 timeout_s,
             )

@@ -270,7 +270,10 @@ def test_exec_command_uses_simulate_timeout_fallback() -> None:
         execute_trace_tool(
             agent=agent,
             tool_name="exec",
-            tool_args_json=_nested("exec", {"command": "echo hello"}),
+            tool_args_json=_nested(
+                "exec",
+                {"command": "echo hello", "working_dir": "/workspace"},
+            ),
             command_timeout_s=10.0,
         )
     )
@@ -278,6 +281,7 @@ def test_exec_command_uses_simulate_timeout_fallback() -> None:
     assert "hello" in result
     assert agent.requests[0]["tool"] == "exec"
     assert agent.requests[0]["args"]["command"] == "echo hello"
+    assert agent.requests[0]["args"]["working_dir"] == "/workspace"
     assert agent.requests[0]["args"]["timeout"] == 10.0
     assert agent.timeouts == [10.0]
 
@@ -333,7 +337,14 @@ def test_exec_command_passes_source_resource_timeline() -> None:
         execute_trace_tool(
             agent=agent,
             tool_name="exec",
-            tool_args_json=_nested("exec", {"command": "pytest", "timeout": 12}),
+            tool_args_json=_nested(
+                "exec",
+                {
+                    "command": "pytest",
+                    "timeout": 12,
+                    "working_dir": "/workspace",
+                },
+            ),
             command_timeout_s=600.0,
             source_resource_timeline=source_resource_timeline,
         )
@@ -344,6 +355,7 @@ def test_exec_command_passes_source_resource_timeline() -> None:
         agent.requests[0]["args"]["source_resource_timeline"]
         == source_resource_timeline
     )
+    assert agent.requests[0]["args"]["working_dir"] == "/workspace"
     assert agent.timeouts == [_RESOURCE_AWARE_AGENT_RESPONSE_TIMEOUT_S]
 
 
@@ -394,7 +406,14 @@ def test_commands_do_not_claim_resource_timeline_support() -> None:
         execute_trace_tool(
             agent=agent,
             tool_name="exec",
-            tool_args_json=_nested("exec", {"commands": ["pytest"], "timeout": 12}),
+            tool_args_json=_nested(
+                "exec",
+                {
+                    "commands": ["pytest"],
+                    "timeout": 12,
+                    "working_dir": "/workspace",
+                },
+            ),
             command_timeout_s=600.0,
             source_resource_timeline=source_resource_timeline,
         )
@@ -402,6 +421,7 @@ def test_commands_do_not_claim_resource_timeline_support() -> None:
 
     assert success is True
     assert "source_resource_timeline" not in agent.requests[0]["args"]
+    assert agent.requests[0]["args"]["working_dir"] == "/workspace"
     assert agent.timeouts == [12.0]
 
 
@@ -429,6 +449,36 @@ def test_resource_progress_uses_cpu_and_network_bottleneck() -> None:
     )
 
     assert progress == 0.25
+
+
+@pytest.mark.parametrize(
+    ("handler_name", "args"),
+    [
+        ("handle_exec", {"command": "pwd"}),
+        (
+            "handle_exec",
+            {
+                "command": "pwd",
+                "source_resource_timeline": {
+                    "version": 1,
+                    "samples": [{"dt_s": 1.0, "cpu_core_s": 1.0}],
+                },
+            },
+        ),
+        ("handle_commands", {"commands": ["pwd"]}),
+    ],
+)
+def test_replay_agent_honors_explicit_working_dir(
+    tmp_path, handler_name: str, args: dict
+) -> None:
+    namespace: dict[str, object] = {}
+    exec(_REPLAY_AGENT_SCRIPT.split("\nHANDLERS = ", 1)[0], namespace)
+    args["working_dir"] = str(tmp_path)
+
+    result = namespace[handler_name](args)
+
+    assert result["returncode"] == 0
+    assert result["result"].splitlines()[0] == str(tmp_path)
 
 
 def test_exec_command_source_timeout_does_not_override_trace_timeout() -> None:
