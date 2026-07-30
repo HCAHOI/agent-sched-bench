@@ -1,0 +1,19 @@
+defaults:
+  task_source: tasks.json
+traces:
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/lean4-proof/trace.jsonl
+    label: ear-quota-no-guard-lean4-proof
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/llm-spec-decoding/trace.jsonl
+    label: ear-quota-no-guard-llm-spec-decoding
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/build-linux-kernel-qemu/trace.jsonl
+    label: ear-quota-no-guard-build-linux-kernel-qemu
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/make-mips-interpreter/trace.jsonl
+    label: ear-quota-no-guard-make-mips-interpreter
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/path-tracing/trace.jsonl
+    label: ear-quota-no-guard-path-tracing
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/make-doom-for-mips/trace.jsonl
+    label: ear-quota-no-guard-make-doom-for-mips
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/tune-mjcf/trace.jsonl
+    label: ear-quota-no-guard-tune-mjcf
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/magsac-install/trace.jsonl
+    label: ear-quota-no-guard-magsac-install
