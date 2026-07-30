@@ -1326,13 +1326,20 @@ class DockerBackend(SandboxBackend):
                 f"{_checkpoint_cas_root()}:{_checkpoint_cas_root()}",
                 *self.bootstrap_mount_args,
             ]
-            self._container_id = await asyncio.to_thread(
-                self.start_task_container_fn,
-                fixed_name,
-                executable=self.container_executable,
-                extra_args=extra_args,
-                network_mode=self.network_mode,
+            start_task = asyncio.create_task(
+                asyncio.to_thread(
+                    self.start_task_container_fn,
+                    fixed_name,
+                    executable=self.container_executable,
+                    extra_args=extra_args,
+                    network_mode=self.network_mode,
+                )
             )
+            try:
+                self._container_id = await asyncio.shield(start_task)
+            except asyncio.CancelledError:
+                self._container_id = await start_task
+                raise
             self._checkpoint_start_marker_ns = time.time_ns()
             if self.startup_recorder is not None:
                 self.startup_recorder.container_id = self._container_id

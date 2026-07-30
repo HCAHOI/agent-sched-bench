@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from trace_collect.simulator import simulate, SimulateError
+from trace_collect.simulator import SimulateError, simulate
 
 
 def _write_manifest(path: Path, entries: list[str | dict[str, object]]) -> Path:
@@ -180,6 +180,163 @@ def test_simulator_accepts_task_with_image_name(
     assert trace_file.exists()
 
 
+def test_ear_finalization_error_still_writes_throughput_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_paths = [tmp_path / "trace-a.jsonl", tmp_path / "trace-b.jsonl"]
+    agent_ids = ["ear-finalize-a", "ear-finalize-b"]
+    for trace_path, agent_id in zip(trace_paths, agent_ids, strict=True):
+        trace_path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "trace_metadata",
+                            "instance_id": agent_id,
+                            "scaffold": "openclaw",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "action",
+                            "action_type": "llm_call",
+                            "action_id": "llm_0",
+                            "agent_id": agent_id,
+                            "iteration": 0,
+                            "ts_start": 1.0,
+                            "ts_end": 1.0,
+                            "data": {"completion_tokens": 1},
+                        }
+                    ),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    task_source = tmp_path / "tasks.json"
+    task_source.write_text(
+        json.dumps(
+            [
+                {"instance_id": agent_id, "image_name": "image"}
+                for agent_id in agent_ids
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from trace_collect.simulator import (
+        PreparedContainer,
+        PreparedTraceSession,
+        ReplayTaskStats,
+    )
+
+    class FakeRuntime:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def metadata(self) -> dict[str, object]:
+            return {"mode": "fixed"}
+
+        def write_artifacts(self, _output_dir: Path) -> None:
+            raise RuntimeError("EAR artifact failure")
+
+        @property
+        def valid(self) -> bool:
+            raise AssertionError("valid is unavailable after artifact failure")
+
+    stopped: list[str] = []
+
+    class FakeAgent:
+        def __init__(self, agent_id: str) -> None:
+            self.agent_id = agent_id
+
+        async def stop(self) -> None:
+            stopped.append(self.agent_id)
+            if self.agent_id == "ear-finalize-a":
+                raise RuntimeError("container stop failure")
+
+    async def fake_run(loaded_sessions, *, container_executable, **_kwargs):
+        prepared = [
+            PreparedTraceSession(
+                loaded=loaded,
+                container=PreparedContainer(
+                    container_id=f"fake-{loaded.agent_id}",
+                    container_executable=container_executable,
+                    docker_image="image",
+                    agent=FakeAgent(loaded.agent_id),
+                ),
+            )
+            for loaded in loaded_sessions
+        ]
+        stats = [
+            ReplayTaskStats(
+                agent_id=loaded.agent_id,
+                run_instance_id=loaded.run_instance_id,
+                source_agent_id=loaded.source_agent_id,
+                manifest_index=loaded.manifest_index,
+                label=loaded.label,
+                source_trace=str(loaded.source_trace),
+                success=True,
+                elapsed_s=0.0,
+                action_count=1,
+                llm_call_count=1,
+                tool_exec_count=0,
+            )
+            for loaded in loaded_sessions
+        ]
+        return prepared, stats
+
+    async def no_prefetch(*_args, **_kwargs) -> None:
+        pass
+
+    async def no_prebuild(*_args, **_kwargs) -> dict[str, str]:
+        return {}
+
+    monkeypatch.setattr(
+        "trace_collect.ear_replay_runtime.EarReplayRuntime",
+        FakeRuntime,
+    )
+    monkeypatch.setattr("trace_collect.simulator._run_cloud_model_queue", fake_run)
+    monkeypatch.setattr(
+        "trace_collect.simulator._prefetch_container_images",
+        no_prefetch,
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator._prebuild_sweep_fixed_images",
+        no_prebuild,
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator.stop_task_container",
+        lambda *_args, **_kwargs: None,
+    )
+
+    output_dir = tmp_path / "out"
+    with pytest.raises(RuntimeError, match="container stop failure"):
+        asyncio.run(
+            simulate(
+                manifest=_write_manifest(
+                    tmp_path / "manifest.yaml",
+                    [str(trace_path) for trace_path in trace_paths],
+                ),
+                task_source=task_source,
+                output_dir=output_dir,
+                container_executable="docker",
+                concurrency=2,
+                ear_mode="fixed",
+                ear_policy=tmp_path / "policy.yaml",
+                resource_monitoring="off",
+                pmu_monitoring="off",
+                memory_bandwidth_monitoring="off",
+            )
+        )
+
+    summary = json.loads((output_dir / "throughput_summary.json").read_text())
+    assert summary["ear_runtime"]["status"] == "invalid"
+    assert sorted(stopped) == agent_ids
+
+
 def test_container_mode_trace_requires_container_executable(tmp_path: Path) -> None:
     trace_path = tmp_path / "trace.jsonl"
     trace_path.write_text(
@@ -310,5 +467,3 @@ def test_simulator_rejects_relative_trace_paths_in_manifest(tmp_path: Path) -> N
                 mode="cloud_model",
             )
         )
-
-

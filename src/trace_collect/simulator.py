@@ -9,9 +9,9 @@ import logging
 import multiprocessing
 import os
 import re
-import subprocess
 import shutil
 import stat
+import subprocess
 import time
 import uuid
 from concurrent.futures import ProcessPoolExecutor
@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import BrokenBarrierError
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -46,10 +46,6 @@ from harness.container_stats_sampler import (
 )
 from harness.trace_logger import TraceLogger
 from trace_collect import attempt_layout
-from trace_collect.mismatch import MismatchOracle
-from trace_collect.output_normalize import normalize_tool_output
-from trace_collect.resource_timeline import valid_resource_timeline
-from trace_collect.monitoring import MonitoringMode, resolve_simulate_monitoring
 from trace_collect.attempt_pipeline import (
     configure_task_container_apt_mirror,
     next_attempt_number_in,
@@ -57,6 +53,14 @@ from trace_collect.attempt_pipeline import (
     start_task_container,
     stop_task_container,
 )
+from trace_collect.mismatch import MismatchOracle
+from trace_collect.monitoring import MonitoringMode, resolve_simulate_monitoring
+from trace_collect.output_normalize import normalize_tool_output
+from trace_collect.resource_timeline import valid_resource_timeline
+
+if TYPE_CHECKING:
+    from trace_collect.ear_replay_runtime import EarReplayRuntime
+
 logger = logging.getLogger(__name__)
 CasManifestValue = str | dict[str, Any]
 CasManifestEntries = dict[str, CasManifestValue]
@@ -2348,25 +2352,58 @@ def _parse_trace_session_file(
         raise SimulateError(f"No action records with agent_id found in {trace_path}")
 
     metadata_agent_id = metadata.get("instance_id") if metadata else None
+    metadata_tool_agent_ids = (
+        [
+            metadata.get("tool_container_id"),
+            metadata.get("terminal_bench_container_id"),
+        ]
+        if metadata
+        else []
+    )
+    mapped_tool_agent_id = next(
+        (
+            value
+            for value in metadata_tool_agent_ids
+            if isinstance(value, str) and value in actions_by_agent
+        ),
+        None,
+    )
     if isinstance(metadata_agent_id, str) and metadata_agent_id in actions_by_agent:
-        primary_agent_id = metadata_agent_id
+        primary_action_agent_id = metadata_agent_id
+        source_agent_id = metadata_agent_id
+    elif isinstance(metadata_agent_id, str) and mapped_tool_agent_id is not None:
+        primary_action_agent_id = mapped_tool_agent_id
+        source_agent_id = metadata_agent_id
     elif first_agent_id and "/" in first_agent_id:
-        primary_agent_id = first_agent_id.split("/", 1)[0]
-        if primary_agent_id not in actions_by_agent:
-            primary_agent_id = first_agent_id
+        primary_action_agent_id = first_agent_id.split("/", 1)[0]
+        if primary_action_agent_id not in actions_by_agent:
+            primary_action_agent_id = first_agent_id
+        source_agent_id = primary_action_agent_id
     else:
-        primary_agent_id = first_agent_id
+        primary_action_agent_id = first_agent_id
+        source_agent_id = first_agent_id
 
-    subagent_prefix = f"{primary_agent_id}/"
+    subagent_prefix = f"{primary_action_agent_id}/"
     actions = [
         action
         for action in all_actions
-        if action.get("agent_id") == primary_agent_id
+        if action.get("agent_id") == primary_action_agent_id
         or str(action.get("agent_id", "")).startswith(subagent_prefix)
     ]
-    if not actions_by_agent.get(primary_agent_id):
+    if source_agent_id != primary_action_agent_id:
+        normalized_actions: list[dict[str, Any]] = []
+        for action in actions:
+            normalized = dict(action)
+            action_agent_id = str(action.get("agent_id", ""))
+            normalized["agent_id"] = (
+                source_agent_id + action_agent_id[len(primary_action_agent_id) :]
+            )
+            normalized_actions.append(normalized)
+        actions = normalized_actions
+    if not actions_by_agent.get(primary_action_agent_id):
         raise SimulateError(
-            f"No primary action records for agent_id {primary_agent_id!r} in {trace_path}"
+            "No primary action records for agent_id "
+            f"{primary_action_agent_id!r} in {trace_path}"
         )
 
     actions.sort(
@@ -2377,7 +2414,12 @@ def _parse_trace_session_file(
             str(action.get("action_id", "")),
         )
     )
-    return primary_agent_id, metadata, actions, summaries.get(primary_agent_id)
+    return (
+        source_agent_id,
+        metadata,
+        actions,
+        summaries.get(primary_action_agent_id) or summaries.get(source_agent_id),
+    )
 
 
 def _source_action_agent_id(action: dict[str, Any]) -> str:
@@ -3212,6 +3254,7 @@ async def _prepare_container_session(
     container_executable: str | None,
     network_mode: str = "host",
     fixed_images_by_source: dict[str, str] | None = None,
+    ear_runtime: EarReplayRuntime | None = None,
 ) -> PreparedTraceSession:
     """Prepare a sandbox backend and start its persistent replay transport."""
     container_exec_env = _source_container_exec_env(loaded.metadata)
@@ -3265,6 +3308,19 @@ async def _prepare_container_session(
         network_mode=network_mode,
         source_image=normalized,
     )
+    start_container_fn = start_task_container
+    stop_container_fn = stop_task_container
+    if ear_runtime is not None:
+        start_container_fn = functools.partial(
+            ear_runtime.start_task_container,
+            agent_id=loaded.agent_id,
+            start_fn=start_task_container,
+            stop_fn=stop_task_container,
+        )
+        stop_container_fn = functools.partial(
+            ear_runtime.stop_task_container,
+            stop_fn=stop_task_container,
+        )
     backend = DockerBackend(
         source_image=normalized,
         fixed_image_name=_replay_fixed_image_name(
@@ -3283,9 +3339,9 @@ async def _prepare_container_session(
         agent_env_kwargs=agent_env_kwargs,
         startup_recorder=recorder,
         ensure_fixed_image_fn=ensure_fixed_image,
-        start_task_container_fn=start_task_container,
+        start_task_container_fn=start_container_fn,
         configure_apt_mirror_fn=configure_task_container_apt_mirror,
-        stop_task_container_fn=stop_task_container,
+        stop_task_container_fn=stop_container_fn,
         remove_image_fn=remove_image,
         copy_checkpoint_archive_to_container_fn=_copy_checkpoint_archive_to_container,
         restore_cas_manifest_in_container_fn=_restore_cas_manifest_in_container,
@@ -3548,6 +3604,7 @@ def _write_throughput_summary(
     task_stats: list[ReplayTaskStats],
     container_resources: dict[str, Any] | None = None,
     monitoring_policy: dict[str, object] | None = None,
+    ear_runtime: dict[str, Any] | None = None,
 ) -> Path:
     attempted = len(task_stats)
     completed = sum(1 for stat in task_stats if stat.success)
@@ -3597,6 +3654,8 @@ def _write_throughput_summary(
             "sampling": container_resources.get("sampling", {}),
             "errors": container_resources.get("errors", []),
         }
+    if ear_runtime is not None:
+        payload["ear_runtime"] = ear_runtime
     summary_path = output_path / "throughput_summary.json"
     summary_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -3890,6 +3949,7 @@ async def _prepare_replay_session(
     resource_monitoring_enabled: bool = True,
     memory_bandwidth_enabled: bool = True,
     monitoring_policy: dict[str, object] | None = None,
+    ear_runtime: EarReplayRuntime | None = None,
 ) -> PreparedTraceSession:
     prepared: PreparedTraceSession | None = None
     session_resource_monitoring_enabled = (
@@ -3923,6 +3983,8 @@ async def _prepare_replay_session(
             prepare_kwargs: dict[str, Any] = {}
             if fixed_images_by_source:
                 prepare_kwargs["fixed_images_by_source"] = fixed_images_by_source
+            if ear_runtime is not None:
+                prepare_kwargs["ear_runtime"] = ear_runtime
             prepared = await _prepare_container_session(
                 loaded,
                 task_output_dir=task_output_dir,
@@ -3987,6 +4049,7 @@ async def _run_cloud_model_queue(
     resource_monitoring_enabled: bool = True,
     memory_bandwidth_enabled: bool = True,
     monitoring_policy: dict[str, object] | None = None,
+    ear_runtime: EarReplayRuntime | None = None,
 ) -> tuple[list[PreparedTraceSession], list[ReplayTaskStats]]:
     if concurrency < 1:
         raise ValueError("concurrency must be >= 1")
@@ -4032,6 +4095,7 @@ async def _run_cloud_model_queue(
                         resource_monitoring_enabled=resource_monitoring_enabled,
                         memory_bandwidth_enabled=memory_bandwidth_enabled,
                         monitoring_policy=monitoring_policy,
+                        ear_runtime=ear_runtime,
                     )
                 except Exception as exc:
                     failed_prepared = _prepared_session_for_prep_error(
@@ -5571,6 +5635,8 @@ async def simulate(
     mode: str = "cloud_model",
     concurrency: int = 1,
     workers: int = 1,
+    ear_mode: str = "off",
+    ear_policy: Path | None = None,
     prep_concurrency: int = 0,
     sandbox_backend: str = "docker",
     checkpoint_backend: str | None = None,
@@ -5635,6 +5701,38 @@ async def simulate(
         loaded_sessions,
         container_executable=container_executable,
     )
+    ear_runtime: EarReplayRuntime | None = None
+    if ear_mode not in {"off", "fixed", "elastic"}:
+        raise ValueError(f"Unsupported EAR mode: {ear_mode}")
+    if ear_mode == "off":
+        if ear_policy is not None:
+            raise ValueError("--ear-policy requires --ear-mode fixed or elastic")
+    else:
+        if ear_policy is None:
+            raise ValueError("--ear-policy is required for EAR replay")
+        if workers != 1:
+            raise ValueError("EAR replay currently requires workers=1")
+        if any(
+            _is_host_mode(session) or session.sandbox_backend != "docker"
+            for session in loaded_sessions
+        ):
+            raise ValueError("EAR replay requires Docker container-mode traces")
+        if container_executable is None:
+            raise ValueError("EAR replay requires --container docker")
+        try:
+            from trace_collect.ear_replay_runtime import EarReplayRuntime
+        except ModuleNotFoundError as exc:
+            if exc.name == "ear":
+                raise ValueError(
+                    "EAR replay requires elastic-agent-runtime in the host environment"
+                ) from exc
+            raise
+        ear_runtime = EarReplayRuntime(
+            policy_path=ear_policy,
+            mode=ear_mode,
+            concurrency=concurrency,
+            container_executable=container_executable,
+        )
     monitoring_policy = resolve_simulate_monitoring(
         resource=resource_monitoring,
         pmu=pmu_monitoring,
@@ -5667,6 +5765,8 @@ async def simulate(
     run_completed_for_fixed_cleanup = False
     run_wall_start: float | None = None
     run_wall_end: float | None = None
+    finalization_error: BaseException | None = None
+    ear_runtime_valid: bool | None = None
     output_path.mkdir(parents=True, exist_ok=True)
     scheduler_mode = "bounded_queue" if workers == 1 else "multi_process_workers"
 
@@ -5683,6 +5783,13 @@ async def simulate(
             if trace_path.exists():
                 trace_path.unlink()
             trace_logger = TraceLogger(output_path, run_id)
+            trace_extra: dict[str, Any] = {
+                "workers": workers,
+                "prep_concurrency": prep_concurrency,
+                "monitoring": monitoring_policy_dict,
+            }
+            if ear_runtime is not None:
+                trace_extra["ear_runtime"] = ear_runtime.metadata()
             _log_trace_metadata(
                 trace_logger=trace_logger,
                 mode=mode,
@@ -5695,11 +5802,7 @@ async def simulate(
                 api_base=None,
                 model=model,
                 network_mode=network_mode,
-                extra={
-                    "workers": workers,
-                    "prep_concurrency": prep_concurrency,
-                    "monitoring": monitoring_policy_dict,
-                },
+                extra=trace_extra,
             )
             if monitoring_policy.global_container_resource_enabled:
                 if container_executable is None:
@@ -5732,6 +5835,7 @@ async def simulate(
                 resource_monitoring_enabled=monitoring_policy.per_task_resource_enabled,
                 memory_bandwidth_enabled=monitoring_policy.memory_bandwidth_enabled,
                 monitoring_policy=monitoring_policy_dict,
+                ear_runtime=ear_runtime,
             )
         else:
             worker_results, task_stats = await _run_cloud_model_worker_waves(
@@ -5783,34 +5887,63 @@ async def simulate(
             )
         run_completed_for_fixed_cleanup = True
     finally:
-        finalization_error: BaseException | None = None
         try:
+            if trace_logger is not None:
+                trace_logger.close()
+                _split_trace_by_agent(trace_logger.path, prepared_sessions)
+        except (Exception, asyncio.CancelledError) as exc:
+            finalization_error = exc
+        for prepared in prepared_sessions:
             try:
-                if trace_logger is not None:
-                    trace_logger.close()
-                    _split_trace_by_agent(trace_logger.path, prepared_sessions)
-                for prepared in prepared_sessions:
-                    await _finalize_prepared_session(prepared)
+                await _finalize_prepared_session(prepared)
             except (Exception, asyncio.CancelledError) as exc:
-                finalization_error = exc
-            if finalization_error is None:
-                run_wall_end = time.monotonic()
-            if container_resource_recorder is not None:
+                if finalization_error is None:
+                    finalization_error = exc
+                else:
+                    logger.exception(
+                        "Failed to finalize replay session %s",
+                        prepared.loaded.agent_id,
+                        exc_info=(type(exc), exc, exc.__traceback__),
+                    )
+        if run_wall_start is not None:
+            run_wall_end = time.monotonic()
+        if container_resource_recorder is not None:
+            try:
                 container_resource_summary = container_resource_recorder.stop()
-            if run_completed_for_fixed_cleanup and finalization_error is None:
+            except (Exception, asyncio.CancelledError) as exc:
+                if finalization_error is None:
+                    finalization_error = exc
+                else:
+                    logger.exception(
+                        "Failed to finalize container resource artifacts",
+                        exc_info=(type(exc), exc, exc.__traceback__),
+                    )
+        if ear_runtime is not None:
+            try:
+                ear_runtime.write_artifacts(output_path)
+                ear_runtime_valid = ear_runtime.valid
+            except (Exception, asyncio.CancelledError) as exc:
+                if finalization_error is None:
+                    finalization_error = exc
+                else:
+                    logger.exception(
+                        "Failed to finalize EAR replay artifacts",
+                        exc_info=(type(exc), exc, exc.__traceback__),
+                    )
+        if run_completed_for_fixed_cleanup and finalization_error is None:
+            try:
                 await _cleanup_sweep_fixed_images(
                     sweep_fixed_images,
                     container_executable=container_executable,
                 )
-            elif sweep_fixed_images:
-                logger.warning(
-                    "Skipping sweep fixed image cleanup because simulate did not "
-                    "complete cleanly; images=%s",
-                    sorted(sweep_fixed_images.values()),
-                )
-        finally:
-            if finalization_error is not None:
-                raise finalization_error
+            except (Exception, asyncio.CancelledError) as exc:
+                finalization_error = exc
+        elif sweep_fixed_images:
+            logger.warning(
+                "Skipping sweep fixed image cleanup because simulate did not "
+                "complete cleanly; images=%s",
+                sorted(sweep_fixed_images.values()),
+            )
 
     if run_wall_start is None or run_wall_end is None:
         raise AssertionError("simulate wall-clock measurement was not recorded")
@@ -5830,6 +5963,21 @@ async def simulate(
         task_stats=task_stats,
         container_resources=container_resource_summary,
         monitoring_policy=monitoring_policy_dict,
+        ear_runtime=(
+            {
+                **ear_runtime.metadata(),
+                "status": "valid" if ear_runtime_valid else "invalid",
+            }
+            if ear_runtime is not None
+            else None
+        ),
     )
+    if finalization_error is not None:
+        raise finalization_error
+    if ear_runtime is not None and not ear_runtime_valid:
+        raise SimulateError(
+            "EAR replay completed with invalid resource lifecycle; "
+            "see controller_summary.json"
+        )
     logger.info("Simulate complete [%s] -> %s", mode, trace_file)
     return trace_file

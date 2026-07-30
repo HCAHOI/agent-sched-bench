@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from agents.openclaw import _checkpoint_container, _session_runner
 from agents.sandbox_runtime import (
     AgentTransportRequest,
+    DockerBackend,
     FakeBackend,
     OverlayBackend,
     SandboxBackend,
@@ -37,6 +39,49 @@ def test_sandbox_runtime_exports_checkpoint_backends() -> None:
 def test_sandbox_runtime_registry_includes_fake_and_docker() -> None:
     assert get_sandbox_backend_class("fake") is FakeBackend
     assert issubclass(get_sandbox_backend_class("docker"), SandboxBackend)
+
+
+def test_docker_start_cancellation_waits_for_and_cleans_container(
+    tmp_path: Path,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    stopped: list[str] = []
+
+    def start_container(*_args, **_kwargs) -> str:
+        started.set()
+        release.wait(timeout=2)
+        return "container-after-cancel"
+
+    backend = DockerBackend(
+        source_image="source",
+        fixed_image_name=None,
+        agent_id="task",
+        source_agent_id="task",
+        manifest_index=0,
+        task_output_dir=tmp_path,
+        container_executable="docker",
+        fixed_images_by_source={"source": "fixed"},
+        ensure_fixed_image_fn=lambda *_args, **_kwargs: ("unused", 0.0),
+        start_task_container_fn=start_container,
+        configure_apt_mirror_fn=lambda *_args, **_kwargs: None,
+        stop_task_container_fn=lambda container_id, **_kwargs: stopped.append(
+            container_id
+        ),
+        remove_image_fn=lambda *_args, **_kwargs: True,
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(backend.start())
+        assert await asyncio.to_thread(started.wait, 1)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+
+    assert stopped == ["container-after-cancel"]
 
 
 def test_fake_runtime_exec_and_filesystem_tools() -> None:
