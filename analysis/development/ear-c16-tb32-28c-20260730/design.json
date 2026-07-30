@@ -196,9 +196,11 @@
     "selection": {
       "count": 32,
       "method": "Take the first 32 eligible task IDs from the frozen seed-42 TB-dev100 order after removing the pre-existing parity-invalid task and tasks whose frozen compose topology requires companion services unavailable to single-image replay; do not replace tasks based on scale-run performance.",
-      "split_path": "/home/chiyu/workspace/agent-sched-bench/analysis/development/tb-dev100-audit-20260724/tb-dev100-split.json",
+      "split_path": "/home/Ubuntu/workspace/agent-sched-bench-ear-scale-28c/analysis/development/ear-c16-tb32-28c-20260730/tb-dev100-split.json",
       "split_seed": 42,
-      "split_sha256": "77b90afd4e5bef89df324ce22978fc2396b78087a2f159bcde34340aea7b85dd"
+      "source_split_sha256": "77b90afd4e5bef89df324ce22978fc2396b78087a2f159bcde34340aea7b85dd",
+      "split_sha256": "87dc0322f98e3ffc45671591ea1d81dcbc472cbc37aacfde4c63e9c0bc669240",
+      "split_copy_normalization": "The pinned copy adds one trailing newline; parsed JSON content is unchanged from the source split."
     },
     "smoke_manifest_sha256": "530ab9e8bbb97264fc90bdad29caf435ef7e87d6c47a11f2a79e6ebff2ca7c2f",
     "source_trace_repo_commit": "19b2abb37e94658bde9f39701023d74ae43c23b4",
@@ -261,7 +263,7 @@
   },
   "preflight_gates": [
     "The formal output root and smoke output root do not exist.",
-    "The ASB code commit, EAR commit, policy SHA256, manifest SHA256, smoke manifest SHA256, tasks SHA256, and frozen TB-dev100 split SHA256 match this design.",
+    "The ASB code commit, EAR commit, policy SHA256, manifest SHA256, smoke manifest SHA256, tasks SHA256, and pinned TB-dev100 split SHA256 match this design.",
     "The remote host signature has 28 online CPUs, at least 75 GiB total memory, cgroup v2, working unprivileged Docker access, and no other trace_collect.cli simulate process.",
     "All 32 source trace paths exist as regular files and match the source_trace_sha256 map.",
     "All 32 mutable Docker image tags resolve to the exact image_ids map.",
