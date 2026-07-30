@@ -72,6 +72,7 @@ class EarReplayRuntime:
             raise ValueError("EAR policy controller.total_memory_gb must be explicit")
         self.total_cpus = controller_config.total_cpus
         self.total_memory_gb = controller_config.total_memory_gb
+        self.quota_only_cpu = self.policy.docker.quota_only_cpu
         manager = self.policy.docker.resource_manager
         if mode == "elastic" and not manager.enabled:
             raise ValueError(
@@ -150,7 +151,11 @@ class EarReplayRuntime:
             raise
         reservation = EarTaskReservation(
             lease=lease,
-            cpuset=self.controller.cpuset_string(lease),
+            cpuset=(
+                ",".join(str(cpu) for cpu in range(self.total_cpus))
+                if self.quota_only_cpu
+                else self.controller.cpuset_string(lease)
+            ),
             cpu_cores=len(lease.cpus),
             memory_bytes=int(lease.memory_gb * 1024**3),
             oom_score_adj=self.policy.docker.oom_score_adj,
@@ -202,6 +207,7 @@ class EarReplayRuntime:
                     cgroup=cgroup,
                     resource_controller=self.controller,
                     lease=lease,
+                    quota_only_cpu=self.quota_only_cpu,
                 )
                 if self.mode == "elastic"
                 else None

@@ -17,7 +17,7 @@ from trace_collect.simulator import (
 )
 
 
-def _policy(tmp_path: Path) -> Path:
+def _policy(tmp_path: Path, *, quota_only_cpu: bool = False) -> Path:
     path = tmp_path / "policy.yaml"
     path.write_text(
         yaml.safe_dump(
@@ -27,6 +27,7 @@ def _policy(tmp_path: Path) -> Path:
                 "docker": {
                     "run_timeout_s": 1.0,
                     "oom_score_adj": -1000,
+                    "quota_only_cpu": quota_only_cpu,
                     "resource_manager": {
                         "enabled": True,
                         "mode": "adaptive",
@@ -216,6 +217,23 @@ def test_compose_override_uses_admitted_lease(
             "-d",
         ]
     ]
+    runtime.cancel_reservation(reservation)
+
+
+def test_quota_only_cpu_exposes_shared_pool_at_initial_quota(
+    tmp_path: Path,
+) -> None:
+    runtime = EarReplayRuntime(
+        policy_path=_policy(tmp_path, quota_only_cpu=True),
+        mode="elastic",
+        concurrency=2,
+        container_executable="docker",
+    )
+
+    reservation = runtime.reserve_task("task-quota-only")
+
+    assert reservation.cpuset == "0,1,2,3,4,5,6,7"
+    assert reservation.cpu_cores == 1
     runtime.cancel_reservation(reservation)
 
 

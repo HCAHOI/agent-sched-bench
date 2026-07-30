@@ -1,0 +1,7 @@
+defaults:
+  task_source: tasks.json
+traces:
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/magsac-install/trace.jsonl
+    label: ear-quota-only-magsac-install
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/build-linux-kernel-qemu/trace.jsonl
+    label: ear-quota-only-build-linux-kernel-qemu
