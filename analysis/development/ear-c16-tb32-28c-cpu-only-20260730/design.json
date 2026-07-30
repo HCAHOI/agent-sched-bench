@@ -148,6 +148,12 @@
       "question": "Can EAR retain memory safety while leaving CPU scheduling work-conserving enough to approach Free?",
       "output": "/tmp/asb-ear-tb32-c16-28c-cpu-only-20260730/block-1/elastic-work-conserving-r2",
       "configuration": "Original 32-trace manifest and concurrency 16; every task sees the full 28-CPU cpuset with no cpu.max quota; EAR manages 2-to-16 GiB per-task memory under a 60 GiB shared pool. The controller keeps one CPU token per task only for admission bookkeeping."
+    },
+    {
+      "name": "work-conserving-paired-repeat3",
+      "question": "Does the remaining Free versus work-conserving Elastic gap persist across paired repeats and reversed run order?",
+      "output": "/tmp/asb-ear-work-conserving-repeat3-20260730",
+      "configuration": "Three paired blocks of the original 32-trace, concurrency-16 replay. Fixed was not rerun because it does not distinguish the remaining gap. random.Random(20260730) independently shuffled each pair, yielding Elastic-Free, Free-Elastic, Elastic-Free. Each arm used a fresh output directory and a ten-second inter-arm delay."
     }
   ],
   "followup_results": [
@@ -503,6 +509,135 @@
       "mechanism_evidence": "All inspected live task containers had cpu.max set to max; memory limits grew independently. The final artifacts record 41 successful memory resizes, zero resize or admission rejection, zero OOM kills across all 32 tasks, all 32 leases released, no sampler errors, and no residual container.",
       "interpretation": "Work-conserving Elastic preserved the same 30 successful traces as Free, reduced wall time by 8.7 percent versus hard-quota Elastic, and reached 79.1 percent of Free throughput. It remained 26.4 percent slower than Free. Observed CPU work was 34.7 percent higher than Free, mostly in magsac-install and build-linux-kernel-qemu, without memory-pressure events; this single run cannot separate scheduler effects from build, cache, and run-order variability.",
       "limitation": "This is one development run per arm on one host, not a repeated-run or population result. CPU lease counts and reserved CPU core-seconds in controller_summary.json are bookkeeping tokens in work-conserving mode, not physical CPU reservations; use the external container sampler for CPU utilization."
+    },
+    {
+      "name": "work-conserving-paired-repeat3",
+      "blocks": [
+        {
+          "block": 1,
+          "order": [
+            "elastic",
+            "free"
+          ],
+          "elastic": {
+            "wall_time_s": 588.2165891900004,
+            "completed_traces": 30,
+            "successful_traces_per_s": 0.051001621768796586,
+            "observed_cpu_core_seconds_estimate": 8995.073,
+            "observed_memory_gib_seconds_estimate": 1683.818,
+            "lean4_cache_action_s": 108.5862,
+            "lean4_cache_action_status": "success"
+          },
+          "free": {
+            "wall_time_s": 1269.7218273550025,
+            "completed_traces": 29,
+            "successful_traces_per_s": 0.022839648319199816,
+            "observed_cpu_core_seconds_estimate": 25601.776,
+            "observed_memory_gib_seconds_estimate": 4784.213,
+            "lean4_cache_action_s": 600.0266,
+            "lean4_cache_action_status": "timeout"
+          },
+          "scheduler_comparison_status": "excluded",
+          "exclusion_reason": "Free timed out while downloading the 6,890-file Mathlib cache, then its verifier compiled Mathlib from source. lean4-proof added a replay-only failure and dominated the 1,269.7-second wall time; this is a network/cache-path difference, not scheduler evidence."
+        },
+        {
+          "block": 2,
+          "order": [
+            "free",
+            "elastic"
+          ],
+          "free": {
+            "wall_time_s": 580.1122935880048,
+            "completed_traces": 30,
+            "successful_traces_per_s": 0.05171412557808328,
+            "observed_cpu_core_seconds_estimate": 8865.176,
+            "observed_memory_gib_seconds_estimate": 1603.059,
+            "lean4_cache_action_s": 111.489,
+            "lean4_cache_action_status": "success"
+          },
+          "elastic": {
+            "wall_time_s": 716.7911420050004,
+            "completed_traces": 30,
+            "successful_traces_per_s": 0.04185319578041147,
+            "observed_cpu_core_seconds_estimate": 8916.902,
+            "observed_memory_gib_seconds_estimate": 1532.841,
+            "lean4_cache_action_s": 107.239,
+            "lean4_cache_action_status": "success"
+          },
+          "elastic_wall_over_free_pct": 23.560757103014396,
+          "scheduler_comparison_status": "included",
+          "mechanism_note": "magsac-install alone accounted for 135.2 of the 136.7-second arm difference. It had zero memory resize rejection and reached an 11 GiB limit while peaking at 6.49 GiB observed memory."
+        },
+        {
+          "block": 3,
+          "order": [
+            "elastic",
+            "free"
+          ],
+          "elastic": {
+            "wall_time_s": 580.514740876999,
+            "completed_traces": 30,
+            "successful_traces_per_s": 0.0516782742754787,
+            "observed_cpu_core_seconds_estimate": 8860.878,
+            "observed_memory_gib_seconds_estimate": 1671.277,
+            "lean4_cache_action_s": 134.0156,
+            "lean4_cache_action_status": "success"
+          },
+          "free": {
+            "wall_time_s": 571.3861043759971,
+            "completed_traces": 30,
+            "successful_traces_per_s": 0.05250390195043785,
+            "observed_cpu_core_seconds_estimate": 8884.776,
+            "observed_memory_gib_seconds_estimate": 1645.397,
+            "lean4_cache_action_s": 346.6474,
+            "lean4_cache_action_status": "success"
+          },
+          "elastic_wall_over_free_pct": 1.597630119299298,
+          "scheduler_comparison_status": "included",
+          "resource_note": "Free had one five-second docker stats timeout. Workload completion and throughput are valid; its resource integral has one missing sampling tick."
+        }
+      ],
+      "aggregate": {
+        "elastic_wall_time_s": {
+          "median": 588.2165891900004,
+          "min": 580.514740876999,
+          "max": 716.7911420050004
+        },
+        "free_cache_success_wall_time_s": {
+          "median": 575.749198982001,
+          "min": 571.3861043759971,
+          "max": 580.1122935880048
+        },
+        "elastic_successful_traces_per_s_median": 0.051001621768796586,
+        "free_cache_success_successful_traces_per_s_median": 0.05210901376426057,
+        "elastic_wall_median_over_free_pct": 2.165420330595924,
+        "elastic_throughput_median_vs_free_pct": -2.125144798314138,
+        "included_paired_elastic_wall_over_free_pct": {
+          "midpoint": 12.579193611156846,
+          "min": 1.597630119299298,
+          "max": 23.560757103014396
+        },
+        "elastic_observed_cpu_core_seconds_median": 8916.90151979848,
+        "free_cache_success_observed_cpu_core_seconds_median": 8874.975828059743,
+        "elastic_cpu_work_over_free_pct": 0.47240344707399906,
+        "elastic_observed_memory_gib_seconds_median": 1671.276808697056,
+        "free_cache_success_observed_memory_gib_seconds_median": 1624.2280066139847,
+        "elastic_memory_work_over_free_pct": 2.8966870347934437
+      },
+      "elastic_lifecycle": {
+        "valid_runs": 3,
+        "memory_resize_count_range": [
+          41,
+          45
+        ],
+        "memory_resize_rejected_count": 0,
+        "cpu_resize_rejected_count": 0,
+        "admission_rejected_count": 0,
+        "oom_kill_count": 0,
+        "released_lease_count_per_run": 32
+      },
+      "interpretation": "With CPU left work-conserving, Elastic is now close to Free: the repeat-arm medians differ by 2.2 percent in wall time and 2.1 percent in throughput, while median observed CPU work differs by only 0.5 percent. The two cache-comparable paired ratios span 1.6 to 23.6 percent because one magsac-install run accounts for almost the entire slow pair. The data no longer support a broad claim that EAR CPU allocation is the dominant gap; remaining differences are dominated by real build and network/cache-path variability.",
+      "limitation": "There are only two cache-comparable paired blocks. Block 1 Free is preserved as a real replay outcome but excluded from scheduler comparison because its Mathlib cache action timed out. Block 3 Free throughput is valid, but its resource integral missed one docker stats tick."
     }
   ],
   "gates": {
