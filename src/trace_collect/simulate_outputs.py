@@ -282,6 +282,7 @@ def _write_throughput_summary(
     task_stats: list[ReplayTaskStats],
     container_resources: dict[str, Any] | None = None,
     monitoring_policy: dict[str, object] | None = None,
+    ear_runtime: dict[str, Any] | None = None,
 ) -> Path:
     attempted = len(task_stats)
     completed = sum(1 for stat in task_stats if stat.success)
@@ -331,6 +332,8 @@ def _write_throughput_summary(
             "sampling": container_resources.get("sampling", {}),
             "errors": container_resources.get("errors", []),
         }
+    if ear_runtime is not None:
+        payload["ear_runtime"] = ear_runtime
     summary_path = output_path / "throughput_summary.json"
     summary_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",

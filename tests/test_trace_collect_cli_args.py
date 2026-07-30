@@ -95,6 +95,23 @@ def test_parse_simulate_args_accepts_explicit_task_source() -> None:
     assert args.task_source == "/abs/path/to/tasks.json"
 
 
+def test_parse_simulate_args_accepts_ear_policy(tmp_path: Path) -> None:
+    policy = tmp_path / "ear.yaml"
+    args = parse_simulate_args(
+        [
+            "--manifest",
+            "manifest.yaml",
+            "--ear-mode",
+            "elastic",
+            "--ear-policy",
+            str(policy),
+        ]
+    )
+
+    assert args.ear_mode == "elastic"
+    assert args.ear_policy == policy
+
+
 @pytest.mark.parametrize("evidence_valid", [True, False])
 def test_resource_collection_gate_uses_run_evidence(
     tmp_path: Path,

@@ -204,6 +204,18 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--ear-mode",
+        choices=["off", "fixed", "elastic"],
+        default="off",
+        help="Optional EAR Docker resource policy mode (default: off).",
+    )
+    parser.add_argument(
+        "--ear-policy",
+        type=Path,
+        default=None,
+        help="EAR policy YAML; required when --ear-mode is fixed or elastic.",
+    )
+    parser.add_argument(
         "--prep-concurrency",
         type=nonnegative_int_arg,
         default=0,
@@ -544,6 +556,8 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "container_executable": args.container,
         "network_mode": args.network_mode,
         "workers": args.workers,
+        "ear_mode": args.ear_mode,
+        "ear_policy": args.ear_policy,
         "prep_concurrency": args.prep_concurrency,
         "resource_monitoring": args.resource_monitoring,
         "pmu_monitoring": args.pmu_monitoring,

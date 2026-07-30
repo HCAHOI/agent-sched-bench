@@ -17,7 +17,9 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from threading import BrokenBarrierError
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+import yaml
 
 from harness.container_image_prep import (
     drop_cached_fixed_image,
@@ -98,6 +100,9 @@ from trace_collect.simulate_utils import (
     _summarize_sleep_drifts,
     _utc_now_iso,
 )
+
+if TYPE_CHECKING:
+    from trace_collect.ear_replay_runtime import EarReplayRuntime, EarTaskReservation
 
 _TOOL_RESOURCE_RUN_TOKENS_ENV = "TOOL_RESOURCE_RUN_TOKENS"
 
@@ -1096,6 +1101,7 @@ def _run_terminal_bench_compose(
     container_executable: str,
     project: str,
     compose_file: Path,
+    compose_override_file: Path | None = None,
     env: dict[str, str],
     args: list[str],
 ) -> str:
@@ -1107,6 +1113,8 @@ def _run_terminal_bench_compose(
         "-f",
         str(compose_file),
     ]
+    if compose_override_file is not None:
+        cmd.extend(["-f", str(compose_override_file)])
     cmd.extend(args)
     result = subprocess.run(
         cmd,
@@ -1123,6 +1131,29 @@ def _run_terminal_bench_compose(
             f"{result.stdout[-2000:]}\n--- stderr tail:\n{result.stderr[-2000:]}"
         )
     return result.stdout.strip()
+
+
+def _write_ear_compose_override(
+    path: Path,
+    reservation: EarTaskReservation,
+) -> None:
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "services": {
+                    "client": {
+                        "cpuset": reservation.cpuset,
+                        "cpus": float(reservation.cpu_cores),
+                        "mem_limit": str(reservation.memory_bytes),
+                        "memswap_limit": str(reservation.memory_bytes),
+                        "oom_score_adj": reservation.oom_score_adj,
+                    }
+                }
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
 
 
 def _inspect_container_workdir(
@@ -1236,6 +1267,7 @@ async def _prepare_terminal_bench_container_session(
     *,
     task_output_dir: Path,
     container_executable: str,
+    ear_runtime: EarReplayRuntime | None = None,
 ) -> PreparedTraceSession:
     """Prepare a real Terminal-Bench client container for host OpenClaw replay."""
 
@@ -1277,6 +1309,10 @@ async def _prepare_terminal_bench_container_session(
         source_image=None,
     )
     cleanup_callback: Callable[[], None] | None = None
+    compose_override_file: Path | None = None
+    ear_reservation: EarTaskReservation | None = None
+    ear_attached = False
+    container_id: str | None = None
     container_workdir = "/testbed"
     container_python_runtime: str | None = None
     container_pythonpath: str | None = None
@@ -1313,6 +1349,7 @@ async def _prepare_terminal_bench_container_session(
             container_executable=container_executable,
             project=project,
             compose_file=compose_file,
+            compose_override_file=compose_override_file,
             env=compose_env,
             args=["down", "--volumes", "--remove-orphans"],
         )
@@ -1331,6 +1368,42 @@ async def _prepare_terminal_bench_container_session(
             recorder.finish_phase(phase, status="failed", error=exc)
             raise
 
+        if ear_runtime is not None:
+            phase = recorder.start_phase("ear_reserve")
+            try:
+                ear_reservation = await asyncio.to_thread(
+                    ear_runtime.reserve_task,
+                    loaded.agent_id,
+                )
+                compose_override_file = (
+                    task_runtime_dir / "docker-compose.ear.override.yaml"
+                )
+                _write_ear_compose_override(
+                    compose_override_file,
+                    ear_reservation,
+                )
+                cleanup_callback = functools.partial(
+                    _run_terminal_bench_compose,
+                    container_executable=container_executable,
+                    project=project,
+                    compose_file=compose_file,
+                    compose_override_file=compose_override_file,
+                    env=compose_env,
+                    args=["down", "--volumes", "--remove-orphans"],
+                )
+                recorder.finish_phase(
+                    phase,
+                    extra={
+                        "compose_override_file": str(compose_override_file),
+                        "cpuset": ear_reservation.cpuset,
+                        "cpu_cores": ear_reservation.cpu_cores,
+                        "memory_bytes": ear_reservation.memory_bytes,
+                    },
+                )
+            except (Exception, asyncio.CancelledError) as exc:
+                recorder.finish_phase(phase, status="failed", error=exc)
+                raise
+
         phase = recorder.start_phase("terminal_bench_compose_up")
         try:
             stdout = await asyncio.to_thread(
@@ -1338,6 +1411,7 @@ async def _prepare_terminal_bench_container_session(
                 container_executable=container_executable,
                 project=project,
                 compose_file=compose_file,
+                compose_override_file=compose_override_file,
                 env=compose_env,
                 args=["up", "-d"],
             )
@@ -1353,6 +1427,7 @@ async def _prepare_terminal_bench_container_session(
                 container_executable=container_executable,
                 project=project,
                 compose_file=compose_file,
+                compose_override_file=compose_override_file,
                 env=compose_env,
                 args=["ps", "-q", "client"],
             )
@@ -1374,6 +1449,21 @@ async def _prepare_terminal_bench_container_session(
         except (Exception, asyncio.CancelledError) as exc:
             recorder.finish_phase(phase, status="failed", error=exc)
             raise
+
+        if ear_runtime is not None:
+            assert ear_reservation is not None
+            phase = recorder.start_phase("ear_attach")
+            try:
+                await asyncio.to_thread(
+                    ear_runtime.attach_task_container,
+                    ear_reservation,
+                    container_id,
+                )
+                ear_attached = True
+                recorder.finish_phase(phase)
+            except (Exception, asyncio.CancelledError) as exc:
+                recorder.finish_phase(phase, status="failed", error=exc)
+                raise
 
         phase = recorder.start_phase("terminal_bench_resolve_container_workdir")
         try:
@@ -1454,14 +1544,24 @@ async def _prepare_terminal_bench_container_session(
             )
         if cleanup_callback is not None:
             try:
-                await asyncio.to_thread(cleanup_callback)
+                if ear_runtime is not None and ear_attached and container_id is not None:
+                    await asyncio.to_thread(
+                        ear_runtime.stop_task_container,
+                        container_id,
+                        stop_fn=lambda _container_id: cleanup_callback(),
+                    )
+                else:
+                    await asyncio.to_thread(cleanup_callback)
             except (Exception, asyncio.CancelledError):
                 logger.exception(
                     "Failed to clean Terminal-Bench compose project for %s",
                     loaded.agent_id,
                 )
+        if ear_runtime is not None and ear_reservation is not None:
+            ear_runtime.cancel_reservation(ear_reservation)
         raise
 
+    assert container_id is not None
     container = PreparedContainer(
         container_id=container_id,
         container_executable=container_executable,
@@ -1474,7 +1574,11 @@ async def _prepare_terminal_bench_container_session(
         cleanup_fixed_image=False,
         cleanup_callback=cleanup_callback,
     )
-    return PreparedTraceSession(loaded=loaded, container=container)
+    return PreparedTraceSession(
+        loaded=loaded,
+        container=container,
+        ear_runtime=ear_runtime,
+    )
 
 
 async def _prepare_container_session(
@@ -1486,6 +1590,7 @@ async def _prepare_container_session(
     fixed_images_by_source: dict[str, str] | None = None,
     start_agent: bool = True,
     start_extra_args: list[str] | None = None,
+    ear_runtime: EarReplayRuntime | None = None,
 ) -> PreparedTraceSession:
     """Prepare a Docker/Podman container and start a persistent replay agent."""
     from trace_collect.openclaw_tools import ContainerAgent
@@ -1506,6 +1611,18 @@ async def _prepare_container_session(
     container_id: str | None = None
     agent: Any | None = None
     cleanup_fixed_image = True
+    start_container_fn: Callable[..., str] = start_task_container
+    stop_container_fn = functools.partial(
+        stop_task_container,
+        executable=container_executable,
+    )
+    if ear_runtime is not None:
+        start_container_fn = functools.partial(
+            ear_runtime.start_task_container,
+            agent_id=loaded.agent_id,
+            start_fn=start_task_container,
+            stop_fn=stop_container_fn,
+        )
     try:
         phase = recorder.start_phase("ensure_fixed_image")
         try:
@@ -1563,7 +1680,7 @@ async def _prepare_container_session(
             ]
             extra_args.extend(start_extra_args or [])
             container_id = await asyncio.to_thread(
-                start_task_container,
+                start_container_fn,
                 fixed_name,
                 executable=container_executable,
                 run_as_host_user=False,
@@ -1647,11 +1764,14 @@ async def _prepare_container_session(
         container_stopped = False
         if container_id is not None:
             try:
-                await asyncio.to_thread(
-                    stop_task_container,
-                    container_id,
-                    executable=container_executable,
-                )
+                if ear_runtime is not None:
+                    await asyncio.to_thread(
+                        ear_runtime.stop_task_container,
+                        container_id,
+                        stop_fn=stop_container_fn,
+                    )
+                else:
+                    await asyncio.to_thread(stop_container_fn, container_id)
                 container_stopped = True
             except (Exception, asyncio.CancelledError) as cleanup_exc:
                 cleanup_errors.append(cleanup_exc)
@@ -1697,6 +1817,7 @@ async def _prepare_container_session(
         loaded=loaded,
         container=container,
         task_output_dir=task_output_dir,
+        ear_runtime=ear_runtime,
     )
 
 
@@ -1766,7 +1887,20 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
         agent_stop_error = exc
 
     try:
-        if ctr.cleanup_callback is not None:
+        if prepared.ear_runtime is not None:
+            if ctr.cleanup_callback is not None:
+                stop_fn = lambda _container_id: ctr.cleanup_callback()
+            else:
+                stop_fn = functools.partial(
+                    stop_task_container,
+                    executable=ctr.container_executable,
+                )
+            await asyncio.to_thread(
+                prepared.ear_runtime.stop_task_container,
+                ctr.container_id,
+                stop_fn=stop_fn,
+            )
+        elif ctr.cleanup_callback is not None:
             await asyncio.to_thread(ctr.cleanup_callback)
         else:
             await asyncio.to_thread(
@@ -1990,6 +2124,7 @@ async def _prepare_replay_session(
     resource_monitoring_enabled: bool = True,
     memory_bandwidth_enabled: bool = True,
     monitoring_policy: dict[str, object] | None = None,
+    ear_runtime: EarReplayRuntime | None = None,
 ) -> PreparedTraceSession:
     prepared: PreparedTraceSession | None = None
     session_resource_monitoring_enabled = (
@@ -2023,10 +2158,14 @@ async def _prepare_replay_session(
                     "container_executable is required for replay task containers"
                 )
             if _is_terminal_bench_registry_task(loaded):
+                terminal_bench_kwargs: dict[str, Any] = {}
+                if ear_runtime is not None:
+                    terminal_bench_kwargs["ear_runtime"] = ear_runtime
                 prepared = await _prepare_terminal_bench_container_session(
                     loaded,
                     task_output_dir=task_output_dir,
                     container_executable=container_executable,
+                    **terminal_bench_kwargs,
                 )
             else:
                 prepare_kwargs: dict[str, Any] = {}
@@ -2034,6 +2173,8 @@ async def _prepare_replay_session(
                     prepare_kwargs["start_agent"] = False
                 if fixed_images_by_source:
                     prepare_kwargs["fixed_images_by_source"] = fixed_images_by_source
+                if ear_runtime is not None:
+                    prepare_kwargs["ear_runtime"] = ear_runtime
                 prepared = await _prepare_container_session(
                     loaded,
                     task_output_dir=task_output_dir,
@@ -2044,6 +2185,7 @@ async def _prepare_replay_session(
                 prepared.task_output_dir = task_output_dir
                 await _restore_source_runtime_artifacts(prepared)
             prepared.task_output_dir = task_output_dir
+            prepared.ear_runtime = ear_runtime
         if prepared.container is not None:
             prepared.resource_monitoring_enabled = session_resource_monitoring_enabled
             prepared.memory_bandwidth_enabled = memory_bandwidth_enabled
@@ -2167,6 +2309,7 @@ async def _run_cloud_model_queue(
     memory_bandwidth_enabled: bool = True,
     monitoring_policy: dict[str, object] | None = None,
     cleanup_state: _ImageCleanupState | None = None,
+    ear_runtime: EarReplayRuntime | None = None,
 ) -> tuple[list[PreparedTraceSession], list[ReplayTaskStats]]:
     if concurrency < 1:
         raise ValueError("concurrency must be >= 1")
@@ -2232,6 +2375,7 @@ async def _run_cloud_model_queue(
                         resource_monitoring_enabled=resource_monitoring_enabled,
                         memory_bandwidth_enabled=memory_bandwidth_enabled,
                         monitoring_policy=monitoring_policy,
+                        ear_runtime=ear_runtime,
                     )
                 except _ReplayPreparationError as exc:
                     prepared = exc.prepared
@@ -3261,6 +3405,8 @@ async def simulate(
     mode: str = "cloud_model",
     concurrency: int = 1,
     workers: int = 1,
+    ear_mode: str = "off",
+    ear_policy: Path | None = None,
     prep_concurrency: int = 0,
     container_executable: str | None = None,
     network_mode: str = "host",
@@ -3331,6 +3477,38 @@ async def simulate(
         loaded_sessions,
         container_executable=container_executable,
     )
+    ear_runtime: EarReplayRuntime | None = None
+    if ear_mode not in {"off", "fixed", "elastic"}:
+        raise ValueError(f"Unsupported EAR mode: {ear_mode}")
+    if ear_mode == "off":
+        if ear_policy is not None:
+            raise ValueError("--ear-policy requires --ear-mode fixed or elastic")
+    else:
+        if ear_policy is None:
+            raise ValueError("--ear-policy is required for EAR replay")
+        if workers != 1:
+            raise ValueError("EAR replay currently requires workers=1")
+        if any(
+            _is_host_mode(session) or not _requires_task_container(session)
+            for session in loaded_sessions
+        ):
+            raise ValueError("EAR replay requires Docker container-mode traces")
+        if container_executable is None or Path(container_executable).name != "docker":
+            raise ValueError("EAR replay requires --container docker")
+        try:
+            from trace_collect.ear_replay_runtime import EarReplayRuntime
+        except ModuleNotFoundError as exc:
+            if exc.name == "ear":
+                raise ValueError(
+                    "EAR replay requires elastic-agent-runtime in the host environment"
+                ) from exc
+            raise
+        ear_runtime = EarReplayRuntime(
+            policy_path=ear_policy,
+            mode=ear_mode,
+            concurrency=concurrency,
+            container_executable=container_executable,
+        )
     monitoring_policy = resolve_simulate_monitoring(
         resource=resource_monitoring,
         pmu=pmu_monitoring,
@@ -3381,6 +3559,7 @@ async def simulate(
     resource_runs: dict[str, Any] = {}
     run_wall_start: float | None = None
     run_wall_end: float | None = None
+    ear_runtime_valid: bool | None = None
     output_path.mkdir(parents=True, exist_ok=True)
     has_dependencies = _has_session_dependencies(loaded_sessions)
     if has_dependencies and workers > 1:
@@ -3436,6 +3615,21 @@ async def simulate(
             if trace_path.exists():
                 trace_path.unlink()
             trace_logger = TraceLogger(output_path, run_id)
+            trace_extra: dict[str, Any] = {
+                "workers": workers,
+                "prep_concurrency": prep_concurrency,
+                "monitoring": monitoring_policy_dict,
+                "tool_resource": {
+                    "profile": (
+                        str(tool_resource_profile.resolve())
+                        if tool_resource_profile is not None
+                        else None
+                    ),
+                    "service_enabled": tool_resource_profile is not None,
+                },
+            }
+            if ear_runtime is not None:
+                trace_extra["ear_runtime"] = ear_runtime.metadata()
             _log_trace_metadata(
                 trace_logger=trace_logger,
                 mode=mode,
@@ -3448,19 +3642,7 @@ async def simulate(
                 api_base=None,
                 model=model,
                 network_mode=network_mode,
-                extra={
-                    "workers": workers,
-                    "prep_concurrency": prep_concurrency,
-                    "monitoring": monitoring_policy_dict,
-                    "tool_resource": {
-                        "profile": (
-                            str(tool_resource_profile.resolve())
-                            if tool_resource_profile is not None
-                            else None
-                        ),
-                        "service_enabled": tool_resource_profile is not None,
-                    },
-                },
+                extra=trace_extra,
             )
             if monitoring_policy.global_container_resource_enabled:
                 if container_executable is None:
@@ -3494,6 +3676,7 @@ async def simulate(
                 memory_bandwidth_enabled=monitoring_policy.memory_bandwidth_enabled,
                 monitoring_policy=monitoring_policy_dict,
                 cleanup_state=cleanup_state,
+                ear_runtime=ear_runtime,
             )
         else:
             worker_results, task_stats = await _run_cloud_model_worker_waves(
@@ -3571,6 +3754,9 @@ async def simulate(
                 run_wall_end = time.monotonic()
             if container_resource_recorder is not None:
                 container_resource_summary = container_resource_recorder.stop()
+            if ear_runtime is not None:
+                ear_runtime.write_artifacts(output_path)
+                ear_runtime_valid = ear_runtime.valid
             if run_completed_for_fixed_cleanup and finalization_error is None:
                 await _cleanup_sweep_fixed_images(
                     sweep_fixed_images,
@@ -3605,7 +3791,20 @@ async def simulate(
         task_stats=task_stats,
         container_resources=container_resource_summary,
         monitoring_policy=monitoring_policy_dict,
+        ear_runtime=(
+            {
+                **ear_runtime.metadata(),
+                "status": "valid" if ear_runtime_valid else "invalid",
+            }
+            if ear_runtime is not None
+            else None
+        ),
     )
+    if ear_runtime is not None and not ear_runtime_valid:
+        raise SimulateError(
+            "EAR replay completed with invalid resource lifecycle; "
+            "see controller_summary.json"
+        )
     if cleanup_state is not None:
         logger.info(
             "cleanup-images: %d source image removal(s) skipped due to errors",

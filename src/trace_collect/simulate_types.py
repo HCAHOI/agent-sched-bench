@@ -160,3 +160,4 @@ class PreparedTraceSession:
     memory_bandwidth_enabled: bool = True
     monitoring_policy: dict[str, object] | None = None
     runtime_artifact_root_map: dict[str, str] = dataclasses.field(default_factory=dict)
+    ear_runtime: Any | None = None

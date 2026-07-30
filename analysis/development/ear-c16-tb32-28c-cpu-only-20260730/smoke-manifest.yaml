@@ -1,0 +1,7 @@
+defaults:
+  task_source: tasks.json
+traces:
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/countdown-game/trace.jsonl
+    label: ear-smoke-countdown-game
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/pandas-etl/trace.jsonl
+    label: ear-smoke-pandas-etl
