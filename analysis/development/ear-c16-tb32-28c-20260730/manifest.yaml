@@ -1,0 +1,99 @@
+defaults:
+  task_source: tasks.json
+traces:
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/cpp-compatibility/trace.jsonl
+    docker_image: tb__cpp-compatibility__client:latest
+    label: ear-c16-cpp-compatibility
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/lean4-proof/trace.jsonl
+    docker_image: tb__lean4-proof__client:latest
+    label: ear-c16-lean4-proof
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/assign-seats/trace.jsonl
+    docker_image: tb__assign-seats__client:latest
+    label: ear-c16-assign-seats
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/speech-to-text/trace.jsonl
+    docker_image: tb__speech-to-text__client:latest
+    label: ear-c16-speech-to-text
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/modernize-scientific-stack/trace.jsonl
+    docker_image: tb__modernize-scientific-stack__client:latest
+    label: ear-c16-modernize-scientific-stack
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/video-processing/trace.jsonl
+    docker_image: tb__video-processing__client:latest
+    label: ear-c16-video-processing
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/countdown-game/trace.jsonl
+    docker_image: tb__countdown-game__client:latest
+    label: ear-c16-countdown-game
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/merge-diff-arc-agi-task/trace.jsonl
+    docker_image: tb__merge-diff-arc-agi-task__client:latest
+    label: ear-c16-merge-diff-arc-agi-task
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/schedule-vacation/trace.jsonl
+    docker_image: tb__schedule-vacation__client:latest
+    label: ear-c16-schedule-vacation
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/catch-me-if-you-can/trace.jsonl
+    docker_image: tb__catch-me-if-you-can__client:latest
+    label: ear-c16-catch-me-if-you-can
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/fmri-encoding-r/trace.jsonl
+    docker_image: tb__fmri-encoding-r__client:latest
+    label: ear-c16-fmri-encoding-r
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/llm-spec-decoding/trace.jsonl
+    docker_image: tb__llm-spec-decoding__client:latest
+    label: ear-c16-llm-spec-decoding
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/new-encrypt-command/trace.jsonl
+    docker_image: tb__new-encrypt-command__client:latest
+    label: ear-c16-new-encrypt-command
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/build-linux-kernel-qemu/trace.jsonl
+    docker_image: tb__build-linux-kernel-qemu__client:latest
+    label: ear-c16-build-linux-kernel-qemu
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/make-mips-interpreter/trace.jsonl
+    docker_image: tb__make-mips-interpreter__client:latest
+    label: ear-c16-make-mips-interpreter
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/run-pdp11-code/trace.jsonl
+    docker_image: tb__run-pdp11-code__client:latest
+    label: ear-c16-run-pdp11-code
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/solve-sudoku/trace.jsonl
+    docker_image: tb__solve-sudoku__client:latest
+    label: ear-c16-solve-sudoku
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/path-tracing/trace.jsonl
+    docker_image: tb__path-tracing__client:latest
+    label: ear-c16-path-tracing
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/pytorch-model-cli/trace.jsonl
+    docker_image: tb__pytorch-model-cli__client:latest
+    label: ear-c16-pytorch-model-cli
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/feal-linear-cryptanalysis/trace.jsonl
+    docker_image: tb__feal-linear-cryptanalysis__client:latest
+    label: ear-c16-feal-linear-cryptanalysis
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/make-doom-for-mips/trace.jsonl
+    docker_image: tb__make-doom-for-mips__client:latest
+    label: ear-c16-make-doom-for-mips
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/pandas-etl/trace.jsonl
+    docker_image: tb__pandas-etl__client:latest
+    label: ear-c16-pandas-etl
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/torch-pipeline-parallelism/trace.jsonl
+    docker_image: tb__torch-pipeline-parallelism__client:latest
+    label: ear-c16-torch-pipeline-parallelism
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/git-multibranch/trace.jsonl
+    docker_image: tb__git-multibranch__client:latest
+    label: ear-c16-git-multibranch
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/tune-mjcf/trace.jsonl
+    docker_image: tb__tune-mjcf__client:latest
+    label: ear-c16-tune-mjcf
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/magsac-install/trace.jsonl
+    docker_image: tb__magsac-install__client:latest
+    label: ear-c16-magsac-install
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/polyglot-c-py/trace.jsonl
+    docker_image: tb__polyglot-c-py__client:latest
+    label: ear-c16-polyglot-c-py
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/enemy-grid-escape/trace.jsonl
+    docker_image: tb__enemy-grid-escape__client:latest
+    label: ear-c16-enemy-grid-escape
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/fix-git/trace.jsonl
+    docker_image: tb__fix-git__client:latest
+    label: ear-c16-fix-git
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/vul-flask/trace.jsonl
+    docker_image: tb__vul-flask__client:latest
+    label: ear-c16-vul-flask
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/bank-trans-filter/trace.jsonl
+    docker_image: tb__bank-trans-filter__client:latest
+    label: ear-c16-bank-trans-filter
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/write-compressor/trace.jsonl
+    docker_image: tb__write-compressor__client:latest
+    label: ear-c16-write-compressor

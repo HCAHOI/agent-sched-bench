@@ -1,0 +1,9 @@
+defaults:
+  task_source: tasks.json
+traces:
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/countdown-game/trace.jsonl
+    docker_image: tb__countdown-game__client:latest
+    label: ear-c16-smoke-countdown-game
+  - trace: /home/Ubuntu/workspace/tb32-traces/canonical/lean4-proof/trace.jsonl
+    docker_image: tb__lean4-proof__client:latest
+    label: ear-c16-smoke-lean4-proof
