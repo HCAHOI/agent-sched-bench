@@ -267,6 +267,7 @@ def _comparison_key(path: Path) -> dict[str, Any]:
     }
     key["llm_ttft_ms"] = metadata.get("llm_ttft_ms")
     key["llm_tpot_ms"] = metadata.get("llm_tpot_ms")
+    key["manifest"] = str(Path(metadata["manifest"]).resolve())
     return key
 
 
