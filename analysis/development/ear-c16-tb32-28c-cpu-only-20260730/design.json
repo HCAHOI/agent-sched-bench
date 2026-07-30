@@ -7,13 +7,18 @@
     "asb_commit": "8e42308bd618c5a35c7a726c4f451ffd3eaaeedb",
     "quota_only_asb_commit": "fc118a5e64ebacfebdb408af35d300d3622ce1cf",
     "quota_only_no_guard_asb_commit": "9cfdc8eccc80eed2a7b299fdeebf5fb078f004c8",
+    "work_conserving_asb_commits": [
+      "2a5f70af2d4759fd9936d4637cc712c13154a751",
+      "363757e09f964a4b8d3289d72b603b2eb4e2a7cd"
+    ],
     "ear_commits": {
       "fixed": "911a87482f50738bbdd4ad4789f0b49ef83ae638",
       "elastic": "4ac7844525c0d19161e3f25b480541325d1441f5",
       "elastic_max24": "b13909415c4719023a4903d1f67d7ec3cd435c54",
       "quota_only": "9e93a75f478ab8f2ae2a419bd938fe98383b608e",
       "quota_only_no_guard": "d6a3d12aded41356be8edceb59024f1b288a7c30",
-      "quota_only_guard_disabled": "36559f08e7847a55be32d48c551cccfc96e723c5"
+      "quota_only_guard_disabled": "36559f08e7847a55be32d48c551cccfc96e723c5",
+      "work_conserving": "278ff7d6ba9d4cfab98ed3e063388a6977891082"
     }
   },
   "host": {
@@ -44,6 +49,8 @@
     "quota_only_sha256": "0dc9b2bb4038a9333692a493b32e7d9387651bdaa346ac7595bd48f7a84f487b",
     "quota_only_no_guard_path": "/home/Ubuntu/workspace/elastic-agent-runtime-quota-probe/configs/policies/docker_elastic_24c_60g_quota_only_no_guard.yaml",
     "quota_only_no_guard_sha256": "c82b3742c74f5ebacd98f1477066b1f78b05b9aef06e9cf03d42384e982adce4",
+    "work_conserving_path": "/home/Ubuntu/workspace/elastic-agent-runtime-quota-probe/configs/policies/docker_elastic_28c_60g_memory_only.yaml",
+    "work_conserving_sha256": "29ced5dc60b076128283922d1686187b45b44564508307162a27c446ceed5fe8",
     "pool": {
       "cpu_cores": 24,
       "memory_gib": 60
@@ -84,7 +91,9 @@
     "excluded_artifacts": [
       "/tmp/asb-ear-tb32-c16-plumbing-smoke-r4-20260730",
       "/tmp/asb-ear-cpu-only-smoke-20260730",
-      "/tmp/asb-ear-tb32-c16-28c-cpu-only-20260730/block-1/elastic-invalid-cap2"
+      "/tmp/asb-ear-tb32-c16-28c-cpu-only-20260730/block-1/elastic-invalid-cap2",
+      "/tmp/asb-ear-work-conserving-smoke-20260730",
+      "/tmp/asb-ear-tb32-c16-28c-cpu-only-20260730/block-1/elastic-work-conserving"
     ]
   },
   "amendments": [
@@ -133,6 +142,12 @@
       "question": "Does treating a zero marginal-growth threshold as a true guard disable remove the remaining source-valid replay failure?",
       "output": "/tmp/asb-ear-tb32-c16-28c-cpu-only-20260730/block-1/quota-only-guard-disabled",
       "configuration": "Original 32-trace manifest and concurrency 16; quota-only CPU elasticity with marginal_growth_min_cores set to zero and zero-threshold probe recording disabled; shared pool unchanged at 24 CPU and 60 GiB."
+    },
+    {
+      "name": "elastic-work-conserving-c16",
+      "question": "Can EAR retain memory safety while leaving CPU scheduling work-conserving enough to approach Free?",
+      "output": "/tmp/asb-ear-tb32-c16-28c-cpu-only-20260730/block-1/elastic-work-conserving-r2",
+      "configuration": "Original 32-trace manifest and concurrency 16; every task sees the full 28-CPU cpuset with no cpu.max quota; EAR manages 2-to-16 GiB per-task memory under a 60 GiB shared pool. The controller keeps one CPU token per task only for admission bookkeeping."
     }
   ],
   "followup_results": [
@@ -440,6 +455,54 @@
       "mechanism_evidence": "llm-spec-decoding grew 1-to-2 at 5.5 seconds, 2-to-4 at 8.5 seconds, and 4-to-8 at 361.4 seconds; it completed with zero failed actions. magsac-install repeatedly reclaimed newly available capacity and reached 24 cores at 518.4 seconds. Both tasks succeeded, all 32 leases were released, and no OOM, admission failure, memory resize rejection, sampler error, or residual container remained.",
       "interpretation": "The true-disable fix removes the remaining source-valid replay failure and reduces matched wall time by 13.0 percent versus threshold-zero and 43.0 percent versus the original 0.5-core guard. The 30 successful traces match Free, although Free remains 38.4 percent faster by wall time.",
       "limitation": "This is one development run per arm on one host, not a repeated-run or population result. The guard-disabled controller retries aggressively under contention, producing 772 global-pool-exhausted CPU resize rejections and therefore an invalid strict EAR lifecycle status despite clean workload completion and cleanup."
+    },
+    {
+      "name": "elastic-work-conserving-c16",
+      "wall_time_s": 732.5747395659964,
+      "completed_traces": 30,
+      "attempted_traces": 32,
+      "successful_traces_per_s": 0.040951452977716754,
+      "ear_status": "valid",
+      "work_conserving_cpu": true,
+      "cpu_resize_count": 0,
+      "cpu_resize_rejected_count": 0,
+      "memory_resize_count": 41,
+      "memory_resize_rejected_count": 0,
+      "admission_rejected_count": 0,
+      "oom_kill_count": 0,
+      "released_lease_count": 32,
+      "peak_leased_memory_gb": 38.0,
+      "observed_cpu_core_seconds_estimate": 11970.141,
+      "observed_average_cpu_cores": 16.34,
+      "observed_memory_gib_seconds_estimate": 2376.304,
+      "observed_average_memory_gib": 3.244,
+      "observed_integral_method": "Sum of each container resource summary arithmetic sample mean times its monitored duration.",
+      "reserved_memory_gb_seconds": 15750.298182261038,
+      "failed_tasks": [
+        "catch-me-if-you-can",
+        "solve-sudoku"
+      ],
+      "source_valid_replay_failures": [],
+      "comparison": {
+        "fixed": {
+          "wall_time_s": 2368.4480593960006,
+          "completed_traces": 27,
+          "successful_traces_per_s": 0.011399870008922853
+        },
+        "elastic_hard_quota": {
+          "wall_time_s": 802.3960641749982,
+          "completed_traces": 30,
+          "successful_traces_per_s": 0.037388019881235565
+        },
+        "free": {
+          "wall_time_s": 579.7301288279996,
+          "completed_traces": 30,
+          "successful_traces_per_s": 0.051748216123679705
+        }
+      },
+      "mechanism_evidence": "All inspected live task containers had cpu.max set to max; memory limits grew independently. The final artifacts record 41 successful memory resizes, zero resize or admission rejection, zero OOM kills across all 32 tasks, all 32 leases released, no sampler errors, and no residual container.",
+      "interpretation": "Work-conserving Elastic preserved the same 30 successful traces as Free, reduced wall time by 8.7 percent versus hard-quota Elastic, and reached 79.1 percent of Free throughput. It remained 26.4 percent slower than Free. Observed CPU work was 34.7 percent higher than Free, mostly in magsac-install and build-linux-kernel-qemu, without memory-pressure events; this single run cannot separate scheduler effects from build, cache, and run-order variability.",
+      "limitation": "This is one development run per arm on one host, not a repeated-run or population result. CPU lease counts and reserved CPU core-seconds in controller_summary.json are bookkeeping tokens in work-conserving mode, not physical CPU reservations; use the external container sampler for CPU utilization."
     }
   ],
   "gates": {
