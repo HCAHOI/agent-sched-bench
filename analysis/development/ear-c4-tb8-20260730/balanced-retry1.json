@@ -1,0 +1,61 @@
+{
+  "base_design": "balanced-design.json",
+  "base_design_commit": "c45f8df120954b58d6ce4c52b7cb02a6d40e3549",
+  "base_design_sha256": "fb5f7942e705c70d613fa577a7d8a3f8e5ddcee8ee0599712201879e6e01fe2f",
+  "failure_evidence": {
+    "cleanup_verification": {
+      "container_inspect_exit": 1,
+      "image_inspect_exits": [
+        1,
+        1
+      ],
+      "meaning": "Docker inspect returned not found for each exact object.",
+      "verified_at": "2026-07-30T10:24:36+02:00"
+    },
+    "docker_events": {
+      "assign_container_commit_time_nano": "1785399532636596429",
+      "assign_container_die_exit_code": 137,
+      "assign_container_id": "6996963d65fed12f545b333228e63a74b8dc30226fef9c00e762e34c2e479e86",
+      "assign_container_kill_signals": [
+        15,
+        9
+      ],
+      "source": "docker events read at 2026-07-30T10:24:36+02:00"
+    },
+    "observed_parent_exit": {
+      "exit_code": 143,
+      "kernel_oom_evidence": "No kernel journal or dmesg OOM entry was found for the failure window.",
+      "last_captured_log": "2026-07-30 10:18:51,959 prebuilding assign-seats after adaptive-rejection-sampler completed 1/8.",
+      "prebuild_position": "2/8",
+      "signal_source": "unknown",
+      "source": "Codex unified exec session 46517 output"
+    },
+    "removed_images": [
+      {
+        "id": "sha256:c725bd0c0e0f44e2b83f9994d8218b6c912a7da74ffad7e80740c29d558c5b44",
+        "ref": "swebench-fixed-root-docker.io_library_tb__adaptive-rejection-sampler__client_latest:simulate-sweep-f542656e4861"
+      },
+      {
+        "id": "sha256:bc031944357d2915618cf6c961cad5bd90e247aba7b2e8312871f05d6cbe030f",
+        "ref": "swebench-fixed-root-docker.io_library_tb__assign-seats__client_latest:simulate-sweep-e81462342f5b"
+      }
+    ]
+  },
+  "invalidated_attempt": {
+    "block_1_fixed": "Completed but excluded from every analysis because the full attempt was invalidated.",
+    "block_1_fixed_output": "/tmp/asb-ear-tb8-c4-balanced-r3-20260730/block-1/fixed",
+    "block_1_elastic": "The parent command was observed exiting 143 from an unknown signal source during the second of eight image prebuilds, before replay start and without throughput or task artifacts.",
+    "block_1_elastic_output": "/tmp/asb-ear-tb8-c4-balanced-r3-20260730/block-1/elastic",
+    "cleanup": "The one exited prep container and two sweep fixed images created by the failed Elastic arm were removed by exact ID/name; no related object remains.",
+    "output_root": "/tmp/asb-ear-tb8-c4-balanced-r3-20260730",
+    "status": "invalid and excluded"
+  },
+  "retry": {
+    "analysis": "Inherit the base design unchanged; do not combine any invalidated-attempt artifact with retry results.",
+    "command_expansion": "For each of the nine base-design runs, select the same arm argv template and replace its single {output_dir} element with the base run output_dir after replacing the exact prefix /tmp/asb-ear-tb8-c4-balanced-r3-20260730 by /tmp/asb-ear-tb8-c4-balanced-r3-retry1-20260730. Do not change any other argv.",
+    "gates": "Inherit every preflight, after-arm, after-block, and after-all gate from the base design.",
+    "output_root": "/tmp/asb-ear-tb8-c4-balanced-r3-retry1-20260730",
+    "retry_policy": "This is the sole automatic infrastructure retry. Any command nonzero or gate failure stops it without another automatic retry.",
+    "schedule": "Inherit all three blocks and all nine arm positions unchanged from the base design."
+  }
+}
