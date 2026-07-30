@@ -34,7 +34,7 @@ class EarTaskReservation:
 
     lease: Any
     cpuset: str
-    cpu_cores: int
+    cpu_cores: int | None
     memory_bytes: int
     oom_score_adj: int
 
@@ -158,7 +158,7 @@ class EarReplayRuntime:
                 if self.quota_only_cpu or self.work_conserving_cpu
                 else self.controller.cpuset_string(lease)
             ),
-            cpu_cores=len(lease.cpus),
+            cpu_cores=None if self.work_conserving_cpu else len(lease.cpus),
             memory_bytes=int(lease.memory_gb * 1024**3),
             oom_score_adj=self.policy.docker.oom_score_adj,
         )
@@ -200,7 +200,7 @@ class EarReplayRuntime:
                 update_timeout_s=self.policy.docker.run_timeout_s,
             )
             if (
-                not self.work_conserving_cpu
+                reservation.cpu_cores is not None
                 and cgroup.read_cpu_limit() != reservation.cpu_cores
             ):
                 raise ValueError("Docker CPU limit does not match EAR reservation")
@@ -260,7 +260,7 @@ class EarReplayRuntime:
             reservation.cpuset,
             *(
                 []
-                if self.work_conserving_cpu
+                if reservation.cpu_cores is None
                 else ["--cpus", str(reservation.cpu_cores)]
             ),
             "--memory",

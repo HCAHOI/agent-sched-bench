@@ -1137,19 +1137,17 @@ def _write_ear_compose_override(
     path: Path,
     reservation: EarTaskReservation,
 ) -> None:
+    client: dict[str, Any] = {
+        "cpuset": reservation.cpuset,
+        "mem_limit": str(reservation.memory_bytes),
+        "memswap_limit": str(reservation.memory_bytes),
+        "oom_score_adj": reservation.oom_score_adj,
+    }
+    if reservation.cpu_cores is not None:
+        client["cpus"] = float(reservation.cpu_cores)
     path.write_text(
         yaml.safe_dump(
-            {
-                "services": {
-                    "client": {
-                        "cpuset": reservation.cpuset,
-                        "cpus": float(reservation.cpu_cores),
-                        "mem_limit": str(reservation.memory_bytes),
-                        "memswap_limit": str(reservation.memory_bytes),
-                        "oom_score_adj": reservation.oom_score_adj,
-                    }
-                }
-            },
+            {"services": {"client": client}},
             sort_keys=True,
         ),
         encoding="utf-8",

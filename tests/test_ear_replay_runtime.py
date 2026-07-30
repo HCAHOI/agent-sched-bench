@@ -229,6 +229,25 @@ def test_compose_override_uses_admitted_lease(
     runtime.cancel_reservation(reservation)
 
 
+def test_work_conserving_compose_override_omits_cpu_quota(
+    tmp_path: Path,
+) -> None:
+    runtime = EarReplayRuntime(
+        policy_path=_policy(tmp_path, work_conserving_cpu=True),
+        mode="elastic",
+        concurrency=2,
+        container_executable="docker",
+    )
+    reservation = runtime.reserve_task("task-compose")
+    override = tmp_path / "ear.override.yaml"
+    _write_ear_compose_override(override, reservation)
+
+    client = yaml.safe_load(override.read_text())["services"]["client"]
+    assert client["cpuset"] == ",".join(str(cpu) for cpu in range(8))
+    assert "cpus" not in client
+    runtime.cancel_reservation(reservation)
+
+
 def test_quota_only_cpu_exposes_shared_pool_at_initial_quota(
     tmp_path: Path,
 ) -> None:
