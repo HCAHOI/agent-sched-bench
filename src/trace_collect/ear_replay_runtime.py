@@ -323,17 +323,6 @@ class EarReplayRuntime:
             container_result["dynamic"] = dynamic_summary
             for error in dynamic.errors:
                 self._record_error(f"{container_id}: {error}")
-            rejected_events = sum(
-                int(dynamic_summary.get(field, 0))
-                for field in (
-                    "cpu_resize_rejected_events",
-                    "memory_resize_rejected_events",
-                )
-            )
-            if rejected_events:
-                self._record_error(
-                    f"{container_id}: {rejected_events} EAR resize events rejected"
-                )
         with self._lock:
             self._handles.pop(container_id, None)
             self._container_results[container_id] = container_result

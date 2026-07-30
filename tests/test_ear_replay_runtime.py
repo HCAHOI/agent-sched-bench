@@ -116,8 +116,8 @@ def test_ear_replay_lifecycle(
         def finish(self) -> Any:
             return SimpleNamespace(
                 errors=[],
-                cpu_resize_rejected_events=0,
-                memory_resize_rejected_events=0,
+                cpu_resize_rejected_events=1,
+                memory_resize_rejected_events=1,
             )
 
     monkeypatch.setattr(
@@ -151,6 +151,11 @@ def test_ear_replay_lifecycle(
     runtime.write_artifacts(tmp_path / "out")
 
     assert runtime.valid is True
+    summary = json.loads((tmp_path / "out" / "controller_summary.json").read_text())
+    if mode == "elastic":
+        dynamic = summary["ear_runtime"]["containers"]["container-1"]["dynamic"]
+        assert dynamic["cpu_resize_rejected_events"] == 1
+        assert dynamic["memory_resize_rejected_events"] == 1
     assert stops == ["container-1"]
     assert starts[0][starts[0].index("--cpus") + 1] == str(cpu_cores)
     assert starts[0][starts[0].index("--memory") + 1] == str(memory_bytes)
