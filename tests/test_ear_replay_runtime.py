@@ -82,7 +82,7 @@ def _cgroup(tmp_path: Path, *, oom_kill: int = 0) -> Path:
 
 @pytest.mark.parametrize(
     ("mode", "expected_cpus", "expected_memory"),
-    [("fixed", "4", str(4 * 1024**3)), ("elastic", "1", str(2 * 1024**3))],
+    [("fixed", "8", str(8 * 1024**3)), ("elastic", "1", str(2 * 1024**3))],
 )
 def test_ear_replay_lifecycle(
     tmp_path: Path,

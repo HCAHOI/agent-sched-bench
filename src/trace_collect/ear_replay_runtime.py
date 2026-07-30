@@ -65,19 +65,21 @@ class EarReplayRuntime:
         if mode == "elastic" and not manager.enabled:
             raise ValueError("EAR elastic mode requires docker.resource_manager.enabled")
         if mode == "fixed":
-            if self.total_cpus % concurrency:
-                raise ValueError(
-                    "EAR fixed mode requires controller.total_cpus divisible by "
-                    "concurrency"
-                )
-            self.initial_cpus = self.total_cpus // concurrency
-            self.initial_memory_gb = self.total_memory_gb / concurrency
+            self.initial_cpus = manager.reserved_cpu_cores
+            self.initial_memory_gb = manager.reserved_memory_gb
         else:
             self.initial_cpus = manager.initial_reserved_cpu_cores
             self.initial_memory_gb = manager.initial_reserved_memory_gb
-        if self.initial_cpus * concurrency > self.total_cpus:
+        if self.initial_cpus > self.total_cpus:
+            raise ValueError("EAR initial CPU lease exceeds the shared pool")
+        if self.initial_memory_gb > self.total_memory_gb:
+            raise ValueError("EAR initial memory lease exceeds the shared pool")
+        if mode == "elastic" and self.initial_cpus * concurrency > self.total_cpus:
             raise ValueError("EAR initial CPU leases exceed the shared pool")
-        if self.initial_memory_gb * concurrency > self.total_memory_gb:
+        if (
+            mode == "elastic"
+            and self.initial_memory_gb * concurrency > self.total_memory_gb
+        ):
             raise ValueError("EAR initial memory leases exceed the shared pool")
 
         self.ledger = ResourceLedger()
