@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "scope": "Development-only Fixed/Elastic/Free comparison on one 28-vCPU host; no cross-host or Terminal-Bench population claim.",
+  "code": {
+    "base_branch": "dev/cpu-only",
+    "base_commit": "776d2857b6325992262da59abce88b256404fed9",
+    "asb_commit": "8e42308bd618c5a35c7a726c4f451ffd3eaaeedb",
+    "ear_commit": "911a87482f50738bbdd4ad4789f0b49ef83ae638"
+  },
+  "host": {
+    "nproc": 28,
+    "memory_total_kib": 82351368,
+    "cgroup_filesystem": "cgroup2fs",
+    "docker": "29.4.0"
+  },
+  "inputs": {
+    "task_count": 32,
+    "action_count": 966,
+    "llm_action_count": 499,
+    "tool_action_count": 467,
+    "trace_root": "/home/Ubuntu/workspace/tb32-traces/canonical",
+    "task_context_root": "/home/Ubuntu/workspace/tb32-task-contexts",
+    "trace_set_sha256": "3650cb90d04f72f30e5c1cdd24faa0ed3619451293450e843de8b777bda0c3f9",
+    "manifest_sha256": "a3daa3c20676c679c1d59dd4d38faf8c5482ba096a5833306e8cf91528ed24f9",
+    "tasks_sha256": "3c580338be141bf0144d899c4e5e19ede8e5b0827ad0766b4a8c0323ad86f87b"
+  },
+  "policy": {
+    "path": "/home/Ubuntu/workspace/elastic-agent-runtime-scale-28c/configs/policies/docker_elastic_24c_60g_mixed.yaml",
+    "sha256": "cd0a5499c73c4e619a335732ca667d5881e034fcf93fd8a9ba7870141173e442",
+    "pool": {
+      "cpu_cores": 24,
+      "memory_gib": 60
+    },
+    "fixed_per_task": {
+      "cpu_cores": 2,
+      "memory_gib": 2.5
+    },
+    "elastic_per_task": {
+      "initial_cpu_cores": 1,
+      "max_cpu_cores": 2,
+      "initial_memory_gib": 2,
+      "max_memory_gib": 2.5
+    }
+  },
+  "execution": {
+    "cwd": "/home/Ubuntu/workspace/agent-sched-bench-ear-scale-28c-cpu-only",
+    "manifest": "analysis/development/ear-c16-tb32-28c-cpu-only-20260730/manifest.yaml",
+    "output_root": "/tmp/asb-ear-tb32-c16-28c-cpu-only-20260730",
+    "concurrency": 16,
+    "workers": 1,
+    "replay_speed": 50,
+    "resource_monitoring": "on",
+    "pmu_monitoring": "off",
+    "memory_bandwidth_monitoring": "off",
+    "container": "docker",
+    "arm_modes": {
+      "fixed": "fixed",
+      "elastic": "elastic",
+      "free": "off"
+    },
+    "blocks": [
+      ["fixed", "elastic", "free"],
+      ["elastic", "free", "fixed"],
+      ["free", "fixed", "elastic"]
+    ],
+    "retry_policy": "No automatic retry. Preserve a failed arm and stop the schedule.",
+    "excluded_artifacts": [
+      "/tmp/asb-ear-tb32-c16-plumbing-smoke-r4-20260730",
+      "/tmp/asb-ear-cpu-only-smoke-20260730"
+    ]
+  },
+  "gates": {
+    "all_arms": [
+      "32 attempted, 32 completed, zero failed",
+      "container sampler collected with no errors or dropped samples",
+      "no residual task containers after the arm"
+    ],
+    "fixed_and_elastic": [
+      "EAR runtime status valid",
+      "zero OOM kills",
+      "zero admission failures",
+      "zero CPU or memory resize rejections",
+      "zero active leases or reservations after finalization"
+    ],
+    "free": [
+      "no EAR runtime metadata",
+      "no controller_summary.json",
+      "no lease_events.jsonl"
+    ]
+  },
+  "metrics": {
+    "primary": [
+      "wall_time_s",
+      "successful_traces_per_s",
+      "observed_cpu_core_seconds",
+      "observed_memory_gib_seconds"
+    ],
+    "ear_only": [
+      "total_reserved_cpu_core_seconds",
+      "total_reserved_memory_gb_seconds"
+    ],
+    "reporting": "Report every block, then median and min-max ratios. Do not report a p-value or population interval."
+  }
+}
