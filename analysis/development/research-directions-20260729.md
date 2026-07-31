@@ -1,83 +1,93 @@
 # Research directions — current state
 
-Rewritten 2026-07-30 after eleven autonomous loop iterations. This states what is
-true now; the original survey framing is in git history. Rubric and candidate
-definitions remain in `direction-candidates-20260729.md`; its *status* column is
-superseded by this file.
+Rewritten 2026-07-31 after the CacheWise/TraceLab full-paper comparison. This
+states what is true now; prior survey framing is in git history. Detailed paper
+boundaries and the frozen reproduction protocol are in
+`analysis/offline/related-work.md`.
 
-## Related work read in full
+## Established negative result: single-call KV swap timing
 
-| System | Mechanism | Where our evidence bears on it |
-|---|---|---|
-| [Continuum](https://arxiv.org/abs/2511.02230) | `tau* = argmax_tau P(tau,f)(T_bar*eta + PrefillReload) - tau`; `P` a per-key empirical CDF keyed on **tool name** | A tool-name key reaches **0.9%** of the available budget even fitted in-sample with ~2682 rows per key (`8e7ed28`). The per-key empirical family, evaluated without leakage, is **negative** against a fixed deadline (`f1cbee3`). Reports no fixed-TTL and no oracle baseline. |
-| [ThunderAgent](https://arxiv.org/abs/2602.13692) | Program abstraction over KV + tool assets; lifecycle-hook GC; async env prep | Its stochastic-workload panels sit at **0.65x and 1.24x**; we quantified why. Its fixed-threshold ablation is a **strong** reference, not weak: `T = kv` is near-optimal among constants (`24d4344`). |
-| [AgentCgroup](https://arxiv.org/html/2602.09345v2) | eBPF cgroup control at **tool-call** boundaries; agents *declare* needs | Its granularity argument applies one level down, but the payoff is small (`adeccb2`). Its declaration remedy is undercut by analogy: agent reasoning text carries **no** usable duration signal (`33fb815`). |
-| [Crab](https://arxiv.org/abs/2604.28138), [DeltaBox](https://arxiv.org/html/2605.22781) | Semantics-aware sandbox checkpoint/restore | Occupies the environment-snapshot direction entirely. |
-| [Seer](https://arxiv.org/abs/2511.14617) | Shared-prompt similarity for RL rollout | Occupies the rollout direction. |
-| [PASTE](https://arxiv.org/html/2603.18897) | Speculative tool execution from recurring patterns | Occupies the prefetch direction. |
-
-## The KV lane is closed. What it establishes
-
-A complete, internally consistent negative result for tool-duration prediction under
-KV swap, with every load-bearing constant checked rather than assumed.
+The previous loop closed the per-call duration-prediction lane for the measured
+swap-back-expensive regime. The result is internally consistent:
 
 | Policy class | Best share of the oracle budget |
 |---|---|
-| Constant trigger, fitted out-of-fold | **negative** (beats deadline in 1 of 20 cells) |
-| Constant trigger, in-sample oracle | ≤ 7.2% |
-| Per-key empirical, in-sample | 29–75% — **all overfit** |
-| Per-key empirical, leave-one-out | **negative** |
+| Constant trigger, fitted out-of-fold | negative; beats deadline in 1 of 20 cells |
+| Constant trigger, in-sample oracle | at most 7.2% |
+| Per-key empirical, in-sample | 29--75%; all overfit |
+| Per-key empirical, leave-one-out | negative |
 | Per-call oracle | 100% by construction |
 
-Supporting facts, each independently established:
+The usable budget exists only for `kv < L < 2*kv`. `T=kv` is near-optimal among
+constants because that is where the restore penalty vanishes. On the measured
+model/device, reload beats recompute by 38.4x and the effective restore charge
+is `rho=0.94`; the large 3,500/5,000 ms cells were 62--89 requests' worth of KV,
+not one request. These facts reject another trigger estimator under the same
+cost model; they do not reject ordering multiple paused sessions under real
+memory pressure.
 
-- **The budget lives only in `kv < L < 2*kv`.** Calls beyond `2*kv` contribute
-  *exactly zero*, because the deadline already hides the full swap there (`57cbbbb`).
-  Every predictor in this repo targeted `P(long)`, which is the wrong quantity.
-- **`T = kv` is near-optimal among constants**, because it is exactly where the
-  restore penalty vanishes. The sweep rediscovers `5000 ms` in 4 of 5 folds
-  (`24d4344`).
-- **`rho_effective = 0.94` unconditionally** for this model and device. Reload beats
-  recompute by 38.4x at every KV size, and the ratio is scale-invariant because both
-  costs are linear in tokens. Recompute would need >3.77 MB/token; this model has
-  98 KB (`8e5fc7d`).
-- **The large budget was largely a scale artifact.** As a fraction of deadline
-  utility it is 9.2–16.6% at per-request KV cost (56–160 ms) against 84.8–88.9% at the
-  campaign's 3500/5000 ms cells, which are 62 and 89 *requests'* worth of KV
-  (`8968434`).
+## What the expanded related work changes
 
-### Known regime limits, and they are real
+The occupied directions are now clearer:
 
-The negative result holds for **swap-back-expensive** regimes. Per-key methods do beat
-the deadline below `rho ~ 0.3` (kv=3500) and `~0.6` (kv=5000) (`2316693`) — but
-reaching that would require ~38x more KV per token than this model has. Everything is
-also conditional on **forced eviction**: with no memory pressure the optimal policy is
-never swap and every arm scores zero. `CLOSED-QUESTIONS.md` establishes Fresh-277
-cannot exhibit contention, so that premise is untestable on this corpus.
+- Autellix, ThunderAgent, SAGA, and Murakkab cover program/workflow-aware LLM
+  scheduling.
+- Continuum, KVFlow, CacheWise, PEEK, and the policy-runtime case study cover
+  tool-gap KV lifetime, workflow-aware placement, paused-session eviction, or
+  prefix-aware queueing.
+- Parrot, Pie, and AgentCgroup cover declared semantics, programmable serving,
+  or declared call-level resources.
+- SpecBox, PASTE, Seer, Crab, and DeltaBox cover environment/tool speculation,
+  prefix prefetch, and sandbox state.
 
-## Directions
+The remaining measurement advantage is narrower: our traces preserve raw tool
+arguments and can observe shell clauses, `execve` children, and counters below
+the outer call. TraceLab's public release cannot test that feature because it
+removes raw arguments. CacheWise does test arguments, but only as one serialized
+outer payload with TF-IDF/KMeans.
 
-| # | Direction | Status |
+## Current directions
+
+| Direction | Status | Next decision |
 |---|---|---|
-| D2/D4 | Predictability boundary + mechanism-vs-prediction decomposition | **COMPLETE** — the table above is the result |
-| D1 | Clause-granular resource control | **Near-dead**: corrected payoff 10.6% on 12.3% of calls; `memory.max` is a cap not a reservation; lowering it below usage OOM-kills |
-| D6 | Pipeline-dominated shells (**87.7%** of multi-clause exec calls) | **OPEN, no consumer found** |
-| D3 | Heterogeneous multi-tenant composition | **BLOCKED offline** — needs contention this corpus cannot exhibit |
-| D5 | Clause-attribution instrument | Folded into D1 |
+| CacheWise outer-argument reproduction on SWE | **STOPPED / NO-GO** | C100 raises mean regret by 0.587 s versus tool-name; pair-cluster bootstrap CI [+0.120, +1.188] s. It does not reproduce the paper's granularity gain. |
+| Clause-aware extension of CacheWise | **NOT AUTHORIZED by this gate** | The predeclared prerequisite failed. Do not add clause features or a post-hoc support threshold to rescue this comparison. |
+| Clause-granular resource control | **Near-dead under the old consumer** | Corrected payoff was 10.6% on 12.3% of calls; `memory.max` is a cap, not a reservation, and lowering it below usage OOM-kills. Reopen only with a different measured consumer. |
+| Pipeline-dominated shells | **Open measurement fact, no consumer** | 87.7% of multi-clause exec calls are pipeline-dominated. Do not build a predictor until a decision depends on it. |
+| Heterogeneous multi-tenant composition | **Blocked offline; live run not authorized** | Existing SWE traces cannot establish the 30--50-session pressure regime, and the required predictor gate failed. |
 
-## No high-value offline experiment remains
+## Stop/go boundary for the current run
 
-Checked and exhausted: the target quantity, the baseline, the estimator family, the
-key granularity, the overfit, the restore charge, and the cost scale. D6 has no
-decision it changes; D3 and the forced-eviction premise both require contention the
-corpus provably lacks. Further iterations of this loop would produce commits without
-advancing a claim.
+The CacheWise reproduction is not a new canonical tool-resource predictor and
+does not change the locked latency/resource objective. It reuses canonical
+outer `tool_exec` records and makes no new collection.
 
-## Corrections made during the run, for the record
+Go to one live serving experiment only if the predeclared 95% unordered-task-pair
+cluster bootstrap interval for `mean_regret(C100) - mean_regret(tool_name)` is
+strictly below zero. Otherwise stop: do not tune tokenization, choose `C` after
+the fact, substitute synthetic concurrency, or descend to shell clauses to
+rescue the result. `C=20/50`, top-1 agreement, and call-duration fit explain the
+mechanism but cannot override the primary gate.
 
-Nine, all self-caught: a transcription error (`1947` for `1089`); an envelope figure
-wrong by ~5x from summing a sequential integral over concurrent pipeline clauses; a
-false verification line in a commit message; the reasoning-text and runtime-activity
-NO-GOs; the in-sample per-key ceilings shown to be pure overfit; the hypothesis that
-`rho = 0.94` was an overcharge, refuted; and the discovery that the headline cost cells
-were 62–89 requests' worth of KV rather than one.
+Even a pass supports only "outer arguments improve pairwise reuse ordering on
+development-exposed SWE traces." It does not support CacheWise's end-to-end JCT
+claim or confirmation, because fresh-277 reaches only concurrency two and some
+repositories overlap the fit corpus.
+
+The gate did not pass. Tool-name mean regret is 0.780 s; C20/C50/C100 are
+0.857/1.179/1.366 s. C100's top-1 rate is almost unchanged (94.07% versus
+93.98%) because it makes nearly balanced numbers of helpful and harmful choice
+changes, but its rare harmful changes are much larger. Post-hoc inspection
+locates the tail in repository-specific test commands whose fitted argument
+clusters end far earlier than the held-out calls. This is evidence against
+whole-argument TF-IDF/KMeans as a safe remaining-time tail estimator here, not
+authorization to tune on fresh-277.
+
+## Corrections retained from the prior loop
+
+The earlier investigation self-corrected a transcription error (`1947` for
+`1089`), a roughly 5x envelope overestimate from summing concurrent pipeline
+clauses, an inaccurate verification line, negative reasoning-text/runtime-
+activity hypotheses, in-sample per-key overfit, the refuted restore-overcharge
+hypothesis, and the 62--89-request cost-scale artifact. Those corrections remain
+load-bearing context for the closed single-call KV lane.

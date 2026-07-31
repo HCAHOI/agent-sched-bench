@@ -1,0 +1,82 @@
+{
+  "status": "development-exposed diagnostic",
+  "question": "Does CacheWise C100 whole-argument clustering improve observed-overlap pairwise reuse ordering over tool-name history?",
+  "protocol": {
+    "fit_root": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/offline-gated-confirm-100-v2",
+    "eval_root": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/fresh-seed42-skip150-n200",
+    "unit": "LLM-end to next-LLM-start tool gap; parallel outer calls form one ordered batch",
+    "arms": [
+      "global",
+      "tool",
+      "c20",
+      "c50",
+      "c100"
+    ],
+    "tfidf_max_features": 5000,
+    "kmeans_random_state": 0,
+    "primary": "mean_regret(c100) - mean_regret(tool)",
+    "go_criterion": "upper endpoint of 95% unordered-task-pair cluster-bootstrap CI < 0"
+  },
+  "data": {
+    "fit_gaps": 4175,
+    "eval_gaps": 12771,
+    "ranking_events": 2410,
+    "task_pair_clusters": 185,
+    "max_concurrency": 2
+  },
+  "cluster_models": {
+    "c20": {
+      "tool_batch_keys": 30,
+      "occupied_clusters": 295
+    },
+    "c50": {
+      "tool_batch_keys": 30,
+      "occupied_clusters": 518
+    },
+    "c100": {
+      "tool_batch_keys": 30,
+      "occupied_clusters": 755
+    }
+  },
+  "metrics": {
+    "global": {
+      "mean_regret_s": 0.7776255860862891,
+      "top1_oracle_agreement": 0.9365145228215768
+    },
+    "tool": {
+      "mean_regret_s": 0.7795576197477792,
+      "top1_oracle_agreement": 0.9398340248962656
+    },
+    "c20": {
+      "mean_regret_s": 0.8573268910166634,
+      "top1_oracle_agreement": 0.9439834024896265
+    },
+    "c50": {
+      "mean_regret_s": 1.1794950193389322,
+      "top1_oracle_agreement": 0.9390041493775934
+    },
+    "c100": {
+      "mean_regret_s": 1.3661054404444715,
+      "top1_oracle_agreement": 0.9406639004149377
+    }
+  },
+  "primary_comparison": {
+    "delta_mean_regret_s": 0.5865478206966922,
+    "ci95_task_pair_cluster_bootstrap_s": [
+      0.11967355975100544,
+      1.188047871020904
+    ],
+    "task_pair_clusters": 185,
+    "bootstrap_draws": 10000,
+    "go": false
+  },
+  "decision": "STOP; do not descend to clause features to rescue the result",
+  "review": "Independent bounded review found no critical or major issue; its terminology-only minor was fixed before this run.",
+  "limitations": [
+    "Both SWE corpora are development-exposed.",
+    "Observed concurrency is two, not CacheWise's 30-50 sessions.",
+    "This tests a hypothetical victim ranking on observed overlapping gaps; no memory pressure or actual eviction was observed.",
+    "This does not test eviction count or end-to-end completion time.",
+    "Some repositories overlap between fit and evaluation."
+  ]
+}
