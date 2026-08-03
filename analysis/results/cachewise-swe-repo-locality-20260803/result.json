@@ -1,0 +1,1419 @@
+{
+  "status": "development-exposed same-repository diagnostic",
+  "question": "Does task-disjoint same-repository history make CacheWise C100 outperform a same-repository tool-name baseline?",
+  "protocol": {
+    "fit_root": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/offline-gated-confirm-100-v2",
+    "eval_root": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/fresh-seed42-skip150-n200",
+    "repo_key": "strip only the trailing -<issue number> from SWE task ID",
+    "eligibility": "natural ranking event where every candidate repository has at least one task in fit",
+    "repo_history": "fit tasks from only that candidate repository; exhausted cluster falls back to repo tool-name then repo global",
+    "primary": "mean_regret(repo_c100) - mean_regret(repo_tool)",
+    "go_criterion": "upper endpoint of 95% unordered-task-pair cluster-bootstrap CI < 0",
+    "task_stability": "maximum mean primary delta after deleting every event involving one evaluation repository < 0"
+  },
+  "data": {
+    "fit_tasks": 100,
+    "fit_gaps": 4175,
+    "eval_tasks": 277,
+    "eval_repositories": 213,
+    "eval_gaps": 12771,
+    "overlapping_repositories": 36,
+    "eligible_ranking_events": 199,
+    "eligible_task_pairs": 15,
+    "same_repo_ranking_events": 7,
+    "same_repo_task_pairs": 1
+  },
+  "metrics": {
+    "pooled_tool": {
+      "mean_regret_s": 0.665267919176188,
+      "top1_oracle_agreement": 0.9246231155778895
+    },
+    "pooled_c100": {
+      "mean_regret_s": 1.25352445199861,
+      "top1_oracle_agreement": 0.914572864321608
+    },
+    "repo_tool": {
+      "mean_regret_s": 33.73404604346309,
+      "top1_oracle_agreement": 0.44221105527638194
+    },
+    "repo_c100": {
+      "mean_regret_s": 33.320949130321864,
+      "top1_oracle_agreement": 0.4472361809045226
+    }
+  },
+  "comparisons": {
+    "pooled_c100_minus_pooled_tool": {
+      "delta_mean_regret_s": 0.5882565328224221,
+      "ci95_task_pair_cluster_bootstrap_s": [
+        -0.030316090221232907,
+        1.4810917462463724
+      ],
+      "task_pair_clusters": 15,
+      "bootstrap_draws": 10000,
+      "go": false,
+      "choice_changes": 12,
+      "helpful_changes": 5,
+      "harmful_changes": 7,
+      "helpful_seconds": 10.000720024108887,
+      "harmful_seconds": 127.06377005577087
+    },
+    "repo_c100_minus_repo_tool": {
+      "delta_mean_regret_s": -0.4130969131412219,
+      "ci95_task_pair_cluster_bootstrap_s": [
+        -1.6886471733146784,
+        0.017638733878984913
+      ],
+      "task_pair_clusters": 15,
+      "bootstrap_draws": 10000,
+      "go": false,
+      "choice_changes": 17,
+      "helpful_changes": 9,
+      "harmful_changes": 8,
+      "helpful_seconds": 98.29599905014038,
+      "harmful_seconds": 16.08971333503723
+    },
+    "repo_tool_minus_pooled_tool": {
+      "delta_mean_regret_s": 33.0687781242869,
+      "ci95_task_pair_cluster_bootstrap_s": [
+        7.100724389795214,
+        66.50722330579052
+      ],
+      "task_pair_clusters": 15,
+      "bootstrap_draws": 10000,
+      "go": false,
+      "choice_changes": 110,
+      "helpful_changes": 7,
+      "harmful_changes": 103,
+      "helpful_seconds": 23.861584901809692,
+      "harmful_seconds": 6604.548431634903
+    },
+    "repo_c100_minus_pooled_c100": {
+      "delta_mean_regret_s": 32.067424678323256,
+      "ci95_task_pair_cluster_bootstrap_s": [
+        6.209590716089204,
+        65.63301691158199
+      ],
+      "task_pair_clusters": 15,
+      "bootstrap_draws": 10000,
+      "go": false,
+      "choice_changes": 109,
+      "helpful_changes": 8,
+      "harmful_changes": 101,
+      "helpful_seconds": 152.04396414756775,
+      "harmful_seconds": 6533.461475133896
+    }
+  },
+  "primary_comparison": {
+    "delta_mean_regret_s": -0.4130969131412219,
+    "ci95_task_pair_cluster_bootstrap_s": [
+      -1.6886471733146784,
+      0.017638733878984913
+    ],
+    "task_pair_clusters": 15,
+    "bootstrap_draws": 10000,
+    "go": false,
+    "choice_changes": 17,
+    "helpful_changes": 9,
+    "harmful_changes": 8,
+    "helpful_seconds": 98.29599905014038,
+    "harmful_seconds": 16.08971333503723
+  },
+  "repo_deletion_results": [
+    {
+      "excluded_repo": "sqlfluff__sqlfluff",
+      "removed_events": 30,
+      "ranking_events": 169,
+      "delta_mean_regret_s": 0.003008714089026818
+    },
+    {
+      "excluded_repo": "iterative__dvc",
+      "removed_events": 71,
+      "ranking_events": 128,
+      "delta_mean_regret_s": -0.002772785723209381
+    },
+    {
+      "excluded_repo": "12rambau__sepal_ui",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "ARMmbed__mbed-tools",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "ASPP__pelita",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "AzureAD__microsoft-authentication-library-for-python",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "Azure__azure-cli",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "Azure__iotedgedev",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "Azure__msrestazure-for-python",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "CS-SI__eodag",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "CodeWithEmad__apyrat",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "CoffeaTeam__coffea",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "CrossGL__crosstl",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "DHI__mikeio",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "DataBiosphere__toil",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "Delgan__loguru",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "Dorthu__openapi3",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "Duke-GCB__lando",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "Eyepea__aiosip",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "G-Node__python-odml",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "Luke-Poeppel__decitala",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "Materials-Consortia__optimade-python-tools",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "MatterMiners__tardis",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "MycroftAI__lingua-franca",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "NREL__hescore-hpxml",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "NeurodataWithoutBorders__pynwb",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "Ouranosinc__xclim",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "PennLINC__xcp_d",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "PyCQA__flake8-bugbear",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "PyCQA__pyflakes",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "QuickPay__quickpay-python-client",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "RDFLib__rdflib",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "SAP__cloud-pysec",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "Stewori__pytypes",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "Veinar__envcloak",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "aequitas__python-rflink",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "agronholm__anyio",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "aio-libs__yarl",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "airspeed-velocity__asv",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "alanmcruickshank__sqlfluff",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "alexander-akhmetov__python-telegram",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "algorand__pyteal",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "andialbrecht__sqlparse",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "andrasmaroy__pconf",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "asdf-format__asdf",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "asottile__pyupgrade",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "aspuru-guzik-group__selfies",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "astanin__python-tabulate",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "astropy__astroquery",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "astropy__photutils",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "awdeorio__mailmerge",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "beeware__briefcase",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "berkerpeksag__astor",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "bids-standard__pybids",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "briancurtin__deprecation",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "brightway-lca__brightway2-data",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "broadinstitute__cromshell",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "bvanelli__actualpy",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "canonical__charmcraft",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "canonical__operator",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "capsulecorplab__mindgraph",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "catalystneuro__neuroconv",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "cekit__cekit",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "cleder__fastkml",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "codesankalp__dsalgo",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "cosmicBboy__pandera",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "coverahealth__dataspec",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "cpplint__cpplint",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "creare-com__podpac",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "da4089__simplefix",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "dag-hammarskjold-library__dlx",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "dandi__dandi-cli",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "dapr__python-sdk",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "dask__dask-ml",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "docker__docker-py",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "dpkp__kafka-python",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "dwavesystems__dimod",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "elcaminoreal__elcaminoreal",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "encode__httpx",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "encode__uvicorn",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "facelessuser__pymdown-extensions",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "facelessuser__soupsieve",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "facelessuser__wcmatch",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "feder-observatory__stellarphot",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "fjosw__pyerrors",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "fsspec__filesystem_spec",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "fzakaria__nix-auto-follow",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "gerbenoostra__poetry-plugin-mono-repo-deps",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "getsentry__sentry-python",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "googleapis__google-auth-library-python",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "googleapis__python-bigquery",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "googleapis__python-pubsub",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "gristlabs__asttokens",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "hgrecco__pint",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "hhm970__c10-games-tracker-project",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "hylang__hy",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "ioos__erddapy",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "ipython__ipython",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "jamesoff__simplemonitor",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "janehmueller__python-json-config",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "jaywink__federation",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "jboss-dockerfiles__dogen",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "jd__tenacity",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "joshtemple__lkml",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "jpadilla__pyjwt",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "jriddy__zerial",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "kaste__mockito-python",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "kjd__idna",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "lanl__scico",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "larq__zookeeper",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "lbl-anp__becquerel",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "learningequality__kolibri",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "lektor__lektor",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "lincc-frameworks__nested-pandas",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "lincolnloop__goodconf",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "lmfit__lmfit-py",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "makcedward__nlpaug",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "marcelm__cutadapt",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "marcosschroh__dataclasses-avroschema",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "marshmallow-code__apispec",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "matrix-org__synapse",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "mdowds__python-mock-firestore",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "microsoft__electionguard-python",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "microsoft__pybryt",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "mikedh__trimesh",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "missionpinball__mpf",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "mitmproxy__pdoc",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "mjs__imapclient",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "modin-project__modin",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "mwouts__jupytext",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "narwhals-dev__narwhals",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "nathan-v__aws_okta_keyman",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "nephila__python-taiga",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "networkx__networkx",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "nilearn__nilearn",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "numba__numba",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "omni-us__jsonargparse",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "online-judge-tools__oj",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "open-dicom__dicom_parser",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "pandas-dev__pandas",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "pdm-project__pdm",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "planetlabs__planet-client-python",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "pre-commit__pre-commit",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "probabl-ai__skore",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "pycasbin__sqlalchemy-adapter",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "pypa__wheel",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "pytest-dev__pytest-xdist",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "python-babel__babel",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "python-cmd2__cmd2",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "python-lsp__python-lsp-server",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "pyupio__safety",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "qiboteam__qibo",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "qutech__qupulse",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "reanahub__reana-client",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "reata__sqllineage",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "reframe-hpc__reframe",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "rl-institut__smooth",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "sangoma__ursine",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "scikit-hep__pylhe",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "scikit-hep__vector",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "scipp__plopp",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "scrapy__scrapy",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "sendgrid__sendgrid-python",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "simonsobs__ocs",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "simpeg__simpeg",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "sktime__sktime",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "smartystreets__smartystreets-python-sdk",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "soar-telescope__goodman_focus",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "sosw__sosw",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "spacetelescope__jwst",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "sphinx-doc__sphinx",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "statsmodels__statsmodels",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "streamlink__streamlink",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "stuartmaxwell__djpress",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "stummjr__scrapy-fieldstats",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "sunpy__sunpy",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "tefra__xsdata",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "terrapower__armi",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "terrencepreilly__darglint",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "theskumar__python-dotenv",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "titipata__pubmed_parser",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "tophat__syrupy",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "tornadoweb__tornado",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "tox-dev__tox",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "tskit-dev__tsdate",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "ttu__ruuvitag-sensor",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "twisted__towncrier",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "urllib3__urllib3",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "vyperlang__vyper",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "webscopeio__license.sh",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "wemake-services__wemake-python-styleguide",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "wireservice__csvkit",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "yt-project__unyt",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "yukinarit__pyserde",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "zarr-developers__zarr-python",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "zmoog__refurbished",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "zopefoundation__zope.schema",
+      "removed_events": 0,
+      "ranking_events": 199,
+      "delta_mean_regret_s": -0.4130969131412219
+    },
+    {
+      "excluded_repo": "cloud-custodian__cloud-custodian",
+      "removed_events": 1,
+      "ranking_events": 198,
+      "delta_mean_regret_s": -0.41518326118738963
+    },
+    {
+      "excluded_repo": "deepset-ai__haystack",
+      "removed_events": 1,
+      "ranking_events": 198,
+      "delta_mean_regret_s": -0.41518326118738963
+    },
+    {
+      "excluded_repo": "pytorch__ignite",
+      "removed_events": 1,
+      "ranking_events": 198,
+      "delta_mean_regret_s": -0.41518326118738963
+    },
+    {
+      "excluded_repo": "borgbackup__borg",
+      "removed_events": 3,
+      "ranking_events": 196,
+      "delta_mean_regret_s": -0.4194198250770569
+    },
+    {
+      "excluded_repo": "ethereum__web3.py",
+      "removed_events": 3,
+      "ranking_events": 196,
+      "delta_mean_regret_s": -0.4194198250770569
+    },
+    {
+      "excluded_repo": "joke2k__faker",
+      "removed_events": 3,
+      "ranking_events": 196,
+      "delta_mean_regret_s": -0.4194198250770569
+    },
+    {
+      "excluded_repo": "pydicom__pydicom",
+      "removed_events": 10,
+      "ranking_events": 189,
+      "delta_mean_regret_s": -0.4369860956908534
+    },
+    {
+      "excluded_repo": "SpikeInterface__spikeinterface",
+      "removed_events": 18,
+      "ranking_events": 181,
+      "delta_mean_regret_s": -0.45187324845329835
+    },
+    {
+      "excluded_repo": "aws__chalice",
+      "removed_events": 16,
+      "ranking_events": 183,
+      "delta_mean_regret_s": -0.45517401877648195
+    },
+    {
+      "excluded_repo": "tobymao__sqlglot",
+      "removed_events": 21,
+      "ranking_events": 178,
+      "delta_mean_regret_s": -0.45755148737618095
+    },
+    {
+      "excluded_repo": "spdx__tools-python",
+      "removed_events": 19,
+      "ranking_events": 180,
+      "delta_mean_regret_s": -0.4581507523854574
+    },
+    {
+      "excluded_repo": "PennyLaneAI__pennylane",
+      "removed_events": 25,
+      "ranking_events": 174,
+      "delta_mean_regret_s": -0.47244991790289165
+    },
+    {
+      "excluded_repo": "CORE-GATECH-GROUP__serpent-tools",
+      "removed_events": 40,
+      "ranking_events": 159,
+      "delta_mean_regret_s": -0.5205652083990708
+    },
+    {
+      "excluded_repo": "conan-io__conan",
+      "removed_events": 41,
+      "ranking_events": 158,
+      "delta_mean_regret_s": -0.5248495355437074
+    },
+    {
+      "excluded_repo": "mhostetter__galois",
+      "removed_events": 43,
+      "ranking_events": 156,
+      "delta_mean_regret_s": -0.5261769646253341
+    },
+    {
+      "excluded_repo": "dask__dask",
+      "removed_events": 45,
+      "ranking_events": 154,
+      "delta_mean_regret_s": -0.5310977790262792
+    }
+  ],
+  "repo_stability": {
+    "evaluated_repositories": 213,
+    "worst_deletion": {
+      "excluded_repo": "sqlfluff__sqlfluff",
+      "removed_events": 30,
+      "ranking_events": 169,
+      "delta_mean_regret_s": 0.003008714089026818
+    },
+    "go": false
+  },
+  "decision": "STOP; do not collect new traces to rescue repository locality",
+  "review": "Independent bounded review found no critical or major issue; its repo-deletion completeness and self-check minors were fixed before the formal run.",
+  "limitations": [
+    "Both SWE corpora and this repository-locality hypothesis are development-exposed.",
+    "Most repository-local histories contain only one or two fit tasks.",
+    "Natural overlap reaches concurrency two and contains almost no same-repository candidate pairs.",
+    "This measures hypothetical victim regret, not KV pressure, eviction count, or JCT."
+  ]
+}

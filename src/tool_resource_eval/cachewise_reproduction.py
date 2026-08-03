@@ -81,7 +81,7 @@ def load_gaps(root: Path) -> list[Gap]:
             end = float(llm[window.next_llm_action_id]["ts_start"])
             batch_args: list[Any] = []
             for call_id in window.tool_call_ids:
-                data = (tools[call_id].get("data") or {})
+                data = tools[call_id].get("data") or {}
                 batch_args.append(_parse_args(data.get("tool_args")))
             gaps.append(
                 Gap(
@@ -117,13 +117,18 @@ def _histories(gaps: Iterable[Gap]) -> tuple[np.ndarray, dict[str, np.ndarray]]:
 
 def fit_clusters(
     gaps: list[Gap],
+    *,
+    cluster_counts: Iterable[int] = CLUSTER_COUNTS,
 ) -> tuple[dict[int, dict[str, ClusterModel]], dict[int, dict[str, int]]]:
+    counts = tuple(cluster_counts)
+    if not counts or any(count < 1 for count in counts):
+        raise ValueError("cluster_counts must contain positive integers")
     grouped: dict[str, list[Gap]] = defaultdict(list)
     for gap in gaps:
         grouped[gap.tool_key].append(gap)
 
-    models = {count: {} for count in CLUSTER_COUNTS}
-    occupied = {count: {} for count in CLUSTER_COUNTS}
+    models = {count: {} for count in counts}
+    occupied = {count: {} for count in counts}
     for tool_key, rows in grouped.items():
         texts = [row.args_text for row in rows]
         vectorizer = TfidfVectorizer(max_features=5000)
@@ -131,7 +136,7 @@ def fit_clusters(
             matrix = vectorizer.fit_transform(texts)
         except ValueError:
             continue
-        for count in CLUSTER_COUNTS:
+        for count in counts:
             n_clusters = min(count, len(rows), len(set(texts)))
             if n_clusters < 1:
                 continue
@@ -154,7 +159,9 @@ def fit_clusters(
                 kmeans=kmeans,
                 durations=cluster_durations,
             )
-            occupied[count][tool_key] = sum(len(values) > 0 for values in cluster_durations)
+            occupied[count][tool_key] = sum(
+                len(values) > 0 for values in cluster_durations
+            )
     return models, occupied
 
 
@@ -172,17 +179,27 @@ def _predict(
     global_history: np.ndarray,
     tool_history: dict[str, np.ndarray],
     clusters: dict[int, dict[str, ClusterModel]],
+    label_cache: dict[tuple[int, str, str], int] | None = None,
 ) -> float:
     if arm.startswith("c"):
         count = int(arm[1:])
         model = clusters[count].get(gap.tool_key)
         if model is not None:
-            label = int(model.kmeans.predict(model.vectorizer.transform([gap.args_text]))[0])
+            cache_key = (count, gap.tool_key, gap.args_text)
+            label = label_cache.get(cache_key) if label_cache is not None else None
+            if label is None:
+                label = int(
+                    model.kmeans.predict(model.vectorizer.transform([gap.args_text]))[0]
+                )
+                if label_cache is not None:
+                    label_cache[cache_key] = label
             prediction = _remaining_mean(model.durations[label], elapsed)
             if prediction is not None:
                 return prediction
     if arm != "global":
-        prediction = _remaining_mean(tool_history.get(gap.tool_key, np.asarray([])), elapsed)
+        prediction = _remaining_mean(
+            tool_history.get(gap.tool_key, np.asarray([])), elapsed
+        )
         if prediction is not None:
             return prediction
     return _remaining_mean(global_history, elapsed) or 0.0
@@ -193,12 +210,12 @@ def evaluate(
     global_history: np.ndarray,
     tool_history: dict[str, np.ndarray],
     clusters: dict[int, dict[str, ClusterModel]],
+    *,
+    label_cache: dict[tuple[int, str, str], int] | None = None,
 ) -> tuple[dict[str, dict[str, float]], dict[str, list[tuple[tuple[str, ...], float]]]]:
     arms = ("global", "tool", "c20", "c50", "c100")
     active: list[Gap] = []
-    rows: dict[str, list[tuple[tuple[str, ...], float]]] = {
-        arm: [] for arm in arms
-    }
+    rows: dict[str, list[tuple[tuple[str, ...], float]]] = {arm: [] for arm in arms}
     correct = {arm: 0 for arm in arms}
     for gap in gaps:
         active = [
@@ -209,7 +226,9 @@ def evaluate(
         candidates = [*active, gap]
         if len(candidates) >= 2:
             pair = tuple(sorted(candidate.session_id for candidate in candidates))
-            oracle_remaining = max(candidate.end - gap.start for candidate in candidates)
+            oracle_remaining = max(
+                candidate.end - gap.start for candidate in candidates
+            )
             for arm in arms:
                 chosen = max(
                     candidates,
@@ -221,6 +240,7 @@ def evaluate(
                             global_history,
                             tool_history,
                             clusters,
+                            label_cache,
                         ),
                         candidate.session_id,
                     ),
@@ -310,7 +330,9 @@ def run(fit_root: Path, eval_root: Path) -> dict[str, Any]:
         },
         "metrics": metrics,
         "primary_comparison": primary,
-        "decision": "GO to one live pressure experiment" if primary["go"] else "STOP; do not descend to clause features to rescue the result",
+        "decision": "GO to one live pressure experiment"
+        if primary["go"]
+        else "STOP; do not descend to clause features to rescue the result",
         "review": "Independent bounded review found no critical or major issue; its terminology-only minor was fixed before this run.",
         "limitations": [
             "Both SWE corpora are development-exposed.",
@@ -340,9 +362,9 @@ def self_check() -> None:
     clusters, _ = fit_clusters(fit)
     quick = Gap("q", 20.0, 21.0, "exec", "quick status")
     slow = Gap("s", 20.0, 30.0, "exec", "long test suite")
-    assert _predict(slow, 0.0, "c20", global_history, tool_history, clusters) > _predict(
-        quick, 0.0, "c20", global_history, tool_history, clusters
-    )
+    assert _predict(
+        slow, 0.0, "c20", global_history, tool_history, clusters
+    ) > _predict(quick, 0.0, "c20", global_history, tool_history, clusters)
 
 
 def main() -> None:
@@ -361,7 +383,9 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("analysis/results/cachewise-swe-reproduction-20260731/result.json"),
+        default=Path(
+            "analysis/results/cachewise-swe-reproduction-20260731/result.json"
+        ),
     )
     args = parser.parse_args()
     if args.self_check:

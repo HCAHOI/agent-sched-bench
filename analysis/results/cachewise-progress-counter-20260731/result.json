@@ -1,0 +1,83 @@
+{
+  "status": "development-exposed diagnostic",
+  "question": "Do causal in-exec CPU/network counters improve observed-overlap remaining-time ordering over tool-name survival?",
+  "protocol": {
+    "fit_root": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/offline-gated-confirm-100-v2",
+    "eval_root": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/fresh-seed42-skip150-n200",
+    "fit_unit": "one row per observed resource-timeline sample endpoint in a single-exec gap",
+    "eval_unit": "all observed-overlap gap-start ranking events; unsupported gaps fall back to tool-name survival",
+    "features": [
+      "gap_elapsed_s",
+      "sample_count",
+      "cumulative_cpu_core_s",
+      "mean_cpu_cores",
+      "recent_cpu_cores",
+      "cpu_fraction_of_quota",
+      "cpu_quota_cores",
+      "log1p_cumulative_net_rx_bytes",
+      "log1p_cumulative_net_tx_bytes",
+      "log1p_recent_net_rx_bytes_per_s",
+      "log1p_recent_net_tx_bytes_per_s"
+    ],
+    "model": "sklearn HistGradientBoostingRegressor defaults, random_state=0",
+    "primary": "mean_regret(progress) - mean_regret(tool)",
+    "go_criterion": "upper endpoint of 95% unordered-task-pair cluster-bootstrap CI < 0",
+    "sample_availability": "tool action start + recorder offset + frozen 0.050 s pad; action end is used only for a fail-closed bound audit"
+  },
+  "data": {
+    "fit_gaps": 4175,
+    "fit_single_exec_gaps_with_progress": 705,
+    "fit_progress_rows": 11157,
+    "eval_gaps": 12771,
+    "ranking_events": 2410,
+    "ranking_events_with_causal_progress": 2212,
+    "changed_choices": 71,
+    "task_pair_clusters": 185,
+    "max_concurrency": 2
+  },
+  "metrics": {
+    "tool": {
+      "mean_regret_s": 0.7795576197477792,
+      "top1_oracle_agreement": 0.9398340248962656,
+      "p95_regret_s": 0.0883441805839527,
+      "p99_regret_s": 17.274826467037023,
+      "max_regret_s": 269.85966062545776
+    },
+    "progress": {
+      "mean_regret_s": 1.2842396181154054,
+      "top1_oracle_agreement": 0.91701244813278,
+      "p95_regret_s": 1.4568834662437324,
+      "p99_regret_s": 37.805379223823294,
+      "max_regret_s": 269.85966062545776
+    }
+  },
+  "mechanism_diagnostics": {
+    "changed_better": 8,
+    "changed_worse": 63,
+    "cumulative_help_s": 32.875168800354004,
+    "cumulative_harm_s": 1249.158784866333,
+    "point_candidate_rows": 2212,
+    "tool_point_mae_s": 57.42821163883346,
+    "progress_point_mae_s": 55.24080907313441,
+    "tool_point_bias_s": 26.25283487570731,
+    "progress_point_bias_s": -16.82655317663287
+  },
+  "primary_comparison": {
+    "delta_mean_regret_s": 0.5046819983676262,
+    "ci95_task_pair_cluster_bootstrap_s": [
+      0.25684143555876576,
+      0.7953774302424093
+    ],
+    "task_pair_clusters": 185,
+    "bootstrap_draws": 10000,
+    "go": false
+  },
+  "decision": "STOP existing-counter direction",
+  "review": "Independent review found no critical or major issue after a causal timestamp fix and focused re-review.",
+  "limitations": [
+    "Both SWE corpora and fresh-277 outcomes are development-exposed.",
+    "Counters are whole task-container cgroup deltas during a single exec, not clause-exclusive attribution.",
+    "Observed ranking concurrency is two and no actual KV memory pressure or eviction is present.",
+    "CPU/network progress cannot establish the value of uncollected time-resolved disk, RSS, or process-phase signals."
+  ]
+}

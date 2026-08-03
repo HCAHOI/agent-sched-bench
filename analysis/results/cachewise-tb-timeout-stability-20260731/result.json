@@ -1,0 +1,1064 @@
+{
+  "status": "development-exposed timeout-only task-stability diagnostic",
+  "question": "Does exact inference-time timeout conditioning improve TB victim ordering without depending on any one evaluation task?",
+  "protocol": {
+    "root": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/canonical",
+    "split_task_ids": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/task_ids.txt",
+    "timeout_key": "(tool batch, exact tuple of positive finite numeric timeout values); missing/unusable values fall back to tool-name",
+    "schedule_seeds": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31
+    ],
+    "primary": "mean_regret(timeout) - mean_regret(tool)",
+    "aggregate_go": "upper endpoint of 95% paired schedule bootstrap CI < 0",
+    "task_stability_go": "maximum mean delta over exhaustive delete-one-evaluation-task schedules < 0"
+  },
+  "data": {
+    "fit_tasks_declared": 139,
+    "fit_tasks_with_gaps": 136,
+    "fit_gaps": 1888,
+    "eval_tasks_declared": 100,
+    "eval_tasks_with_gaps": 99,
+    "eval_gaps": 1227,
+    "timeout_history_keys": 24
+  },
+  "schedule_results": [
+    {
+      "seed": 0,
+      "ranking_events": 1193,
+      "choice_changes": 544,
+      "tool_mean_regret_s": 160.55015764232454,
+      "timeout_mean_regret_s": 129.39784131525747,
+      "delta_mean_regret_s": -31.15231632706707,
+      "tool_top1_oracle_agreement": 0.14249790444258173,
+      "timeout_top1_oracle_agreement": 0.23218776194467727,
+      "realized_mean_live_sessions": 8.540876001729641,
+      "realized_max_live_sessions": 45
+    },
+    {
+      "seed": 1,
+      "ranking_events": 1185,
+      "choice_changes": 558,
+      "tool_mean_regret_s": 221.81869004929618,
+      "timeout_mean_regret_s": 208.1118108232313,
+      "delta_mean_regret_s": -13.70687922606487,
+      "tool_top1_oracle_agreement": 0.31645569620253167,
+      "timeout_top1_oracle_agreement": 0.22869198312236286,
+      "realized_mean_live_sessions": 9.448336319686835,
+      "realized_max_live_sessions": 47
+    },
+    {
+      "seed": 2,
+      "ranking_events": 1203,
+      "choice_changes": 557,
+      "tool_mean_regret_s": 235.17715609836657,
+      "timeout_mean_regret_s": 223.67663809842898,
+      "delta_mean_regret_s": -11.500517999937586,
+      "tool_top1_oracle_agreement": 0.20615128844555278,
+      "timeout_top1_oracle_agreement": 0.2460515378221114,
+      "realized_mean_live_sessions": 9.107605742632272,
+      "realized_max_live_sessions": 50
+    },
+    {
+      "seed": 3,
+      "ranking_events": 1158,
+      "choice_changes": 260,
+      "tool_mean_regret_s": 225.63019513630908,
+      "timeout_mean_regret_s": 216.30818498814045,
+      "delta_mean_regret_s": -9.32201014816863,
+      "tool_top1_oracle_agreement": 0.24438687392055267,
+      "timeout_top1_oracle_agreement": 0.24870466321243523,
+      "realized_mean_live_sessions": 9.160461598318928,
+      "realized_max_live_sessions": 45
+    },
+    {
+      "seed": 4,
+      "ranking_events": 1126,
+      "choice_changes": 222,
+      "tool_mean_regret_s": 148.646913096494,
+      "timeout_mean_regret_s": 182.90645542216768,
+      "delta_mean_regret_s": 34.25954232567369,
+      "tool_top1_oracle_agreement": 0.48312611012433393,
+      "timeout_top1_oracle_agreement": 0.38543516873889877,
+      "realized_mean_live_sessions": 8.7905949601402,
+      "realized_max_live_sessions": 43
+    },
+    {
+      "seed": 5,
+      "ranking_events": 1191,
+      "choice_changes": 736,
+      "tool_mean_regret_s": 252.90795846609984,
+      "timeout_mean_regret_s": 151.32664285819135,
+      "delta_mean_regret_s": -101.5813156079085,
+      "tool_top1_oracle_agreement": 0.13350125944584382,
+      "timeout_top1_oracle_agreement": 0.35852225020990763,
+      "realized_mean_live_sessions": 8.599037258548027,
+      "realized_max_live_sessions": 44
+    },
+    {
+      "seed": 6,
+      "ranking_events": 1141,
+      "choice_changes": 337,
+      "tool_mean_regret_s": 216.07917826808827,
+      "timeout_mean_regret_s": 216.2795817678587,
+      "delta_mean_regret_s": 0.20040349977043093,
+      "tool_top1_oracle_agreement": 0.3339176161262051,
+      "timeout_top1_oracle_agreement": 0.2462751971954426,
+      "realized_mean_live_sessions": 9.591875482440596,
+      "realized_max_live_sessions": 47
+    },
+    {
+      "seed": 7,
+      "ranking_events": 1145,
+      "choice_changes": 436,
+      "tool_mean_regret_s": 200.28704850663263,
+      "timeout_mean_regret_s": 178.58445872490063,
+      "delta_mean_regret_s": -21.702589781732,
+      "tool_top1_oracle_agreement": 0.28820960698689957,
+      "timeout_top1_oracle_agreement": 0.32838427947598253,
+      "realized_mean_live_sessions": 9.322775365792355,
+      "realized_max_live_sessions": 48
+    },
+    {
+      "seed": 8,
+      "ranking_events": 1152,
+      "choice_changes": 502,
+      "tool_mean_regret_s": 223.59086837184927,
+      "timeout_mean_regret_s": 192.07644504288004,
+      "delta_mean_regret_s": -31.51442332896923,
+      "tool_top1_oracle_agreement": 0.2673611111111111,
+      "timeout_top1_oracle_agreement": 0.2326388888888889,
+      "realized_mean_live_sessions": 9.2680354113367,
+      "realized_max_live_sessions": 44
+    },
+    {
+      "seed": 9,
+      "ranking_events": 1184,
+      "choice_changes": 566,
+      "tool_mean_regret_s": 281.29469576780053,
+      "timeout_mean_regret_s": 218.05094955901842,
+      "delta_mean_regret_s": -63.24374620878211,
+      "tool_top1_oracle_agreement": 0.16722972972972974,
+      "timeout_top1_oracle_agreement": 0.15118243243243243,
+      "realized_mean_live_sessions": 9.003703025871676,
+      "realized_max_live_sessions": 54
+    },
+    {
+      "seed": 10,
+      "ranking_events": 1193,
+      "choice_changes": 385,
+      "tool_mean_regret_s": 194.17684225884187,
+      "timeout_mean_regret_s": 186.27120228465225,
+      "delta_mean_regret_s": -7.905639974189626,
+      "tool_top1_oracle_agreement": 0.38725901089689857,
+      "timeout_top1_oracle_agreement": 0.30511316010058676,
+      "realized_mean_live_sessions": 9.213934530774603,
+      "realized_max_live_sessions": 44
+    },
+    {
+      "seed": 11,
+      "ranking_events": 1200,
+      "choice_changes": 492,
+      "tool_mean_regret_s": 143.1231531014045,
+      "timeout_mean_regret_s": 180.06385325094064,
+      "delta_mean_regret_s": 36.94070014953613,
+      "tool_top1_oracle_agreement": 0.2866666666666667,
+      "timeout_top1_oracle_agreement": 0.31,
+      "realized_mean_live_sessions": 8.438144550718066,
+      "realized_max_live_sessions": 46
+    },
+    {
+      "seed": 12,
+      "ranking_events": 1206,
+      "choice_changes": 489,
+      "tool_mean_regret_s": 224.75065394025142,
+      "timeout_mean_regret_s": 156.03510807363153,
+      "delta_mean_regret_s": -68.71554586661989,
+      "tool_top1_oracle_agreement": 0.3250414593698176,
+      "timeout_top1_oracle_agreement": 0.5124378109452736,
+      "realized_mean_live_sessions": 8.540876001908021,
+      "realized_max_live_sessions": 49
+    },
+    {
+      "seed": 13,
+      "ranking_events": 1173,
+      "choice_changes": 580,
+      "tool_mean_regret_s": 228.0844874091364,
+      "timeout_mean_regret_s": 176.22893807325013,
+      "delta_mean_regret_s": -51.85554933588625,
+      "tool_top1_oracle_agreement": 0.3034953111679454,
+      "timeout_top1_oracle_agreement": 0.35805626598465473,
+      "realized_mean_live_sessions": 8.852219256337701,
+      "realized_max_live_sessions": 48
+    },
+    {
+      "seed": 14,
+      "ranking_events": 1204,
+      "choice_changes": 448,
+      "tool_mean_regret_s": 187.499041117505,
+      "timeout_mean_regret_s": 207.98443154183732,
+      "delta_mean_regret_s": 20.485390424332337,
+      "tool_top1_oracle_agreement": 0.2840531561461794,
+      "timeout_top1_oracle_agreement": 0.19684385382059802,
+      "realized_mean_live_sessions": 9.055356344173278,
+      "realized_max_live_sessions": 51
+    },
+    {
+      "seed": 15,
+      "ranking_events": 1184,
+      "choice_changes": 569,
+      "tool_mean_regret_s": 225.04815627332474,
+      "timeout_mean_regret_s": 192.54987976337605,
+      "delta_mean_regret_s": -32.49827650994868,
+      "tool_top1_oracle_agreement": 0.1858108108108108,
+      "timeout_top1_oracle_agreement": 0.23733108108108109,
+      "realized_mean_live_sessions": 9.392116384891013,
+      "realized_max_live_sessions": 45
+    },
+    {
+      "seed": 16,
+      "ranking_events": 1204,
+      "choice_changes": 383,
+      "tool_mean_regret_s": 246.63378910923322,
+      "timeout_mean_regret_s": 209.0027872118047,
+      "delta_mean_regret_s": -37.63100189742852,
+      "tool_top1_oracle_agreement": 0.26827242524916944,
+      "timeout_top1_oracle_agreement": 0.37375415282392027,
+      "realized_mean_live_sessions": 8.902144283672019,
+      "realized_max_live_sessions": 47
+    },
+    {
+      "seed": 17,
+      "ranking_events": 1197,
+      "choice_changes": 409,
+      "tool_mean_regret_s": 236.647618622011,
+      "timeout_mean_regret_s": 219.2471074791082,
+      "delta_mean_regret_s": -17.400511142902815,
+      "tool_top1_oracle_agreement": 0.1361737677527151,
+      "timeout_top1_oracle_agreement": 0.22138680033416874,
+      "realized_mean_live_sessions": 9.635791578025653,
+      "realized_max_live_sessions": 46
+    },
+    {
+      "seed": 18,
+      "ranking_events": 1203,
+      "choice_changes": 395,
+      "tool_mean_regret_s": 228.66302247812425,
+      "timeout_mean_regret_s": 163.5996209128341,
+      "delta_mean_regret_s": -65.06340156529015,
+      "tool_top1_oracle_agreement": 0.2635078969243558,
+      "timeout_top1_oracle_agreement": 0.30756442227763925,
+      "realized_mean_live_sessions": 9.621108265742672,
+      "realized_max_live_sessions": 44
+    },
+    {
+      "seed": 19,
+      "ranking_events": 1163,
+      "choice_changes": 313,
+      "tool_mean_regret_s": 231.49906566956898,
+      "timeout_mean_regret_s": 245.5013378568487,
+      "delta_mean_regret_s": 14.002272187279715,
+      "tool_top1_oracle_agreement": 0.2063628546861565,
+      "timeout_top1_oracle_agreement": 0.236457437661221,
+      "realized_mean_live_sessions": 8.669884990700023,
+      "realized_max_live_sessions": 47
+    },
+    {
+      "seed": 20,
+      "ranking_events": 1204,
+      "choice_changes": 735,
+      "tool_mean_regret_s": 251.93731434262077,
+      "timeout_mean_regret_s": 180.33255282371147,
+      "delta_mean_regret_s": -71.6047615189093,
+      "tool_top1_oracle_agreement": 0.14451827242524917,
+      "timeout_top1_oracle_agreement": 0.3230897009966777,
+      "realized_mean_live_sessions": 8.754030504079752,
+      "realized_max_live_sessions": 48
+    },
+    {
+      "seed": 21,
+      "ranking_events": 1159,
+      "choice_changes": 219,
+      "tool_mean_regret_s": 97.93239821392056,
+      "timeout_mean_regret_s": 120.77511049962641,
+      "delta_mean_regret_s": 22.842712285705844,
+      "tool_top1_oracle_agreement": 0.4201898188093184,
+      "timeout_top1_oracle_agreement": 0.42795513373597927,
+      "realized_mean_live_sessions": 8.990881639683177,
+      "realized_max_live_sessions": 53
+    },
+    {
+      "seed": 22,
+      "ranking_events": 1156,
+      "choice_changes": 475,
+      "tool_mean_regret_s": 242.66935211358185,
+      "timeout_mean_regret_s": 174.32031012385775,
+      "delta_mean_regret_s": -68.3490419897241,
+      "tool_top1_oracle_agreement": 0.1972318339100346,
+      "timeout_top1_oracle_agreement": 0.2491349480968858,
+      "realized_mean_live_sessions": 8.717768967629663,
+      "realized_max_live_sessions": 49
+    },
+    {
+      "seed": 23,
+      "ranking_events": 1203,
+      "choice_changes": 369,
+      "tool_mean_regret_s": 123.58435699529481,
+      "timeout_mean_regret_s": 135.48346034051573,
+      "delta_mean_regret_s": 11.899103345220922,
+      "tool_top1_oracle_agreement": 0.24023275145469658,
+      "timeout_top1_oracle_agreement": 0.20947630922693267,
+      "realized_mean_live_sessions": 8.877111575253842,
+      "realized_max_live_sessions": 48
+    },
+    {
+      "seed": 24,
+      "ranking_events": 1168,
+      "choice_changes": 321,
+      "tool_mean_regret_s": 166.7922461381922,
+      "timeout_mean_regret_s": 217.31826217350078,
+      "delta_mean_regret_s": 50.52601603530857,
+      "tool_top1_oracle_agreement": 0.288527397260274,
+      "timeout_top1_oracle_agreement": 0.285958904109589,
+      "realized_mean_live_sessions": 8.864647940693658,
+      "realized_max_live_sessions": 48
+    },
+    {
+      "seed": 25,
+      "ranking_events": 1207,
+      "choice_changes": 287,
+      "tool_mean_regret_s": 122.53149846198643,
+      "timeout_mean_regret_s": 127.73622870583523,
+      "delta_mean_regret_s": 5.2047302438488,
+      "tool_top1_oracle_agreement": 0.5111847555923777,
+      "timeout_top1_oracle_agreement": 0.415907207953604,
+      "realized_mean_live_sessions": 8.494910421480014,
+      "realized_max_live_sessions": 47
+    },
+    {
+      "seed": 26,
+      "ranking_events": 1194,
+      "choice_changes": 86,
+      "tool_mean_regret_s": 121.24958835434873,
+      "timeout_mean_regret_s": 122.71403796249498,
+      "delta_mean_regret_s": 1.4644496081462535,
+      "tool_top1_oracle_agreement": 0.40871021775544386,
+      "timeout_top1_oracle_agreement": 0.4187604690117253,
+      "realized_mean_live_sessions": 9.577325605675,
+      "realized_max_live_sessions": 48
+    },
+    {
+      "seed": 27,
+      "ranking_events": 1190,
+      "choice_changes": 109,
+      "tool_mean_regret_s": 96.58004849277624,
+      "timeout_mean_regret_s": 109.28665869917188,
+      "delta_mean_regret_s": 12.706610206395638,
+      "tool_top1_oracle_agreement": 0.6243697478991597,
+      "timeout_top1_oracle_agreement": 0.5932773109243697,
+      "realized_mean_live_sessions": 9.295324798582227,
+      "realized_max_live_sessions": 42
+    },
+    {
+      "seed": 28,
+      "ranking_events": 1187,
+      "choice_changes": 310,
+      "tool_mean_regret_s": 66.92950624784905,
+      "timeout_mean_regret_s": 99.94262821150107,
+      "delta_mean_regret_s": 33.013121963652026,
+      "tool_top1_oracle_agreement": 0.2948609941027801,
+      "timeout_top1_oracle_agreement": 0.33024431339511373,
+      "realized_mean_live_sessions": 9.562819803151294,
+      "realized_max_live_sessions": 46
+    },
+    {
+      "seed": 29,
+      "ranking_events": 1182,
+      "choice_changes": 697,
+      "tool_mean_regret_s": 221.22137417244627,
+      "timeout_mean_regret_s": 168.9383843961706,
+      "delta_mean_regret_s": -52.282989776275684,
+      "tool_top1_oracle_agreement": 0.12267343485617598,
+      "timeout_top1_oracle_agreement": 0.2859560067681895,
+      "realized_mean_live_sessions": 8.939959183430917,
+      "realized_max_live_sessions": 46
+    },
+    {
+      "seed": 30,
+      "ranking_events": 1168,
+      "choice_changes": 631,
+      "tool_mean_regret_s": 236.13866016962757,
+      "timeout_mean_regret_s": 206.82837707130875,
+      "delta_mean_regret_s": -29.31028309831882,
+      "tool_top1_oracle_agreement": 0.16267123287671234,
+      "timeout_top1_oracle_agreement": 0.21404109589041095,
+      "realized_mean_live_sessions": 9.295324798776363,
+      "realized_max_live_sessions": 50
+    },
+    {
+      "seed": 31,
+      "ranking_events": 1155,
+      "choice_changes": 561,
+      "tool_mean_regret_s": 168.56881571579805,
+      "timeout_mean_regret_s": 158.7026251382126,
+      "delta_mean_regret_s": -9.866190577585456,
+      "tool_top1_oracle_agreement": 0.3878787878787879,
+      "timeout_top1_oracle_agreement": 0.4727272727272727,
+      "realized_mean_live_sessions": 8.61076469499735,
+      "realized_max_live_sessions": 47
+    }
+  ],
+  "primary_comparison": {
+    "delta_mean_regret_s": -17.270685612713716,
+    "ci95_schedule_bootstrap_s": [
+      -29.73930957610313,
+      -4.295576415810808
+    ],
+    "schedule_repetitions": 32,
+    "bootstrap_draws": 10000,
+    "go": true
+  },
+  "task_deletion_results": [
+    {
+      "excluded_task": "mixed-integer-programming",
+      "delta_mean_regret_s": 4.012086164834313,
+      "helpful_schedules": 13,
+      "harmful_schedules": 19
+    },
+    {
+      "excluded_task": "query-optimize",
+      "delta_mean_regret_s": -12.087325782118928,
+      "helpful_schedules": 17,
+      "harmful_schedules": 15
+    },
+    {
+      "excluded_task": "mailman",
+      "delta_mean_regret_s": -15.026317927430785,
+      "helpful_schedules": 18,
+      "harmful_schedules": 14
+    },
+    {
+      "excluded_task": "tune-mjcf",
+      "delta_mean_regret_s": -15.457046509116772,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "weighted-max-sat-solver",
+      "delta_mean_regret_s": -15.632981138572339,
+      "helpful_schedules": 23,
+      "harmful_schedules": 9
+    },
+    {
+      "excluded_task": "path-tracing",
+      "delta_mean_regret_s": -15.822041712349836,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "make-mips-interpreter",
+      "delta_mean_regret_s": -16.05384083736727,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "predicate-pushdown-bench",
+      "delta_mean_regret_s": -16.35906480333318,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "compile-compcert",
+      "delta_mean_regret_s": -16.52264397474825,
+      "helpful_schedules": 19,
+      "harmful_schedules": 13
+    },
+    {
+      "excluded_task": "fix-ocaml-gc",
+      "delta_mean_regret_s": -16.578681537028658,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "setup-custom-dev-env",
+      "delta_mean_regret_s": -16.596713801033246,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "build-pov-ray",
+      "delta_mean_regret_s": -16.826503823287283,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "regex-chess",
+      "delta_mean_regret_s": -16.865290556768723,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "vul-flask",
+      "delta_mean_regret_s": -16.93430643725465,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "install-windows-3.11",
+      "delta_mean_regret_s": -16.997832600649502,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "qemu-alpine-ssh",
+      "delta_mean_regret_s": -17.043336836293683,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "wasm-pipeline",
+      "delta_mean_regret_s": -17.134400041080443,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "path-tracing-reverse",
+      "delta_mean_regret_s": -17.16851000701203,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "deterministic-tarball",
+      "delta_mean_regret_s": -17.188624280226907,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "debug-long-program",
+      "delta_mean_regret_s": -17.196049217813364,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "play-zork-easy",
+      "delta_mean_regret_s": -17.205865354232593,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "git-workflow-hack",
+      "delta_mean_regret_s": -17.23565610816727,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "multi-source-data-merger",
+      "delta_mean_regret_s": -17.238126576970252,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "accelerate-maximal-square",
+      "delta_mean_regret_s": -17.239027419749746,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "fibonacci-server",
+      "delta_mean_regret_s": -17.240071040013838,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "vimscript-vim-quine",
+      "delta_mean_regret_s": -17.251635883459315,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "grid-pattern-transform",
+      "delta_mean_regret_s": -17.251927668052822,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "create-bucket",
+      "delta_mean_regret_s": -17.253431879577903,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "png-generation",
+      "delta_mean_regret_s": -17.25651863844192,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "extract-safely",
+      "delta_mean_regret_s": -17.257976369246663,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "predict-customer-churn",
+      "delta_mean_regret_s": -17.259640729174233,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "movie-helper",
+      "delta_mean_regret_s": -17.265203654244154,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "flood-monitoring-basic",
+      "delta_mean_regret_s": -17.265547595204914,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "stable-parallel-kmeans",
+      "delta_mean_regret_s": -17.265882957537013,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "git-leak-recovery",
+      "delta_mean_regret_s": -17.267567940198074,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "polyglot-rust-c",
+      "delta_mean_regret_s": -17.271338519950632,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "acl-permissions-inheritance",
+      "delta_mean_regret_s": -17.274173565220444,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "enemy-grid-escape",
+      "delta_mean_regret_s": -17.275223493820523,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "mnist-learning-fix",
+      "delta_mean_regret_s": -17.27815329170581,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "download-youtube",
+      "delta_mean_regret_s": -17.280812313496238,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "pcap-to-netflow",
+      "delta_mean_regret_s": -17.283275972854625,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "distribution-search",
+      "delta_mean_regret_s": -17.283520356931074,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "interactive-maze-game",
+      "delta_mean_regret_s": -17.28397419243977,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "find-restaurant",
+      "delta_mean_regret_s": -17.284331166897868,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "vulnerable-secret",
+      "delta_mean_regret_s": -17.284519465501546,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "configure-git-webserver",
+      "delta_mean_regret_s": -17.289823952715082,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "ode-solver-rk4",
+      "delta_mean_regret_s": -17.29214962361122,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "gcc-compiler-optimization",
+      "delta_mean_regret_s": -17.29836768835275,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "db-wal-recovery",
+      "delta_mean_regret_s": -17.299992253767098,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "classifier-debug",
+      "delta_mean_regret_s": -17.302936751531078,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "extract-moves-from-video",
+      "delta_mean_regret_s": -17.30460655633911,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "fix-code-vulnerability",
+      "delta_mean_regret_s": -17.306114880437143,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "matlab-python-conversion",
+      "delta_mean_regret_s": -17.307825456066364,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "feal-differential-cryptanalysis",
+      "delta_mean_regret_s": -17.308061180151853,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "sha-puzzle",
+      "delta_mean_regret_s": -17.31014164614316,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "ancient-puzzle",
+      "delta_mean_regret_s": -17.314565011743007,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "adaptive-rejection-sampler",
+      "delta_mean_regret_s": -17.3147838106445,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "privilege-escalation",
+      "delta_mean_regret_s": -17.320201702956854,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "hello-world",
+      "delta_mean_regret_s": -17.32091246001601,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "blind-maze-explorer-5x5",
+      "delta_mean_regret_s": -17.32655730277566,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "form-filling",
+      "delta_mean_regret_s": -17.33924782002181,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "pytorch-model-cli",
+      "delta_mean_regret_s": -17.339702312839506,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "polyglot-c-py",
+      "delta_mean_regret_s": -17.340276997919712,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "tmux-advanced-workflow",
+      "delta_mean_regret_s": -17.34533618300629,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "get-bitcoin-nodes",
+      "delta_mean_regret_s": -17.345399749946075,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "simple-sheets-put",
+      "delta_mean_regret_s": -17.3472656105185,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "analyze-access-logs",
+      "delta_mean_regret_s": -17.34891347538931,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "broken-networking",
+      "delta_mean_regret_s": -17.350011012030162,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "cartpole-rl-training",
+      "delta_mean_regret_s": -17.351132822867264,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "torch-tensor-parallelism",
+      "delta_mean_regret_s": -17.35547150327941,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "recover-accuracy-log",
+      "delta_mean_regret_s": -17.35647571642174,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "aimo-airline-departures",
+      "delta_mean_regret_s": -17.360850562463384,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "huarong-dao-solver",
+      "delta_mean_regret_s": -17.36776169246999,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "sqlite-db-truncate",
+      "delta_mean_regret_s": -17.36995755880334,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "extract-elf",
+      "delta_mean_regret_s": -17.3750460834154,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "logistic-regression-divergence",
+      "delta_mean_regret_s": -17.377096673208484,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "sam-cell-seg",
+      "delta_mean_regret_s": -17.37710104994712,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "oom",
+      "delta_mean_regret_s": -17.378639102504998,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "shell-deobfuscation",
+      "delta_mean_regret_s": -17.380103428791323,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "schedule-vacation",
+      "delta_mean_regret_s": -17.38038010561379,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "puzzle-solver",
+      "delta_mean_regret_s": -17.382170969760132,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "sqlite-with-gcov",
+      "delta_mean_regret_s": -17.391790781821587,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "dna-insert",
+      "delta_mean_regret_s": -17.39478533810169,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "hydra-debug-slurm-mode",
+      "delta_mean_regret_s": -17.396426314220193,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "hf-model-inference",
+      "delta_mean_regret_s": -17.398678392277922,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "dna-assembly",
+      "delta_mean_regret_s": -17.402906199558974,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "llm-inference-batching-scheduler",
+      "delta_mean_regret_s": -17.40453131802124,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "prove-plus-comm",
+      "delta_mean_regret_s": -17.410693526727883,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "decommissioning-service-with-sensitive-data",
+      "delta_mean_regret_s": -17.430381083493124,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "install-windows-xp",
+      "delta_mean_regret_s": -17.436527866351323,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "incompatible-python-fasttext",
+      "delta_mean_regret_s": -17.452218338999952,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "amuse-install",
+      "delta_mean_regret_s": -17.484425993197103,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "recover-obfuscated-files",
+      "delta_mean_regret_s": -17.504051912241785,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "circuit-fibsqrt",
+      "delta_mean_regret_s": -17.538337120593336,
+      "helpful_schedules": 20,
+      "harmful_schedules": 12
+    },
+    {
+      "excluded_task": "play-zork",
+      "delta_mean_regret_s": -17.96222640017901,
+      "helpful_schedules": 22,
+      "harmful_schedules": 10
+    },
+    {
+      "excluded_task": "npm-conflict-resolution",
+      "delta_mean_regret_s": -19.135823546550224,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    },
+    {
+      "excluded_task": "mteb-leaderboard",
+      "delta_mean_regret_s": -19.502424142886905,
+      "helpful_schedules": 22,
+      "harmful_schedules": 10
+    },
+    {
+      "excluded_task": "hdfs-deployment",
+      "delta_mean_regret_s": -20.98234930665559,
+      "helpful_schedules": 25,
+      "harmful_schedules": 7
+    },
+    {
+      "excluded_task": "build-tcc-qemu",
+      "delta_mean_regret_s": -22.59368240402821,
+      "helpful_schedules": 21,
+      "harmful_schedules": 11
+    }
+  ],
+  "task_stability": {
+    "evaluated_tasks": 99,
+    "worst_deletion": {
+      "excluded_task": "mixed-integer-programming",
+      "delta_mean_regret_s": 4.012086164834313,
+      "helpful_schedules": 13,
+      "harmful_schedules": 19
+    },
+    "go": false
+  },
+  "decision": "STOP timeout-only direction",
+  "review": "Independent bounded review found no critical or major issue; its zero-event deletion minor was fixed before the formal run.",
+  "limitations": [
+    "The TB traces, split, and schedules are development-exposed.",
+    "Delete-one-task sensitivity is not independent task-population uncertainty.",
+    "The simulation holds isolated durations fixed and models no contention, KV pressure, eviction feedback, or JCT."
+  ]
+}

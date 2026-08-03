@@ -1,0 +1,403 @@
+{
+  "status": "development-exposed synthetic-concurrency diagnostic",
+  "question": "Does CacheWise C100 improve victim ordering in expectation over 32 fixed c32 trace-driven arrival streams?",
+  "protocol": {
+    "fit_root": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/offline-gated-confirm-100-v2",
+    "eval_root": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/fresh-seed42-skip150-n200",
+    "schedule": "for seeds 0-31, shuffle sorted session IDs with NumPy default_rng(seed); open-loop arrivals at fit-median-gap-span / 32; preserve within-session gap offsets and durations",
+    "arms": [
+      "global",
+      "tool",
+      "c20",
+      "c50",
+      "c100"
+    ],
+    "tfidf_max_features": 5000,
+    "kmeans_random_state": 0,
+    "primary": "mean_regret(c100) - mean_regret(tool)",
+    "go_criterion": "upper endpoint of 95% paired schedule-level bootstrap CI < 0"
+  },
+  "data": {
+    "fit_gaps": 4175,
+    "fit_sessions": 100,
+    "eval_gaps": 12771,
+    "eval_sessions": 277,
+    "schedule_repetitions": 32,
+    "schedule_seeds": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31
+    ],
+    "target_concurrency": 32,
+    "fit_median_gap_span_s": 357.30342984199524,
+    "interarrival_s": 11.165732182562351,
+    "ranking_events_mean": 12588.1875,
+    "ranking_events_range": [
+      12439,
+      12722
+    ],
+    "realized_mean_live_sessions_mean": 22.22377784600218,
+    "realized_max_live_sessions_range": [
+      36,
+      42
+    ],
+    "max_simultaneous_active_gaps": 19
+  },
+  "cluster_models": {
+    "c20": {
+      "tool_batch_keys": 30,
+      "occupied_clusters": 295
+    },
+    "c50": {
+      "tool_batch_keys": 30,
+      "occupied_clusters": 518
+    },
+    "c100": {
+      "tool_batch_keys": 30,
+      "occupied_clusters": 755
+    }
+  },
+  "schedule_mean_metrics": {
+    "global": {
+      "mean_regret_s": 57.96272168349796,
+      "top1_oracle_agreement": 0.44592814800186503,
+      "p95_regret_s": 241.8813725326209,
+      "p99_regret_s": 284.9321108907461,
+      "max_regret_s": 314.6738647148013
+    },
+    "tool": {
+      "mean_regret_s": 57.96118327611987,
+      "top1_oracle_agreement": 0.4459803825326124,
+      "p95_regret_s": 241.8813725326209,
+      "p99_regret_s": 284.9321108907461,
+      "max_regret_s": 314.6738647148013
+    },
+    "c20": {
+      "mean_regret_s": 60.813700828225784,
+      "top1_oracle_agreement": 0.4297690180764474,
+      "p95_regret_s": 243.39936032779508,
+      "p99_regret_s": 286.73578737176945,
+      "max_regret_s": 316.8342087715864
+    },
+    "c50": {
+      "mean_regret_s": 63.12701427758022,
+      "top1_oracle_agreement": 0.4121435618897328,
+      "p95_regret_s": 248.31522431969643,
+      "p99_regret_s": 287.1981630971283,
+      "max_regret_s": 320.43476367741823
+    },
+    "c100": {
+      "mean_regret_s": 59.80798508904915,
+      "top1_oracle_agreement": 0.4366674473045236,
+      "p95_regret_s": 244.67285089343784,
+      "p99_regret_s": 284.7809540256858,
+      "max_regret_s": 314.286136969924
+    }
+  },
+  "schedule_results": [
+    {
+      "seed": 0,
+      "ranking_events": 12665,
+      "delta_mean_regret_s": 2.8300122644889143,
+      "realized_mean_live_sessions": 23.72770504673047,
+      "realized_max_live_sessions": 36,
+      "max_simultaneous_active_gaps": 16
+    },
+    {
+      "seed": 1,
+      "ranking_events": 12624,
+      "delta_mean_regret_s": -0.9587096034800595,
+      "realized_mean_live_sessions": 23.30758330658284,
+      "realized_max_live_sessions": 38,
+      "max_simultaneous_active_gaps": 15
+    },
+    {
+      "seed": 2,
+      "ranking_events": 12637,
+      "delta_mean_regret_s": 3.8044288761019374,
+      "realized_mean_live_sessions": 21.219521278631646,
+      "realized_max_live_sessions": 39,
+      "max_simultaneous_active_gaps": 19
+    },
+    {
+      "seed": 3,
+      "ranking_events": 12646,
+      "delta_mean_regret_s": 0.656694834394095,
+      "realized_mean_live_sessions": 24.001333268057444,
+      "realized_max_live_sessions": 40,
+      "max_simultaneous_active_gaps": 16
+    },
+    {
+      "seed": 4,
+      "ranking_events": 12439,
+      "delta_mean_regret_s": 4.395597407802313,
+      "realized_mean_live_sessions": 24.27688741673599,
+      "realized_max_live_sessions": 38,
+      "max_simultaneous_active_gaps": 16
+    },
+    {
+      "seed": 5,
+      "ranking_events": 12622,
+      "delta_mean_regret_s": -0.44211466545500144,
+      "realized_mean_live_sessions": 24.52449888688146,
+      "realized_max_live_sessions": 39,
+      "max_simultaneous_active_gaps": 16
+    },
+    {
+      "seed": 6,
+      "ranking_events": 12568,
+      "delta_mean_regret_s": 2.6029657219375935,
+      "realized_mean_live_sessions": 20.49273225760932,
+      "realized_max_live_sessions": 41,
+      "max_simultaneous_active_gaps": 16
+    },
+    {
+      "seed": 7,
+      "ranking_events": 12537,
+      "delta_mean_regret_s": 0.09569018868592138,
+      "realized_mean_live_sessions": 20.257529988673515,
+      "realized_max_live_sessions": 39,
+      "max_simultaneous_active_gaps": 19
+    },
+    {
+      "seed": 8,
+      "ranking_events": 12554,
+      "delta_mean_regret_s": 2.1819235812103983,
+      "realized_mean_live_sessions": 23.05962943242755,
+      "realized_max_live_sessions": 38,
+      "max_simultaneous_active_gaps": 15
+    },
+    {
+      "seed": 9,
+      "ranking_events": 12655,
+      "delta_mean_regret_s": -0.5445084512869585,
+      "realized_mean_live_sessions": 24.290750852476588,
+      "realized_max_live_sessions": 37,
+      "max_simultaneous_active_gaps": 18
+    },
+    {
+      "seed": 10,
+      "ranking_events": 12564,
+      "delta_mean_regret_s": 1.7488013213700242,
+      "realized_mean_live_sessions": 21.659372536977507,
+      "realized_max_live_sessions": 38,
+      "max_simultaneous_active_gaps": 16
+    },
+    {
+      "seed": 11,
+      "ranking_events": 12563,
+      "delta_mean_regret_s": 3.1916396802353972,
+      "realized_mean_live_sessions": 20.542433947965865,
+      "realized_max_live_sessions": 38,
+      "max_simultaneous_active_gaps": 16
+    },
+    {
+      "seed": 12,
+      "ranking_events": 12613,
+      "delta_mean_regret_s": -0.7301417458665114,
+      "realized_mean_live_sessions": 20.88502079341478,
+      "realized_max_live_sessions": 40,
+      "max_simultaneous_active_gaps": 15
+    },
+    {
+      "seed": 13,
+      "ranking_events": 12572,
+      "delta_mean_regret_s": 2.94557765195448,
+      "realized_mean_live_sessions": 21.186304916315958,
+      "realized_max_live_sessions": 36,
+      "max_simultaneous_active_gaps": 16
+    },
+    {
+      "seed": 14,
+      "ranking_events": 12556,
+      "delta_mean_regret_s": 0.4259423135989522,
+      "realized_mean_live_sessions": 21.605974097441152,
+      "realized_max_live_sessions": 39,
+      "max_simultaneous_active_gaps": 19
+    },
+    {
+      "seed": 15,
+      "ranking_events": 12613,
+      "delta_mean_regret_s": 1.6275404623174197,
+      "realized_mean_live_sessions": 20.620389256620488,
+      "realized_max_live_sessions": 40,
+      "max_simultaneous_active_gaps": 15
+    },
+    {
+      "seed": 16,
+      "ranking_events": 12671,
+      "delta_mean_regret_s": 7.458666368946169,
+      "realized_mean_live_sessions": 23.57206338809155,
+      "realized_max_live_sessions": 38,
+      "max_simultaneous_active_gaps": 15
+    },
+    {
+      "seed": 17,
+      "ranking_events": 12616,
+      "delta_mean_regret_s": 1.2721423402041268,
+      "realized_mean_live_sessions": 24.296963206616528,
+      "realized_max_live_sessions": 38,
+      "max_simultaneous_active_gaps": 17
+    },
+    {
+      "seed": 18,
+      "ranking_events": 12518,
+      "delta_mean_regret_s": -0.38199861523137457,
+      "realized_mean_live_sessions": 24.167922956399394,
+      "realized_max_live_sessions": 40,
+      "max_simultaneous_active_gaps": 18
+    },
+    {
+      "seed": 19,
+      "ranking_events": 12623,
+      "delta_mean_regret_s": 1.064821050745607,
+      "realized_mean_live_sessions": 21.543917606352878,
+      "realized_max_live_sessions": 38,
+      "max_simultaneous_active_gaps": 17
+    },
+    {
+      "seed": 20,
+      "ranking_events": 12538,
+      "delta_mean_regret_s": -0.749255869296924,
+      "realized_mean_live_sessions": 20.835367858043245,
+      "realized_max_live_sessions": 39,
+      "max_simultaneous_active_gaps": 14
+    },
+    {
+      "seed": 21,
+      "ranking_events": 12632,
+      "delta_mean_regret_s": 3.7492563143948203,
+      "realized_mean_live_sessions": 20.915665593305256,
+      "realized_max_live_sessions": 39,
+      "max_simultaneous_active_gaps": 15
+    },
+    {
+      "seed": 22,
+      "ranking_events": 12511,
+      "delta_mean_regret_s": -0.35826995818509033,
+      "realized_mean_live_sessions": 23.01538398644592,
+      "realized_max_live_sessions": 36,
+      "max_simultaneous_active_gaps": 16
+    },
+    {
+      "seed": 23,
+      "ranking_events": 12548,
+      "delta_mean_regret_s": 0.5733804025960154,
+      "realized_mean_live_sessions": 22.255566853405902,
+      "realized_max_live_sessions": 37,
+      "max_simultaneous_active_gaps": 14
+    },
+    {
+      "seed": 24,
+      "ranking_events": 12589,
+      "delta_mean_regret_s": 2.767686856788231,
+      "realized_mean_live_sessions": 22.66778038596234,
+      "realized_max_live_sessions": 40,
+      "max_simultaneous_active_gaps": 17
+    },
+    {
+      "seed": 25,
+      "ranking_events": 12572,
+      "delta_mean_regret_s": 1.8182027535646341,
+      "realized_mean_live_sessions": 21.821055643648435,
+      "realized_max_live_sessions": 36,
+      "max_simultaneous_active_gaps": 15
+    },
+    {
+      "seed": 26,
+      "ranking_events": 12592,
+      "delta_mean_regret_s": 1.6394151061811186,
+      "realized_mean_live_sessions": 21.746053406595784,
+      "realized_max_live_sessions": 39,
+      "max_simultaneous_active_gaps": 16
+    },
+    {
+      "seed": 27,
+      "ranking_events": 12442,
+      "delta_mean_regret_s": 6.621982488749474,
+      "realized_mean_live_sessions": 20.1164191266659,
+      "realized_max_live_sessions": 39,
+      "max_simultaneous_active_gaps": 19
+    },
+    {
+      "seed": 28,
+      "ranking_events": 12517,
+      "delta_mean_regret_s": -2.7894431654233784,
+      "realized_mean_live_sessions": 21.75786638875855,
+      "realized_max_live_sessions": 42,
+      "max_simultaneous_active_gaps": 17
+    },
+    {
+      "seed": 29,
+      "ranking_events": 12651,
+      "delta_mean_regret_s": 4.11421812774541,
+      "realized_mean_live_sessions": 22.312228664931617,
+      "realized_max_live_sessions": 40,
+      "max_simultaneous_active_gaps": 14
+    },
+    {
+      "seed": 30,
+      "ranking_events": 12652,
+      "delta_mean_regret_s": 3.8144105900852807,
+      "realized_mean_live_sessions": 22.657913079708518,
+      "realized_max_live_sessions": 38,
+      "max_simultaneous_active_gaps": 16
+    },
+    {
+      "seed": 31,
+      "ranking_events": 12722,
+      "delta_mean_regret_s": 4.651103383863969,
+      "realized_mean_live_sessions": 21.82105564359527,
+      "realized_max_live_sessions": 40,
+      "max_simultaneous_active_gaps": 15
+    }
+  ],
+  "primary_comparison": {
+    "delta_mean_regret_s": 1.8468018129292814,
+    "ci95_schedule_bootstrap_s": [
+      1.087365775276705,
+      2.6456088448106496
+    ],
+    "schedule_repetitions": 32,
+    "bootstrap_draws": 10000,
+    "go": false
+  },
+  "decision": "STOP synthetic-concurrency direction",
+  "review": "Independent bounded review found no critical or major issue after replacing invalid trigger-task clustering with schedule repetitions.",
+  "limitations": [
+    "SWE-100, fresh-277, and these schedules are development-exposed.",
+    "The interval measures arrival-permutation sensitivity conditional on these fixed tasks, not task-population uncertainty.",
+    "The simulation holds isolated-trace durations fixed and does not model resource contention.",
+    "No KV capacity, eviction/recomputation feedback, eviction count, or end-to-end JCT is modeled.",
+    "A positive result cannot reverse the negative observed-overlap result."
+  ]
+}
