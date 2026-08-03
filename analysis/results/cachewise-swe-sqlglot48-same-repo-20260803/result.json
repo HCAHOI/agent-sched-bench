@@ -1,0 +1,256 @@
+{
+  "status": "development-exposed dense same-repository mechanism test",
+  "question": "Does dense task-disjoint same-repository history make CacheWise whole-argument clustering outperform a same-repository tool-name baseline?",
+  "protocol": {
+    "trace_root": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-48-c2-fast-requested-ebpf-8a72722-20260803",
+    "corpus_config": "/home/chiyu/workspace/agent-sched-bench/configs/corpora/swe-sqlglot-48-gpt56-ebpf.json",
+    "collection_id": "swe-rebench-sqlglot-48-gpt-5.6-sol-codex-c2-ebpf-20260803",
+    "fit_selection": "configured fit.task_ids only",
+    "eval_selection": "configured eval.task_ids only",
+    "history": "all configured fit-task gaps from the one repository; evaluation gaps are never observed",
+    "unit": "LLM-end to next-LLM-start tool gap; parallel outer calls form one ordered batch",
+    "candidate": "C100 TF-IDF/KMeans whole-argument history",
+    "baseline": "tool-name history on the identical fit gaps",
+    "primary": "mean_regret(repo_c100) - mean_regret(repo_tool)",
+    "go_criterion": "upper endpoint of the 95% task-pair cluster-bootstrap interval is below zero",
+    "task_stability": "repeat after removing each evaluation task; report any task whose removal changes the sign",
+    "comparison_scope": "identical eligible ranking events and task labels for all methods",
+    "bootstrap": "10,000 draws clustered by unordered active-task tuple"
+  },
+  "data": {
+    "repository": "tobymao__sqlglot",
+    "configured_fit_tasks": 24,
+    "fit_tasks_with_gaps": 24,
+    "fit_tasks_without_gaps": [],
+    "fit_gaps": 751,
+    "configured_eval_tasks": 24,
+    "eval_tasks_with_gaps": 24,
+    "eval_tasks_without_gaps": [],
+    "eval_gaps": 788,
+    "eligible_ranking_events": 272,
+    "eligible_task_pairs": 17,
+    "max_concurrency": 2
+  },
+  "metrics": {
+    "pooled_tool": {
+      "mean_regret_s": 3.9246436226017334,
+      "top1_oracle_agreement": 0.9154411764705882
+    },
+    "pooled_c100": {
+      "mean_regret_s": 2.285887309733559,
+      "top1_oracle_agreement": 0.9227941176470589
+    },
+    "repo_tool": {
+      "mean_regret_s": 3.9246436226017334,
+      "top1_oracle_agreement": 0.9154411764705882
+    },
+    "repo_c100": {
+      "mean_regret_s": 2.285887309733559,
+      "top1_oracle_agreement": 0.9227941176470589
+    }
+  },
+  "primary_comparison": {
+    "delta_mean_regret_s": -1.6387563128681744,
+    "ci95_task_pair_cluster_bootstrap_s": [
+      -3.1663506527826155,
+      -0.10533530547392798
+    ],
+    "task_pair_clusters": 17,
+    "bootstrap_draws": 10000,
+    "go": true,
+    "choice_changes": 22,
+    "helpful_changes": 12,
+    "harmful_changes": 10,
+    "helpful_seconds": 672.1439497470856,
+    "harmful_seconds": 226.40223264694214
+  },
+  "task_deletion_results": [
+    {
+      "excluded_task": "tobymao__sqlglot-4493",
+      "removed_events": 10,
+      "ranking_events": 262,
+      "delta_mean_regret_s": -1.229813719523772,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4505",
+      "removed_events": 10,
+      "ranking_events": 262,
+      "delta_mean_regret_s": -1.229813719523772,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4533",
+      "removed_events": 16,
+      "ranking_events": 256,
+      "delta_mean_regret_s": -1.360251795500517,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4457",
+      "removed_events": 19,
+      "ranking_events": 253,
+      "delta_mean_regret_s": -1.4322818560091404,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4459",
+      "removed_events": 19,
+      "ranking_events": 253,
+      "delta_mean_regret_s": -1.4322818560091404,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4417",
+      "removed_events": 26,
+      "ranking_events": 246,
+      "delta_mean_regret_s": -1.460206582294247,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4528",
+      "removed_events": 36,
+      "ranking_events": 236,
+      "delta_mean_regret_s": -1.4755273713903911,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4415",
+      "removed_events": 31,
+      "ranking_events": 241,
+      "delta_mean_regret_s": -1.490501324665497,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4373",
+      "removed_events": 42,
+      "ranking_events": 230,
+      "delta_mean_regret_s": -1.560362978603529,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4448",
+      "removed_events": 25,
+      "ranking_events": 247,
+      "delta_mean_regret_s": -1.5839604202069735,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4447",
+      "removed_events": 31,
+      "ranking_events": 241,
+      "delta_mean_regret_s": -1.6233951194652383,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4472",
+      "removed_events": 10,
+      "ranking_events": 262,
+      "delta_mean_regret_s": -1.7013042637410054,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4488",
+      "removed_events": 10,
+      "ranking_events": 262,
+      "delta_mean_regret_s": -1.7013042637410054,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4438",
+      "removed_events": 10,
+      "ranking_events": 262,
+      "delta_mean_regret_s": -1.7137346567998406,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4430",
+      "removed_events": 16,
+      "ranking_events": 256,
+      "delta_mean_regret_s": -1.7539003128185868,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4545",
+      "removed_events": 20,
+      "ranking_events": 252,
+      "delta_mean_regret_s": -1.7688163376989818,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4523",
+      "removed_events": 20,
+      "ranking_events": 252,
+      "delta_mean_regret_s": -1.7756959162061177,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4506",
+      "removed_events": 21,
+      "ranking_events": 251,
+      "delta_mean_regret_s": -1.7758634147416072,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4393",
+      "removed_events": 23,
+      "ranking_events": 249,
+      "delta_mean_regret_s": -1.7866087706692249,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4519",
+      "removed_events": 22,
+      "ranking_events": 250,
+      "delta_mean_regret_s": -1.7899014835357665,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4516",
+      "removed_events": 23,
+      "ranking_events": 249,
+      "delta_mean_regret_s": -1.7901273779122227,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4390",
+      "removed_events": 31,
+      "ranking_events": 241,
+      "delta_mean_regret_s": -1.8459152858781618,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4355",
+      "removed_events": 51,
+      "ranking_events": 221,
+      "delta_mean_regret_s": -1.997023960044481,
+      "changes_primary_sign": false
+    },
+    {
+      "excluded_task": "tobymao__sqlglot-4347",
+      "removed_events": 22,
+      "ranking_events": 250,
+      "delta_mean_regret_s": -2.1128021087646482,
+      "changes_primary_sign": false
+    }
+  ],
+  "task_stability": {
+    "evaluated_tasks": 24,
+    "worst_deletion": {
+      "excluded_task": "tobymao__sqlglot-4493",
+      "removed_events": 10,
+      "ranking_events": 262,
+      "delta_mean_regret_s": -1.229813719523772,
+      "changes_primary_sign": false
+    },
+    "sign_change_tasks": [],
+    "go": true
+  },
+  "decision": "GO; dense same-repository history passes the primary and task-stability gates",
+  "limitations": [
+    "This same-repository hypothesis and cohort are development-exposed.",
+    "Natural overlap reaches concurrency two, not CacheWise's 30-50 sessions.",
+    "This measures hypothetical victim regret, not KV pressure, eviction count, or JCT.",
+    "The eBPF counters are excluded from model selection and reserved for mechanism analysis."
+  ]
+}
