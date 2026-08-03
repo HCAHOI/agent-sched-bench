@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "collection_id": "swe-rebench-sqlglot-48-gpt-5.6-sol-codex-c2-ebpf-20260803",
+  "status": "development-exposed mechanism test; frozen before collection outcomes, then amended as recorded below",
+  "amendments": [
+    {
+      "date": "2026-08-03",
+      "visible_before_change": "The interrupted Standard-tier run had six completed task artifacts and one partial trace for tobymao__sqlglot-4165.",
+      "change": "Restart all 48 tasks from the beginning with the Codex Fast tier requested; do not combine the interrupted Standard-tier artifacts with this run.",
+      "reason": "Reduce collection wall time without changing the task set, concurrency, model, iteration cap, telemetry, or evaluation criterion.",
+      "evidence_boundary": "HTTP and WebSocket smokes requested priority but the backend response reported service_tier=default. Treat the new run as requested_fast, not verified_fast, and retain response-reported tier metadata."
+    }
+  ],
+  "source": {
+    "benchmark": "swe-rebench",
+    "task_source": "data/swe-rebench/tasks.json",
+    "task_source_count": 6542,
+    "repository": "tobymao/sqlglot",
+    "selection": "sort the repository's tasks by created_at and take zero-based rows [231:279]",
+    "selection_basis": "repository task count, temporal locality, and collection cost; no task outcome was used"
+  },
+  "collection": {
+    "provider": "codex",
+    "model": "gpt-5.6-sol",
+    "service_tier_request": "fast",
+    "scaffold": "openclaw",
+    "prompt_template": "cc_aligned",
+    "mcp_config": "none",
+    "max_iterations": 100,
+    "concurrency": 2,
+    "container": "docker",
+    "telemetry": "canonical required-for-valid-evidence eBPF",
+    "latency_bucket_edges_ms": [2000, 8000]
+  },
+  "evaluation": {
+    "question": "Does dense task-disjoint same-repository history make CacheWise whole-argument clustering outperform a same-repository tool-name baseline?",
+    "primary_metric": "mean_regret_seconds(cachewise_c100) - mean_regret_seconds(tool_name); lower is better",
+    "go_criterion": "upper endpoint of the 95% task-pair cluster-bootstrap interval is below zero",
+    "task_stability": "repeat after removing each evaluation task; report any task whose removal changes the sign",
+    "comparison_scope": "identical eligible ranking events and task labels for all methods",
+    "note": "eBPF resource counters are collected for later mechanism analysis and do not select this primary result"
+  },
+  "fit": {
+    "expected_task_count": 24,
+    "created_at_first": "2024-09-11 10:24:12",
+    "created_at_last": "2024-10-31 20:24:16",
+    "task_ids": [
+      "tobymao__sqlglot-4110",
+      "tobymao__sqlglot-4127",
+      "tobymao__sqlglot-4130",
+      "tobymao__sqlglot-4141",
+      "tobymao__sqlglot-4148",
+      "tobymao__sqlglot-4151",
+      "tobymao__sqlglot-4165",
+      "tobymao__sqlglot-4172",
+      "tobymao__sqlglot-4194",
+      "tobymao__sqlglot-4197",
+      "tobymao__sqlglot-4206",
+      "tobymao__sqlglot-4208",
+      "tobymao__sqlglot-4218",
+      "tobymao__sqlglot-4239",
+      "tobymao__sqlglot-4252",
+      "tobymao__sqlglot-4276",
+      "tobymao__sqlglot-4287",
+      "tobymao__sqlglot-4293",
+      "tobymao__sqlglot-4301",
+      "tobymao__sqlglot-4302",
+      "tobymao__sqlglot-4311",
+      "tobymao__sqlglot-4325",
+      "tobymao__sqlglot-4328",
+      "tobymao__sqlglot-4331"
+    ]
+  },
+  "eval": {
+    "expected_task_count": 24,
+    "created_at_first": "2024-11-05 09:20:57",
+    "created_at_last": "2024-12-23 16:28:45",
+    "task_ids": [
+      "tobymao__sqlglot-4347",
+      "tobymao__sqlglot-4355",
+      "tobymao__sqlglot-4373",
+      "tobymao__sqlglot-4390",
+      "tobymao__sqlglot-4393",
+      "tobymao__sqlglot-4415",
+      "tobymao__sqlglot-4417",
+      "tobymao__sqlglot-4430",
+      "tobymao__sqlglot-4438",
+      "tobymao__sqlglot-4447",
+      "tobymao__sqlglot-4448",
+      "tobymao__sqlglot-4457",
+      "tobymao__sqlglot-4459",
+      "tobymao__sqlglot-4472",
+      "tobymao__sqlglot-4488",
+      "tobymao__sqlglot-4493",
+      "tobymao__sqlglot-4505",
+      "tobymao__sqlglot-4506",
+      "tobymao__sqlglot-4516",
+      "tobymao__sqlglot-4519",
+      "tobymao__sqlglot-4523",
+      "tobymao__sqlglot-4528",
+      "tobymao__sqlglot-4533",
+      "tobymao__sqlglot-4545"
+    ]
+  }
+}
