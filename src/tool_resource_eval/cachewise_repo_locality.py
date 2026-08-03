@@ -95,12 +95,19 @@ def _prediction(
 
 
 def evaluate(
-    gaps: list[Gap], pooled: History, local: dict[str, History]
+    gaps: list[Gap],
+    pooled: History,
+    local: dict[str, History],
+    *,
+    pooled_cache: dict[tuple[int, str, str], int] | None = None,
+    local_caches: dict[str, dict[tuple[int, str, str], int]] | None = None,
 ) -> list[RankingRow]:
     active: list[Gap] = []
     rows: list[RankingRow] = []
-    pooled_cache: dict[tuple[int, str, str], int] = {}
-    local_caches = {repo: {} for repo in local}
+    if pooled_cache is None:
+        pooled_cache = {}
+    if local_caches is None:
+        local_caches = {repo: {} for repo in local}
     for gap in gaps:
         active = [
             other
@@ -484,6 +491,18 @@ def self_check() -> None:
     assert len(rows) == 1
     assert rows[0].regrets["repo_c100"] == 0.0
     assert rows[0].regrets["repo_tool"] == 7.0
+    pooled_cache: dict[tuple[int, str, str], int] = {}
+    local_caches: dict[str, dict[tuple[int, str, str], int]] = {
+        repo: {} for repo in local
+    }
+    assert rows == evaluate(
+        evaluation,
+        pooled,
+        local,
+        pooled_cache=pooled_cache,
+        local_caches=local_caches,
+    )
+    assert pooled_cache and all(local_caches.values())
 
     def deletion_row(pair: tuple[str, ...], delta: float) -> RankingRow:
         regrets = {arm: 0.0 for arm in ARMS}
