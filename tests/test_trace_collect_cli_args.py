@@ -31,12 +31,15 @@ def test_parse_collect_args_accepts_skip_and_concurrency() -> None:
         "3",
         "--tool-resource-profile",
         "resource.yaml",
+        "--service-tier",
+        "fast",
     ])
 
     assert args.skip == 7
     assert args.selection_seed == 43
     assert args.concurrency == 3
     assert args.tool_resource_profile == "resource.yaml"
+    assert args.service_tier == "fast"
 
 
 def test_parse_collect_args_rejects_negative_skip() -> None:

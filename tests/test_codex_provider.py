@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import pytest
 
+import llm_call.codex as codex
 from llm_call.codex import CodexProvider, _responses_input, load_codex_credentials
 from llm_call.codex import _consume_stream
 from llm_call.providers import create_provider
@@ -122,6 +123,49 @@ def test_codex_stream_requires_completed_event() -> None:
     assert success.content == "partial"
     assert refused.finish_reason == "stop"
     assert refused.content == "refused"
+
+
+def test_codex_fast_tier_maps_to_priority_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request: dict[str, object] = {}
+
+    async def stream():
+        yield SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(
+                usage=None,
+                id="response-1",
+                model="gpt-5.6-sol",
+                service_tier="priority",
+                status="completed",
+            ),
+        )
+
+    class FakeResponses:
+        async def create(self, **kwargs):
+            request.update(kwargs)
+            return stream()
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            self.responses = FakeResponses()
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(codex, "AsyncOpenAI", FakeClient)
+    provider = CodexProvider(
+        api_key="test-token",
+        api_base=None,
+        default_model="gpt-5.6-sol",
+        service_tier="fast",
+    )
+
+    response = asyncio.run(provider.chat([{"role": "user", "content": "hi"}]))
+
+    assert request["service_tier"] == "priority"
+    assert response.extra["codex_metadata"]["service_tier"] == "priority"
 
 
 def test_codex_backend_retry_message_is_transient() -> None:

@@ -137,6 +137,7 @@ def _generation_config(
     top_p: float | None,
     top_k: int | None,
     repetition_penalty: float | None,
+    service_tier: str | None,
 ) -> dict[str, Any]:
     return {
         key: value
@@ -145,6 +146,7 @@ def _generation_config(
             "top_p": top_p,
             "top_k": top_k,
             "repetition_penalty": repetition_penalty,
+            "service_tier": service_tier,
         }.items()
         if value is not None
     }
@@ -815,6 +817,7 @@ async def collect_traces(
     selection_seed: int | None = None,
     top_k: int | None = None,
     repetition_penalty: float | None = None,
+    service_tier: str | None = None,
     sample: int | None = None,
     skip: int = 0,
     concurrency: int = 1,
@@ -858,6 +861,7 @@ async def collect_traces(
         top_p=top_p,
         top_k=top_k,
         repetition_penalty=repetition_penalty,
+        service_tier=service_tier,
     )
     model_backend = _prepare_collect_model_backend(
         model=model,

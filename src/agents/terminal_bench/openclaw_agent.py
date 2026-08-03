@@ -80,6 +80,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         top_p: float | str | None = None,
         top_k: int | str | None = None,
         repetition_penalty: float | str | None = None,
+        service_tier: str | None = None,
         bridge_bootstrap_timeout_sec: float | str | None = None,
         tool_resource_profile: str | None = None,
         resource_run_token: str | None = None,
@@ -129,6 +130,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         self._top_p = _optional_float(top_p)
         self._top_k = _optional_int(top_k)
         self._repetition_penalty = _optional_float(repetition_penalty)
+        self._service_tier = service_tier
         self._tool_resource_profile = tool_resource_profile
         self._resource_run_token = resource_run_token
         self._resource_trace_id = resource_trace_id
@@ -379,6 +381,8 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             config["top_k"] = self._top_k
         if self._repetition_penalty is not None:
             config["repetition_penalty"] = self._repetition_penalty
+        if self._service_tier is not None:
+            config["service_tier"] = self._service_tier
         return config
 
     def _load_mcp_servers(self) -> dict[str, Any]:

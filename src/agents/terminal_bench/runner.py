@@ -374,6 +374,7 @@ class TerminalBenchRunner:
             "top_p",
             "top_k",
             "repetition_penalty",
+            "service_tier",
         ):
             if key in self.generation_config:
                 command.extend(

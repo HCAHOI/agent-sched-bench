@@ -60,6 +60,12 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Optional agent repetition penalty for compatible providers.",
     )
     parser.add_argument(
+        "--service-tier",
+        choices=["fast"],
+        default=None,
+        help="Optional Codex service tier; fast uses Priority processing.",
+    )
+    parser.add_argument(
         "--benchmark",
         default="swe-bench-verified",
         help=(
@@ -399,6 +405,9 @@ def _run_collect(args: argparse.Namespace) -> None:
         except ValueError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
+    elif args.service_tier is not None:
+        print("ERROR: --service-tier is supported only by codex.", file=sys.stderr)
+        sys.exit(2)
     elif not provider_config.api_key:
         print(
             f"ERROR: Set {provider_config.env_key} or pass --api-key.",
@@ -433,6 +442,7 @@ def _run_collect(args: argparse.Namespace) -> None:
             top_p=args.top_p,
             top_k=args.top_k,
             repetition_penalty=args.repetition_penalty,
+            service_tier=args.service_tier,
             sample=args.sample,
             selection_seed=args.selection_seed,
             skip=args.skip,

@@ -126,6 +126,7 @@ def test_terminal_bench_runner_passes_generation_agent_kwargs(tmp_path: Path) ->
             "top_p": 0.8,
             "top_k": 20,
             "repetition_penalty": 1.05,
+            "service_tier": "fast",
         },
     )
 
@@ -144,6 +145,7 @@ def test_terminal_bench_runner_passes_generation_agent_kwargs(tmp_path: Path) ->
     assert "top_p=0.8" in command
     assert "top_k=20" in command
     assert "repetition_penalty=1.05" in command
+    assert "service_tier=fast" in command
 
 
 def test_terminal_bench_runner_disables_asciinema_in_runtime_copy(

@@ -44,6 +44,7 @@ class CodexProvider(LLMProvider):
         top_p: float | None = None,
         top_k: int | None = None,
         repetition_penalty: float | None = None,
+        service_tier: str | None = None,
         timeout: float | None = None,
     ) -> None:
         unsupported = [
@@ -62,8 +63,13 @@ class CodexProvider(LLMProvider):
                 "Codex Responses does not support generation setting(s): "
                 + ", ".join(unsupported)
             )
+        if service_tier not in {None, "fast"}:
+            raise ValueError(
+                "Codex Responses service_tier must be 'fast' or omitted"
+            )
         super().__init__(api_key, api_base or CODEX_DEFAULT_API_BASE)
         self.default_model = default_model
+        self.service_tier = "priority" if service_tier == "fast" else None
         self.timeout = timeout
         self.generation = GenerationSettings(
             temperature=0.0,
@@ -155,6 +161,8 @@ class CodexProvider(LLMProvider):
             }
             if reasoning_effort:
                 kwargs["reasoning"] = {"effort": reasoning_effort}
+            if self.service_tier is not None:
+                kwargs["service_tier"] = self.service_tier
             if tools:
                 kwargs["tools"] = [_responses_tool(tool) for tool in tools]
                 kwargs["tool_choice"] = _responses_tool_choice(tool_choice)
@@ -556,6 +564,7 @@ def _response_metadata(response: Any) -> dict[str, Any]:
         for key, value in {
             "response_id": getattr(response, "id", None),
             "model": getattr(response, "model", None),
+            "service_tier": getattr(response, "service_tier", None),
             "status": getattr(response, "status", None),
         }.items()
         if value is not None
