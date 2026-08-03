@@ -1267,6 +1267,10 @@ async def _run_openclaw_in_task_container(
                 container_id=container_id,
                 artifact_path=ctx.attempt_dir / "resource_observations.json",
             )
+            setup_error = await asyncio.to_thread(resource_trace.wait_ready)
+            if setup_error is not None:
+                resource_errors.append(setup_error)
+                resource_trace.add_integrity_error(setup_error)
 
         async def _patch_extractor(
             _diff_cwd: str,

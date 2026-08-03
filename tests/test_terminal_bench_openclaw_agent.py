@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -99,9 +100,19 @@ def test_agent_reads_api_key_from_environment(monkeypatch: pytest.MonkeyPatch) -
     assert "env-key" not in agent._install_agent_script_path.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize(
+    ("setup_error", "agent_timeout_sec", "setup_delay_s"),
+    [
+        (None, None, 0.0),
+        ("telemetry setup failed", 0.1, 0.2),
+    ],
+)
 def test_perform_task_runs_host_session_with_container_tools(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    setup_error: str | None,
+    agent_timeout_sec: float | None,
+    setup_delay_s: float,
 ) -> None:
     calls: list[tuple[str, Any]] = []
     resource_open: dict[str, Any] = {}
@@ -155,6 +166,7 @@ def test_perform_task_runs_host_session_with_container_tools(
             calls.append(("runner_init", kwargs))
 
         async def run(self, **kwargs: Any) -> SimpleNamespace:
+            assert resource_open["ready"] is True
             calls.append(("runner_run", kwargs))
             trace_file = Path(kwargs["trace_file"])
             trace_file.write_text(
@@ -192,7 +204,7 @@ def test_perform_task_runs_host_session_with_container_tools(
     class FakeResourceTrace:
         calls: list[dict[str, Any]] = []
         final_artifact = {
-            "telemetry_quality": "ok",
+            "telemetry_quality": "ok" if setup_error is None else "unavailable",
             "formal_completeness": "complete",
             "call_coverage": {
                 "total_call_count": 0,
@@ -200,11 +212,16 @@ def test_perform_task_runs_host_session_with_container_tools(
                 "withheld_call_count": 0,
                 "eligible_fraction": 1.0,
             },
-            "collection_validity": "valid",
+            "collection_validity": "valid" if setup_error is None else "invalid",
         }
 
         def add_integrity_error(self, message: str) -> None:
-            raise AssertionError(message)
+            resource_open["integrity_error"] = message
+
+        def wait_ready(self) -> str | None:
+            time.sleep(setup_delay_s)
+            resource_open["ready"] = True
+            return setup_error
 
         def finalize(self, *, replay_execution: str) -> None:
             resource_open["replay_execution"] = replay_execution
@@ -247,6 +264,7 @@ def test_perform_task_runs_host_session_with_container_tools(
         tool_resource_profile="/tmp/resource.yaml",
         resource_run_token="run-token",
         resource_trace_id="hello-world",
+        agent_timeout_sec=agent_timeout_sec,
     ).perform_task(
         "solve sqlite query",
         FakeSession(),  # type: ignore[arg-type]
@@ -267,6 +285,9 @@ def test_perform_task_runs_host_session_with_container_tools(
     assert trace_records[0]["terminal_bench_container_id"] == "abcdef1234567890"
     assert trace_records[0]["terminal_bench_workdir"] == "/workdir"
     assert trace_records[0]["tool_container_python"] == "Python 3.6.9"
+    assert trace_records[0]["collection_validity"] == (
+        "valid" if setup_error is None else "invalid"
+    )
     assert (
         "Shell/file tools `python3`: Python 3.6.9"
         in trace_records[0]["prompt_runtime_label"]
@@ -296,6 +317,8 @@ def test_perform_task_runs_host_session_with_container_tools(
     assert resource_open["run_token"] == "run-token"
     assert resource_open["trace_id"] == "hello-world"
     assert resource_open["container_runtime"] == "docker"
+    assert resource_open["ready"] is True
+    assert resource_open.get("integrity_error") == setup_error
     rendered_calls = repr(calls)
     assert "secret-value" in repr(provider_kwargs)
     assert "secret-value" not in rendered_calls.replace(repr(provider_kwargs), "")

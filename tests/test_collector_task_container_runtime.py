@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from trace_collect.attempt_pipeline import AttemptContext
 from trace_collect.collector import (
     _run_openclaw_in_task_container,
@@ -66,9 +68,11 @@ def test_tool_resource_scope_never_falls_back_to_benchmark() -> None:
     )
 
 
+@pytest.mark.parametrize("setup_error", [None, "telemetry setup failed"])
 def test_run_openclaw_in_task_container_runs_openclaw_on_host_with_container_tools(
     tmp_path: Path,
     monkeypatch,
+    setup_error: str | None,
 ) -> None:
     start_seen: dict[str, object] = {}
     agent_seen: dict[str, object] = {}
@@ -106,6 +110,7 @@ def test_run_openclaw_in_task_container_runs_openclaw_on_host_with_container_too
 
     class FakeRunner:
         async def run_task(self, eval_task, **kwargs):
+            assert resource_seen["ready"] is True
             run_seen["eval_task"] = eval_task
             run_seen.update(kwargs)
             Path(kwargs["trace_file"]).write_text(
@@ -192,7 +197,7 @@ def test_run_openclaw_in_task_container_runs_openclaw_on_host_with_container_too
     class FakeResourceTrace:
         calls: list[dict] = []
         final_artifact = {
-            "telemetry_quality": "ok",
+            "telemetry_quality": "ok" if setup_error is None else "unavailable",
             "formal_completeness": "complete",
             "call_coverage": {
                 "total_call_count": 0,
@@ -200,11 +205,15 @@ def test_run_openclaw_in_task_container_runs_openclaw_on_host_with_container_too
                 "withheld_call_count": 0,
                 "eligible_fraction": 1.0,
             },
-            "collection_validity": "valid",
+            "collection_validity": "valid" if setup_error is None else "invalid",
         }
 
         def add_integrity_error(self, message: str) -> None:
-            raise AssertionError(message)
+            resource_seen["integrity_error"] = message
+
+        def wait_ready(self) -> str | None:
+            resource_seen["ready"] = True
+            return setup_error
 
         def finalize(self, *, replay_execution: str) -> None:
             resource_seen["replay_execution"] = replay_execution
@@ -245,7 +254,9 @@ def test_run_openclaw_in_task_container_runs_openclaw_on_host_with_container_too
     assert metadata["runtime_proof"]["tool_container_user_id"] == 0
     assert metadata["runtime_proof"]["tool_container_workdir"] == "/testbed"
     assert metadata["tool_resource"]["service_enabled"] is True
-    assert metadata["collection_validity"] == "valid"
+    assert metadata["collection_validity"] == (
+        "valid" if setup_error is None else "invalid"
+    )
     assert start_seen["run_as_host_user"] is False
     assert start_seen["mount_host_home"] is False
     assert start_seen["container_home"] == "/root"
@@ -264,6 +275,8 @@ def test_run_openclaw_in_task_container_runs_openclaw_on_host_with_container_too
     assert build_seen["tool_overrides"]
     assert resource_seen["container_id"] == "cid-openclaw"
     assert resource_seen["trace_id"] == ctx.instance_id
+    assert resource_seen["ready"] is True
+    assert resource_seen.get("integrity_error") == setup_error
     assert resource_seen["replay_execution"] == "completed"
     assert callable(build_seen["container_patch_extractor"])
     assert run_seen["tool_workspace"] == Path("/testbed")

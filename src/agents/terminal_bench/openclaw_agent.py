@@ -290,6 +290,13 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
                     container_id=container_id,
                     artifact_path=log_dir / "resource_observations.json",
                 )
+                setup_started = time.monotonic()
+                setup_error = await asyncio.to_thread(resource_trace.wait_ready)
+                if deadline is not None:
+                    # Instrumentation setup is outside the workload timeout.
+                    deadline += time.monotonic() - setup_started
+                if setup_error is not None:
+                    resource_trace.add_integrity_error(setup_error)
             provider = create_provider(
                 provider_name=self._provider_name,
                 api_key=self._api_key,
