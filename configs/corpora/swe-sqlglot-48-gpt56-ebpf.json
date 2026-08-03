@@ -9,6 +9,13 @@
       "change": "Restart all 48 tasks from the beginning with the Codex Fast tier requested; do not combine the interrupted Standard-tier artifacts with this run.",
       "reason": "Reduce collection wall time without changing the task set, concurrency, model, iteration cap, telemetry, or evaluation criterion.",
       "evidence_boundary": "HTTP and WebSocket smokes requested priority but the backend response reported service_tier=default. Treat the new run as requested_fast, not verified_fast, and retain response-reported tier metadata."
+    },
+    {
+      "date": "2026-08-03",
+      "visible_before_change": "The natural-c2 primary result was -1.639 seconds with a 95% task-pair interval of [-3.166, -0.105], all 24 task deletions remained negative, and a post-result mechanism audit found that 21 of 22 changed decisions had identical timeout signatures and none approached the timeout ceiling.",
+      "change": "Freeze one synthetic-c32 follow-up over the same 24 fit and 24 evaluation tasks, with fixed arrival seeds 0 through 31, C100 versus tool-name only, paired schedule-bootstrap uncertainty, and exhaustive evaluation-task deletion stability.",
+      "reason": "Test whether the natural-c2 same-repository advantage survives one predeclared high-concurrency arrival model before any live pressure experiment.",
+      "evidence_boundary": "This is an openly post-result development follow-up. It reuses isolated durations and models neither contention nor KV eviction feedback."
     }
   ],
   "source": {
@@ -39,6 +46,21 @@
     "task_stability": "repeat after removing each evaluation task; report any task whose removal changes the sign",
     "comparison_scope": "identical eligible ranking events and task labels for all methods",
     "note": "eBPF resource counters are collected for later mechanism analysis and do not select this primary result"
+  },
+  "followup_evaluations": {
+    "synthetic_c32": {
+      "question": "Does the frozen SQLGlot C100 advantage survive fixed trace-driven synthetic concurrency?",
+      "fit_and_eval": "reuse the configured 24 fit and 24 evaluation task IDs without refitting on evaluation tasks",
+      "arms": ["tool_name", "c100"],
+      "target_concurrency": 32,
+      "schedule_seeds": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
+      "arrival_model": "shuffle sorted evaluation task IDs with NumPy default_rng(seed); open-loop interarrival is fit-median session gap span divided by 32; preserve within-session gap offsets and durations",
+      "primary_metric": "mean over schedules of mean_regret_seconds(c100) - mean_regret_seconds(tool_name); lower is better",
+      "primary_go_criterion": "upper endpoint of the 10,000-draw paired schedule-bootstrap 95% interval is below zero",
+      "task_stability_go_criterion": "maximum schedule-mean primary delta after deleting each evaluation task is below zero",
+      "stop_rule": "if either gate fails, stop before live pressure or scheduler experiments",
+      "evidence_boundary": "isolated trace durations only; no contention, KV capacity, eviction, recomputation, or JCT feedback"
+    }
   },
   "fit": {
     "expected_task_count": 24,
