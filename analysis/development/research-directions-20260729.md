@@ -425,7 +425,9 @@ Protocol:
   scheduling selects the queued request requiring the fewest additional blocks.
   LRU evicts the least-recently accessed resident session. C100 reuses the
   existing 5,000-term TF-IDF, KMeans `C=100`, conditional-survivor mean, and
-  tool/global fallback without retuning.
+  tool/global fallback without retuning. Scheduling ties use causal arrival
+  order then the seeded task order; equal C100 predictions fall back to LRU,
+  then task ID.
 - Primary metrics are evicted blocks and eviction-induced reusable-prefix miss
   blocks. Report the mean paired effects of prefix alone (`prefix_lru -
   fcfs_lru`), C100 alone (`fcfs_c100 - fcfs_lru`), incremental C100 under prefix
