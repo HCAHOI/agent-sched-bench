@@ -156,7 +156,7 @@ least five percentage points, changed predictions are net helpful, and probe
 p95 is below 100 ms. A failure ends the state route; do not add states or
 replace package sets.
 
-## 6. Phase E — scheduler actionability
+## 6. Phase E — scheduler actionability (complete, no-go)
 
 Do not implement a scheduler. For every surviving candidate, count changed
 latency/resource hard decisions and independent tasks, then identify whether a
@@ -167,6 +167,12 @@ at least 20 commands across at least 10 tasks and false-action and
 missed-action costs can be stated. Otherwise stop at predictor representation
 and make no scheduling-utility claim. CacheWise timeout is a ceiling, not a
 remaining-work proxy, and its ranking is not a default consumer.
+
+Observed: latency changed five commands across five tasks, Disk changed four
+across four, and CPU/RSS changed none. The union is six commands across six
+tasks, below both frozen thresholds. No repository consumer outside the
+tool-resource service maps these predictions to a scheduling action. No
+scheduler protocol or implementation is authorized.
 
 ## 7. Interfaces, artifacts, and acceptance
 

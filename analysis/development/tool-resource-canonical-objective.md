@@ -158,9 +158,16 @@ to 98/119, with 11 helpful and 13 harmful changes. State therefore lacks both
 the required contrast and an oracle improvement ceiling. The controlled state
 collection is not prepared or requested.
 
-Scheduler actionability remains a downstream gate in
-`clause-interaction-kb-plan.md`; it cannot authorize scheduler implementation
-by itself.
+### Phase E — scheduler actionability: complete, no-go
+
+The surviving pip representation changed five latency decisions across five
+tasks, four Disk decisions across four tasks, and no CPU or RSS decisions.
+After deduplication, only six commands across six tasks changed any hard target;
+the frozen gate required 20 commands across ten tasks. No repository consumer
+outside the tool-resource service currently maps these predictions to an
+allocation, admission, ordering, or timeout action. Scheduler implementation
+and scheduling-utility claims therefore stop. CacheWise timeout remains a
+ceiling, not a remaining-work signal.
 
 ## 5. Development-exposure record
 

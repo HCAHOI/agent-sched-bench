@@ -61,15 +61,22 @@
  <div class="card"><span>Mode oracle vs semantic</span><b class="neg">−2 correct</b><p>100/119 → 98/119</p></div>
 </div><p><b>Observed：</b>selected causal-state arm 与 semantic-only PMF 完全相同。Hindsight mode leave-one-task-out 改变 25 个 hard predictions：11 helpful、13 harmful、1 neutral，净 −2；因此不是“缺少更好的 state probe”，而是这个 workload 中连 output-derived oracle mode 都不能提高三桶准确率。</p><div class="callout"><b>Decision：</b><p>Phase C NO-GO。没有 8 个可比较 package sets，也没有至少 10 个 oracle 净修复；不准备、不申请 96 次 paired state collection。</p></div></section>
 
+<section class="section"><h2>Phase E：预测变化太少，而且没有实际 scheduler consumer</h2><div class="grid cards">
+ <div class="card"><span>Latency changes</span><b>5</b><p>覆盖 5 tasks</p></div>
+ <div class="card"><span>Disk changes</span><b>4</b><p>覆盖 4 tasks</p></div>
+ <div class="card"><span>CPU / RSS changes</span><b class="zero">0 / 0</b><p>没有 hard-decision 变化</p></div>
+ <div class="card"><span>Union</span><b class="neg">6 commands</b><p>6 tasks；要求 20 / 10</p></div>
+</div><p>Latency 与 Disk 有 3 个 command 重叠。代码审计没有发现 tool-resource service 之外的 caller 会根据 PMF 或 Heavy/Light 类别改变 allocation、admission、ordering 或 timeout；当前 daemon 只提供预测。</p><div class="callout"><b>Decision：</b><p>Phase E NO-GO。不实现 scheduler，不把 bucket accuracy gain 外推为系统 utility；CacheWise timeout 仍只是 ceiling，不是 remaining-work proxy。</p></div></section>
+
 <div class="grid two"><section class="section"><h2>不确定性与证据边界</h2>
  <table><thead><tr><th>Overall latency</th><th>Point</th><th>Task-bootstrap 95%</th></tr></thead><tbody><tr><th>Canonical − Current</th><td class="neg">−0.112 pp</td><td>[−0.340, +0.108] pp</td></tr><tr><th>Jaccard − Current</th><td class="pos">+0.167 pp</td><td>[−0.056, +0.432] pp</td></tr></tbody></table>
  <p>两个 Phase A 区间都跨 0；bootstrap 仅报告不确定性，不参与冻结 gate。Phase B 的 overall delta 为 +0.223 pp，task-bootstrap 95% 区间为 [+0.054, +0.464] pp，但同样不覆盖 signature-diversity gate。SQLGlot100 已 development-exposed，不能作为 confirmation。</p>
  </section><section class="section"><h2>下一步由 gate 决定</h2>
- <ol><li><b>Phase B 已停止：</b>不换第二个 tool，不迁移 pytest 到 CPU/RSS/Disk。</li><li><b>Phase C 已停止：</b>现有 traces 没有 state contrast，mode oracle 也更差。</li><li><b>Phase D 未解锁：</b>不准备、不申请 96 次 paired collection。</li><li><b>Phase E：</b>先数现有候选是否会让 named consumer 改变至少 20 commands / 10 tasks；否则整个路线结束。</li></ol>
+ <ol><li><b>Phase B 已停止：</b>不换第二个 tool，不迁移 pytest 到 CPU/RSS/Disk。</li><li><b>Phase C 已停止：</b>现有 traces 没有 state contrast，mode oracle 也更差。</li><li><b>Phase D 未解锁：</b>不准备、不申请 96 次 paired collection。</li><li><b>Phase E 已停止：</b>只有 6 commands / 6 tasks 改变任一 hard target，且没有 named consumer。当前 decision tree 完成。</li></ol>
  </section></div>
 
-<section class="section"><h2>结论</h2><div class="callout"><p class="verdict">Phase A 选择 pip Jaccard；Phase B pytest 与 Phase C state 均严格 NO-GO。同 repo repetition 确实产生少量可复用信号，但当前证据只支持两个窄 case，不支持通用 semantic KB、state-aware predictor 或 scheduling claim。</p></div></section>
+<section class="section"><h2>结论</h2><div class="callout"><p class="verdict">Phase A 选择 pip Jaccard；Phase B pytest、Phase C state 和 Phase E actionability 均严格 NO-GO。同 repo repetition 确实产生少量可复用信号，但当前证据只支持两个窄 case，不支持通用 semantic KB、state-aware predictor 或 scheduling claim。</p></div></section>
 
-<section class="section"><h2>可追溯输入</h2><p class="sources">Phase A JSON: analysis/results/tool-resource-clause-interactions-20260804/pip-carrier-audit-latency.json<br>Phase A rows: analysis/results/tool-resource-clause-interactions-20260804/pip-carrier-audit-latency-rows.jsonl<br>Phase B JSON: analysis/results/tool-resource-clause-interactions-20260804/pytest-semantic-latency.json<br>Phase B rows: analysis/results/tool-resource-clause-interactions-20260804/pytest-semantic-latency-rows.jsonl<br>Phase C JSON: analysis/results/tool-resource-clause-interactions-20260804/pip-state-identifiability.json<br>Prior resource JSON: analysis/results/tool-resource-clause-interactions-20260804/pip-semantic-resources.json<br>Protocol: analysis/development/tool-resource-canonical-objective.md<br>Plan: analysis/development/clause-interaction-kb-plan.md</p></section>
-<footer>1,792 IDs reconciled · Phase A Jaccard GO · Phase B pytest NO-GO · Phase C state NO-GO · development-exposed</footer>
+<section class="section"><h2>可追溯输入</h2><p class="sources">Phase A JSON: analysis/results/tool-resource-clause-interactions-20260804/pip-carrier-audit-latency.json<br>Phase A rows: analysis/results/tool-resource-clause-interactions-20260804/pip-carrier-audit-latency-rows.jsonl<br>Phase B JSON: analysis/results/tool-resource-clause-interactions-20260804/pytest-semantic-latency.json<br>Phase B rows: analysis/results/tool-resource-clause-interactions-20260804/pytest-semantic-latency-rows.jsonl<br>Phase C JSON: analysis/results/tool-resource-clause-interactions-20260804/pip-state-identifiability.json<br>Phase E JSON: analysis/results/tool-resource-clause-interactions-20260804/semantic-actionability-gate.json<br>Prior resource JSON: analysis/results/tool-resource-clause-interactions-20260804/pip-semantic-resources.json<br>Protocol: analysis/development/tool-resource-canonical-objective.md<br>Plan: analysis/development/clause-interaction-kb-plan.md</p></section>
+<footer>Phase A Jaccard GO · Phase B pytest NO-GO · Phase C state NO-GO · Phase E actionability NO-GO · development-exposed</footer>
 </main></body></html>

@@ -1,0 +1,48 @@
+{
+  "action_changes": {
+    "by_target": {
+      "disk_read_write_bytes_total": {
+        "changed_commands": 4,
+        "tasks": 4
+      },
+      "latency": {
+        "changed_commands": 5,
+        "tasks": 5
+      },
+      "peak_cpu_cores": {
+        "changed_commands": 0,
+        "tasks": 0
+      },
+      "sampled_peak_rss_mb": {
+        "changed_commands": 0,
+        "tasks": 0
+      }
+    },
+    "latency_disk_command_overlap": 3,
+    "union": {
+      "changed_commands": 6,
+      "tasks": 6
+    }
+  },
+  "claim_bearing": false,
+  "consumer_audit": {
+    "named_consumer": null,
+    "observation": "No caller outside the tool-resource service maps latency PMFs or Heavy/Light predictions to a scheduling action.",
+    "service_role": "resource-agentd exposes predictions but does not choose allocations, admission, ordering, or timeout actions."
+  },
+  "gate": {
+    "pass": false,
+    "requires_changed_commands_at_least": 20,
+    "requires_changed_tasks_at_least": 10,
+    "requires_explicit_false_and_missed_action_costs": true,
+    "requires_named_consumer": true
+  },
+  "inputs": {
+    "latency_result": "analysis/results/tool-resource-clause-interactions-20260804/pip-carrier-audit-latency.json",
+    "latency_rows": "analysis/results/tool-resource-clause-interactions-20260804/pip-carrier-audit-latency-rows.jsonl",
+    "resource_result": "analysis/results/tool-resource-clause-interactions-20260804/pip-semantic-resources.json",
+    "resource_rows": "analysis/results/tool-resource-clause-interactions-20260804/pip-semantic-resources-rows.jsonl"
+  },
+  "objective": "semantic_predictor_scheduler_actionability",
+  "status": "development_exposed_actionability_no_go"
+}
