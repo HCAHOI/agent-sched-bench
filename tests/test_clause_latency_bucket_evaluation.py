@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import replace
 from itertools import combinations
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from scripts.evaluation.evaluate_clause_latency_buckets import (
     _telemetry_scored_rows,
     _validate_partition,
     evaluate_clause_telemetry,
+    evaluate_interaction_commands,
     evaluate_prequential_commands,
 )
 from scripts.evaluation.evaluate_clause_resource_classes import (
@@ -122,9 +124,12 @@ def test_interaction_poset_features_and_maximal_frontier() -> None:
         ("runner", "deploy", "--tag=x", "--tag=y"),
         stable,
     )
+    flag_a = _interaction_feature_set("x", ("x", "--a"), frozenset())
+    flag_b = _interaction_feature_set("x", ("x", "--b"), frozenset())
 
     assert reordered_left == reordered_right
     assert reordered_left != positional_reordered
+    assert not (flag_a.features & flag_b.features)
     assert {
         feature for feature in repeated.features if feature.startswith("option:--tag")
     } == {
@@ -327,6 +332,178 @@ def test_command_prequential_baseline_updates_only_between_tasks() -> None:
         assert metric["constant_light_accuracy"] == 0.0
         assert metric["current_dynamic"]["accuracy"] == 1 / 3
         assert metric["frozen_at_80"]["accuracy"] == 0.0
+
+
+def test_interaction_evaluator_updates_only_after_task_settlement() -> None:
+    def row(task: int) -> Row:
+        return Row(
+            task_id=f"target__repo-{task}",
+            repo="target__repo",
+            manifest_index=task - 1,
+            bin="x",
+            argv=("x", "--mode=slow"),
+            latency_ms=9000.0,
+            peak_cpu_cores=None,
+            sampled_peak_rss_mb=None,
+            disk_read_write_bytes_total=None,
+        )
+
+    clauses = [row(1), row(1), row(2)]
+    commands = [
+        CommandRow(
+            task_id=clause.task_id,
+            repo=clause.repo,
+            manifest_index=clause.manifest_index,
+            call_index=call_index,
+            call_id=f"call-{index}",
+            command="x --mode=slow",
+            duration_ms=clause.latency_ms,
+            clauses=(clause,),
+        )
+        for index, (call_index, clause) in enumerate(
+            zip((0, 1, 0), clauses, strict=True)
+        )
+    ]
+    public = [
+        Row(
+            task_id="public__repo-1",
+            repo="public__repo",
+            manifest_index=0,
+            bin="x",
+            argv=("x", "--mode=fast"),
+            latency_ms=100.0,
+            peak_cpu_cores=None,
+            sampled_peak_rss_mb=None,
+            disk_read_write_bytes_total=None,
+        )
+    ]
+
+    result, sidecar = evaluate_interaction_commands(
+        public,
+        ["target__repo-1", "target__repo-2"],
+        clauses,
+        commands,
+        {"fixture": True},
+    )
+
+    for arm in ("current", "interaction_poset", "subset_kernel"):
+        assert [item["arms"][arm]["prediction"] for item in sidecar] == [0, 0, 2]
+        assert result["latency"]["arms"][arm]["three_class_accuracy"] == 1 / 3
+    assert result["row_identity"][
+        "identical_command_ids_labels_and_availability"
+    ] is True
+    assert result["gates"]["stage0"]["pass"] is False
+    assert result["counts"]["stored_target_observations_by_candidate"] == {
+        "interaction_poset": 3,
+        "subset_kernel": 3,
+        "subset_k1": 3,
+        "subset_k2": 3,
+        "subset_k3": 3,
+    }
+
+
+def test_interaction_queries_use_static_not_observed_argv() -> None:
+    target = [
+        Row(
+            task_id=f"target__repo-{task}",
+            repo="target__repo",
+            manifest_index=task - 1,
+            bin="x",
+            argv=("x", "slow"),
+            latency_ms=9000.0,
+            peak_cpu_cores=None,
+            sampled_peak_rss_mb=None,
+            disk_read_write_bytes_total=None,
+        )
+        for task in (1, 2)
+    ]
+    commands = [
+        CommandRow(
+            task_id=clause.task_id,
+            repo=clause.repo,
+            manifest_index=clause.manifest_index,
+            call_index=0,
+            call_id=f"call-{index}",
+            command='x "$MODE"',
+            duration_ms=clause.latency_ms,
+            clauses=(clause,),
+        )
+        for index, clause in enumerate(target)
+    ]
+    public = [
+        replace(
+            target[0],
+            task_id="public__repo-1",
+            repo="public__repo",
+            argv=("x", "fast"),
+            latency_ms=100.0,
+        )
+    ]
+
+    _, sidecar = evaluate_interaction_commands(
+        public,
+        ["target__repo-1", "target__repo-2"],
+        target,
+        commands,
+        {"fixture": True},
+    )
+
+    for arm in ("interaction_poset", "subset_kernel"):
+        assert sidecar[1]["arms"][arm]["all_clauses_exact"] is False
+
+
+def test_interaction_exact_compound_uses_current_composition() -> None:
+    values = ((100.0, 9000.0), (9000.0, 100.0), (100.0, 100.0))
+    clauses: list[Row] = []
+    commands: list[CommandRow] = []
+    for task, (a_latency, b_latency) in enumerate(values, start=1):
+        pair = tuple(
+            Row(
+                task_id=f"target__repo-{task}",
+                repo="target__repo",
+                manifest_index=task - 1,
+                bin=bin_,
+                argv=(bin_,),
+                latency_ms=latency,
+                peak_cpu_cores=None,
+                sampled_peak_rss_mb=None,
+                disk_read_write_bytes_total=None,
+            )
+            for bin_, latency in (("a", a_latency), ("b", b_latency))
+        )
+        clauses.extend(pair)
+        commands.append(
+            CommandRow(
+                task_id=pair[0].task_id,
+                repo=pair[0].repo,
+                manifest_index=pair[0].manifest_index,
+                call_index=0,
+                call_id=f"call-{task}",
+                command="a; b",
+                duration_ms=a_latency + b_latency,
+                clauses=pair,
+            )
+        )
+    public = [
+        replace(
+            clauses[0],
+            task_id="public__repo-1",
+            repo="public__repo",
+        )
+    ]
+
+    _, sidecar = evaluate_interaction_commands(
+        public,
+        [f"target__repo-{task}" for task in range(1, 4)],
+        clauses,
+        commands,
+        {"fixture": True},
+    )
+
+    current = sidecar[2]["arms"]["current"]["probability_by_bucket"]
+    for arm in ("interaction_poset", "subset_kernel", "subset_k1", "subset_k2", "subset_k3"):
+        assert sidecar[2]["arms"][arm]["all_clauses_exact"] is True
+        assert sidecar[2]["arms"][arm]["probability_by_bucket"] == current
 
 
 def _telemetry_record(
