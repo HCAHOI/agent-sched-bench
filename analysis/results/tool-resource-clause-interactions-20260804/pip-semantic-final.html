@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SQLGlot100 · pip 语义与任务状态实验</title>
+<style>
+:root{--bg:#07121f;--panel:#0e1d30;--panel2:#12263c;--ink:#edf5ff;--muted:#9fb2c8;--line:#29445f;--cyan:#48d7c8;--blue:#78adff;--amber:#ffc96b;--red:#ff8390}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 85% 0,#173550 0,transparent 32%),linear-gradient(155deg,#07121f,#091827 60%,#07121f);color:var(--ink);font:15px/1.5 "Noto Sans CJK SC",Inter,system-ui,sans-serif}
+main{width:min(1460px,calc(100% - 48px));margin:auto;padding:40px 0 64px}h1{font-size:42px;line-height:1.13;letter-spacing:-.03em;margin:7px 0 12px}h2{font-size:25px;margin:0 0 14px}h3{font-size:17px;margin:0 0 7px}p{color:var(--muted);margin:7px 0}.eyebrow{color:var(--cyan);font-size:12px;font-weight:800;letter-spacing:.13em;text-transform:uppercase}.lede{font-size:19px;max-width:1120px}.grid{display:grid;gap:16px}.cards{grid-template-columns:repeat(4,1fr);margin:27px 0 20px}.two{grid-template-columns:1fr 1fr}.three{grid-template-columns:repeat(3,1fr)}.card,.section{background:linear-gradient(180deg,rgba(18,38,60,.97),rgba(14,29,48,.97));border:1px solid var(--line);border-radius:16px;box-shadow:0 14px 36px rgba(0,0,0,.18)}.card{padding:18px}.card span{color:var(--muted);font-size:12px}.card b{display:block;font-size:29px;line-height:1.15;margin:5px 0}.section{padding:23px;margin:16px 0}.flow{display:flex;gap:9px;align-items:stretch;margin-top:14px}.node{flex:1;padding:14px;background:#0a1728;border:1px solid var(--line);border-radius:12px}.arrow{align-self:center;color:var(--cyan);font-size:22px}.tag{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:3px 9px;color:var(--muted);font-size:11px;margin:3px 2px 0 0}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:10px 9px;border-bottom:1px solid rgba(41,68,95,.72);text-align:right;vertical-align:middle}th:first-child,td:first-child{text-align:left}thead th{color:#b8cada;font-size:11px;text-transform:uppercase;letter-spacing:.045em}tbody th{font-weight:700}.candidate{background:rgba(72,215,200,.055)}.metric{font-weight:800;color:#fff}.pos{color:var(--cyan);font-weight:800}.zero{color:var(--muted)}.neg{color:var(--red);font-weight:800}small{display:block;color:var(--muted);font-size:10.5px;margin-top:2px}.note{font-size:12px}.callout{border-left:4px solid var(--amber);padding:12px 15px;background:rgba(255,201,107,.07);border-radius:0 10px 10px 0}.callout.good{border-color:var(--cyan);background:rgba(72,215,200,.065)}ul{padding-left:20px;margin:8px 0}li{color:var(--muted);margin:6px 0}li::marker{color:var(--cyan)}.mode{display:grid;grid-template-columns:150px 1fr 56px;gap:10px;align-items:center;margin:10px 0}.track{height:11px;background:#081421;border-radius:7px;overflow:hidden}.fill{height:100%;background:linear-gradient(90deg,var(--blue),var(--cyan));border-radius:7px}.mono{font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}.verdict{font-size:22px;color:#fff}.sources{font-size:11px;color:#7890a8;overflow-wrap:anywhere}footer{text-align:center;color:#7890a8;font-size:11px;margin-top:22px}@media(max-width:900px){main{width:calc(100% - 24px)}.cards,.two,.three{grid-template-columns:1fr}.flow{flex-direction:column}.arrow{transform:rotate(90deg)}.tablewrap{overflow-x:auto}}
+</style></head><body><main>
+<div class="eyebrow">SQLGlot100 · development-exposed · causal command replay</div>
+<h1>pip 参数语义有小幅收益；<br>任务状态没有提供额外信息。</h1>
+<p class="lede">在完全相同的 100 个 task、1,792 个 eligible command 上，手写 pip package-set 语义让 latency 多对 3 个、Disk 多对 2 个；CPU/RSS 不变。semantic-only 与 semantic+state 的每个 PMF 都相同，因此不能把收益归因于 pip availability 或 installed-package state。</p>
+
+<div class="grid cards">
+ <div class="card"><span>统一评估流</span><b>1,792 commands</b><p>100 tasks · 3,799 causal clauses</p></div>
+ <div class="card"><span>Latency · 全体</span><b class="pos">+3 correct</b><p>87.50% → 87.67%</p></div>
+ <div class="card"><span>Disk · 全体</span><b class="pos">+2 correct</b><p>98.83% → 98.94%</p></div>
+ <div class="card"><span>State 的额外贡献</span><b class="zero">0 PMF changes</b><p>Latency / CPU / RSS / Disk 全部为 0</p></div>
+</div>
+
+<section class="section"><h2>我们改了什么：只替换 non-exact pip evidence</h2><div class="flow">
+ <div class="node"><h3>Current · control</h3><p>repo exact → argv prefix → binary → frozen public prior</p><span class="tag">raw argv</span><span class="tag">task-final update</span></div><div class="arrow">→</div>
+ <div class="node"><h3>pip semantic-only</h3><p>解释 interpreter / invocation / flags；package 名字排序并用 Jaccard 匹配。</p><span class="tag">alpha = 16</span><span class="tag">exact shortcut</span></div><div class="arrow">+</div>
+ <div class="node"><h3>pip semantic + state · primary</h3><p>再条件化到 query 前已知的 pip present/absent 与 remaining packages。</p><span class="tag">只看更早输出</span><span class="tag">每 task reset</span></div>
+</div><p class="note">非 pip command 直接返回 Current 的同一个概率向量；1,673/1,673 已逐位验证。当前 command 的 output 只用于 hindsight execution-mode 分析，不进入 feature。</p></section>
+
+<section class="section"><h2>完整四行表：全体 command accuracy ↑</h2><div class="tablewrap"><table><thead><tr><th>预测目标</th><th>Eligible n</th><th>Majority</th><th>Current<br><small>causal update</small></th><th>pip semantic-only</th><th>pip semantic + state</th><th>Δ Current</th></tr></thead><tbody>
+ <tr><th>Latency · 3 buckets<small>≤2s / 2–8s / &gt;8s</small></th><td>1,792</td><td data-value="0.77734375">77.73%</td><td class="metric" data-value="0.875">87.50%<small>1,568 correct</small></td><td class="metric" data-value="0.8766741071428571">87.67%<small>1,571 correct</small></td><td class="metric" data-value="0.8766741071428571">87.67%<small>1,571 correct</small></td><td class="pos">+0.167 pp</td></tr>
+ <tr><th>CPU peak · Heavy/Light<small>Heavy &gt; 2 cores</small></th><td>1,105</td><td data-value="0.8678733031674208">86.79%</td><td class="metric" data-value="0.8995475113122172">89.95%<small>994 correct</small></td><td class="metric" data-value="0.8995475113122172">89.95%<small>994 correct</small></td><td class="metric" data-value="0.8995475113122172">89.95%<small>994 correct</small></td><td class="zero">+0.000 pp</td></tr>
+ <tr><th>Sampled RSS · Heavy/Light<small>Heavy &gt; 500 MB</small></th><td>1,225</td><td data-value="0.8840816326530613">88.41%</td><td class="metric" data-value="0.913469387755102">91.35%<small>1,119 correct</small></td><td class="metric" data-value="0.913469387755102">91.35%<small>1,119 correct</small></td><td class="metric" data-value="0.913469387755102">91.35%<small>1,119 correct</small></td><td class="zero">+0.000 pp</td></tr>
+ <tr class="candidate"><th>Disk I/O · Heavy/Light<small>Heavy &gt; 100 MiB</small></th><td>1,790</td><td data-value="0.9351955307262569">93.52%</td><td class="metric" data-value="0.988268156424581">98.83%<small>1,769 correct</small></td><td class="metric" data-value="0.9893854748603352">98.94%<small>1,771 correct</small></td><td class="metric" data-value="0.9893854748603352">98.94%<small>1,771 correct</small></td><td class="pos">+0.112 pp</td></tr>
+</tbody></table></div><p class="note">Majority 是在完全相同 eligible labels 上无脑预测最多类。CPU/RSS 的 ambiguous compound labels 被严格 withholding；Disk 可加，因此 n 更接近 1,792。方向均为越高越好。</p></section>
+
+<section class="section"><h2>只看 119 个 parsed pip command：机制信号更清楚</h2><div class="tablewrap"><table><thead><tr><th>目标</th><th>Eligible n</th><th>Heavy / long rate</th><th>Majority</th><th>Current</th><th>semantic-only</th><th>+ state</th><th>Hard changes</th></tr></thead><tbody>
+ <tr><th>Latency</th><td>119</td><td>64.71% long</td><td>64.71%</td><td data-value="0.8151260504201681">81.51%</td><td data-value="0.8403361344537815">84.03%</td><td data-value="0.8403361344537815">84.03%</td><td>5 = <span class="pos">4 helpful</span> / <span class="neg">1 harmful</span></td></tr>
+ <tr><th>CPU peak</th><td>116</td><td>1.72% Heavy</td><td>98.28%</td><td data-value="0.9827586206896551">98.28%</td><td data-value="0.9827586206896551">98.28%</td><td data-value="0.9827586206896551">98.28%</td><td>0</td></tr>
+ <tr><th>Sampled RSS</th><td>118</td><td>1.69% Heavy</td><td>98.31%</td><td data-value="0.9830508474576272">98.31%</td><td data-value="0.9830508474576272">98.31%</td><td data-value="0.9830508474576272">98.31%</td><td>0</td></tr>
+ <tr class="candidate"><th>Disk I/O</th><td>119</td><td>79.83% Heavy</td><td>79.83%</td><td data-value="0.8739495798319328">87.39%</td><td data-value="0.8907563025210085">89.08%</td><td data-value="0.8907563025210085">89.08%</td><td>4 = <span class="pos">3 helpful</span> / <span class="neg">1 harmful</span></td></tr>
+</tbody></table></div></section>
+
+<div class="grid two"><section class="section"><h2>真实 output 的 execution modes</h2>
+ <div class="mode"><span>下载 / build</span><div class="track"><div class="fill" style="width:85.7%"></div></div><b>102</b></div>
+ <div class="mode"><span>pip 不存在</span><div class="track"><div class="fill" style="width:9.2%;background:var(--red)"></div></div><b>11</b></div>
+ <div class="mode"><span>其他失败</span><div class="track"><div class="fill" style="width:4.2%;background:var(--amber)"></div></div><b>5</b></div>
+ <div class="mode"><span>cache-only</span><div class="track"><div class="fill" style="width:.9%"></div></div><b>1</b></div>
+ <p>Latency 净增益按模式分解：pip 不存在 +2 correct，下载/build +1，其他两类不变。标签来自当前 output，只用于这张诊断图。</p>
+ </section><section class="section"><h2>为什么 state 没有作用</h2>
+ <div class="callout"><b>Observed：四个目标上都是 0 PMF difference。</b><p>semantic-only 与 semantic+state 不只是 accuracy 相同，而是 119 个 pip command 的全部预测分布都相同；resource probability 也全部相同。</p></div>
+ <ul><li>11 个 “pip 不存在” 通常在第一次 install 执行后才知道 absent；预测当前 command 时还不可见。</li><li>只有 15 个 command 实际启用了 non-exact semantic evidence，状态条件化没有改变其 evidence set。</li><li>5 个 <span class="mono">apt &amp;&amp; pip</span> command 在 apt 失败后没有执行 pip clause；它们仍是 command-level pip queries，但不能产生 pip observation。</li></ul>
+ <p><b>Inference：</b>现有 task 内缺少“先建立状态，再重复一个 non-exact pip query”的序列；不是状态理论上无用，而是这 100 条 trace 没提供可利用的 state contrast。</p>
+ </section></div>
+
+<div class="grid two"><section class="section"><h2>Compound command：ceiling 不是主要问题</h2>
+ <div class="grid three"><div class="card"><span>Observed pip clauses</span><b>114</b><p>119 parsed queries 中 5 个 tail 未执行</p></div><div class="card"><span>Compound pip</span><b>40</b><p>Current latency accuracy 100%</p></div><div class="card"><span>Single pip</span><b>74</b><p>Current latency accuracy 77.03%</p></div></div>
+ <p>用真实 clause latency 按 shell stage 组合的 hindsight oracle：114/114 pip commands 全对；command duration − clause composition 的 p50 仅 12.2 ms。这里的主要误差来自“相似 command 的真实工作量不同”，不是 tail clause 没相加。</p>
+ </section><section class="section"><h2>不确定性与证据边界</h2>
+ <table><thead><tr><th>Latency comparison</th><th>Point</th><th>Task-bootstrap 95%</th><th>P(Δ&gt;0)</th></tr></thead><tbody><tr><th>semantic − Current</th><td class="pos">+0.167 pp</td><td>[−0.056, +0.432] pp</td><td>89.0%</td></tr><tr><th>state − Current</th><td class="pos">+0.167 pp</td><td>[−0.056, +0.432] pp</td><td>89.0%</td></tr></tbody></table>
+ <p>区间跨 0；所有结果均来自已经开发暴露的 SQLGlot100，因此是机制诊断，不是 confirmation。资源阶段由预先冻结的 latency gate 才允许运行。</p>
+ </section></div>
+
+<section class="section"><h2>结论与下一步</h2><div class="grid two">
+ <div><h3>证据支持</h3><ul><li>针对常见 tool 的 deterministic semantic parser 值得做：pip package-set matching 在 latency 与 Disk 上各有小的净收益。</li><li>统一 KB 不必理解 dependency resolution；parser 只负责产生语义 key，预测仍由同一个因果 episodic memory 完成。</li><li>CPU/RSS 的 pip 子集极端偏 Light，accuracy 已被 majority ceiling 卡住；这里不是继续调权重的好目标。</li></ul></div>
+ <div><h3>不要过度声称</h3><ul><li>state arm 没有任何边际收益，不能讲“task-container state 解决了 cache/availability”。</li><li>Latency +3 与 Disk +2 都很小；没有 fresh repository 证据。</li><li>下一步应先做一个新的 tool parser（例如 pytest/apt）或在 fresh repo 上冻结确认；不要在 SQLGlot100 上继续调 alpha、flags 或 package-specific rules。</li></ul></div>
+ </div><div class="callout good"><p class="verdict">最窄且站得住的 story：generic argv matching 失败后，tool-specific semantic key 能修正少量 pip 决策；更丰富的状态只有在 trace 真正包含可复用的 state contrast 时才可能有用。</p></div>
+</section>
+
+<section class="section"><h2>可追溯输入</h2><p class="sources">Latency JSON: analysis/results/tool-resource-clause-interactions-20260804/pip-semantic-latency.json<br>Latency rows: analysis/results/tool-resource-clause-interactions-20260804/pip-semantic-latency-rows.jsonl<br>Resource JSON: analysis/results/tool-resource-clause-interactions-20260804/pip-semantic-resources.json<br>Resource rows: analysis/results/tool-resource-clause-interactions-20260804/pip-semantic-resources-rows.jsonl<br>Protocol: analysis/development/tool-resource-canonical-objective.md · 2026-08-04 handwritten pip semantics amendment</p></section>
+<footer>1,792 sample IDs reconciled · non-pip PMFs bit-identical · task-bootstrap seed 0 / 2,000 draws · development-exposed, not claim-bearing</footer>
+</main></body></html>
