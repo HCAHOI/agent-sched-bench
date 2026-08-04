@@ -102,8 +102,18 @@ no scheduler consumer existed.
 The early-execution CPU-reservation question is also closed for the current EAR
 action set. It used each command's own timestamped execution prefix rather than
 cross-task similarity, but its hindsight action-space upper bound did not pass
-the frozen utility gate. No predictor, runtime integration, or new collection
-is authorized by this lock.
+the frozen utility gate.
+
+The active development arm is now a task-local full-test phase correction. It
+was introduced only after the 5/3/3/3 error cases below were visible. It counts
+earlier completed full-suite command texts in the current task, uses no output
+or telemetry, and may only raise latency, CPU, or RSS predictions for the third
+or later full-suite call. Disk and all other commands remain Current. This is an
+explicit amendment to the previous rule that the current task was entirely
+invisible: resource observations still settle only after whole-task
+finalization, while prior command text is an allowed causal session signal for
+this named arm. The protocol and held-out gate live in
+`clause-interaction-kb-plan.md`. No runtime integration is authorized yet.
 
 The fixed full-command targets in Section 1 remain the static-predictor
 baseline. Their first causal 80-task warm-up / 20-task test replay contains 349
@@ -257,6 +267,12 @@ ceiling, not a remaining-work signal.
   independent review. Its empty CPU Medium class and two-row RSS Medium class
   are now development-exposed and cannot be used for an unreported threshold
   change.
+- The seven dangerous 5/3/3/3 errors, their raw outputs, and a task-phase table
+  were inspected before the task-local full-test phase method and its
+  continuation rule were frozen. Its original 80/20 replay is therefore only
+  post-hoc development evidence. The adjacent earlier SQLGlot collection had
+  zero completed result rows when its held-out protocol was frozen; no result
+  from that collection had been read.
 
 ## 6. Non-negotiable task contract
 

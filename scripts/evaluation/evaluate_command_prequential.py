@@ -14,6 +14,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 
 from scripts.evaluation.evaluate_clause_latency_buckets import (  # noqa: E402
     PipExecEvent,
+    evaluate_full_test_phase,
     evaluate_interaction_commands,
     evaluate_pip_resources,
     evaluate_pip_semantics,
@@ -69,7 +70,19 @@ def _load_exec_events(
                     command = arguments.get("command") if isinstance(arguments, dict) else None
                     if not isinstance(command, str):
                         raise ValueError(f"{attempt_dir}: raw exec action lacks command")
-                    task_events.append(PipExecEvent(call_id, command, tool_result))
+                    ts_start = action.get("ts_start")
+                    ts_end = action.get("ts_end")
+                    if (
+                        not isinstance(ts_start, (int, float))
+                        or isinstance(ts_start, bool)
+                        or not isinstance(ts_end, (int, float))
+                        or isinstance(ts_end, bool)
+                        or ts_end < ts_start
+                    ):
+                        raise ValueError(f"{attempt_dir}: raw exec timestamps are invalid")
+                    task_events.append(
+                        PipExecEvent(call_id, command, tool_result, float(ts_start), float(ts_end))
+                    )
             events[task_id] = task_events
     if list(events) != expected_task_ids:
         raise ValueError("raw exec event tasks differ from accepted task order")
@@ -106,6 +119,11 @@ def main() -> None:
         "--pytest-semantics",
         action="store_true",
         help="score the frozen SQLGlot-local pytest work signature",
+    )
+    parser.add_argument(
+        "--full-test-phase",
+        action="store_true",
+        help="score the task-local third-or-later full-test correction",
     )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--dump-rows", type=Path, required=True)
@@ -148,6 +166,7 @@ def main() -> None:
             args.pip_semantics,
             args.pip_resources_after_latency,
             args.pytest_semantics,
+            args.full_test_phase,
         )
     )
     if selected_modes > 1:
@@ -201,6 +220,16 @@ def main() -> None:
             provenance,
             expected_current=(1792, 1568),
             expected_coverage=(398, 339, 88, 125),
+        )
+    elif args.full_test_phase:
+        result, rows = evaluate_full_test_phase(
+            public,
+            task_ids,
+            clauses,
+            commands,
+            _load_exec_events(args.run_dir, task_ids),
+            provenance,
+            warmup_task_count=args.warmup_tasks,
         )
     else:
         result, rows = evaluate_prequential_commands(

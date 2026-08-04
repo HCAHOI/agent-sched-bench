@@ -12,6 +12,7 @@ import pytest
 from scripts.evaluation.evaluate_clause_latency_buckets import (
     _EpisodicSubsetKB,
     _InteractionPosetKB,
+    PipExecEvent,
     ScoredRow,
     _argmax_bucket,
     _bounded_node_oracle_candidates,
@@ -19,6 +20,7 @@ from scripts.evaluation.evaluate_clause_latency_buckets import (
     _empty_resource_bucket_confusion,
     _finalize_resource_bucket_metric,
     _interaction_feature_set,
+    _is_full_test_suite,
     _maximal_intersections,
     _parser,
     _select_shrinkage_alpha,
@@ -29,6 +31,7 @@ from scripts.evaluation.evaluate_clause_latency_buckets import (
     _validate_partition,
     evaluate_clause_telemetry,
     evaluate_interaction_commands,
+    evaluate_full_test_phase,
     evaluate_poset_resources,
     evaluate_prequential_commands,
 )
@@ -358,6 +361,132 @@ def test_command_prequential_baseline_updates_only_between_tasks() -> None:
         assert metric["constant_low_accuracy"] == 0.0
         assert metric["current_dynamic"]["accuracy"] == 1 / 3
         assert metric["frozen_at_80"]["accuracy"] == 0.0
+
+
+def test_full_test_suite_detection_is_narrow() -> None:
+    assert _is_full_test_suite("python3 -m pytest -q")
+    assert _is_full_test_suite("PATH=/opt/conda/bin:$PATH make test")
+    assert not _is_full_test_suite("pytest tests/test_x.py")
+    assert not _is_full_test_suite("pytest -k slow")
+    assert not _is_full_test_suite("pytest -x")
+    assert not _is_full_test_suite("make test && echo done")
+
+
+def test_full_test_phase_only_raises_third_attempt_and_preserves_disk() -> None:
+    mib = 1024.0 * 1024.0
+    task_ids = [f"target__repo-{index}" for index in range(5)]
+    clauses: list[Row] = []
+    commands: list[CommandRow] = []
+    events: dict[str, list[PipExecEvent]] = {}
+    for manifest_index, task_id in enumerate(task_ids):
+        task_events = []
+        for call_index, high in enumerate((False, False, True)):
+            latency = 40_000.0 if high else 1_000.0
+            clause = Row(
+                task_id=task_id,
+                repo="target__repo",
+                manifest_index=manifest_index,
+                bin="python3",
+                argv=("python3", "-m", "pytest"),
+                latency_ms=latency,
+                peak_cpu_cores=6.0 if high else 1.0,
+                sampled_peak_rss_mb=3_000.0 if high else 100.0,
+                disk_read_write_bytes_total=0.0,
+            )
+            call_id = f"call-{manifest_index}-{call_index}"
+            clauses.append(clause)
+            commands.append(
+                CommandRow(
+                    task_id=task_id,
+                    repo="target__repo",
+                    manifest_index=manifest_index,
+                    call_index=call_index,
+                    call_id=call_id,
+                    command="python3 -m pytest",
+                    duration_ms=latency,
+                    clauses=(clause,),
+                )
+            )
+            task_events.append(PipExecEvent(call_id, "python3 -m pytest", ""))
+        events[task_id] = task_events
+    public = [
+        Row(
+            task_id="public__repo-1",
+            repo="public__repo",
+            manifest_index=0,
+            bin="python3",
+            argv=("python3", "-m", "pytest"),
+            latency_ms=1_000.0,
+            peak_cpu_cores=1.0,
+            sampled_peak_rss_mb=100.0,
+            disk_read_write_bytes_total=mib,
+        )
+    ]
+
+    with pytest.raises(ValueError, match="frozen protocol"):
+        evaluate_full_test_phase(
+            public, task_ids, clauses, commands, events, {"fixture": True}, warmup_task_count=2
+        )
+    result, rows = evaluate_full_test_phase(
+        public,
+        task_ids,
+        clauses,
+        commands,
+        events,
+        {"fixture": True},
+        warmup_task_count=2,
+        expected_split=(5, 2),
+    )
+
+    changed = [row for row in rows if row["candidate"] != row["current_dynamic"]]
+    assert {row["full_test_phase"] for row in changed} == {2}
+    assert len({row["task_id"] for row in changed}) == 3
+    assert result["prediction_changes"]["latency"]["helpful"] == 3
+    assert result["prediction_changes"]["peak_cpu_cores"]["helpful"] == 3
+    assert result["prediction_changes"]["sampled_peak_rss_mb"]["helpful"] == 3
+    assert result["prediction_changes"]["disk_read_write_bytes_total"]["changed"] == 0
+    assert result["row_identity"]["disk_probability_vectors_bit_identical"]
+    assert result["gate"]["helpful_tasks"] == 3
+    assert result["gate"]["go"]
+
+    mismatched = {task: list(task_events) for task, task_events in events.items()}
+    mismatched[task_ids[-1]][-1] = replace(mismatched[task_ids[-1]][-1], command="make test")
+    with pytest.raises(ValueError, match="matching raw event"):
+        evaluate_full_test_phase(
+            public,
+            task_ids,
+            clauses,
+            commands,
+            mismatched,
+            {"fixture": True},
+            warmup_task_count=2,
+            expected_split=(5, 2),
+        )
+
+    neutral_commands = []
+    for command in commands:
+        if command.manifest_index >= 3 and command.call_index == 2:
+            clause = replace(
+                command.clauses[0],
+                latency_ms=10_000.0,
+                peak_cpu_cores=3.0,
+                sampled_peak_rss_mb=1_000.0,
+            )
+            command = replace(command, duration_ms=10_000.0, clauses=(clause,))
+        neutral_commands.append(command)
+    neutral_result, _rows = evaluate_full_test_phase(
+        public,
+        task_ids,
+        [command.clauses[0] for command in neutral_commands],
+        neutral_commands,
+        events,
+        {"fixture": True},
+        warmup_task_count=2,
+        expected_split=(5, 2),
+    )
+    assert neutral_result["gate"]["changed_tasks"] == 3
+    assert neutral_result["gate"]["helpful_tasks"] == 1
+    assert not neutral_result["gate"]["go"]
 
 
 def test_interaction_evaluator_updates_only_after_task_settlement() -> None:

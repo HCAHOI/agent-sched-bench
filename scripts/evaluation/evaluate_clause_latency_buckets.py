@@ -77,6 +77,7 @@ INTERACTION_FEATURE_VERSION = "generic-argv-v3-role-interaction-set-v1"
 PIP_SEMANTIC_FEATURE_VERSION = "pip-install-semantic-jaccard-v1"
 PIP_CANONICAL_FEATURE_VERSION = "pip-install-canonical-exact-v1"
 PYTEST_SEMANTIC_FEATURE_VERSION = "pytest-work-shape-exact-v1"
+FULL_TEST_PHASE_FEATURE_VERSION = "full-test-third-or-later-v1"
 
 
 @dataclass(frozen=True)
@@ -166,6 +167,8 @@ class PipExecEvent:
     call_id: str
     command: str
     tool_result: str
+    ts_start: float | None = None
+    ts_end: float | None = None
 
 
 @dataclass(frozen=True)
@@ -2650,6 +2653,21 @@ def evaluate_prequential_commands(
                         resource: None if prediction is None else prediction.label
                         for resource, prediction in resources.classifications.items()
                     },
+                    "probability_by_bucket": {
+                        "latency": (
+                            None
+                            if latency.prediction is None
+                            else list(latency.prediction.probability_by_bucket)
+                        ),
+                        **{
+                            resource: (
+                                None
+                                if prediction is None
+                                else list(prediction.probability_by_bucket)
+                            )
+                            for resource, prediction in resources.classifications.items()
+                        },
+                    },
                 }
             resource_labels: dict[str, int | None] = {}
             resource_sources: dict[str, str] = {}
@@ -2785,6 +2803,310 @@ def evaluate_prequential_commands(
         },
     }
     return result, sidecar
+
+
+def _is_full_test_suite(command: str) -> bool:
+    parsed = parse_command_clauses(command)
+    clauses = parsed.get("clauses", ())
+    if parsed.get("parse_failed") or len(clauses) != 1:
+        return False
+    argv = tuple(clauses[0].get("argv", ()))
+    signature = parse_pytest(argv)
+    if signature is not None:
+        return (
+            not signature.target_shapes
+            and signature.maxfail is None
+            and not signature.collect_only
+            and not signature.last_failed
+            and not signature.failed_first
+            and signature.stepwise is None
+            and signature.k_shape is None
+            and signature.m_shape is None
+        )
+    return argv == ("make", "test")
+
+
+def _full_test_phases(events: Sequence[PipExecEvent]) -> dict[str, int]:
+    phases: dict[str, int] = {}
+    previous_end: float | None = None
+    for event in events:
+        if not _is_full_test_suite(event.command):
+            continue
+        if (
+            previous_end is not None
+            and event.ts_start is not None
+            and previous_end >= event.ts_start
+        ):
+            raise ValueError("full-test calls overlap; causal phase is ambiguous")
+        phases[event.call_id] = min(len(phases), 2)
+        previous_end = event.ts_end
+    return phases
+
+
+def _empirical_pmf(counts: Counter[int], buckets: int) -> tuple[float, ...]:
+    total = sum(counts.values())
+    if not total:
+        raise ValueError("full-test phase has no training labels")
+    return tuple(counts[bucket] / total for bucket in range(buckets))
+
+
+def _phase_bucket(value: Any, target: str) -> int | None:
+    if value is None:
+        return None
+    return int(value) if target == "latency" else RESOURCE_BUCKET_LABELS.index(str(value))
+
+
+def _phase_changes(rows: Sequence[Mapping[str, Any]], target: str) -> dict[str, Any]:
+    changed = [row for row in rows if row["candidate"][target] != row["current_dynamic"][target]]
+    helpful = [
+        row
+        for row in changed
+        if _phase_bucket(row["candidate"][target], target) == row["labels"][target]
+        and _phase_bucket(row["current_dynamic"][target], target) != row["labels"][target]
+    ]
+    harmful = sum(
+        _phase_bucket(row["current_dynamic"][target], target) == row["labels"][target]
+        and _phase_bucket(row["candidate"][target], target) != row["labels"][target]
+        for row in changed
+    )
+    return {
+        "changed": len(changed),
+        "helpful": len(helpful),
+        "harmful": harmful,
+        "neutral": len(changed) - len(helpful) - harmful,
+        "tasks": len({row["task_id"] for row in changed}),
+        "helpful_task_ids": sorted({row["task_id"] for row in helpful}),
+    }
+
+
+def evaluate_full_test_phase(
+    public_rows: Sequence[Row],
+    task_ids: Sequence[str],
+    clause_rows: Sequence[Row],
+    command_rows: Sequence[CommandRow],
+    events_by_task: Mapping[str, Sequence[PipExecEvent]],
+    provenance: Mapping[str, Any],
+    *,
+    warmup_task_count: int,
+    expected_split: tuple[int, int] = (100, 80),
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Replay the monotone third-or-later full-test correction over Current."""
+
+    if (len(task_ids), warmup_task_count) != expected_split:
+        raise ValueError(
+            "full-test phase split differs from the frozen protocol: "
+            f"{(len(task_ids), warmup_task_count)} != {expected_split}"
+        )
+    baseline, baseline_rows = evaluate_prequential_commands(
+        public_rows,
+        task_ids,
+        clause_rows,
+        command_rows,
+        provenance,
+        warmup_task_count=warmup_task_count,
+    )
+    if list(events_by_task) != list(task_ids):
+        raise ValueError("raw exec event tasks differ from accepted task order")
+
+    task_index = {task_id: index for index, task_id in enumerate(task_ids)}
+    commands_by_task: dict[str, list[CommandRow]] = defaultdict(list)
+    for row in command_rows:
+        commands_by_task[row.task_id].append(row)
+    phases: dict[str, dict[str, int]] = {}
+    for task_id in task_ids:
+        events = events_by_task[task_id]
+        event_by_call = {event.call_id: event for event in events}
+        if len(event_by_call) != len(events):
+            raise ValueError(f"{task_id}: duplicate raw exec call id")
+        for row in commands_by_task[task_id]:
+            event = event_by_call.get(row.call_id)
+            if event is None or event.command != row.command:
+                raise ValueError(f"{row.call_id}: eligible command lacks matching raw event")
+        phases[task_id] = _full_test_phases(events)
+        for row in commands_by_task[task_id]:
+            if (row.call_id in phases[task_id]) != _is_full_test_suite(row.command):
+                raise ValueError(f"{row.call_id}: scored full-test phase does not align")
+
+    counts = {"latency": Counter(), **{resource: Counter() for resource in CANONICAL_RESOURCE_BUCKET_EDGES}}
+    for row in command_rows:
+        if phases[row.task_id].get(row.call_id) != 2 or task_index[row.task_id] >= warmup_task_count:
+            continue
+        counts["latency"][CANONICAL_LATENCY_BUCKETS.bucket_id(row.duration_ms)] += 1
+        for resource in CANONICAL_RESOURCE_BUCKET_EDGES:
+            label, _source = command_resource_bucket_label(row, resource)
+            if label is not None:
+                counts[resource][label] += 1
+    pmfs = {
+        "latency": _empirical_pmf(counts["latency"], CANONICAL_LATENCY_BUCKETS.bucket_count),
+        **{resource: _empirical_pmf(counts[resource], 3) for resource in CANONICAL_RESOURCE_BUCKET_EDGES},
+    }
+
+    test_commands = {
+        f"{row.task_id}:{row.call_index}": row
+        for row in command_rows
+        if task_index[row.task_id] >= warmup_task_count
+    }
+    if set(test_commands) != {row["sample_id"] for row in baseline_rows}:
+        raise AssertionError("full-test candidate differs from baseline command rows")
+
+    targets = ("latency", "peak_cpu_cores", "sampled_peak_rss_mb")
+    rows: list[dict[str, Any]] = []
+    latency_rows: list[ScoredRow] = []
+    resource_raw = {resource: _empty_resource_bucket_confusion() for resource in CANONICAL_RESOURCE_BUCKET_EDGES}
+    resource_labels = {resource: Counter() for resource in CANONICAL_RESOURCE_BUCKET_EDGES}
+    resource_sources = {resource: Counter() for resource in CANONICAL_RESOURCE_BUCKET_EDGES}
+    for base in baseline_rows:
+        command = test_commands[base["sample_id"]]
+        current = dict(base["current_dynamic"])
+        current_pmfs = current.pop("probability_by_bucket")
+        labels = {"latency": base["latency_label"], **base["resource_labels"]}
+        candidate = dict(current)
+        candidate_pmfs = dict(current_pmfs)
+        if phases[command.task_id].get(command.call_id) == 2:
+            for target in targets:
+                learned = _argmax_probabilities(pmfs[target])
+                if learned > _phase_bucket(current[target], target):
+                    candidate[target] = learned if target == "latency" else RESOURCE_BUCKET_LABELS[learned]
+                    candidate_pmfs[target] = list(pmfs[target])
+
+        latency_changed = candidate["latency"] != current["latency"]
+        latency_prediction = ClauseLatencyBucketPrediction(
+            probability_by_bucket=tuple(candidate_pmfs["latency"]),
+            scope="task_local" if latency_changed else "current",
+            key_kind="full_test_phase" if latency_changed else "current",
+            evidence_count=sum(counts["latency"].values()) if latency_changed else 0,
+            fallback_path=(),
+            canonicalizer_version=FULL_TEST_PHASE_FEATURE_VERSION if latency_changed else "current",
+            arbitration="monotone_upward_override" if latency_changed else "current",
+        )
+        latency_rows.append(_command_scored_row(command, latency_prediction, None))
+        for resource in CANONICAL_RESOURCE_BUCKET_EDGES:
+            label = labels[resource]
+            resource_sources[resource][base["resource_label_sources"][resource]] += 1
+            if label is None:
+                continue
+            resource_labels[resource][label] += 1
+            predicted = RESOURCE_BUCKET_LABELS.index(candidate[resource])
+            resource_raw[resource]["confusion_label_by_prediction"][label][predicted] += 1
+            provenance_key = (
+                "task_local:full_test_phase:" + FULL_TEST_PHASE_FEATURE_VERSION
+                if candidate[resource] != current[resource]
+                else "current:unchanged:current"
+            )
+            resource_raw[resource]["provenance_counts"][provenance_key] += 1
+        rows.append(
+            {
+                **base,
+                "call_id": command.call_id,
+                "full_test_phase": phases[command.task_id].get(command.call_id),
+                "labels": labels,
+                "current_dynamic": current,
+                "candidate": candidate,
+                "current_probability_by_bucket": current_pmfs,
+                "candidate_probability_by_bucket": candidate_pmfs,
+            }
+        )
+
+    current_latency = baseline["latency"]["current_dynamic"]
+    candidate_latency = _telemetry_metrics(latency_rows, current_accuracy=current_latency["exact_class_accuracy"])
+    candidate_resources = {
+        resource: _finalize_resource_bucket_metric(
+            resource_raw[resource], resource_labels[resource], resource_sources[resource]
+        )
+        for resource in CANONICAL_RESOURCE_BUCKET_EDGES
+    }
+    changes = {target: _phase_changes(rows, target) for target in ("latency", *CANONICAL_RESOURCE_BUCKET_EDGES)}
+    helpful_tasks = {task for change in changes.values() for task in change["helpful_task_ids"]}
+    changed_tasks = {
+        row["task_id"]
+        for row in rows
+        if any(row["candidate"][target] != row["current_dynamic"][target] for target in changes)
+    }
+    metric_pairs = {
+        "latency": (current_latency, candidate_latency),
+        **{
+            resource: (baseline["resources"][resource]["current_dynamic"], candidate_resources[resource])
+            for resource in CANONICAL_RESOURCE_BUCKET_EDGES
+        },
+    }
+    no_accuracy_regression = all(
+        candidate["exact_class_accuracy" if target == "latency" else "accuracy"]
+        >= current["exact_class_accuracy" if target == "latency" else "accuracy"]
+        for target, (current, candidate) in metric_pairs.items()
+    )
+    no_severe_under_regression = all(
+        candidate["severe_underprediction_rate"] <= current["severe_underprediction_rate"]
+        for current, candidate in metric_pairs.values()
+    )
+    disk = "disk_read_write_bytes_total"
+    disk_identical = all(
+        row["candidate"][disk] == row["current_dynamic"][disk]
+        and row["candidate_probability_by_bucket"][disk] == row["current_probability_by_bucket"][disk]
+        for row in rows
+    )
+    helpful = sum(change["helpful"] for change in changes.values())
+    harmful = sum(change["harmful"] for change in changes.values())
+    go = (
+        no_accuracy_regression
+        and no_severe_under_regression
+        and disk_identical
+        and helpful > harmful
+        and len(helpful_tasks) >= 3
+    )
+    result = {
+        "status": "development_exposed_full_test_phase_go" if go else "development_exposed_full_test_phase_no_go",
+        "claim_bearing": False,
+        "objective": "task_local_full_test_phase_command_prediction",
+        "inputs": dict(provenance),
+        "protocol": {
+            "warmup_task_count": warmup_task_count,
+            "feature": FULL_TEST_PHASE_FEATURE_VERSION,
+            "state": "count of earlier completed full-suite command texts in the same task",
+            "hidden": "all previous outputs, exit status, duration, telemetry, and future calls",
+            "override": "third-or-later only; learned hard bucket must exceed Current",
+            "targets": list(targets),
+            "disk": "bit-identical Current",
+        },
+        "training": {
+            target: {
+                "label_counts": dict(sorted(count.items())),
+                "probability_by_bucket": list(pmfs[target]),
+                "hard_bucket": _argmax_probabilities(pmfs[target]),
+            }
+            for target, count in counts.items()
+        },
+        "counts": {**baseline["counts"], "changed_tasks": len(changed_tasks), "helpful_tasks": len(helpful_tasks)},
+        "row_identity": {**baseline["row_identity"], "disk_probability_vectors_bit_identical": disk_identical},
+        "latency": {
+            "bucket_edges_ms": baseline["latency"]["bucket_edges_ms"],
+            "majority": baseline["latency"]["majority"],
+            "arms": {"current_dynamic": current_latency, "full_test_phase": candidate_latency},
+        },
+        "resources": {
+            resource: {
+                "bucket_edges": baseline["resources"][resource]["bucket_edges"],
+                "majority": baseline["resources"][resource]["majority"],
+                "arms": {
+                    "current_dynamic": baseline["resources"][resource]["current_dynamic"],
+                    "full_test_phase": candidate_resources[resource],
+                },
+            }
+            for resource in CANONICAL_RESOURCE_BUCKET_EDGES
+        },
+        "prediction_changes": changes,
+        "gate": {
+            "go": go,
+            "no_accuracy_regression": no_accuracy_regression,
+            "no_severe_underprediction_regression": no_severe_under_regression,
+            "disk_bit_identical": disk_identical,
+            "helpful": helpful,
+            "harmful": harmful,
+            "changed_tasks": len(changed_tasks),
+            "helpful_tasks": len(helpful_tasks),
+            "requires_helpful_tasks_at_least": 3,
+        },
+    }
+    return result, rows
 
 
 def _quartile_metrics(
