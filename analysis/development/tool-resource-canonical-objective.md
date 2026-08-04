@@ -106,9 +106,29 @@ the frozen utility gate. No predictor, runtime integration, or new collection
 is authorized by this lock.
 
 The fixed full-command targets in Section 1 remain the static-predictor
-baseline. Phase 0 was only an observability and coverage audit. The action set,
-decision time, future-work target, cost metric, and gate below were committed
-before the formal oracle result was read.
+baseline. Their first causal 80-task warm-up / 20-task test replay contains 349
+test commands. It is development-exposed, not confirmation evidence:
+
+| Target | Eligible | Label counts low to high | Majority | Frozen at 80 | Dynamic update | Within one | Severe under |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Latency | 349 | 214 / 58 / 20 / 28 / 29 | 61.318% | 77.650% | 77.937% | 91.977% | 1.146% |
+| CPU | 210 | 181 / 0 / 29 | 86.190% | 90.476% | 90.476% | 90.476% | 3.333% |
+| RSS | 237 | 208 / 2 / 27 | 87.764% | 91.139% | 91.561% | 91.561% | 2.954% |
+| Disk | 349 | 243 / 85 / 21 | 69.628% | 81.662% | 81.375% | 99.713% | 0.000% |
+
+Dynamic updates changed exact accuracy by +0.287, 0.000, +0.422, and -0.287
+percentage points respectively. The Current predictor beats the constant
+majority on all four targets, but this corpus does not substantiate the chosen
+CPU and RSS middle levels: CPU has no Medium labels and RSS has only two.
+Changing those boundaries after this result would be a visible amendment, not
+a pre-registered comparison. The machine-readable result and command rows are:
+
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot80-20-current-baseline.json`
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot80-20-current-baseline.rows.jsonl`
+
+Phase 0 was only an observability and coverage audit. The action set, decision
+time, future-work target, cost metric, and gate below were committed before the
+formal oracle result was read.
 
 The frozen Phase 1 consumer is the existing EAR shared CPU lease pool. Its
 checked-in Docker policy at EAR commit `244d1f58` uses integer pages
@@ -232,6 +252,11 @@ ceiling, not a remaining-work signal.
   were fixed after all earlier SQLGlot 3/2/2/2-class results and the CacheWise
   diagnostics were visible. They preserve existing physical cutoffs and add
   allocation-relevant levels; they were not selected from 5/3/3/3 accuracy.
+- The first 5/3/3/3 SQLGlot replay was read only after objective commit
+  `ef1e7e4`, implementation commit `9075235`, focused verification, and bounded
+  independent review. Its empty CPU Medium class and two-row RSS Medium class
+  are now development-exposed and cannot be used for an unreported threshold
+  change.
 
 ## 6. Non-negotiable task contract
 
