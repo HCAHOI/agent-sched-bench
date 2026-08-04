@@ -1,0 +1,64 @@
+{
+  "status": "development_exposed_phase1_oracle",
+  "question": "Can perfect post-prefix information reduce EAR CPU reservations without lowering any later observed interval demand?",
+  "protocol": {
+    "trace_root": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803",
+    "consumer": "EAR shared CPU lease pool",
+    "ear_policy_source": {
+      "commit": "244d1f58ed5ea88147d2601a45f2889ce243da64",
+      "path": "configs/policies/docker_elastic_mixed_burst.yaml"
+    },
+    "pages_cores": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "control_page_cores": 8,
+    "sample_interval_s": 0.5,
+    "sample_availability_pad_s": 0.05,
+    "cpu_update_p95_s": 0.09132007875,
+    "effective_time": "first full sample endpoint + pad + update p95",
+    "oracle": "smallest page >= maximum later interval CPU rate, capped by recorded quota",
+    "primary": "post-decision reserved CPU core-seconds",
+    "go_criterion": "zero modeled false shrink, >=20 changed commands across >=10 tasks, and >=10% reservation reduction"
+  },
+  "data": {
+    "selected_traces": 100,
+    "exec_actions": 1916,
+    "valid_timeline_actions": 1916,
+    "eligible_actions": 467,
+    "eligible_tasks": 100,
+    "exclusions": {
+      "no_full_decision_sample": 1241,
+      "no_future_cpu": 81,
+      "no_post_actuation_interval": 127
+    }
+  },
+  "actions": {
+    "counts_by_page": {
+      "1": 6,
+      "2": 99,
+      "4": 186,
+      "8": 176
+    },
+    "changed_commands": 291,
+    "changed_tasks": 99,
+    "modeled_false_shrinks": 0
+  },
+  "reservation": {
+    "control_core_s": 144661.88208915427,
+    "oracle_core_s": 136436.47519638384,
+    "saved_core_s": 8225.406892770436,
+    "saving_fraction": 0.05685953185443257,
+    "saving_percent": 5.685953185443257
+  },
+  "decision": "STOP before predictor",
+  "gate_pass": false,
+  "evidence_boundary": [
+    "The oracle reads future CPU samples and is only an action-space upper bound.",
+    "Interval-average demand can miss sub-0.5-second bursts.",
+    "Reserved core-seconds are meaningful for the EAR lease consumer but do not prove lower latency or higher throughput.",
+    "SQLGlot100 and the EAR action pages are development-exposed."
+  ]
+}

@@ -91,17 +91,16 @@ That route is closed by the frozen results below: the surviving representation
 changed too few decisions, causal environment state was not identifiable, and
 no scheduler consumer existed.
 
-The active research question is now whether the current command's early,
-timestamped system behavior predicts its remaining work well enough to change a
-real CPU reservation action. Phase 0 may audit existing SQLGlot, SWE, and
-Terminal-Bench traces because this mechanism uses each command's own execution
-prefix rather than cross-task semantic similarity. All are development-exposed;
-no new collection is authorized by this lock.
+The early-execution CPU-reservation question is also closed for the current EAR
+action set. It used each command's own timestamped execution prefix rather than
+cross-task similarity, but its hindsight action-space upper bound did not pass
+the frozen utility gate. No predictor, runtime integration, or new collection
+is authorized by this lock.
 
 The fixed full-command targets in Section 1 remain the static-predictor
-baseline. Phase 0 is only an observability and coverage audit. If it passes, the
-action set, decision time, future-work target, and cost metric must be frozen in
-this lock before a formal predictor result is read.
+baseline. Phase 0 was only an observability and coverage audit. The action set,
+decision time, future-work target, cost metric, and gate below were committed
+before the formal oracle result was read.
 
 The frozen Phase 1 consumer is the existing EAR shared CPU lease pool. Its
 checked-in Docker policy at EAR commit `244d1f58` uses integer pages
@@ -110,10 +109,14 @@ hindsight oracle acts at its first complete sample endpoint plus 0.14132007875
 seconds, nominally about 0.641 seconds, and chooses the smallest page no lower
 than any later 0.5-second average CPU demand. The primary action cost is reserved
 CPU core-seconds after that time. Always reserving eight cores is the control.
-Continue only if the oracle causes zero modeled source slowdown,
-changes at least 20 commands across ten tasks, and reduces post-decision
-reservation by at least 10%. This is a capacity upper bound, not a latency or
-scheduler-gain claim.
+The oracle was eligible on 467 commands across all 100 SQLGlot tasks. It chose a
+smaller page for 291 commands across 99 tasks with zero modeled false shrink,
+but reduced post-decision reservation only from 144,661.88 to 136,436.48 CPU
+core-seconds, a 5.686% reduction below the frozen 10% gate. The mechanism is
+time-weighted: the 176 commands that still required eight cores accounted for
+89.84% of control reservation, while the numerous shrinkable commands were too
+short to dominate cost. This is a hindsight capacity upper bound and does not
+establish sub-interval safety, latency gain, or scheduling gain. Phase 2 stops.
 
 The runtime boundary remains unchanged: `resource-agentd` owns parsing,
 prediction, state, persistence, and orchestration; `telemetryd` owns privileged
@@ -202,6 +205,10 @@ ceiling, not a remaining-work signal.
   formula was corrected from `max(sample interval, update latency)` to their
   serial sum plus the frozen 50 ms sample-availability pad. The live update
   latencies were visible when this correction was recorded.
+- The Phase 1 CPU-reservation protocol and gate were committed before its future
+  CPU samples were evaluated. Independent review then corrected complete-window
+  and missing-counter handling before the formal result was run; no result was
+  visible during those fixes.
 - The first SQLGlot command-level replay made with an older public aggregate
   retained invalid downstream-pipeline evidence. It remains explicitly named
   `*.pre-public-structure-fix.invalid`; only the corrected artifact is
@@ -221,9 +228,9 @@ Short-null resource policy = Light only when explicitly marked and <500 ms.
 Causal visibility = observation end before query start, after task settlement.
 Compound commands = physical stage/pipeline composition, never Boolean OR.
 Current = unchanged raw exact/prefix/binary control.
-Active early-execution audit = existing development-exposed traces only.
-Current-command prefix is visible only up to a frozen decision timestamp.
-Phase 1 pages = {1,2,4,8}; control = 8; act at first full endpoint +0.14132007875 s.
+Early-execution Phase 1 = frozen NO-GO at 5.686% versus the 10% gate.
+Current-command prefix was visible only up to the frozen decision timestamp.
+Phase 2 predictor and runtime control were not run.
 No result-dependent tuning, package/test-name outcome rules, or hindsight state.
 No new collection, runtime integration, or scheduler implementation without a
 separate approved protocol.

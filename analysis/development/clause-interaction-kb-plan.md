@@ -2,7 +2,7 @@
 
 **Effective:** 2026-08-04
 
-**Status:** development-only decision tree
+**Status:** complete through Phase 1; stopped by frozen no-go gate
 
 This plan extends `tool-resource-canonical-objective.md`. The completed
 semantic-signature experiments remain frozen evidence; they are not the active
@@ -65,7 +65,7 @@ timestamp, not command-exclusive. Persisted eBPF clause observations are
 attached only after the exec completes, so they are not an early signal in the
 current interface.
 
-## 3. Phase 1 — hindsight CPU-reservation oracle (protocol frozen)
+## 3. Phase 1 — hindsight CPU-reservation oracle (complete: no-go)
 
 Run only if Phase 0 passes. The consumer is the existing EAR shared CPU lease
 pool, where a page held by one task is unavailable for another admission or
@@ -110,7 +110,23 @@ commands across at least 10 tasks, has zero modeled false-shrink slowdown, and
 reduces post-decision reservation by at least 10%. This phase is an action-space
 upper bound; it cannot claim latency or scheduling improvement.
 
-## 4. Phase 2 — early-prefix prediction
+The formal run retained 467 commands across all 100 tasks. The oracle changed
+291 commands across 99 tasks and had zero modeled false shrink, but reservation
+fell only from 144,661.88 to 136,436.48 CPU core-seconds: 8,225.41 saved, or
+5.686%. The frozen 10% gate therefore fails and the route stops before fitting
+a predictor.
+
+The negative result is not caused by too few changed commands. The 176 commands
+whose later interval demand still required the eight-core page consumed 89.84%
+of the control reservation. The smaller-page decisions were frequent but
+time-weighted too lightly to create enough capacity. One longest example is a
+compound command running targeted tests, the full pytest suite, and `make test`;
+its remaining 206.47 seconds still reached the eight-core page. This diagnosis
+is observed in the row artifact. Whether a different consumer could exploit
+short-command release is untested and is not a reason to change this frozen
+gate.
+
+## 4. Phase 2 — early-prefix prediction (not run)
 
 Run only if Phase 1 passes. Reuse the existing causal evaluator and trace
 loader. Compare exactly four arms on identical command decisions:
@@ -131,7 +147,7 @@ changes actions for at least 20 commands across at least 10 tasks, and is better
 than both Current and early-only. Report the fixed full-command latency/CPU/RSS/
 Disk classifications as secondary diagnostics on their unchanged eligible rows.
 
-## 5. Phase 3 — real control
+## 5. Phase 3 — real control (not run)
 
 Run only if Phase 2 passes. Apply the predicted cgroup change during real task
 execution and compare against the unchanged static policy with matched tasks and
@@ -154,6 +170,11 @@ shows an effect large enough to justify consuming it.
 - Obtain one bounded independent review before results from a substantial new
   evaluator or controller become evidence.
 - Commit each completed phase, including a negative result.
+
+Phase 1 authoritative artifacts:
+
+- `analysis/results/early-execution-resource-control-20260804/phase1-cpu-reservation-oracle.json`
+- `analysis/results/early-execution-resource-control-20260804/phase1-cpu-reservation-oracle-rows.jsonl`
 
 Stop the route when time-resolved data is absent, the post-decision action space
 is too small, the hindsight upper bound is not useful, or the predictor does not
