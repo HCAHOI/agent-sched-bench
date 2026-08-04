@@ -8,7 +8,7 @@ import hashlib
 import json
 import subprocess
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -44,14 +44,13 @@ OUTPUT_SCHEMA = {
     "additionalProperties": False,
     "required": sorted(RECORD_KEYS),
     "properties": {
-        "query_id": {"type": "string", "pattern": "^Q[0-9]{4}$"},
+        "query_id": {"type": "string"},
         "state": {"enum": STATES},
         "evidence_event_indices": {
             "type": "array",
-            "uniqueItems": True,
-            "items": {"type": "integer", "minimum": 0},
+            "items": {"type": "integer"},
         },
-        "rationale": {"type": "string", "minLength": 1, "maxLength": 240},
+        "rationale": {"type": "string"},
     },
 }
 
@@ -113,6 +112,7 @@ def _validate_record(record: Any, query: dict[str, Any]) -> dict[str, Any]:
         or (record["state"] != "unknown" and not evidence)
         or not isinstance(record["rationale"], str)
         or not record["rationale"].strip()
+        or len(record["rationale"]) > 240
     ):
         raise ValueError(f"{query['query_id']}: response evidence or rationale is invalid")
     return record
@@ -194,12 +194,12 @@ def main() -> None:
         raise FileExistsError("classification output already exists; use a fresh path")
     cache_dir.mkdir(parents=True, exist_ok=True)
     records: dict[str, dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        futures = {pool.submit(_classify, query, cache_dir): query for query in queries}
-        for completed, future in enumerate(as_completed(futures), start=1):
-            record = future.result()
-            records[record["query_id"]] = record
-            print(f"classified {completed}/{len(queries)}", flush=True)
+    for start in range(0, len(queries), args.jobs):
+        batch = queries[start : start + args.jobs]
+        with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            for record in pool.map(lambda query: _classify(query, cache_dir), batch):
+                records[record["query_id"]] = record
+        print(f"classified {min(start + args.jobs, len(queries))}/{len(queries)}", flush=True)
     codex_version = subprocess.run(
         ["codex", "--version"], check=True, capture_output=True, text=True
     ).stdout.strip()
