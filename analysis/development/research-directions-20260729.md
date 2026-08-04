@@ -434,10 +434,12 @@ Protocol:
   scheduling (`prefix_c100 - prefix_lru`), and the full baseline-to-combined
   eviction ratio. Use a 10,000-draw paired seed bootstrap only to show
   conditional schedule/cohort uncertainty.
-- Classify the result as paper-sized only if both mechanisms reduce mean evicted
-  blocks in their matching comparisons and `fcfs_lru / prefix_c100 >= 2.0`, the
-  paper's lower reported eviction reduction. A smaller effect is a measured gap,
-  not permission to change capacity, load, cluster count, split, or simulator.
+- Classify the result as paper-sized only if prefix scheduling alone
+  (`prefix_lru < fcfs_lru`), C100 alone (`fcfs_c100 < fcfs_lru`), and C100 added
+  under prefix scheduling (`prefix_c100 < prefix_lru`) all reduce mean evicted
+  blocks, and `fcfs_lru / prefix_c100 >= 2.0`, the paper's lower reported
+  eviction reduction. A smaller effect is a measured gap, not permission to
+  change capacity, load, cluster count, split, or simulator.
 
 Any positive result justifies at most one separately approved live-GPU smoke.
 The simulator omits continuous batching, chunked prefill, transfer contention,
