@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import random
+import re
 import sys
 import time
 import tracemalloc
@@ -38,6 +39,13 @@ from scripts.evaluation.evaluate_clause_resource_classes import (  # noqa: E402
 )
 from tool_resource_eval.labels import repo_of  # noqa: E402
 from tool_resource.clause_parser import parse_command_clauses  # noqa: E402
+from tool_resource.pip_semantics import (  # noqa: E402
+    PipInstallSignature,
+    PipQueryState,
+    PipTaskState,
+    apt_installs_system_pip,
+    parse_pip_install,
+)
 from tool_resource.runtime_kb import (  # noqa: E402
     CANONICAL_LATENCY_BUCKETS,
     CANONICAL_RESOURCE_HEAVY_THRESHOLDS,
@@ -57,6 +65,7 @@ from tool_resource.runtime_kb import (  # noqa: E402
 
 INTERACTION_ALPHA = 16.0
 INTERACTION_FEATURE_VERSION = "generic-argv-v3-role-interaction-set-v1"
+PIP_SEMANTIC_FEATURE_VERSION = "pip-install-semantic-jaccard-v1"
 
 
 @dataclass(frozen=True)
@@ -139,6 +148,28 @@ class _WeightedClauseEvidence:
     max_shared_feature_count: int
     key_kind: str
     public_key_kind: str | None
+
+
+@dataclass(frozen=True)
+class PipExecEvent:
+    call_id: str
+    command: str
+    tool_result: str
+
+
+@dataclass(frozen=True)
+class _PipObservation:
+    observation_id: int
+    task_id: str
+    row: Row
+    signature: PipInstallSignature
+    state: PipQueryState
+
+
+@dataclass(frozen=True)
+class _PipMatch:
+    evidence: _WeightedClauseEvidence
+    state_fallback: bool
 
 
 def _interaction_feature_set(
@@ -355,6 +386,405 @@ def _effective_sample_size(weights: Sequence[float]) -> float:
     total = sum(weights)
     squared = sum(weight * weight for weight in weights)
     return total * total / squared if squared else 0.0
+
+
+def _pip_partition(signature: PipInstallSignature) -> tuple[str, str, tuple[str, ...]]:
+    return signature.interpreter, signature.invocation, signature.flags
+
+
+def _jaccard(left: Sequence[str], right: Sequence[str]) -> float:
+    left_set = frozenset(left)
+    right_set = frozenset(right)
+    if not left_set and not right_set:
+        return 1.0
+    union = left_set | right_set
+    return len(left_set & right_set) / len(union) if union else 0.0
+
+
+class _PipSemanticKB:
+    """Slow episodic pip memory for the frozen development experiment."""
+
+    def __init__(self, public_rows: Sequence[Row]) -> None:
+        self._next_observation_id = 0
+        self._exact: dict[
+            tuple[str, tuple[str, ...]], list[_PipObservation]
+        ] = defaultdict(list)
+        self._local: dict[
+            tuple[str, str, tuple[str, ...]], list[_PipObservation]
+        ] = defaultdict(list)
+        self._public: dict[
+            tuple[str, str, tuple[str, ...]], list[_PipObservation]
+        ] = defaultdict(list)
+        for row in public_rows:
+            signature = parse_pip_install(row.argv)
+            if signature is None:
+                continue
+            self._public[_pip_partition(signature)].append(
+                _PipObservation(
+                    observation_id=self._next_observation_id,
+                    task_id=row.task_id,
+                    row=row,
+                    signature=signature,
+                    state=PipQueryState("unknown", signature.package_names),
+                )
+            )
+            self._next_observation_id += 1
+
+    def observe(
+        self,
+        task_id: str,
+        row: Row,
+        signature: PipInstallSignature,
+        state: PipQueryState,
+    ) -> None:
+        observation = _PipObservation(
+            observation_id=self._next_observation_id,
+            task_id=task_id,
+            row=row,
+            signature=signature,
+            state=state,
+        )
+        self._next_observation_id += 1
+        self._exact[(row.bin, row.argv[1:])].append(observation)
+        self._local[_pip_partition(signature)].append(observation)
+
+    @property
+    def observation_count(self) -> int:
+        return self._next_observation_id - sum(
+            len(items) for items in self._public.values()
+        )
+
+    def query(
+        self,
+        row: Row | _InteractionQueryClause,
+        signature: PipInstallSignature,
+        state: PipQueryState,
+        *,
+        use_state: bool,
+        current_selected: tuple[
+            Sequence[float], str, str, tuple[str, ...]
+        ],
+    ) -> _PipMatch:
+        exact = tuple(self._exact.get((row.bin, row.argv[1:]), ()))
+        if exact:
+            return _PipMatch(
+                evidence=_WeightedClauseEvidence(
+                    values=tuple(item.row.latency_ms for item in exact),
+                    weights=(1.0,) * len(exact),
+                    exact=True,
+                    nonexact_local=False,
+                    local_observation_count=len(exact),
+                    effective_sample_size=float(len(exact)),
+                    contributing_task_ids=frozenset(item.task_id for item in exact),
+                    max_shared_feature_count=len(signature.package_names),
+                    key_kind="exact_clause",
+                    public_key_kind=None,
+                ),
+                state_fallback=False,
+            )
+
+        local = tuple(self._local.get(_pip_partition(signature), ()))
+        state_fallback = False
+        query_packages: Sequence[str] = signature.package_names
+        if use_state:
+            state_local = tuple(
+                item
+                for item in local
+                if item.state.availability == state.availability
+            )
+            if state_local:
+                local = state_local
+                query_packages = state.remaining_packages
+            elif local:
+                state_fallback = True
+        local_pairs = tuple(
+            (item, weight)
+            for item in local
+            if (
+                weight := _jaccard(
+                    query_packages,
+                    (
+                        item.state.remaining_packages
+                        if use_state and not state_fallback
+                        else item.signature.package_names
+                    ),
+                )
+            )
+            > 0.0
+        )
+        public_pairs = tuple(
+            (item, weight)
+            for item in self._public.get(_pip_partition(signature), ())
+            if (weight := _jaccard(signature.package_names, item.signature.package_names))
+            > 0.0
+        )
+        if not public_pairs:
+            values, scope, kind, _path = current_selected
+            return _PipMatch(
+                evidence=_WeightedClauseEvidence(
+                    values=tuple(values),
+                    weights=(1.0,) * len(values),
+                    exact=scope == "repo" and kind == "exact_clause",
+                    nonexact_local=False,
+                    local_observation_count=len(values) if scope == "repo" else 0,
+                    effective_sample_size=float(len(values)),
+                    contributing_task_ids=frozenset(),
+                    max_shared_feature_count=0,
+                    key_kind=f"current_{scope}_{kind}",
+                    public_key_kind=kind if scope == "public" else None,
+                ),
+                state_fallback=state_fallback,
+            )
+
+        local_weights = tuple(weight for _item, weight in local_pairs)
+        effective_n = _effective_sample_size(local_weights)
+        local_total = sum(local_weights)
+        normalized_local = tuple(
+            weight * effective_n / local_total for weight in local_weights
+        )
+        public_total = sum(weight for _item, weight in public_pairs)
+        normalized_public = tuple(
+            weight * INTERACTION_ALPHA / public_total
+            for _item, weight in public_pairs
+        )
+        shared = tuple(
+            len(set(query_packages) & set(item.signature.package_names))
+            for item, _weight in local_pairs
+        )
+        return _PipMatch(
+            evidence=_WeightedClauseEvidence(
+                values=(
+                    *(item.row.latency_ms for item, _weight in local_pairs),
+                    *(item.row.latency_ms for item, _weight in public_pairs),
+                ),
+                weights=(*normalized_local, *normalized_public),
+                exact=False,
+                nonexact_local=bool(local_pairs),
+                local_observation_count=len(local_pairs),
+                effective_sample_size=effective_n,
+                contributing_task_ids=frozenset(
+                    item.task_id for item, _weight in local_pairs
+                ),
+                max_shared_feature_count=max(shared, default=0),
+                key_kind=(
+                    "pip_semantic_state"
+                    if use_state and local_pairs and not state_fallback
+                    else "pip_semantic"
+                    if local_pairs
+                    else "pip_semantic_public"
+                ),
+                public_key_kind="pip_semantic",
+            ),
+            state_fallback=state_fallback,
+        )
+
+
+def _pip_query_contexts(
+    command: str,
+    state: PipTaskState,
+) -> tuple[Mapping[str, Any], tuple[PipQueryState | None, ...]]:
+    parsed = parse_command_clauses(command)
+    clauses = parsed.get("clauses", ())
+    signatures = tuple(
+        parse_pip_install(clause.get("argv", ()))
+        for clause in clauses
+    )
+    conditional_present: set[int] = set()
+    for edge in parsed.get("control_edges", ()):
+        if edge.get("operator") != "&&":
+            continue
+        lhs = edge.get("lhs", {}).get("clause_indices", ())
+        rhs = edge.get("rhs", {}).get("clause_indices", ())
+        if any(
+            apt_installs_system_pip(clauses[index].get("argv", ()))
+            for index in lhs
+        ):
+            conditional_present.update(
+                index
+                for index in rhs
+                if signatures[index] is not None
+                and signatures[index].interpreter == "python3"
+            )
+    return parsed, tuple(
+        None
+        if signature is None
+        else state.query(
+            signature,
+            conditional_present=index in conditional_present,
+        )
+        for index, signature in enumerate(signatures)
+    )
+
+
+def _pip_contexts_by_call(
+    events: Sequence[PipExecEvent],
+) -> dict[str, tuple[PipQueryState | None, ...]]:
+    state = PipTaskState()
+    contexts: dict[str, tuple[PipQueryState | None, ...]] = {}
+    for event in events:
+        if event.call_id in contexts:
+            raise ValueError(f"duplicate tool event {event.call_id}")
+        _parsed, before = _pip_query_contexts(event.command, state)
+        contexts[event.call_id] = before
+        state.observe(event.command, event.tool_result)
+    return contexts
+
+
+def _current_weighted_evidence(
+    selected: tuple[Sequence[float], str, str, tuple[str, ...]],
+) -> _WeightedClauseEvidence:
+    values, scope, kind, _path = selected
+    return _WeightedClauseEvidence(
+        values=tuple(values),
+        weights=(1.0,) * len(values),
+        exact=scope == "repo" and kind == "exact_clause",
+        nonexact_local=False,
+        local_observation_count=len(values) if scope == "repo" else 0,
+        effective_sample_size=float(len(values)),
+        contributing_task_ids=frozenset(),
+        max_shared_feature_count=0,
+        key_kind=f"current_{scope}_{kind}",
+        public_key_kind=kind if scope == "public" else None,
+    )
+
+
+def _pip_composition_seed(
+    command: str,
+    index: int,
+    evidence: _WeightedClauseEvidence,
+) -> str:
+    if evidence.exact:
+        scope, key_kind = "repo", "exact_clause"
+    elif evidence.key_kind.startswith("current_"):
+        scope, _, key_kind = evidence.key_kind.removeprefix("current_").partition("_")
+    else:
+        scope = "repo+public" if evidence.nonexact_local else "public"
+        key_kind = "pip_semantic_weighted_pool"
+    return f"{command}\0latency_ms\0{index}\0{scope}\0{key_kind}"
+
+
+def _predict_pip_latency_command(
+    memory: _PipSemanticKB,
+    current: ClauseResourceKB,
+    row: CommandRow,
+    parsed: Mapping[str, Any],
+    states: Sequence[PipQueryState | None],
+    current_prediction: ClauseLatencyBucketPrediction,
+    *,
+    use_state: bool,
+) -> tuple[ClauseLatencyBucketPrediction, dict[str, Any]]:
+    parsed_clauses = parsed.get("clauses", ())
+    query_clauses = _interaction_query_clauses(parsed_clauses)
+    signatures = tuple(
+        parse_pip_install(clause.argv) for clause in query_clauses
+    )
+    if not any(signature is not None for signature in signatures):
+        return current_prediction, {
+            "carrier": False,
+            "pip_clause_count": 0,
+            "state_fallback": False,
+            "clauses": [],
+        }
+    stages = _command_stages(parsed_clauses)
+    if stages is None or len(states) != len(query_clauses):
+        raise ValueError(f"{row.call_id}: pip query structure is unavailable")
+    evidence: list[_WeightedClauseEvidence] = []
+    state_fallback = False
+    semantic_used = False
+    clause_diagnostics: list[dict[str, Any]] = []
+    for clause, signature, query_state in zip(
+        query_clauses, signatures, states, strict=True
+    ):
+        selected = current._select(row.repo, "latency_ms", clause.bin, clause.argv)
+        if selected is None:
+            raise ValueError("Current has no clause evidence")
+        if signature is None:
+            item = _current_weighted_evidence(selected)
+            fallback = False
+        else:
+            if query_state is None:
+                raise AssertionError("pip clause has no causal query state")
+            match = memory.query(
+                clause,
+                signature,
+                query_state,
+                use_state=use_state,
+                current_selected=selected,
+            )
+            item = match.evidence
+            fallback = match.state_fallback
+            state_fallback |= fallback
+            semantic_used |= item.key_kind.startswith("pip_semantic")
+        evidence.append(item)
+        clause_diagnostics.append(
+            {
+                "pip": signature is not None,
+                "exact": item.exact,
+                "key_kind": item.key_kind,
+                "local_observation_count": item.local_observation_count,
+                "effective_sample_size": item.effective_sample_size,
+                "state": None if query_state is None else query_state.availability,
+                "remaining_packages": (
+                    None if query_state is None else list(query_state.remaining_packages)
+                ),
+                "state_fallback": fallback,
+            }
+        )
+    if not semantic_used:
+        return current_prediction, {
+            "carrier": False,
+            "pip_clause_count": sum(signature is not None for signature in signatures),
+            "state_fallback": state_fallback,
+            "clauses": clause_diagnostics,
+        }
+    if len(evidence) == 1:
+        probabilities = _weighted_bucket_probabilities(
+            evidence[0].values,
+            evidence[0].weights,
+        )
+    else:
+        draws = tuple(
+            _weighted_stratified_draws(
+                item.values,
+                item.weights,
+                _pip_composition_seed(row.command, index, item),
+            )
+            for index, item in enumerate(evidence)
+        )
+        composed = tuple(
+            sum(max(draws[index][draw] for index in stage) for stage in stages)
+            for draw in range(COMMAND_COMPOSITION_DRAWS)
+        )
+        probabilities = _weighted_bucket_probabilities(
+            composed,
+            (1.0,) * len(composed),
+        )
+    local_counts = [item.local_observation_count for item in evidence]
+    public_counts = [len(item.values) - item.local_observation_count for item in evidence]
+    prediction = ClauseLatencyBucketPrediction(
+        probability_by_bucket=probabilities,
+        scope="repo+public" if any(local_counts) else "public",
+        key_kind=(
+            evidence[0].key_kind if len(evidence) == 1 else "shell_execution_graph"
+        ),
+        evidence_count=min(len(item.values) for item in evidence),
+        fallback_path=tuple(
+            f"clause[{index}]:{item.key_kind}" for index, item in enumerate(evidence)
+        ),
+        canonicalizer_version=PIP_SEMANTIC_FEATURE_VERSION,
+        arbitration="current-or-pip-semantic-jaccard-v1",
+        local_key_kind="pip_semantic" if any(local_counts) else None,
+        local_evidence_count=min(local_counts),
+        public_key_kind="pip_semantic",
+        public_evidence_count=min(public_counts),
+        shrinkage_alpha=INTERACTION_ALPHA,
+    )
+    return prediction, {
+        "carrier": True,
+        "pip_clause_count": sum(signature is not None for signature in signatures),
+        "state_fallback": state_fallback,
+        "clauses": clause_diagnostics,
+    }
 
 
 def _candidate_clause_evidence(
@@ -2171,6 +2601,466 @@ def evaluate_interaction_commands(
                     "requires_positive_nonexact_carrier_net_gain": True,
                 }
                 for arm, go in stage1_go.items()
+            },
+        },
+    }
+    return result, sidecar
+
+
+def _settled_pip_observations(
+    command: CommandRow,
+    states: Sequence[PipQueryState | None],
+) -> tuple[tuple[Row, PipInstallSignature, PipQueryState], ...]:
+    parsed = parse_command_clauses(command.command)
+    parsed_signatures = tuple(
+        parse_pip_install(clause.get("argv", ()))
+        for clause in parsed.get("clauses", ())
+    )
+    if len(parsed_signatures) != len(states):
+        raise ValueError(f"{command.call_id}: parsed clauses and state differ")
+    unused = set(range(len(parsed_signatures)))
+    observations: list[tuple[Row, PipInstallSignature, PipQueryState]] = []
+    for row in command.clauses:
+        if row.pipeline_position > 0 or (signature := parse_pip_install(row.argv)) is None:
+            continue
+        index = next(
+            (
+                candidate
+                for candidate in sorted(unused)
+                if parsed_signatures[candidate] == signature
+            ),
+            None,
+        )
+        if index is None or states[index] is None:
+            raise ValueError(f"{command.call_id}: pip telemetry cannot be aligned")
+        unused.remove(index)
+        observations.append((row, signature, states[index]))
+    return tuple(observations)
+
+
+def _pip_execution_mode(tool_result: str) -> str:
+    lower = tool_result.lower()
+    lines = [line for line in tool_result.splitlines() if line]
+    if not lines or not lines[-1].startswith("Exit code: "):
+        return "unknown_output"
+    try:
+        exit_code = int(lines[-1].removeprefix("Exit code: "))
+    except ValueError:
+        return "unknown_output"
+    if exit_code != 0:
+        if "no module named pip" in lower or re.search(
+            r"(?:^|\n).*\bpip3?\b.*(?:not found|no such file)", lower
+        ):
+            return "failure_missing_pip"
+        return "failure_other"
+    if "downloading " in lower or "building wheel" in lower:
+        return "success_download_or_build"
+    if "using cached" in lower or "requirement already satisfied" in lower:
+        return "success_cache_only"
+    return "success_other"
+
+
+def _observed_composition_summary(
+    commands: Sequence[CommandRow],
+    current_rows: Sequence[ScoredRow],
+) -> dict[str, Any]:
+    current = {row.sample_id: row for row in current_rows}
+    groups: dict[str, list[tuple[CommandRow, float, int]]] = defaultdict(list)
+    for row in commands:
+        structures = [
+            {
+                "in_pipe": clause.in_pipe,
+                "in_subst": clause.in_subst,
+                "pipeline_position": clause.pipeline_position,
+            }
+            for clause in row.clauses
+        ]
+        stages = _command_stages(structures)
+        if stages is None:
+            continue
+        composed_ms = sum(
+            max(row.clauses[index].latency_ms for index in stage)
+            for stage in stages
+        )
+        pip = any(parse_pip_install(clause.argv) is not None for clause in row.clauses)
+        item = (row, composed_ms, len(stages))
+        groups["all"].append(item)
+        if pip:
+            groups["pip"].append(item)
+            groups["pip_compound" if len(row.clauses) > 1 else "pip_single"].append(item)
+
+    def summarize(items: Sequence[tuple[CommandRow, float, int]]) -> dict[str, Any]:
+        if not items:
+            return {"commands": 0}
+        oracle_correct = 0
+        current_correct = 0
+        residuals = []
+        for row, composed_ms, _stage_count in items:
+            sample_id = f"{row.task_id}:{row.manifest_index}:call:{row.call_index}"
+            label = CANONICAL_LATENCY_BUCKETS.bucket_id(row.duration_ms)
+            oracle_correct += CANONICAL_LATENCY_BUCKETS.bucket_id(composed_ms) == label
+            current_correct += _argmax_bucket(current[sample_id]) == label
+            residuals.append(row.duration_ms - composed_ms)
+        return {
+            "commands": len(items),
+            "oracle_accuracy": oracle_correct / len(items),
+            "current_accuracy": current_correct / len(items),
+            "command_minus_observed_composition_ms": {
+                "p50": _percentile(residuals, 0.5),
+                "p90": _percentile(residuals, 0.9),
+            },
+        }
+
+    return {
+        "analysis_only": True,
+        "definition": "sum of per-stage maximum observed clause latency",
+        "groups": {
+            name: summarize(groups[name])
+            for name in ("all", "pip", "pip_single", "pip_compound")
+        },
+    }
+
+
+def evaluate_pip_semantics(
+    public_rows: Sequence[Row],
+    task_ids: Sequence[str],
+    clause_rows: Sequence[Row],
+    command_rows: Sequence[CommandRow],
+    events_by_task: Mapping[str, Sequence[PipExecEvent]],
+    provenance: Mapping[str, Any],
+    *,
+    expected_pip_baseline: tuple[int, int] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Evaluate frozen pip semantics with and without causal task state."""
+
+    if len(set(task_ids)) != len(task_ids):
+        raise ValueError("target task order contains duplicates")
+    if len({repo_of(task_id) for task_id in task_ids}) != 1:
+        raise ValueError("pip evaluation requires one target repository")
+    target_repo = repo_of(task_ids[0])
+    if any(row.repo == target_repo for row in public_rows):
+        raise ValueError("public evidence contains the target repository")
+    task_index = {task_id: index for index, task_id in enumerate(task_ids)}
+    if list(events_by_task) != list(task_ids) or any(
+        row.task_id not in task_index
+        or row.manifest_index != task_index[row.task_id]
+        for row in (*clause_rows, *command_rows)
+    ):
+        raise ValueError("target rows or raw events differ from accepted task order")
+
+    public = tuple(
+        row
+        for row in public_rows
+        if row.structure_known and row.pipeline_position <= 0
+    )
+    if not public:
+        raise ValueError("no frozen public evidence remains after eligibility filters")
+    current = ClauseResourceKB.fit_public(
+        row.observation(0.0, 1.0) for row in public
+    )
+    semantic = _PipSemanticKB(public)
+    clauses_by_task: dict[str, list[Row]] = defaultdict(list)
+    commands_by_task: dict[str, list[CommandRow]] = defaultdict(list)
+    for row in clause_rows:
+        clauses_by_task[row.task_id].append(row)
+    for row in command_rows:
+        commands_by_task[row.task_id].append(row)
+
+    arms = ("current", "pip_semantic", "pip_semantic_state")
+    scored: dict[str, list[ScoredRow]] = {arm: [] for arm in arms}
+    diagnostics: dict[str, list[dict[str, Any]]] = {
+        arm: [] for arm in arms[1:]
+    }
+    sidecar: list[dict[str, Any]] = []
+    modes: dict[str, Counter[str]] = defaultdict(Counter)
+    for ordinal, task_id in enumerate(task_ids):
+        query_ts = float(ordinal * 2 + 3)
+        events = tuple(events_by_task[task_id])
+        contexts = _pip_contexts_by_call(events)
+        event_by_call = {event.call_id: event for event in events}
+        if len(event_by_call) != len(events):
+            raise ValueError(f"{task_id}: duplicate raw exec call id")
+        settled_semantic: list[
+            tuple[Row, PipInstallSignature, PipQueryState]
+        ] = []
+        for row in commands_by_task[task_id]:
+            event = event_by_call.get(row.call_id)
+            if event is None or event.command != row.command:
+                raise ValueError(f"{row.call_id}: eligible command lacks raw output")
+            parsed = parse_command_clauses(row.command)
+            current_result = current.predict_command_latency_bucket_from_clauses(
+                row.repo,
+                parsed["clauses"],
+                query_ts,
+                CANONICAL_LATENCY_BUCKETS,
+                command=row.command,
+                parse_failed=bool(parsed["parse_failed"]),
+            )
+            if current_result.prediction is None:
+                raise ValueError(f"{row.call_id}: Current prediction unavailable")
+            scored["current"].append(
+                _command_scored_row(row, current_result.prediction, None)
+            )
+            states = contexts[row.call_id]
+            arm_values: dict[str, Any] = {
+                "current": {
+                    "prediction": _argmax_probabilities(
+                        current_result.prediction.probability_by_bucket
+                    ),
+                    "probability_by_bucket": current_result.prediction.probability_by_bucket,
+                }
+            }
+            for arm, use_state in (
+                ("pip_semantic", False),
+                ("pip_semantic_state", True),
+            ):
+                prediction, diagnostic = _predict_pip_latency_command(
+                    semantic,
+                    current,
+                    row,
+                    parsed,
+                    states,
+                    current_result.prediction,
+                    use_state=use_state,
+                )
+                scored[arm].append(_command_scored_row(row, prediction, None))
+                diagnostics[arm].append(diagnostic)
+                arm_values[arm] = {
+                    "prediction": _argmax_probabilities(
+                        prediction.probability_by_bucket
+                    ),
+                    "probability_by_bucket": prediction.probability_by_bucket,
+                    **diagnostic,
+                }
+            pip_command = any(
+                parse_pip_install(clause.get("argv", ())) is not None
+                for clause in parsed["clauses"]
+            )
+            mode = _pip_execution_mode(event.tool_result) if pip_command else None
+            if mode is not None:
+                label = CANONICAL_LATENCY_BUCKETS.bucket_id(row.duration_ms)
+                modes[mode]["commands"] += 1
+                modes[mode][f"latency_bucket_{label}"] += 1
+                for arm in arms:
+                    modes[mode][f"{arm}_correct"] += (
+                        arm_values[arm]["prediction"] == label
+                    )
+                for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS:
+                    resource_label, _source = command_resource_label(row, resource)
+                    modes[mode][
+                        f"{resource}_{'unavailable' if resource_label is None else 'heavy' if resource_label else 'light'}"
+                    ] += 1
+            sample_id = f"{row.task_id}:{row.manifest_index}:call:{row.call_index}"
+            sidecar.append(
+                {
+                    "sample_id": sample_id,
+                    "task_id": row.task_id,
+                    "task_ordinal": ordinal,
+                    "call_id": row.call_id,
+                    "command": row.command,
+                    "pip_command": pip_command,
+                    "pip_execution_mode": mode,
+                    "latency_label": CANONICAL_LATENCY_BUCKETS.bucket_id(
+                        row.duration_ms
+                    ),
+                    "arms": arm_values,
+                }
+            )
+            settled_semantic.extend(
+                _settled_pip_observations(row, states)
+            )
+        settle_ts = query_ts + 0.5
+        for row in clauses_by_task[task_id]:
+            current.observe_completed_clause(row.observation(query_ts, settle_ts))
+        for row, signature, state in settled_semantic:
+            semantic.observe(task_id, row, signature, state)
+
+    identity = [
+        (row.sample_id, row.label_bucket, row.probability_by_bucket is not None)
+        for row in scored["current"]
+    ]
+    for arm in arms[1:]:
+        if identity != [
+            (row.sample_id, row.label_bucket, row.probability_by_bucket is not None)
+            for row in scored[arm]
+        ]:
+            raise AssertionError(f"{arm} differs in rows, labels, or availability")
+    current_metrics = _telemetry_metrics(scored["current"])
+    current_accuracy = current_metrics["three_class_accuracy"]
+    assert current_accuracy is not None
+    metrics = {
+        arm: (
+            current_metrics
+            if arm == "current"
+            else _telemetry_metrics(scored[arm], current_accuracy=current_accuracy)
+        )
+        for arm in arms
+    }
+    pip_indices = [
+        index for index, row in enumerate(sidecar) if row["pip_command"]
+    ]
+    nonpip_indices = [
+        index for index, row in enumerate(sidecar) if not row["pip_command"]
+    ]
+    if not pip_indices:
+        raise ValueError("target run contains no eligible pip command")
+    pip_rows = {
+        arm: [scored[arm][index] for index in pip_indices]
+        for arm in arms
+    }
+    pip_current_metrics = _telemetry_metrics(pip_rows["current"])
+    pip_metrics = {
+        arm: (
+            pip_current_metrics
+            if arm == "current"
+            else _telemetry_metrics(
+                pip_rows[arm],
+                current_accuracy=pip_current_metrics["three_class_accuracy"],
+            )
+        )
+        for arm in arms
+    }
+    nonpip_identical = all(
+        scored[arm][index].probability_by_bucket
+        == scored["current"][index].probability_by_bucket
+        for arm in arms[1:]
+        for index in nonpip_indices
+    )
+    changes = {
+        arm: _prediction_changes(
+            scored["current"], scored[arm], diagnostics[arm]
+        )
+        for arm in arms[1:]
+    }
+    current_pip_correct = sum(
+        _exact_bucket_correct(row) for row in pip_rows["current"]
+    )
+    baseline_reconciled = expected_pip_baseline is None or (
+        len(pip_indices), current_pip_correct
+    ) == expected_pip_baseline
+    state_change = changes["pip_semantic_state"][
+        "nonexact_carrier_changed_commands"
+    ]
+    latency_go = (
+        baseline_reconciled
+        and nonpip_identical
+        and metrics["pip_semantic_state"]["three_class_accuracy"]
+        > current_accuracy
+        and pip_metrics["pip_semantic_state"]["three_class_accuracy"]
+        > pip_current_metrics["three_class_accuracy"]
+        and state_change["net_helpful_minus_harmful"] > 0
+    )
+    mode_summary = {
+        mode: {
+            **dict(sorted(counts.items())),
+            **{
+                f"{arm}_accuracy": counts[f"{arm}_correct"] / counts["commands"]
+                for arm in arms
+            },
+        }
+        for mode, counts in sorted(modes.items())
+    }
+    result = {
+        "status": (
+            "development_exposed_pip_latency_go"
+            if latency_go
+            else "development_exposed_pip_latency_no_go"
+            if baseline_reconciled
+            else "invalid_pip_baseline_reconciliation"
+        ),
+        "claim_bearing": False,
+        "objective": "command_latency_pip_semantic_state_comparison",
+        "inputs": dict(provenance),
+        "protocol": {
+            "evaluation_unit": "eligible_exec_command",
+            "causal_update": "KB observations settle only after whole task",
+            "state_information": "raw outputs of earlier exec calls in the same task",
+            "pip_partition": "interpreter, invocation, normalized flags",
+            "pip_similarity": "Jaccard over normalized package names",
+            "pooling_alpha": INTERACTION_ALPHA,
+            "exact_shortcut": "repository-local exact argv",
+            "semantic_ablation": "same matching without availability or remaining-package state",
+            "compound_composition": "weighted-empirical-shell-graph-v1",
+            "weighted_composition_draws": COMMAND_COMPOSITION_DRAWS,
+        },
+        "counts": {
+            "tasks": len(task_ids),
+            "commands": len(command_rows),
+            "pip_commands": len(pip_indices),
+            "nonpip_commands": len(nonpip_indices),
+            "target_online_clause_observations": len(clause_rows),
+            "public_online_clause_observations": len(public),
+            "stored_target_pip_observations": semantic.observation_count,
+        },
+        "row_identity": {
+            "identical_command_ids_labels_and_availability": True,
+            "nonpip_probability_vectors_bit_identical": nonpip_identical,
+            "unique_sample_ids": len({row[0] for row in identity}) == len(identity),
+        },
+        "latency": {
+            "bucket_edges_ms": list(CANONICAL_LATENCY_BUCKETS.edges_ms),
+            "direction": "higher accuracy is better",
+            "overall": {
+                "majority": {
+                    "class": current_metrics["majority_class"],
+                    "accuracy": current_metrics["majority_class_accuracy"],
+                },
+                "arms": metrics,
+            },
+            "pip_commands": {
+                "majority": {
+                    "class": pip_current_metrics["majority_class"],
+                    "accuracy": pip_current_metrics["majority_class_accuracy"],
+                },
+                "arms": pip_metrics,
+            },
+            "prediction_changes": changes,
+            "uncertainty": {
+                f"{arm}_minus_current": _paired_task_cluster_bootstrap(
+                    scored[arm],
+                    scored["current"],
+                    left_name=arm,
+                    right_name="current",
+                )
+                for arm in arms[1:]
+            },
+        },
+        "case_study": {
+            "pip_execution_modes": mode_summary,
+            "observed_clause_composition_oracle": _observed_composition_summary(
+                command_rows, scored["current"]
+            ),
+        },
+        "gates": {
+            "baseline_reconciliation": {
+                "pass": baseline_reconciled,
+                "expected": (
+                    None
+                    if expected_pip_baseline is None
+                    else {
+                        "pip_commands": expected_pip_baseline[0],
+                        "current_correct": expected_pip_baseline[1],
+                    }
+                ),
+                "observed": {
+                    "pip_commands": len(pip_indices),
+                    "current_correct": current_pip_correct,
+                },
+            },
+            "latency": {
+                "go": latency_go,
+                "requires_overall_above_current": True,
+                "requires_pip_above_current": True,
+                "requires_positive_nonexact_carrier_net_gain": True,
+                "requires_nonpip_bit_identity": True,
+            },
+            "resource_evaluation": {
+                "go": latency_go,
+                "reason": (
+                    "latency gate passed"
+                    if latency_go
+                    else "latency gate failed; resource transfer must not run"
+                ),
             },
         },
     }

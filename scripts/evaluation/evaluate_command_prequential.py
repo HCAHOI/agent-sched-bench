@@ -13,7 +13,9 @@ sys.path.insert(0, str(_REPO_ROOT / "src"))
 sys.path.insert(0, str(_REPO_ROOT))
 
 from scripts.evaluation.evaluate_clause_latency_buckets import (  # noqa: E402
+    PipExecEvent,
     evaluate_interaction_commands,
+    evaluate_pip_semantics,
     evaluate_poset_resources,
     evaluate_prequential_commands,
 )
@@ -22,6 +24,54 @@ from scripts.evaluation.evaluate_clause_resource_classes import (  # noqa: E402
     load_run_rows,
 )
 from tool_resource_eval.labels import repo_of  # noqa: E402
+
+
+def _load_exec_events(
+    run_dir: Path,
+    expected_task_ids: list[str],
+) -> dict[str, list[PipExecEvent]]:
+    """Read raw exec commands and outputs from the accepted final attempts."""
+
+    run_dir = run_dir.resolve()
+    events: dict[str, list[PipExecEvent]] = {}
+    with (run_dir / "results.jsonl").open(encoding="utf-8") as handle:
+        for record in map(json.loads, handle):
+            task_id = record.get("instance_id")
+            attempt_value = record.get("attempt_dir")
+            if not isinstance(task_id, str) or not isinstance(attempt_value, str):
+                raise ValueError("results.jsonl lacks a task or attempt path")
+            attempt_dir = Path(attempt_value)
+            if not attempt_dir.is_absolute():
+                attempt_dir = run_dir / attempt_dir
+            attempt_dir = attempt_dir.resolve()
+            if not attempt_dir.is_relative_to(run_dir):
+                raise ValueError(f"attempt path escapes the run: {attempt_dir}")
+            task_events: list[PipExecEvent] = []
+            with (attempt_dir / "trace.jsonl").open(encoding="utf-8") as trace:
+                for line in trace:
+                    action = json.loads(line)
+                    data = action.get("data")
+                    if (
+                        action.get("type") != "action"
+                        or action.get("action_type") != "tool_exec"
+                        or not isinstance(data, dict)
+                        or data.get("tool_name") != "exec"
+                    ):
+                        continue
+                    call_id = data.get("tool_call_id")
+                    tool_args = data.get("tool_args")
+                    tool_result = data.get("tool_result")
+                    if not all(isinstance(value, str) for value in (call_id, tool_args, tool_result)):
+                        raise ValueError(f"{attempt_dir}: raw exec action is incomplete")
+                    arguments = json.loads(tool_args)
+                    command = arguments.get("command") if isinstance(arguments, dict) else None
+                    if not isinstance(command, str):
+                        raise ValueError(f"{attempt_dir}: raw exec action lacks command")
+                    task_events.append(PipExecEvent(call_id, command, tool_result))
+            events[task_id] = task_events
+    if list(events) != expected_task_ids:
+        raise ValueError("raw exec event tasks differ from accepted task order")
+    return events
 
 
 def main() -> None:
@@ -39,6 +89,11 @@ def main() -> None:
         "--poset-resources-after-latency",
         type=Path,
         help="score resources only when this latency result contains a poset GO",
+    )
+    parser.add_argument(
+        "--pip-semantics",
+        action="store_true",
+        help="score the frozen pip semantic and task-state latency arms",
     )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--dump-rows", type=Path, required=True)
@@ -73,8 +128,16 @@ def main() -> None:
         ),
         "target_task_order_source": "results.jsonl successful final attempts",
     }
-    if args.interaction_architectures and args.poset_resources_after_latency:
-        raise ValueError("latency and gated resource modes are mutually exclusive")
+    selected_modes = sum(
+        bool(value)
+        for value in (
+            args.interaction_architectures,
+            args.poset_resources_after_latency,
+            args.pip_semantics,
+        )
+    )
+    if selected_modes > 1:
+        raise ValueError("evaluation modes are mutually exclusive")
     if args.poset_resources_after_latency:
         gate_path = args.poset_resources_after_latency.resolve()
         result, rows = evaluate_poset_resources(
@@ -92,6 +155,16 @@ def main() -> None:
             clauses,
             commands,
             provenance,
+        )
+    elif args.pip_semantics:
+        result, rows = evaluate_pip_semantics(
+            public,
+            task_ids,
+            clauses,
+            commands,
+            _load_exec_events(args.run_dir, task_ids),
+            provenance,
+            expected_pip_baseline=(119, 97),
         )
     else:
         result, rows = evaluate_prequential_commands(
