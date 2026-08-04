@@ -78,6 +78,11 @@ PIP_SEMANTIC_FEATURE_VERSION = "pip-install-semantic-jaccard-v1"
 PIP_CANONICAL_FEATURE_VERSION = "pip-install-canonical-exact-v1"
 PYTEST_SEMANTIC_FEATURE_VERSION = "pytest-work-shape-exact-v1"
 FULL_TEST_PHASE_FEATURE_VERSION = "full-test-third-or-later-v1"
+FULL_TEST_AGENT_STATE_VERSION = "full-test-agent-state-v1"
+FULL_TEST_AGENT_MODEL = "gpt-5.6-sol"
+FULL_TEST_AGENT_STATES = frozenset(
+    {"unavailable", "collection_blocked", "ready", "unknown"}
+)
 
 
 @dataclass(frozen=True)
@@ -2843,6 +2848,154 @@ def _full_test_phases(events: Sequence[PipExecEvent]) -> dict[str, int]:
     return phases
 
 
+def _result_excerpt(result: str) -> str:
+    if len(result) <= 4_000:
+        return result
+    return result[:2_000] + "\n<result middle omitted>\n" + result[-2_000:]
+
+
+def _result_exit_code(result: str) -> int | None:
+    match = re.search(r"(?:^|\n)Exit code: (-?\d+)\s*$", result)
+    return None if match is None else int(match.group(1))
+
+
+def build_full_test_state_packets(
+    task_ids: Sequence[str],
+    command_rows: Sequence[CommandRow],
+    events_by_task: Mapping[str, Sequence[PipExecEvent]],
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Build label-free causal packets and a private query-to-sample map."""
+
+    if list(events_by_task) != list(task_ids):
+        raise ValueError("raw exec event tasks differ from accepted task order")
+    commands = {(row.task_id, row.call_id): row for row in command_rows}
+    packets: list[dict[str, Any]] = []
+    sample_by_query: dict[str, str] = {}
+    for task_id in task_ids:
+        events = events_by_task[task_id]
+        if len({event.call_id for event in events}) != len(events):
+            raise ValueError(f"{task_id}: duplicate raw exec call id")
+        for event_index, event in enumerate(events):
+            row = commands.get((task_id, event.call_id))
+            if row is None or not _is_full_test_suite(event.command):
+                continue
+            if row.command != event.command:
+                raise ValueError(f"{row.call_id}: eligible command lacks matching raw event")
+            prior_events = []
+            for prior_index, prior in enumerate(events[:event_index]):
+                if (
+                    prior.ts_end is not None
+                    and event.ts_start is not None
+                    and prior.ts_end >= event.ts_start
+                ):
+                    raise ValueError(f"{row.call_id}: prior exec event is not causal")
+                prior_events.append(
+                    {
+                        "event_index": prior_index,
+                        "command": prior.command,
+                        "exit_code": _result_exit_code(prior.tool_result),
+                        "result_excerpt": _result_excerpt(prior.tool_result),
+                    }
+                )
+            query_id = f"Q{len(packets) + 1:04d}"
+            packets.append(
+                {
+                    "query_id": query_id,
+                    "current_command": event.command,
+                    "prior_events": prior_events,
+                }
+            )
+            sample_by_query[query_id] = f"{task_id}:{row.call_index}"
+    expected_samples = {
+        f"{row.task_id}:{row.call_index}"
+        for row in command_rows
+        if _is_full_test_suite(row.command)
+    }
+    if set(sample_by_query.values()) != expected_samples:
+        raise ValueError("eligible full-test commands differ from raw exec events")
+    return packets, sample_by_query
+
+
+def _validated_agent_states(
+    packets: Sequence[Mapping[str, Any]],
+    artifact: Mapping[str, Any],
+) -> dict[str, Mapping[str, Any]]:
+    expected_artifact_keys = {
+        "schema",
+        "model",
+        "inference_mode",
+        "requested_service_tier",
+        "reasoning_effort",
+        "temperature",
+        "parallel_jobs",
+        "codex_version",
+        "packet_sha256",
+        "classifications",
+    }
+    if set(artifact) != expected_artifact_keys:
+        raise ValueError("agent-state artifact fields differ from the frozen schema")
+    if artifact.get("schema") != FULL_TEST_AGENT_STATE_VERSION:
+        raise ValueError("agent-state artifact has the wrong schema")
+    if artifact.get("model") != FULL_TEST_AGENT_MODEL:
+        raise ValueError("agent-state artifact has the wrong model")
+    if (
+        artifact.get("inference_mode") != "one_ephemeral_codex_process_per_query"
+        or artifact.get("requested_service_tier") != "fast"
+        or artifact.get("reasoning_effort") != "medium"
+        or artifact.get("temperature") != "unsupported_by_codex_provider"
+        or not isinstance(artifact.get("parallel_jobs"), int)
+        or isinstance(artifact.get("parallel_jobs"), bool)
+        or artifact["parallel_jobs"] < 1
+        or not isinstance(artifact.get("codex_version"), str)
+        or not artifact["codex_version"]
+        or artifact.get("packet_sha256")
+        != hashlib.sha256(
+            json.dumps(packets, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    ):
+        raise ValueError("agent-state inference provenance differs from the frozen protocol")
+    records = artifact.get("classifications")
+    if not isinstance(records, list):
+        raise ValueError("agent-state classifications must be a list")
+    expected = {str(packet["query_id"]): packet for packet in packets}
+    states: dict[str, Mapping[str, Any]] = {}
+    for record in records:
+        if (
+            not isinstance(record, dict)
+            or set(record)
+            != {"query_id", "state", "evidence_event_indices", "rationale"}
+            or not isinstance(record.get("query_id"), str)
+        ):
+            raise ValueError("agent-state classification is malformed")
+        query_id = record["query_id"]
+        if query_id in states:
+            raise ValueError(f"duplicate agent-state query: {query_id}")
+        state = record.get("state")
+        evidence = record.get("evidence_event_indices")
+        if state not in FULL_TEST_AGENT_STATES or not isinstance(evidence, list):
+            raise ValueError(f"{query_id}: invalid state or evidence indices")
+        available = {
+            event["event_index"] for event in expected.get(query_id, {}).get("prior_events", ())
+        }
+        if len(set(evidence)) != len(evidence) or any(
+            not isinstance(index, int)
+            or isinstance(index, bool)
+            or index not in available
+            for index in evidence
+        ):
+            raise ValueError(f"{query_id}: evidence is not in the causal packet")
+        if state != "unknown" and not evidence:
+            raise ValueError(f"{query_id}: non-unknown state lacks evidence")
+        if not isinstance(record.get("rationale"), str) or not record["rationale"].strip():
+            raise ValueError(f"{query_id}: rationale is missing")
+        states[query_id] = record
+    if list(states) != list(expected):
+        missing = sorted(set(expected) - set(states))[:3]
+        extra = sorted(set(states) - set(expected))[:3]
+        raise ValueError(f"agent-state query mismatch: missing={missing}, extra={extra}")
+    return states
+
+
 def _empirical_pmf(counts: Counter[int], buckets: int) -> tuple[float, ...]:
     total = sum(counts.values())
     if not total:
@@ -2856,16 +3009,21 @@ def _phase_bucket(value: Any, target: str) -> int | None:
     return int(value) if target == "latency" else RESOURCE_BUCKET_LABELS.index(str(value))
 
 
-def _phase_changes(rows: Sequence[Mapping[str, Any]], target: str) -> dict[str, Any]:
-    changed = [row for row in rows if row["candidate"][target] != row["current_dynamic"][target]]
+def _phase_changes(
+    rows: Sequence[Mapping[str, Any]],
+    target: str,
+    *,
+    reference: str = "current_dynamic",
+) -> dict[str, Any]:
+    changed = [row for row in rows if row["candidate"][target] != row[reference][target]]
     helpful = [
         row
         for row in changed
         if _phase_bucket(row["candidate"][target], target) == row["labels"][target]
-        and _phase_bucket(row["current_dynamic"][target], target) != row["labels"][target]
+        and _phase_bucket(row[reference][target], target) != row["labels"][target]
     ]
     harmful = sum(
-        _phase_bucket(row["current_dynamic"][target], target) == row["labels"][target]
+        _phase_bucket(row[reference][target], target) == row["labels"][target]
         and _phase_bucket(row["candidate"][target], target) != row["labels"][target]
         for row in changed
     )
@@ -2876,6 +3034,47 @@ def _phase_changes(rows: Sequence[Mapping[str, Any]], target: str) -> dict[str, 
         "neutral": len(changed) - len(helpful) - harmful,
         "tasks": len({row["task_id"] for row in changed}),
         "helpful_task_ids": sorted({row["task_id"] for row in helpful}),
+    }
+
+
+def _sidecar_hard_metrics(
+    rows: Sequence[Mapping[str, Any]], target: str
+) -> dict[str, Any]:
+    buckets = CANONICAL_LATENCY_BUCKETS.bucket_count if target == "latency" else 3
+    confusion = [[0] * buckets for _ in range(buckets)]
+    unavailable = 0
+    for row in rows:
+        label = row["labels"][target]
+        if label is None:
+            continue
+        prediction = _phase_bucket(row["candidate"][target], target)
+        if prediction is None:
+            unavailable += 1
+        else:
+            confusion[label][prediction] += 1
+    eligible = unavailable + sum(map(sum, confusion))
+    correct = sum(confusion[index][index] for index in range(buckets))
+    within_one = sum(
+        count
+        for label, counts in enumerate(confusion)
+        for prediction, count in enumerate(counts)
+        if abs(label - prediction) <= 1
+    )
+    severe_under = sum(
+        count
+        for label, counts in enumerate(confusion)
+        for prediction, count in enumerate(counts)
+        if label - prediction >= 2
+    )
+    return {
+        "eligible_examples" if target == "latency" else "eligible_n": eligible,
+        "prediction_unavailable": unavailable,
+        "exact_class_accuracy" if target == "latency" else "accuracy": (
+            correct / eligible if eligible and not unavailable else None
+        ),
+        "within_one_bucket_accuracy": within_one / eligible if eligible and not unavailable else None,
+        "severe_underprediction_rate": severe_under / eligible if eligible and not unavailable else None,
+        "confusion_label_by_prediction": confusion,
     }
 
 
@@ -3099,6 +3298,258 @@ def evaluate_full_test_phase(
             "no_accuracy_regression": no_accuracy_regression,
             "no_severe_underprediction_regression": no_severe_under_regression,
             "disk_bit_identical": disk_identical,
+            "helpful": helpful,
+            "harmful": harmful,
+            "changed_tasks": len(changed_tasks),
+            "helpful_tasks": len(helpful_tasks),
+            "requires_helpful_tasks_at_least": 3,
+        },
+    }
+    return result, rows
+
+
+def evaluate_full_test_agent_state(
+    public_rows: Sequence[Row],
+    task_ids: Sequence[str],
+    clause_rows: Sequence[Row],
+    command_rows: Sequence[CommandRow],
+    events_by_task: Mapping[str, Sequence[PipExecEvent]],
+    agent_artifact: Mapping[str, Any],
+    provenance: Mapping[str, Any],
+    *,
+    warmup_task_count: int,
+    expected_split: tuple[int, int] = (100, 80),
+    minimum_state_tasks: int = 3,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Replay frozen agent-assigned causal states over the phase candidate."""
+
+    phase_result, phase_rows = evaluate_full_test_phase(
+        public_rows,
+        task_ids,
+        clause_rows,
+        command_rows,
+        events_by_task,
+        provenance,
+        warmup_task_count=warmup_task_count,
+        expected_split=expected_split,
+    )
+    packets, sample_by_query = build_full_test_state_packets(
+        task_ids, command_rows, events_by_task
+    )
+    states = _validated_agent_states(packets, agent_artifact)
+    query_by_sample = {sample: query for query, sample in sample_by_query.items()}
+    if len(query_by_sample) != len(sample_by_query):
+        raise ValueError("full-test state queries map to duplicate command rows")
+    task_index = {task_id: index for index, task_id in enumerate(task_ids)}
+    commands = {
+        f"{row.task_id}:{row.call_index}": row for row in command_rows
+    }
+    targets = ("latency", "peak_cpu_cores", "sampled_peak_rss_mb")
+    counts: dict[str, dict[str, Counter[int]]] = defaultdict(
+        lambda: {target: Counter() for target in targets}
+    )
+    support: dict[str, dict[str, set[str]]] = defaultdict(
+        lambda: {target: set() for target in targets}
+    )
+    for query_id, sample_id in sample_by_query.items():
+        command = commands[sample_id]
+        state = str(states[query_id]["state"])
+        if state == "unknown" or task_index[command.task_id] >= warmup_task_count:
+            continue
+        counts[state]["latency"][CANONICAL_LATENCY_BUCKETS.bucket_id(command.duration_ms)] += 1
+        support[state]["latency"].add(command.task_id)
+        for target in targets[1:]:
+            label, _source = command_resource_bucket_label(command, target)
+            if label is not None:
+                counts[state][target][label] += 1
+                support[state][target].add(command.task_id)
+
+    pmfs: dict[tuple[str, str], tuple[float, ...]] = {}
+    for state, by_target in counts.items():
+        for target, target_counts in by_target.items():
+            if len(support[state][target]) >= minimum_state_tasks:
+                pmfs[state, target] = _empirical_pmf(
+                    target_counts,
+                    CANONICAL_LATENCY_BUCKETS.bucket_count if target == "latency" else 3,
+                )
+
+    rows: list[dict[str, Any]] = []
+    for phase_row in phase_rows:
+        phase_candidate = dict(phase_row["candidate"])
+        phase_pmfs = dict(phase_row["candidate_probability_by_bucket"])
+        candidate = dict(phase_candidate)
+        candidate_pmfs = dict(phase_pmfs)
+        query_id = query_by_sample.get(phase_row["sample_id"])
+        state_record = None if query_id is None else states[query_id]
+        state = None if state_record is None else str(state_record["state"])
+        applied_targets = []
+        if state is not None and state != "unknown":
+            for target in targets:
+                pmf = pmfs.get((state, target))
+                if pmf is None:
+                    continue
+                bucket = _argmax_probabilities(pmf)
+                candidate[target] = bucket if target == "latency" else RESOURCE_BUCKET_LABELS[bucket]
+                candidate_pmfs[target] = list(pmf)
+                applied_targets.append(target)
+
+        rows.append(
+            {
+                **phase_row,
+                "agent_query_id": query_id,
+                "agent_state": state,
+                "agent_state_evidence_event_indices": (
+                    None if state_record is None else state_record["evidence_event_indices"]
+                ),
+                "agent_state_applied_targets": applied_targets,
+                "phase_candidate": phase_candidate,
+                "phase_probability_by_bucket": phase_pmfs,
+                "candidate": candidate,
+                "candidate_probability_by_bucket": candidate_pmfs,
+            }
+        )
+
+    phase_latency = phase_result["latency"]["arms"]["full_test_phase"]
+    candidate_metrics = {
+        target: _sidecar_hard_metrics(rows, target)
+        for target in ("latency", *CANONICAL_RESOURCE_BUCKET_EDGES)
+    }
+    candidate_latency = candidate_metrics["latency"]
+    candidate_resources = {
+        resource: candidate_metrics[resource]
+        for resource in CANONICAL_RESOURCE_BUCKET_EDGES
+    }
+    changes = {
+        target: _phase_changes(rows, target, reference="phase_candidate")
+        for target in ("latency", *CANONICAL_RESOURCE_BUCKET_EDGES)
+    }
+    helpful_tasks = {
+        task for target in targets for task in changes[target]["helpful_task_ids"]
+    }
+    changed_tasks = {
+        row["task_id"]
+        for row in rows
+        if any(row["candidate"][target] != row["phase_candidate"][target] for target in targets)
+    }
+    metric_pairs = {
+        "latency": (phase_latency, candidate_latency),
+        **{
+            resource: (
+                phase_result["resources"][resource]["arms"]["full_test_phase"],
+                candidate_resources[resource],
+            )
+            for resource in targets[1:]
+        },
+    }
+    no_accuracy_regression = all(
+        candidate["exact_class_accuracy" if target == "latency" else "accuracy"]
+        >= reference["exact_class_accuracy" if target == "latency" else "accuracy"]
+        for target, (reference, candidate) in metric_pairs.items()
+    )
+    no_severe_under_regression = all(
+        candidate["severe_underprediction_rate"] <= reference["severe_underprediction_rate"]
+        for reference, candidate in metric_pairs.values()
+    )
+    disk = "disk_read_write_bytes_total"
+    disk_identical = all(
+        row["candidate"][disk] == row["phase_candidate"][disk]
+        and row["candidate_probability_by_bucket"][disk]
+        == row["phase_probability_by_bucket"][disk]
+        for row in rows
+    )
+    non_full_test_identical = all(
+        row["candidate"] == row["phase_candidate"]
+        and row["candidate_probability_by_bucket"] == row["phase_probability_by_bucket"]
+        for row in rows
+        if row["agent_query_id"] is None
+    )
+    helpful = sum(changes[target]["helpful"] for target in targets)
+    harmful = sum(changes[target]["harmful"] for target in targets)
+    go = (
+        no_accuracy_regression
+        and no_severe_under_regression
+        and disk_identical
+        and non_full_test_identical
+        and helpful > harmful
+        and len(helpful_tasks) >= 3
+    )
+    result = {
+        "status": "development_exposed_agent_state_go" if go else "development_exposed_agent_state_no_go",
+        "claim_bearing": False,
+        "objective": "blind_task_local_full_test_state_prediction",
+        "inputs": dict(provenance),
+        "protocol": {
+            "schema": FULL_TEST_AGENT_STATE_VERSION,
+            "model": FULL_TEST_AGENT_MODEL,
+            "warmup_task_count": warmup_task_count,
+            "minimum_distinct_warmup_tasks_per_state_target": minimum_state_tasks,
+            "reference": "reviewed full-test-phase arm",
+            "hidden": "task identity, timing, telemetry, labels, current result, and future events",
+            "disk": "bit-identical full-test-phase arm",
+        },
+        "training": {
+            state: {
+                target: {
+                    "label_counts": dict(sorted(counts[state][target].items())),
+                    "distinct_tasks": len(support[state][target]),
+                    "usable": (state, target) in pmfs,
+                    "probability_by_bucket": (
+                        None if (state, target) not in pmfs else list(pmfs[state, target])
+                    ),
+                }
+                for target in targets
+            }
+            for state in sorted(FULL_TEST_AGENT_STATES - {"unknown"})
+        },
+        "state_counts": {
+            "warmup": dict(sorted(Counter(
+                str(states[query]["state"])
+                for query, sample in sample_by_query.items()
+                if task_index[commands[sample].task_id] < warmup_task_count
+            ).items())),
+            "test": dict(sorted(Counter(
+                str(states[query]["state"])
+                for query, sample in sample_by_query.items()
+                if task_index[commands[sample].task_id] >= warmup_task_count
+            ).items())),
+        },
+        "counts": {
+            **phase_result["counts"],
+            "agent_queries": len(packets),
+            "changed_tasks_vs_full_test_phase": len(changed_tasks),
+            "helpful_tasks_vs_full_test_phase": len(helpful_tasks),
+        },
+        "row_identity": {
+            **phase_result["row_identity"],
+            "disk_probability_vectors_bit_identical_to_full_test_phase": disk_identical,
+            "non_full_test_probability_vectors_bit_identical_to_full_test_phase": non_full_test_identical,
+        },
+        "latency": {
+            "bucket_edges_ms": phase_result["latency"]["bucket_edges_ms"],
+            "majority": phase_result["latency"]["majority"],
+            "arms": {
+                **phase_result["latency"]["arms"],
+                "agent_state": candidate_latency,
+            },
+        },
+        "resources": {
+            resource: {
+                "bucket_edges": phase_result["resources"][resource]["bucket_edges"],
+                "majority": phase_result["resources"][resource]["majority"],
+                "arms": {
+                    **phase_result["resources"][resource]["arms"],
+                    "agent_state": candidate_resources[resource],
+                },
+            }
+            for resource in CANONICAL_RESOURCE_BUCKET_EDGES
+        },
+        "prediction_changes_vs_full_test_phase": changes,
+        "gate": {
+            "go": go,
+            "no_accuracy_regression": no_accuracy_regression,
+            "no_severe_underprediction_regression": no_severe_under_regression,
+            "disk_bit_identical": disk_identical,
+            "non_full_test_bit_identical": non_full_test_identical,
             "helpful": helpful,
             "harmful": harmful,
             "changed_tasks": len(changed_tasks),

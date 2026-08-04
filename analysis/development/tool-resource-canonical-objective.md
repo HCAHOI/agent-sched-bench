@@ -108,8 +108,10 @@ The active development arm is a blind task-local state replay layered on the
 reviewed full-test phase correction. For this named arm only, a fixed agent may
 read earlier completed command text, exit status, and bounded result excerpts
 from the current task, but never timing, telemetry, labels, the current result,
-or future calls. It assigns a frozen environment state; the ordinary evaluator
-fits state-conditioned PMFs from the first 80 tasks and scores the final 20.
+or future calls. Every query uses a separate tool-free model context, preventing
+cross-query leakage. It assigns a frozen environment state; the ordinary
+evaluator fits state-conditioned PMFs from the first 80 tasks and scores the
+final 20.
 This is an explicit amendment to the rule that the current task was entirely
 invisible. Resource observations still settle only after whole-task
 finalization, and the agent never receives them. The exact schema, support rule,

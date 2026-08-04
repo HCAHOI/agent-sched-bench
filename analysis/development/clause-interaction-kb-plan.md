@@ -111,6 +111,13 @@ Codex `gpt-5.6-sol`; its output is exactly one of:
   runner/collection blocker has a later successful explicit remediation; or
 - `unknown`: evidence is absent, conflicting, or does not meet those rules.
 
+Each query is classified in a separate ephemeral Codex process; no model
+context contains another query. The fixed request uses the requested fast tier,
+medium reasoning, and no temperature parameter because the Codex provider does
+not expose one. Any tool call by the classifier invalidates that query. The
+runner retains the structured event transcript, rejects pre-existing output,
+and binds the replay artifact to the exact canonical packet bytes.
+
 The agent emits only state, cited prior-event indices, and a short rationale; it
 does not predict latency, CPU, RSS, or Disk. The first 80 tasks fit an empirical
 bucket PMF per non-unknown state for latency, CPU, and RSS. A state is usable for

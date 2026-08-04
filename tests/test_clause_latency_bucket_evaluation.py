@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from collections import Counter
@@ -9,6 +10,10 @@ from pathlib import Path
 
 import pytest
 
+from scripts.evaluation.classify_full_test_states import (
+    _is_tool_free_event,
+    _validate_query,
+)
 from scripts.evaluation.evaluate_clause_latency_buckets import (
     _EpisodicSubsetKB,
     _InteractionPosetKB,
@@ -29,7 +34,9 @@ from scripts.evaluation.evaluate_clause_latency_buckets import (
     _telemetry_metrics,
     _telemetry_scored_rows,
     _validate_partition,
+    build_full_test_state_packets,
     evaluate_clause_telemetry,
+    evaluate_full_test_agent_state,
     evaluate_interaction_commands,
     evaluate_full_test_phase,
     evaluate_poset_resources,
@@ -487,6 +494,196 @@ def test_full_test_phase_only_raises_third_attempt_and_preserves_disk() -> None:
     assert neutral_result["gate"]["changed_tasks"] == 3
     assert neutral_result["gate"]["helpful_tasks"] == 1
     assert not neutral_result["gate"]["go"]
+
+
+def test_blind_full_test_state_replay_is_causal_and_bidirectional() -> None:
+    task_ids = [f"target__repo-{index}" for index in range(7)]
+    clauses: list[Row] = []
+    commands: list[CommandRow] = []
+    events: dict[str, list[PipExecEvent]] = {}
+    for manifest_index, task_id in enumerate(task_ids):
+        warmup = manifest_index < 3
+        labels = (False, False, True) if warmup else (False, True, False)
+        task_events = []
+        for call_index, high in enumerate(labels):
+            clause = Row(
+                task_id=task_id,
+                repo="target__repo",
+                manifest_index=manifest_index,
+                bin="python3",
+                argv=("python3", "-m", "pytest"),
+                latency_ms=40_000.0 if high else 1_000.0,
+                peak_cpu_cores=6.0 if high else 1.0,
+                sampled_peak_rss_mb=3_000.0 if high else 100.0,
+                disk_read_write_bytes_total=0.0,
+            )
+            call_id = f"call-{manifest_index}-{call_index}"
+            clauses.append(clause)
+            commands.append(
+                CommandRow(
+                    task_id=task_id,
+                    repo="target__repo",
+                    manifest_index=manifest_index,
+                    call_index=call_index,
+                    call_id=call_id,
+                    command="python3 -m pytest",
+                    duration_ms=clause.latency_ms,
+                    clauses=(clause,),
+                )
+            )
+            if call_index == 0:
+                result = (
+                    "No module named pytest\nExit code: 1"
+                    if warmup
+                    else "dependencies installed\nExit code: 0"
+                )
+            elif call_index == 1:
+                result = (
+                    "dependencies installed\nExit code: 0"
+                    if warmup
+                    else "No module named pytest\nExit code: 1"
+                )
+            else:
+                result = "suite finished\nExit code: 0"
+            task_events.append(PipExecEvent(call_id, "python3 -m pytest", result))
+        echo_clause = Row(
+            task_id=task_id,
+            repo="target__repo",
+            manifest_index=manifest_index,
+            bin="echo",
+            argv=("echo", "done"),
+            latency_ms=10.0,
+            peak_cpu_cores=1.0,
+            sampled_peak_rss_mb=10.0,
+            disk_read_write_bytes_total=0.0,
+        )
+        clauses.append(echo_clause)
+        commands.append(
+            CommandRow(
+                task_id=task_id,
+                repo="target__repo",
+                manifest_index=manifest_index,
+                call_index=3,
+                call_id=f"call-{manifest_index}-3",
+                command="echo done",
+                duration_ms=10.0,
+                clauses=(echo_clause,),
+            )
+        )
+        task_events.append(
+            PipExecEvent(f"call-{manifest_index}-3", "echo done", "done\nExit code: 0")
+        )
+        events[task_id] = task_events
+    public = [
+        Row(
+            task_id="public__repo-1",
+            repo="public__repo",
+            manifest_index=0,
+            bin="python3",
+            argv=("python3", "-m", "pytest"),
+            latency_ms=1_000.0,
+            peak_cpu_cores=1.0,
+            sampled_peak_rss_mb=100.0,
+            disk_read_write_bytes_total=0.0,
+        )
+    ]
+
+    packets, samples = build_full_test_state_packets(task_ids, commands, events)
+    serialized = json.dumps(packets)
+    assert all(task_id not in serialized for task_id in task_ids)
+    assert not any(token in serialized for token in ("duration_ms", "telemetry", "label"))
+    assert packets[0]["prior_events"] == []
+    assert len(packets[1]["prior_events"]) == 1
+    assert _validate_query(packets[1]) == packets[1]
+    with pytest.raises(ValueError, match="frozen schema"):
+        _validate_query({**packets[1], "latency_bucket": 0})
+    assert _is_tool_free_event(
+        {"type": "item.completed", "item": {"type": "reasoning"}}
+    )
+    assert not _is_tool_free_event(
+        {"type": "item.completed", "item": {"type": "dynamic_tool_call"}}
+    )
+
+    classifications = []
+    for packet in packets:
+        task_id, call_index_text = samples[packet["query_id"]].rsplit(":", 1)
+        call_index = int(call_index_text)
+        warmup = task_ids.index(task_id) < 3
+        state = (
+            "unknown"
+            if call_index == 0
+            else "unavailable"
+            if (warmup and call_index == 1) or (not warmup and call_index == 2)
+            else "ready"
+        )
+        classifications.append(
+            {
+                "query_id": packet["query_id"],
+                "state": state,
+                "evidence_event_indices": [] if state == "unknown" else [call_index - 1],
+                "rationale": "synthetic causal evidence",
+            }
+        )
+    artifact = {
+        "schema": "full-test-agent-state-v1",
+        "model": "gpt-5.6-sol",
+        "inference_mode": "one_ephemeral_codex_process_per_query",
+        "requested_service_tier": "fast",
+        "reasoning_effort": "medium",
+        "temperature": "unsupported_by_codex_provider",
+        "parallel_jobs": 4,
+        "codex_version": "fixture",
+        "packet_sha256": hashlib.sha256(
+            json.dumps(packets, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "classifications": classifications,
+    }
+    result, rows = evaluate_full_test_agent_state(
+        public,
+        task_ids,
+        clauses,
+        commands,
+        events,
+        artifact,
+        {"fixture": True},
+        warmup_task_count=3,
+        expected_split=(7, 3),
+    )
+
+    changed = [row for row in rows if row["candidate"] != row["phase_candidate"]]
+    assert {row["full_test_phase"] for row in changed} == {1, 2}
+    assert result["gate"]["go"]
+    assert result["gate"]["helpful_tasks"] == 4
+    assert result["gate"]["harmful"] == 0
+    assert result["row_identity"]["disk_probability_vectors_bit_identical_to_full_test_phase"]
+    assert result["row_identity"]["non_full_test_probability_vectors_bit_identical_to_full_test_phase"]
+
+    bad_record = {**classifications[0], "latency_bucket": 0}
+    with pytest.raises(ValueError, match="classification is malformed"):
+        evaluate_full_test_agent_state(
+            public,
+            task_ids,
+            clauses,
+            commands,
+            events,
+            {**artifact, "classifications": [bad_record, *classifications[1:]]},
+            {"fixture": True},
+            warmup_task_count=3,
+            expected_split=(7, 3),
+        )
+    bool_evidence = {**classifications[1], "evidence_event_indices": [True]}
+    with pytest.raises(ValueError, match="evidence is not in the causal packet"):
+        evaluate_full_test_agent_state(
+            public,
+            task_ids,
+            clauses,
+            commands,
+            events,
+            {**artifact, "classifications": [classifications[0], bool_evidence, *classifications[2:]]},
+            {"fixture": True},
+            warmup_task_count=3,
+            expected_split=(7, 3),
+        )
 
 
 def test_interaction_evaluator_updates_only_after_task_settlement() -> None:
