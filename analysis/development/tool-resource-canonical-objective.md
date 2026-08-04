@@ -62,8 +62,10 @@ observe(completed_clause_observations) -> None
   compound-command structure.
 - Telemetry marked invalid, ambiguous, lossy, or cleanup-invalid is withheld;
   independently valid sibling calls may remain eligible.
-- The command and its output cannot reveal its own label or query-time state.
-  Hindsight execution modes are diagnostics only.
+- A static pre-execution arm cannot use the current command's observations or
+  output. An early-execution arm may use only samples timestamped no later than
+  its frozen decision time; the remaining execution and final output stay
+  hidden. Hindsight execution modes are diagnostics only.
 
 Compound commands compose empirical clause values according to shell structure:
 
@@ -80,29 +82,34 @@ ambiguous structures remain unavailable.
 and binary/global backoff with frozen public evidence and causal repo-local
 updates. The trie is not the proposed research contribution.
 
-The active research question is narrower:
+The completed semantic-signature question was:
 
 > Within many tasks from the same repository, can a deterministic semantic
 > work signature reuse evidence that raw argv matching misses?
 
-The active development corpus is the 100-task SQLGlot trace set. It was chosen
-because task relatedness within one repository is a controlled condition.
-SWE100/277 remain development-exposed historical diagnostics and may remain in
-Current's already-frozen public prior, but they must not select, tune, or test a
-semantic work-signature candidate. Other repositories and new collection are
-outside the current semantic experiment.
+That route is closed by the frozen results below: the surviving representation
+changed too few decisions, causal environment state was not identifiable, and
+no scheduler consumer existed.
 
-All SQLGlot results are development-exposed. They may falsify mechanisms and
-guide the next fixed comparison, but cannot support a confirmation claim.
+The active research question is now whether the current command's early,
+timestamped system behavior predicts its remaining work well enough to change a
+real CPU or memory action. Phase 0 may audit existing SQLGlot, SWE, and
+Terminal-Bench traces because this mechanism uses each command's own execution
+prefix rather than cross-task semantic similarity. All are development-exposed;
+no new collection is authorized by this lock.
+
+The fixed full-command targets in Section 1 remain the static-predictor
+baseline. Phase 0 is only an observability and coverage audit. If it passes, the
+action set, decision time, future-work target, and cost metric must be frozen in
+this lock before a formal predictor result is read.
 
 The runtime boundary remains unchanged: `resource-agentd` owns parsing,
 prediction, state, persistence, and orchestration; `telemetryd` owns privileged
 collection and finalized observations. `src/tool_resource/` imports nothing
 from the rest of the repository. Offline trace adapters live in
-`src/tool_resource_eval/`. Runtime integration is not part of the current
-offline semantic experiment.
+`src/tool_resource_eval/`. Phase 0 does not change runtime integration.
 
-## 4. Current decision tree
+## 4. Settled semantic evidence
 
 ### Phase A — pip representation: complete
 
@@ -198,7 +205,8 @@ Short-null resource policy = Light only when explicitly marked and <500 ms.
 Causal visibility = observation end before query start, after task settlement.
 Compound commands = physical stage/pipeline composition, never Boolean OR.
 Current = unchanged raw exact/prefix/binary control.
-Active semantic development corpus = SQLGlot100 only.
+Active early-execution audit = existing development-exposed traces only.
+Current-command prefix is visible only up to a frozen decision timestamp.
 No result-dependent tuning, package/test-name outcome rules, or hindsight state.
 No new collection, runtime integration, or scheduler implementation without a
 separate approved protocol.

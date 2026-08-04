@@ -1,203 +1,122 @@
-# Semantic Work-Signature Research Plan
+# Early-Execution Resource Control Research Plan
 
 **Effective:** 2026-08-04
 
 **Status:** development-only decision tree
 
-**Scope:** same-repository semantic signatures, state identifiability, and
-scheduler actionability on SQLGlot100
-
-This plan extends `tool-resource-canonical-objective.md`. It does not change
-the fixed targets, thresholds, causal visibility, task-settlement barrier,
-command-level evaluation unit, or physical compound-command composition.
+This plan extends `tool-resource-canonical-objective.md`. The completed
+semantic-signature experiments remain frozen evidence; they are not the active
+method. The static predictor remains a cold-start baseline.
 
 ## 1. Research question
 
-Can a command be represented as the work it requests, and can the predictor
-determine how much of that work remains in the environment?
+> After a command starts, can its first short interval of real system behavior
+> predict the work that remains well enough to justify changing its resources?
 
-Proceed through the smallest decision tree that can answer that question:
+Command text cannot expose cache, installation, download, or dependency state
+reliably. Early CPU, memory, disk, and process behavior observes the consequence
+of that hidden state directly. This direction does not require two tasks to run
+similar commands: every prediction begins from the current command's own past.
 
-1. Use SQLGlot100 to distinguish simple pip normalization from package-set
-   overlap.
-2. If the pip mechanism survives, test exactly one second tool, `pytest`, in
-   the same SQLGlot100 causal task stream.
-3. Independently ask whether causal state is identifiable in SQLGlot100;
-   request a controlled collection only if a meaningful oracle gap exists.
-4. Stop at a scheduler actionability gate unless a real consumer would change
-   an action.
+Proceed only through this decision tree:
 
-All existing corpora are development-exposed.
+1. Check whether existing traces contain time-resolved observations and leave a
+   useful interval after a possible decision.
+2. Check with hindsight whether any real resource action could have helped.
+3. Fit the simplest prefix-based predictor only if that action space exists.
+4. Test a real controller only if predicted actions improve over static
+   baselines after observation and actuation costs are charged.
 
-## 2. Phase A — pip carrier audit
+All existing SQLGlot, SWE, and Terminal-Bench traces are development-exposed.
+They may diagnose this mechanism because it does not learn cross-task semantic
+similarity. They cannot support a confirmation claim.
 
-Add one `canonical-exact` arm to the existing pip evaluator:
+## 2. Phase 0 — observability and decision window
 
-- **Current:** existing raw exact/prefix/bin predictor.
-- **Canonical exact:** normalized interpreter, invocation, behavior flags, and
-  complete requirements must match exactly; package order does not affect the
-  key.
-- **Jaccard semantic:** existing normalized package-name overlap.
+Use existing traces only. Do not fit a model or add telemetry first.
 
-All three arms use identical command rows, frozen public evidence, `alpha =
-16`, task-final causal updates, and Current fallback when semantic evidence is
-absent. State is report-only and cannot select the representation.
+For each corpus, inventory whether an eligible command has timestamped samples
+inside its execution for CPU, RSS, Disk I/O, and process/exec activity. Record
+the native sample interval, timestamp domain, command-boundary alignment, and
+validity flags. Final aggregate counters do not count as an early signal.
 
-Output all 119 pip commands and identify the 15 commands that used non-exact
-semantic evidence. For each carrier report task, normalized signature, each
-arm's prediction, label, helpful/harmful change, and contributing evidence.
+The **observation interval** is the part of the command already executed when a
+decision is made. Phase 0 uses one native sample interval only for its coverage
+audit; it does not inspect future-work labels.
 
-Select exactly once:
+Continue only if existing valid traces contain:
 
-- Select Jaccard only if it is strictly more accurate than canonical exact on
-  both all commands and the pip subset, its changed carriers have more helpful
-  than harmful changes, and its net gain spans at least two tasks and two
-  semantic signatures.
-- Otherwise select canonical exact only if it satisfies the same conditions
-  relative to Current.
-- Otherwise stop the entire semantic-method route.
+- at least 100 commands across at least 20 tasks with one complete observation
+  interval and at least one equally long interval still remaining; and
+- at least 20 commands across at least 10 tasks where CPU or memory could
+  physically be changed after that decision.
 
-Do not change `alpha`, flags, support thresholds, or package-specific rules.
-Obtain one bounded independent review before reading the formal result, then
-commit the implementation and result artifact.
+If traces contain only final aggregates, stop and report the exact missing
+fields. Do not reconstruct a prefix from final totals.
 
-## 3. Phase B — fixed second tool: pytest (complete, no-go)
+## 3. Phase 1 — hindsight actionability
 
-Run this phase only if Phase A passes. Failure does not authorize switching to
-`apt` or another tool.
+Run only if Phase 0 passes. The named consumer is a task container whose cgroup
+CPU or memory limit can be kept, raised, or lowered while a command runs.
 
-Add a minimal `PytestSignature` module, not a generic plugin framework:
+First measure the supported limits, update latency, and update cost on the real
+runtime. Freeze the final decision time as the greater of the native sample
+interval and measured p95 update latency, then repeat the Phase 0 coverage gate.
+Freeze the action set and costs before inspecting which actions would have
+helped. Then use future samples only as a hindsight upper bound; they are never
+predictor input.
 
-- normalize direct `pytest` and `python -m pytest` invocations;
-- represent targets only by counts and shapes (`file`, `directory`, `nodeid`,
-  or none), without repository or test names;
-- normalize `-x` to `maxfail=1` and retain explicit `--maxfail`;
-- retain worker count or `auto`, `--dist`, collect-only, last-failed,
-  failed-first, and stepwise modes;
-- retain only Boolean structure and atom count for `-k` and `-m`, replacing
-  identifiers with placeholders;
-- return `None` and fall back to Current for an unknown result-affecting option
-  or `--` passthrough;
-- use exact semantic-signature matching only, with no new similarity parameter.
+Continue only if the hindsight policy changes an action for at least 20
+commands across at least 10 tasks and its benefit exceeds the observation and
+resource-update costs. Report CPU and memory separately even if the final
+controller changes them together.
 
-Replay SQLGlot100 causally in its existing manifest/task order. Current keeps
-its unchanged frozen public prior. The pytest candidate may use semantic
-evidence only from settled earlier SQLGlot tasks and falls back to Current when
-none exists. Before reading pytest labels, require at least 100 parsed pytest
-commands, coverage across at least 20 tasks, and 20 commands whose semantic
-signature has causal earlier-task evidence but whose Current exact clause key
-has no earlier-task match; otherwise stop.
+## 4. Phase 2 — early-prefix prediction
 
-Latency passes only if the pytest subset and overall accuracy are both strictly
-higher than Current, changed commands are net helpful, positive net gains span
-at least two tasks and two semantic signatures, and every non-pytest PMF is
-bit-identical. Report paired
-task-cluster bootstrap uncertainty without tuning on it. Only after this gate
-passes, transfer the unchanged representation to CPU, RSS, and Disk without
-target-specific parser or weight changes.
+Run only if Phase 1 passes. Reuse the existing causal evaluator and trace
+loader. Compare exactly four arms on identical command decisions:
 
-Observed after freezing the gate: coverage passed at 339 parsed commands, 88
-tasks, and 125 non-exact carriers. Accuracy improved by four commands overall
-and on the pytest subset, with four helpful, zero harmful, and three neutral
-hard changes. The gain spanned four tasks but only one positive-net semantic
-signature, so the frozen two-signature gate failed. Resource transfer and any
-replacement second tool are stopped.
+- constant action;
+- Current static command predictor;
+- early observations only; and
+- Current plus early observations.
 
-## 4. Phase C — state identifiability (complete, no-go)
+Start with simple summaries from the current command before the decision:
+CPU use, RSS level and change, Disk I/O rate, and process/exec count. Do not add
+tool-specific parsing, package names, agent-generated adapters, or a model
+sweep. Split causally by task; no sample after the decision may enter a feature.
 
-This phase requires the representation selected by Phase A but is independent
-of Phase B. Use SQLGlot100 only. Measure:
+Primary evaluation is the consumer's action cost, not fit quality. Continue
+only if Current plus early observations improves the frozen action objective,
+changes actions for at least 20 commands across at least 10 tasks, and is better
+than both Current and early-only. Report the fixed full-command latency/CPU/RSS/
+Disk classifications as secondary diagnostics on their unchanged eligible rows.
 
-- how many independent tasks repeat each semantic signature;
-- whether the same signature appears under different pre-query causal states;
-- whether those states cross latency or resource buckets;
-- how many Current errors a hindsight execution mode can fix under
-  leave-one-task-out evaluation; and
-- the gap between causal state and the hindsight mode oracle.
+## 5. Phase 3 — real control
 
-Prepare a controlled collection only if at least eight package sets occur in
-two or more execution modes across independent tasks, the oracle mode nets at
-least ten hard-error fixes over semantic-only prediction, and the gain is not
-concentrated in one task or package set. Otherwise record that the existing
-workload has no identifiable state contrast and stop state modeling.
+Run only if Phase 2 passes. Apply the predicted cgroup change during real task
+execution and compare against the unchanged static policy with matched tasks and
+order. Charge observation, prediction, and actuation overhead. Report task wall
+time, command tail latency, CPU-time, memory failures, and any workload failure.
 
-Observed: 26 package-set signatures included ten repeated across tasks, zero
-with multiple causal pre-query states, and one with multiple execution modes.
-The semantic-only and selected causal-state arms were identical at 100/119;
-the hindsight execution-mode leave-one-task-out oracle scored 98/119, with 11
-helpful and 13 harmful changes. The gate failed, so state modeling and the
-paired collection stop here.
+A smoke validates plumbing but is not evidence. Before any run expected to take
+over 30 minutes, report the wall-time and memory estimate and wait for explicit
+approval. Fresh confirmation data is considered only after a development run
+shows an effect large enough to justify consuming it.
 
-## 5. Phase D — paired state intervention (not reached)
+## 6. Artifacts and stop rules
 
-This is the only allowed new collection. It is not pre-authorized: after a
-smoke and resource estimate, pause for explicit approval before the expected
-one-to-three-hour run.
+- Phase 0 is a read-only schema and coverage audit; it must not change the KB,
+  evaluator, telemetry service, or runtime.
+- Reuse existing loaders and runtime mechanisms. Do not create another trace
+  reader, controller framework, daemon, or dependency.
+- Emit one machine-readable result per completed phase and update the existing
+  self-contained HTML only when a phase produces scientific evidence.
+- Obtain one bounded independent review before results from a substantial new
+  evaluator or controller become evidence.
+- Commit each completed phase, including a negative result.
 
-With seed 42, select 12 real successful package sets from SQLGlot100 spanning
-sizes 1, 2, and 3+, excluding local, VCS, and path installs. Execute each set
-twice in each of four isolated states, for 96 real executions total:
-
-1. pip absent;
-2. pip present, empty cache, requested packages not installed;
-3. requested wheels cached, requested packages not installed;
-4. requested top-level packages already installed.
-
-Randomize order with seed 42 and keep image, index/network configuration, and
-eBPF telemetry fixed. Before the query, state may inspect only pip
-availability, installed distributions, and requested-wheel cache inventory.
-It may not inspect current output, the final dependency graph, or download
-volume. Measure and charge state-probe latency and resources.
-
-The primary comparison is leave-one-package-set-out semantic-only versus
-semantic-plus-state three-bucket accuracy. Continue only if at least 3 of 12
-sets cross a latency bucket across states, state-aware accuracy improves by at
-least five percentage points, changed predictions are net helpful, and probe
-p95 is below 100 ms. A failure ends the state route; do not add states or
-replace package sets.
-
-## 6. Phase E — scheduler actionability (complete, no-go)
-
-Do not implement a scheduler. For every surviving candidate, count changed
-latency/resource hard decisions and independent tasks, then identify whether a
-real repository consumer would take a different action.
-
-Write a separate scheduler protocol only if a named consumer changes action on
-at least 20 commands across at least 10 tasks and false-action and
-missed-action costs can be stated. Otherwise stop at predictor representation
-and make no scheduling-utility claim. CacheWise timeout is a ceiling, not a
-remaining-work proxy, and its ranking is not a default consumer.
-
-Observed: latency changed five commands across five tasks, Disk changed four
-across four, and CPU/RSS changed none. The union is six commands across six
-tasks, below both frozen thresholds. No repository consumer outside the
-tool-resource service maps these predictions to a scheduling action. No
-scheduler protocol or implementation is authorized.
-
-## 7. Interfaces, artifacts, and acceptance
-
-- Reuse the causal command evaluator; do not create another evaluator
-  framework.
-- Keep a narrow `PytestSignature` parser in its own module only if Phase B is
-  reached. Do not add agent-generated adapters, daemons, snapshots, runtime
-  integration, or new dependencies.
-- Extend the existing aggregate loader if Phase B needs command duration, raw
-  output, or clauses; do not add a second trace reader.
-- Emit one machine-readable result and the necessary row sidecar per phase,
-  and update the existing self-contained HTML summary.
-- Verify identical command IDs, labels, and availability across arms; require
-  non-target-tool PMFs to be bit-identical.
-- Preserve `observation.ts_end < query.ts_start`, task settlement before
-  learning, and the current latency/CPU/RSS/Disk compound-composition rules.
-- Add focused tests for pip order normalization and partial overlap. If Phase B
-  is reached, test invocation equivalence, options, selection-expression shape,
-  and fail-closed parsing.
-- Obtain one bounded independent review after each substantial evaluator/parser
-  phase and before its output becomes evidence.
-- Commit each completed phase, including a negative gate result. Do not run an
-  unrelated full suite.
-
-SQLGlot100 is development-exposed. SWE100/277 are not semantic-method evidence
-in this plan. Fresh-repository confirmation is deferred until the actionability
-gate yields a minimum useful effect and a task-cluster power/precision analysis
-justifies consuming it.
+Stop the route when time-resolved data is absent, the post-decision action space
+is too small, the hindsight upper bound is not useful, or the predictor does not
+improve the real action. A failed gate does not authorize changing the window,
+thresholds, corpus subset, or action costs after seeing results.
