@@ -221,6 +221,56 @@ target-specific similarity while latency is the only target.
 An open amendment is legitimate; an amendment described as pre-registration is
 not. Each entry records the date and what was visible when the criterion moved.
 
+### 2026-08-04 — semantic work-signature decision tree
+
+Visible before this amendment: every SQLGlot non-trie result and the completed
+pip semantic latency/resource transfer. Across 1,792 commands, Current latency
+was correct on 1,568 (87.500%) and both semantic-only and state-aware were
+correct on 1,571 (87.667%). On the 119-command pip subset, the corresponding
+counts were 97 (81.513%) and 100 (84.034%); five predictions changed, four
+helpfully and one harmfully. The paired task bootstrap interval for the overall
+delta crossed zero. CPU and RSS had no hard-prediction changes. Disk improved
+from 1,769/1,790 (98.827%) to 1,771/1,790 (98.939%); four pip predictions
+changed, three helpfully and one harmfully. Semantic-only and state-aware PMFs
+were identical for all targets. Fifteen commands used non-exact pip evidence.
+These are development-exposed observations, not confirmation.
+
+The earlier state-aware-primary stopping rule is openly amended because its
+failure does not distinguish simple order/shape normalization from partial
+package-set overlap. The next and only carrier audit adds a canonical-exact arm
+to the unchanged SQLGlot evaluator. Current, canonical exact, and Jaccard use
+identical rows, frozen public evidence, `alpha = 16`, task-final updates, and
+Current fallback. Canonical exact requires equality of normalized interpreter,
+invocation, flags, and the complete order-insensitive requirement set. State is
+report-only.
+
+Jaccard is selected only if it strictly exceeds canonical exact on both overall
+and pip accuracy, changed carriers are net helpful, and its net gain spans at
+least two tasks and two semantic signatures. Otherwise canonical exact is
+selected only if it satisfies the same criteria against Current. Otherwise the
+semantic-method route stops. No alpha, flag, support, or package-specific tuning
+is allowed.
+
+Only a selected pip representation may unlock the fixed second-tool test:
+exact semantic-signature matching for `pytest`, with a pre-label coverage gate
+of at least 100 parsed SWE277 pytest commands, 10 repositories, and 20
+non-exact commands with evidence. Its latency gate requires strict gains on the
+pytest subset and overall, net-helpful changes spanning at least two
+repositories, and bit-identical non-pytest PMFs. Resource transfer follows only
+after that gate and cannot change the representation.
+
+State collection is considered only if existing traces contain at least eight
+package sets with two execution modes across independent tasks, and a
+leave-one-task-out hindsight mode oracle nets at least ten hard-error fixes
+without concentration in one task or package set. The paired four-state pip
+intervention remains unapproved until a smoke and estimate are reported. Its
+frozen gate is at least 3/12 cross-state bucket transitions, at least five
+percentage points of leave-one-package-set-out accuracy gain, net-helpful
+changes, and probe p95 below 100 ms. Scheduler work remains deferred unless a
+named consumer would change action on at least 20 commands across at least 10
+tasks with explicit false/missed-action costs. CacheWise timeout is not a
+remaining-work proxy.
+
 ### 2026-08-04 — handwritten pip semantics after non-trie failure
 
 Visible before this amendment: every SQLGlot non-trie latency and gated-resource
