@@ -221,6 +221,52 @@ target-specific similarity while latency is the only target.
 An open amendment is legitimate; an amendment described as pre-registration is
 not. Each entry records the date and what was visible when the criterion moved.
 
+### 2026-08-04 — handwritten pip semantics after non-trie failure
+
+Visible before this amendment: every SQLGlot non-trie latency and gated-resource
+result; the last-20 case studies; and a bounded inspection of pip-install rows.
+That inspection found 119 eligible commands containing an actual parsed pip
+install clause, including 40 compound commands. Current was correct on 97/119
+and interaction-poset on 91/119. The full tool outputs roughly separated into
+102 downloads, 18 failures, and one cache-only execution. Order-normalizing the
+observed pip arguments collapsed 35 raw clause forms to 27 semantic forms. All
+of these numbers are development-exposed and may motivate or diagnose the next
+mechanism, not confirm it.
+
+The next development question is whether a handwritten, deterministic pip
+semantic representation plus causally prior task-container state can recover
+errors that generic argv interaction matching cannot. The primary candidate is
+Current with only non-exact pip clauses replaced by a semantic episodic match;
+all non-pip commands remain bit-identical to Current. A fixed semantic-only arm
+is an ablation and cannot replace a failed state-aware primary. Matching uses
+the normalized interpreter and invocation form, order-insensitive behavior
+flags, and Jaccard overlap of normalized requested package names. Repo-local
+weighted evidence is pooled with frozen cross-repo semantic pip evidence at the
+already selected `alpha = 16`; if semantic evidence is absent, Current is used.
+No package name may encode a resource outcome.
+
+Runtime state is reset per task and contains only facts available before the
+query: whether pip is known absent or present for an interpreter and packages
+known installed by earlier successful commands. Earlier tool results may update
+this query context immediately, but their latency/resource observations remain
+withheld from learning until successful whole-task finalization. A left-hand
+`apt-get install ... python3-pip` under `&&` may establish that pip is present
+conditional on the right-hand clause executing. Execution-mode labels parsed
+from the current command's output are hindsight-only diagnostics and never
+features.
+
+Run one causal SQLGlot-100 latency comparison in manifest task order. The
+state-aware primary passes only if it strictly improves both overall accuracy
+and the fixed 97/119 Current pip accuracy, has more helpful than harmful changes
+through non-exact semantic evidence, and leaves every non-pip prediction
+unchanged. Report paired task-cluster bootstrap uncertainty, but do not tune or
+select on it. Only after that gate passes may the unchanged representation be
+transferred to CPU, RSS, and Disk. A failure stops the experiment: do not tune
+weights, flags, support thresholds, state backoff, or package-specific rules.
+This experiment is offline and development-only; agent-generated adapters,
+online daemon integration, dependency resolution, and new collection are
+deferred.
+
 ### 2026-08-04 — two non-trie candidate architectures
 
 Visible before this amendment: the reportable SQLGlot 80/20 command baseline,
