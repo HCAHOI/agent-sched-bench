@@ -1,8 +1,8 @@
-# Clause Interaction KB — Query-Time Subset Matching Plan
+# Non-Trie Clause Interaction KB — SQLGlot Plan
 
-**Effective:** 2026-08-03  
-**Status:** development plan; no implementation or result claim yet  
-**Scope:** SWE-ReBench clause latency first; CPU, RSS, and Disk transfer only
+**Effective:** 2026-08-04
+**Status:** SQLGlot development plan; command baseline visible, no subset result yet
+**Scope:** SQLGlot command latency first; CPU, RSS, and Disk evaluation only
 after the latency mechanism passes
 
 This plan extends the representation-and-arbitration work in
@@ -12,7 +12,7 @@ single offline/online predictor contract.
 
 ## 1. Question
 
-The current KB can reuse an exact command, an ordered argv prefix, or a bare
+The current KB can reuse an exact clause, an ordered argv prefix, or a bare
 binary. Ordered prefix matching is a poor proxy for command semantics: two
 commands may share the interaction that matters even when an unrelated path or
 value appears between the matching arguments.
@@ -27,10 +27,11 @@ matching `{a, c}` and `{a, b}`:
 
 The current prefix chain can represent only one argv-order-dependent path.
 
-**Hypothesis:** within a repository, all shared argument interactions carry
-useful causal resource information beyond exact/prefix/bin matching. Computing
-those matches at query time can recover the signal without materializing an
-exponential subset lattice.
+**Hypothesis:** within a repository, shared argument interactions carry useful
+causal resource information beyond exact/prefix/bin matching. Compare two
+genuinely non-trie KB architectures: a materialized feature-set poset queried by
+its maximal interaction frontier, and an episodic observation memory queried by
+an all-subset kernel. The current trie is a control, not a candidate.
 
 ## 2. Candidate mechanism
 
@@ -51,11 +52,33 @@ so the representation remains a set without losing multiplicity. Raw paths,
 opaque IDs, secrets, timeouts, target labels, and post-execution measurements
 never become matching features.
 
-The existing exact-clause lookup remains a shared shortcut in every arm. The
-new method is consulted only after an exact miss, so the experiment isolates
-non-exact sharing.
+The normalized binary partitions candidate histories but is not counted as an
+interaction feature. Thus candidates may share arguments only within the same
+binary, while a history sharing no non-binary feature receives no local weight.
 
-### 2.2 All subset matches without a materialized lattice
+The existing exact-clause hash lookup remains a shared shortcut in every arm.
+Both non-trie methods are consulted only after an exact miss and never consult
+prefix or binary trie nodes.
+
+### 2.2 Architecture A — interaction-poset frontier
+
+Store observations under their complete typed non-binary feature set. Distinct
+feature sets are poset nodes ordered by strict set inclusion; a node owns only
+the observations inserted at that exact set.
+
+For query features `Q`, intersect `Q` with every causally visible node `H`, drop
+empty intersections, and collapse equal intersections. Retain the maximal
+intersection sets: an intersection `I` is on the frontier when no other
+observed intersection is a strict superset of `I`. Every observation owned by a
+node whose intersection lies on that frontier contributes once with uniform
+weight. Dominated weaker matches contribute nothing. This is a feature-set
+poset with a query-induced maximal frontier, not a prefix tree.
+
+Pool the resulting local empirical distribution with the frozen public PMF
+using `alpha = 16` and `n_eff = number of distinct contributing observations`.
+When the frontier is empty, return the public PMF.
+
+### 2.3 Architecture B — episodic all-subset kernel
 
 Store each causally visible historical observation once, with feature set
 `H`. For a query with feature set `Q`, let:
@@ -94,10 +117,13 @@ K_k(Q,H) numerator = sum(comb(m, j), j=1..min(k,m))
 ```
 
 for `k = 1, 2, 3`. These show whether the signal comes from individual
-features, pairs, or higher-order interactions. They are ablations, not
-alternative DVC candidates selected after seeing DVC results.
+features, pairs, or higher-order interactions. They are explanatory ablations,
+not alternatives that may replace a failed primary candidate. For each `k`,
+apply the same truncation to the query and history self-counts in the
+denominator; this preserves the length normalization rather than changing only
+the cross-term.
 
-### 2.3 Prediction and public evidence
+### 2.4 Prediction and public evidence
 
 For each class, sum the kernel weights of its causal repository-local
 observations and normalize them into `local_pmf`.
@@ -117,18 +143,28 @@ posterior = (n_eff * local_pmf + alpha * public_pmf)
 ```
 
 Use the already development-selected `alpha = 16`; do not tune another alpha
-on SQLGlot or DVC. When there is no non-binary match, return the public PMF.
+on SQLGlot. When there is no non-binary match, return the public PMF.
 
-This defines three required arms on identical rows:
+Compound commands require values rather than bucket IDs. Represent the same
+posterior as a weighted empirical value distribution: normalize local weights
+to total mass `n_eff`, give uniform public values total mass `alpha`, and use
+the canonical 256 deterministic stratified draws over its weighted CDF before
+shell-stage composition. An exact local shortcut remains its unweighted
+empirical distribution and does not pool public evidence. Single-clause PMFs
+are computed directly from weights without drawing.
+
+This defines three required predictor arms on identical rows, plus majority:
 
 1. **Current:** raw exact/prefix/bin hard first-hit backoff.
-2. **Prefix + pooling:** current prefix candidates with the same public PMF and
-   `alpha = 16` pooling.
+2. **Interaction poset + pooling:** maximal non-dominated shared feature sets,
+   with no prefix/bin trie lookup.
 3. **Subset kernel + pooling:** query-time all-subset matching with the same
    public PMF and `alpha = 16` pooling.
 
-Arm 3 versus Arm 2 isolates the value of non-prefix interactions. Arm 2 versus
-Arm 1 separately measures the value of pooling.
+Arms 2 and 3 are co-primary architectural alternatives. Compare each against
+Current and majority, and compare them directly to distinguish frontier
+selection from dense similarity weighting. A win by either does not erase the
+other result.
 
 ## 3. Data and causal protocol
 
@@ -140,38 +176,16 @@ spend this cohort. It cannot support a confirmation claim.
 
 Replay manifest order as a serialized deployment:
 
-1. predict every eligible clause in one task;
+1. predict every eligible command in one task from its parsed clauses;
 2. reveal none of that task's observations while the task is running;
 3. after successful task/trace finalization, release its eligible observations
    to later tasks.
 
-The public state is frozen before replay and excludes all SQLGlot and DVC
-observations. Every arm receives the same public state and the same ordered
-observation stream.
-
-### DVC72: frozen transfer
-
-Freeze the feature extraction, kernel, alpha, tie-breaking, and all decision
-criteria before reading DVC outcomes.
-
-Seven DVC task IDs already occur in the development-exposed SWE-100/277
-corpora:
-
-```text
-iterative__dvc-2254
-iterative__dvc-2462
-iterative__dvc-2866
-iterative__dvc-3405
-iterative__dvc-3727
-iterative__dvc-4108
-iterative__dvc-5822
-```
-
-Run all 72 tasks in their fixed order, but score the primary transfer result on
-the other 65 task IDs. The seven excluded IDs may contribute their newly
-collected observations to later tasks only after normal causal finalization.
-Describe the result as **fresh-task transfer within a development-known
-repository**, not untouched-repository confirmation.
+Reuse the frozen public input and filtering recorded by the current SQLGlot
+command baseline; it excludes the target repository. Every arm receives that
+same public state and the same ordered observation stream. Command latency truth
+is the matching tool-call duration. Clauses remain internal evidence and their
+empirical values are composed by the canonical shell execution graph.
 
 ## 4. Staged execution
 
@@ -183,11 +197,13 @@ in the active repository; do not build an index yet.
 Verify on a hand-checkable example that:
 
 - the closed-form kernel equals explicit subset enumeration;
+- the poset returns exactly the maximal non-dominated intersections;
 - option reordering matches while positional reordering does not;
 - one historical observation contributes once;
 - observations from the current, future, failed, or unfinalized task are
   invisible;
-- all arms score identical eligible row IDs and labels.
+- both candidates avoid every prefix/bin trie lookup;
+- all arms score identical eligible command IDs, labels, and availability.
 
 On SQLGlot, report without selecting a model:
 
@@ -196,64 +212,50 @@ On SQLGlot, report without selecting a model:
   `m >= 3`;
 - the number of distinct prior tasks contributing to each prediction;
 - effective sample size and warm-up position;
-- how often subset matching changes the current prediction;
-- a hindsight-only oracle over current versus subset prediction, clearly
-  marked unavailable at inference time.
+- how often each non-trie architecture changes the current command prediction;
+- a hindsight-only command oracle over current and both non-trie predictions,
+  clearly marked unavailable at inference time.
 
-Stop if non-prefix matches never change a prediction or the oracle cannot beat
-both current and the same-row majority baseline. That would show there is no
-decision-relevant signal to justify an index or runtime work.
+Stop if neither non-trie architecture changes a prediction through a non-exact
+match, or the three-way oracle cannot beat both current and the same-row
+majority baseline. That would show there is no decision-relevant signal to
+justify runtime work.
 
 ### Stage 1 — SQLGlot development decision
 
-Run the three required arms and the fixed `k = 1, 2, 3` ablations. The full
-all-subsets kernel is the primary candidate; bounded-order results explain the
-mechanism and cannot replace a failed primary result.
+Run the three required predictor arms and the fixed subset-kernel `k = 1, 2, 3`
+ablations. Poset and full all-subsets kernel are co-primary architectures;
+bounded-order results explain the kernel and cannot replace a failed full
+kernel.
 
 Report:
 
-- exact three-class latency accuracy, higher is better;
+- exact command-level three-class latency accuracy, higher is better;
 - same-row majority accuracy and 3x3 confusion matrix;
-- paired task-cluster uncertainty for Arm 3 minus Arms 1 and 2;
+- paired task-cluster uncertainty for each non-trie arm minus Current and for
+  their direct difference;
 - prediction changes split into helpful and harmful;
 - results by task-order quartile to expose warm-up behavior;
 - lookup p50/p95, peak evaluator memory, and stored observation count.
 
-Proceed only if the full kernel beats current, prefix + pooling, and majority
-on SQLGlot and the gain is actually carried by queries with non-prefix
-matches. Otherwise stop with a mechanism diagnosis; do not search feature
-weights, support thresholds, kernels, or argument parsers.
+Use a paired task-cluster percentile bootstrap with seed `0` and `2000` draws.
+A command is a non-exact carrier for an architecture when at least one clause
+uses positive-weight local evidence after an exact miss. Its carrier net gain
+is `helpful - harmful` among carrier commands whose hard prediction differs
+from Current.
 
-### Stage 2 — freeze and DVC transfer
+Proceed to resource evaluation for every non-trie architecture that beats both
+Current and majority on SQLGlot and whose net correctness gain is positive on
+commands changed through non-exact matches. Otherwise stop with a mechanism
+diagnosis; do not search feature weights, support thresholds, kernels, or
+argument parsers.
 
-Before opening DVC result labels, write the frozen result-affecting
-configuration into the SQLGlot result artifact. Then run exactly one DVC
-transfer evaluation.
+### Stage 2 — resource and systems evaluation
 
-The primary comparison is:
-
-```text
-accuracy(subset kernel + pooling) - accuracy(prefix + pooling)
-```
-
-GO requires:
-
-- the paired task-cluster 95% interval for the primary difference has lower
-  endpoint above zero;
-- the subset arm also exceeds current and same-row majority accuracy;
-- no arm changes eligible rows, labels, or prediction availability;
-- non-prefix matches are selected often enough to account for the observed
-  prediction changes.
-
-Report leave-one-task influence as a fragility diagnostic, not as an additional
-selection gate. A result dominated by one task must be described as fragile.
-
-### Stage 3 — resource and systems transfer
-
-Only after the latency GO, apply the frozen representation and matching rule to
-CPU, RSS, and Disk. Preserve their current independent Heavy/Light thresholds,
-short-null policy, rows, and labels. Do not retune the kernel or alpha per
-target.
+Only after the SQLGlot latency GO, apply the frozen representation and matching
+rule on the same command stream to CPU, RSS, and Disk. Preserve their current
+independent Heavy/Light thresholds, short-null policy, rows, and labels. Do not
+retune the kernel or alpha per target.
 
 Only after predictive evidence exists should implementation work address
 serving cost. Profile the slow evaluator first. If lookup cost matters, add the
@@ -270,9 +272,11 @@ out of scope.
   settlement before release.
 - Fit no vocabulary, parameter, or public state on the target repository's
   evaluation labels.
-- Keep offline replay and any eventual online path on the same
-  `ClauseResourceKB` semantics; no analysis-only winning implementation may be
-  described as deployable.
+- Keep command composition, public evidence, and causal replay identical across
+  arms. No analysis-only winning implementation may be described as deployable.
+- The two candidate predictors must not call or reconstruct exact/prefix/bin
+  trie backoff. Only the current control may consult it; exact hash lookup and
+  frozen public binary/global evidence are shared separately.
 - Put reusable evaluation logic in one existing evaluation module and one
   focused test. The test must cover closed-form versus enumerated subsets and
   the task-settlement boundary.
@@ -281,8 +285,8 @@ out of scope.
   approved cohort.
 - Obtain one bounded independent review of the evaluator and causal protocol
   before its output is used as scientific evidence.
-- Do not change `resource-agentd`, snapshots, persistence, or collection while
-  Stages 0–2 remain offline diagnostics.
+- Do not change `resource-agentd`, snapshots, persistence, or collection; all
+  stages in this plan are offline diagnostics, and no new collection is needed.
 
 ## 6. Outputs
 
@@ -293,6 +297,6 @@ analysis/results/tool-resource-clause-interactions-<date>/
 ```
 
 It should contain machine-readable SQLGlot development results, the frozen
-configuration, the single DVC transfer result, and only the figures needed to
-explain coverage, accuracy, warm-up, and cost. Rewrite this plan only when the
-protocol changes; preserve completed result artifacts unchanged.
+configuration, and only the figures needed to explain coverage, accuracy,
+warm-up, and cost. Rewrite this plan only when the protocol changes; preserve
+completed result artifacts unchanged.

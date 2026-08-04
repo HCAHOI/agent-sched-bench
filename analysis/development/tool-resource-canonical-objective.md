@@ -197,11 +197,12 @@ timestamps only to order sessions rather than represent historical concurrency.
 
 ### P2 — representation and arbitration
 
-Retain the trie only as a cheap candidate/backoff index. Introduce the minimum
-generic canonical signature justified by P1 diagnostics, then replace hard
-single-node repo-first selection with support-aware public/repo distribution
-shrinkage. Do not add ANN retrieval, a second model, or target-specific
-similarity while latency is the only target.
+Keep the current exact/prefix/binary trie only as the control. Evaluate at least
+two candidate KB architectures that do not consult trie prefix or binary nodes:
+an interaction-poset frontier over typed feature sets and an episodic
+all-subset-kernel memory. Both may share an exact-clause hash shortcut and the
+same frozen public prior. Do not add ANN retrieval, a neural model, or
+target-specific similarity while latency is the only target.
 
 ### Deferred
 
@@ -219,6 +220,21 @@ similarity while latency is the only target.
 
 An open amendment is legitimate; an amendment described as pre-registration is
 not. Each entry records the date and what was visible when the criterion moved.
+
+### 2026-08-04 — two non-trie candidate architectures
+
+Visible before this amendment: the reportable SQLGlot 80/20 command baseline,
+the current trie implementation, and the written subset-matching proposal. No
+interaction-poset or subset-kernel prediction result had been run or read.
+
+The human rejected an incremental trie candidate because a trie-based method is
+not a defensible research contribution for the intended presentation. The trie
+therefore remains only a control. The SQLGlot development experiment must
+implement and compare at least two candidates that never consult its prefix or
+binary nodes: (1) an interaction-poset frontier over shared typed feature sets,
+and (2) an episodic memory using the closed-form all-subset kernel. A shared
+exact-clause hash shortcut and frozen public prior are allowed because neither
+is a trie lookup. Candidate selection remains command-level and causal.
 
 ### 2026-08-04 — command-level evaluation and physical composition
 
