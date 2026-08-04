@@ -380,7 +380,7 @@ to rescue this result. A future study of history depth or hierarchical pooling
 would be a new, openly post-result hypothesis and would require a separately
 frozen method plus independent tasks; it cannot be tuned on these 199 events.
 
-## Frozen SQLGlot factorial KV mechanism diagnostic
+## SQLGlot factorial KV mechanism diagnostic
 
 Frozen 2026-08-04 after the SQLGlot48 natural-c2 and synthetic-c32 C100 results
 were visible, but before any KV-capacity simulation result on SQLGlot100 was
@@ -441,11 +441,47 @@ Protocol:
   eviction reduction. A smaller effect is a measured gap, not permission to
   change capacity, load, cluster count, split, or simulator.
 
-Any positive result justifies at most one separately approved live-GPU smoke.
-The simulator omits continuous batching, chunked prefill, transfer contention,
-cache-miss feedback, and exact vLLM block allocation. Therefore its latency
-output cannot be compared numerically with the paper's 2.7--3.5x end-to-end
-claim; the defensible comparison is block eviction under the frozen model.
+Result (2026-08-04): the frozen factorial gate did not pass. The authoritative
+artifact is
+`analysis/results/cachewise-sqlglot100-kv-factorial-20260804/result.json`.
+Means below are over 32 seeded 40-session schedules; lower is better for both
+block metrics.
+
+| Arm | Evicted blocks | Recomputed prefix blocks |
+|---|---:|---:|
+| FCFS + LRU | 56,075.28 | 56,075.25 |
+| Prefix + LRU | 0 | 0 |
+| FCFS + C100 | 6,973.47 | 6,923.94 |
+| Prefix + C100 | 0 | 0 |
+
+Observed evidence:
+
+- Prefix scheduling removed all modeled pressure in all 32 schedules. Its
+  paired eviction delta was -56,075.28 blocks (95% paired-seed bootstrap
+  interval -79,203.65 to -35,500.70).
+- C100 alone reduced mean eviction by 49,101.81 blocks (interval -69,864.78 to
+  -30,600.11), an 87.56% reduction or 8.04x fewer blocks than FCFS + LRU.
+- C100 added no benefit after prefix scheduling: the paired delta was exactly
+  zero in every schedule. The predeclared factorial gate therefore failed even
+  though each mechanism looked strong in isolation.
+
+Interpretation: this is not evidence that SQLGlot beats CacheWise. The zero is
+a ceiling in the serial fixed-service simulator: the prefix heuristic can keep
+choosing low-additional-block requests until inactive sessions shed suffixes,
+so no pressure remains for C100 to improve. CacheWise's live server retains
+continuous batching, overlapping decode, chunked prefill, and cache-miss
+feedback, where both mechanisms remain active. The defensible finding is that
+our offline model makes prefix scheduling unrealistically dominant and cannot
+measure the paper's complementary prefix + C100 effect or its 2.7--3.5x
+end-to-end latency result. Under the frozen decision rule, stop before live
+integration rather than treating the zero-eviction ceiling as success.
+
+Execution note: the first formal invocation stopped before writing an artifact
+because one combined-arm seed had zero evictions and the reporting code divided
+per-seed ratios. The reviewed fix computes the already-frozen point estimate as
+a ratio of means and paired-bootstraps that same statistic; it did not change
+the arms, schedules, primary metrics, or decision gate. The successful run was
+then executed once.
 
 ## Corrections retained from the prior loop
 
