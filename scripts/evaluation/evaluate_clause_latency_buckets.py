@@ -650,6 +650,7 @@ def _current_weighted_evidence(
 
 def _pip_composition_seed(
     command: str,
+    source: str,
     index: int,
     evidence: _WeightedClauseEvidence,
 ) -> str:
@@ -660,7 +661,7 @@ def _pip_composition_seed(
     else:
         scope = "repo+public" if evidence.nonexact_local else "public"
         key_kind = "pip_semantic_weighted_pool"
-    return f"{command}\0latency_ms\0{index}\0{scope}\0{key_kind}"
+    return f"{command}\0{source}\0{index}\0{scope}\0{key_kind}"
 
 
 def _predict_pip_latency_command(
@@ -747,7 +748,7 @@ def _predict_pip_latency_command(
             _weighted_stratified_draws(
                 item.values,
                 item.weights,
-                _pip_composition_seed(row.command, index, item),
+                _pip_composition_seed(row.command, "latency_ms", index, item),
             )
             for index, item in enumerate(evidence)
         )
@@ -785,6 +786,151 @@ def _predict_pip_latency_command(
         "state_fallback": state_fallback,
         "clauses": clause_diagnostics,
     }
+
+
+def _predict_pip_resources(
+    memories: Mapping[str, _PipSemanticKB],
+    current: ClauseResourceKB,
+    row: CommandRow,
+    parsed: Mapping[str, Any],
+    states: Sequence[PipQueryState | None],
+    current_predictions: Mapping[str, ClauseHeavyLightPrediction | None],
+    *,
+    use_state: bool,
+) -> tuple[dict[str, ClauseHeavyLightPrediction | None], dict[str, Any]]:
+    parsed_clauses = parsed.get("clauses", ())
+    query_clauses = _interaction_query_clauses(parsed_clauses)
+    signatures = tuple(parse_pip_install(clause.argv) for clause in query_clauses)
+    if not any(signature is not None for signature in signatures):
+        return dict(current_predictions), {
+            resource: {"carrier": False, "clauses": []}
+            for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS
+        }
+    stages = _command_stages(parsed_clauses)
+    if stages is None or len(states) != len(query_clauses):
+        raise ValueError(f"{row.call_id}: pip resource structure is unavailable")
+
+    predictions: dict[str, ClauseHeavyLightPrediction | None] = {}
+    diagnostics: dict[str, Any] = {}
+    for resource, threshold in CANONICAL_RESOURCE_HEAVY_THRESHOLDS.items():
+        current_prediction = current_predictions.get(resource)
+        if current_prediction is None:
+            predictions[resource] = None
+            diagnostics[resource] = {"carrier": False, "clauses": []}
+            continue
+        evidence: list[_WeightedClauseEvidence] = []
+        semantic_used = False
+        clause_diagnostics: list[dict[str, Any]] = []
+        for clause, signature, state in zip(
+            query_clauses, signatures, states, strict=True
+        ):
+            selected = current._select(row.repo, resource, clause.bin, clause.argv)
+            if selected is None:
+                raise ValueError(f"Current has no {resource} clause evidence")
+            if signature is None:
+                item = _current_weighted_evidence(selected)
+            else:
+                if state is None:
+                    raise AssertionError("pip clause has no causal query state")
+                item = memories[resource].query(
+                    clause,
+                    signature,
+                    state,
+                    use_state=use_state,
+                    current_selected=selected,
+                ).evidence
+                semantic_used |= item.key_kind.startswith("pip_semantic")
+            evidence.append(item)
+            clause_diagnostics.append(
+                {
+                    "pip": signature is not None,
+                    "exact": item.exact,
+                    "key_kind": item.key_kind,
+                    "local_observation_count": item.local_observation_count,
+                }
+            )
+        if not semantic_used:
+            predictions[resource] = current_prediction
+            diagnostics[resource] = {
+                "carrier": False,
+                "clauses": clause_diagnostics,
+            }
+            continue
+        if len(evidence) == 1:
+            total = sum(evidence[0].weights)
+            probability_heavy = sum(
+                weight
+                for value, weight in zip(
+                    evidence[0].values,
+                    evidence[0].weights,
+                    strict=True,
+                )
+                if value > threshold
+            ) / total
+        else:
+            draws = tuple(
+                _weighted_stratified_draws(
+                    item.values,
+                    item.weights,
+                    _pip_composition_seed(row.command, resource, index, item),
+                )
+                for index, item in enumerate(evidence)
+            )
+            composed = tuple(
+                (
+                    sum(
+                        sum(draws[index][draw] for index in stage)
+                        for stage in stages
+                    )
+                    if resource == "disk_read_write_bytes_total"
+                    else max(
+                        sum(draws[index][draw] for index in stage)
+                        for stage in stages
+                    )
+                )
+                for draw in range(COMMAND_COMPOSITION_DRAWS)
+            )
+            probability_heavy = sum(value > threshold for value in composed) / len(
+                composed
+            )
+        local_counts = [item.local_observation_count for item in evidence]
+        public_counts = [
+            len(item.values) - item.local_observation_count for item in evidence
+        ]
+        predictions[resource] = ClauseHeavyLightPrediction(
+            resource=resource,
+            threshold=threshold,
+            probability_heavy=probability_heavy,
+            heavy_decision_threshold=DEFAULT_HEAVY_DECISION_THRESHOLD,
+            label=(
+                "heavy"
+                if probability_heavy > DEFAULT_HEAVY_DECISION_THRESHOLD
+                else "light"
+            ),
+            scope="repo+public" if any(local_counts) else "public",
+            key_kind=(
+                evidence[0].key_kind
+                if len(evidence) == 1
+                else "shell_execution_graph"
+            ),
+            evidence_count=min(len(item.values) for item in evidence),
+            fallback_path=tuple(
+                f"clause[{index}]:{item.key_kind}"
+                for index, item in enumerate(evidence)
+            ),
+            canonicalizer_version=PIP_SEMANTIC_FEATURE_VERSION,
+            arbitration="current-or-pip-semantic-jaccard-v1",
+            local_key_kind="pip_semantic" if any(local_counts) else None,
+            local_evidence_count=min(local_counts),
+            public_key_kind="pip_semantic",
+            public_evidence_count=min(public_counts),
+            shrinkage_alpha=INTERACTION_ALPHA,
+        )
+        diagnostics[resource] = {
+            "carrier": True,
+            "clauses": clause_diagnostics,
+        }
+    return predictions, diagnostics
 
 
 def _candidate_clause_evidence(
@@ -3063,6 +3209,377 @@ def evaluate_pip_semantics(
                 ),
             },
         },
+    }
+    return result, sidecar
+
+
+def evaluate_pip_resources(
+    public_rows: Sequence[Row],
+    task_ids: Sequence[str],
+    clause_rows: Sequence[Row],
+    command_rows: Sequence[CommandRow],
+    events_by_task: Mapping[str, Sequence[PipExecEvent]],
+    provenance: Mapping[str, Any],
+    latency_gate: Mapping[str, Any],
+    *,
+    expected_pip_baseline: tuple[int, int] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Transfer the latency-gated pip representation to the resource targets."""
+
+    if len(set(task_ids)) != len(task_ids) or len(
+        {repo_of(task_id) for task_id in task_ids}
+    ) != 1:
+        raise ValueError("pip resource evaluation requires unique tasks from one repo")
+    target_repo = repo_of(task_ids[0])
+    if any(row.repo == target_repo for row in public_rows):
+        raise ValueError("public evidence contains the target repository")
+    task_index = {task_id: index for index, task_id in enumerate(task_ids)}
+    if list(events_by_task) != list(task_ids) or any(
+        row.task_id not in task_index
+        or row.manifest_index != task_index[row.task_id]
+        for row in (*clause_rows, *command_rows)
+    ):
+        raise ValueError("target rows or raw events differ from accepted task order")
+    public = tuple(
+        row
+        for row in public_rows
+        if row.structure_known and row.pipeline_position <= 0
+    )
+    gate_inputs = latency_gate.get("inputs")
+    gate_counts = latency_gate.get("counts")
+    gate_protocol = latency_gate.get("protocol")
+    gate_identity = latency_gate.get("row_identity")
+    required_input_keys = (
+        "target_run_dir",
+        "public_telemetry",
+        "public_excluded_repositories",
+        "public_clause_observations_before_repo_filter",
+        "public_clause_observations_after_repo_filter",
+        "public_online_eligible_clause_observations",
+    )
+    target_pip_commands = sum(
+        any(
+            parse_pip_install(clause.get("argv", ())) is not None
+            for clause in parse_command_clauses(row.command)["clauses"]
+        )
+        for row in command_rows
+    )
+    baseline_gate = latency_gate.get("gates", {}).get(
+        "baseline_reconciliation", {}
+    )
+    gate_matches = (
+        latency_gate.get("status") == "development_exposed_pip_latency_go"
+        and latency_gate.get("objective")
+        == "command_latency_pip_semantic_state_comparison"
+        and isinstance(gate_inputs, Mapping)
+        and all(gate_inputs.get(key) == provenance.get(key) for key in required_input_keys)
+        and isinstance(gate_counts, Mapping)
+        and gate_counts.get("tasks") == len(task_ids)
+        and gate_counts.get("commands") == len(command_rows)
+        and gate_counts.get("target_online_clause_observations") == len(clause_rows)
+        and gate_counts.get("public_online_clause_observations") == len(public)
+        and gate_counts.get("pip_commands") == target_pip_commands
+        and isinstance(gate_protocol, Mapping)
+        and all(
+            gate_protocol.get(key) == value
+            for key, value in {
+                "evaluation_unit": "eligible_exec_command",
+                "causal_update": "KB observations settle only after whole task",
+                "state_information": "raw outputs of earlier exec calls in the same task",
+                "pip_partition": "interpreter, invocation, normalized flags",
+                "pip_similarity": "Jaccard over normalized package names",
+                "pooling_alpha": INTERACTION_ALPHA,
+                "exact_shortcut": "repository-local exact argv",
+                "semantic_ablation": "same matching without availability or remaining-package state",
+                "compound_composition": "weighted-empirical-shell-graph-v1",
+                "weighted_composition_draws": COMMAND_COMPOSITION_DRAWS,
+            }.items()
+        )
+        and isinstance(gate_identity, Mapping)
+        and gate_identity.get("identical_command_ids_labels_and_availability") is True
+        and gate_identity.get("nonpip_probability_vectors_bit_identical") is True
+        and baseline_gate.get("pass") is True
+        and baseline_gate.get("observed", {}).get("pip_commands")
+        == target_pip_commands
+        and (
+            expected_pip_baseline is None
+            or baseline_gate.get("expected")
+            == {
+                "pip_commands": expected_pip_baseline[0],
+                "current_correct": expected_pip_baseline[1],
+            }
+            and baseline_gate.get("observed")
+            == {
+                "pip_commands": expected_pip_baseline[0],
+                "current_correct": expected_pip_baseline[1],
+            }
+        )
+        and latency_gate.get("gates", {}).get("latency", {}).get("go") is True
+        and latency_gate.get("gates", {}).get("resource_evaluation", {}).get("go")
+        is True
+    )
+    if not gate_matches:
+        raise ValueError("pip latency GO does not match this resource replay")
+
+    current = ClauseResourceKB.fit_public(
+        row.observation(0.0, 1.0) for row in public
+    )
+    memories = {
+        resource: _PipSemanticKB(
+            [
+                replace(row, latency_ms=value)
+                for row in public
+                if (value := _row_resource_value(row, resource)) is not None
+            ]
+        )
+        for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS
+    }
+    clauses_by_task: dict[str, list[Row]] = defaultdict(list)
+    commands_by_task: dict[str, list[CommandRow]] = defaultdict(list)
+    for row in clause_rows:
+        clauses_by_task[row.task_id].append(row)
+    for row in command_rows:
+        commands_by_task[row.task_id].append(row)
+
+    arms = ("current", "pip_semantic", "pip_semantic_state")
+    raw = {
+        resource: {
+            "all": {
+                "label_sources": Counter(),
+                "arms": {arm: _empty_confusion() for arm in arms},
+            },
+            "pip": {
+                "label_sources": Counter(),
+                "arms": {arm: _empty_confusion() for arm in arms},
+            },
+        }
+        for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS
+    }
+    sidecar: list[dict[str, Any]] = []
+    for ordinal, task_id in enumerate(task_ids):
+        query_ts = float(ordinal * 2 + 3)
+        events = tuple(events_by_task[task_id])
+        contexts = _pip_contexts_by_call(events)
+        event_by_call = {event.call_id: event for event in events}
+        if len(event_by_call) != len(events):
+            raise ValueError(f"{task_id}: duplicate raw exec call id")
+        settled_semantic: list[
+            tuple[Row, PipInstallSignature, PipQueryState]
+        ] = []
+        for row in commands_by_task[task_id]:
+            event = event_by_call.get(row.call_id)
+            if event is None or event.command != row.command:
+                raise ValueError(f"{row.call_id}: eligible command lacks raw output")
+            parsed = parse_command_clauses(row.command)
+            current_result = current.predict_command_resource_classes_from_clauses(
+                row.repo,
+                parsed["clauses"],
+                query_ts,
+                command=row.command,
+                parse_failed=bool(parsed["parse_failed"]),
+            )
+            states = contexts[row.call_id]
+            predictions: dict[
+                str, Mapping[str, ClauseHeavyLightPrediction | None]
+            ] = {"current": current_result.classifications}
+            arm_diagnostics: dict[str, Mapping[str, Any]] = {}
+            for arm, use_state in (
+                ("pip_semantic", False),
+                ("pip_semantic_state", True),
+            ):
+                predictions[arm], arm_diagnostics[arm] = _predict_pip_resources(
+                    memories,
+                    current,
+                    row,
+                    parsed,
+                    states,
+                    current_result.classifications,
+                    use_state=use_state,
+                )
+            pip_command = any(
+                parse_pip_install(clause.get("argv", ())) is not None
+                for clause in parsed["clauses"]
+            )
+            labels: dict[str, bool | None] = {}
+            sources: dict[str, str] = {}
+            arm_values: dict[str, dict[str, Any]] = {arm: {} for arm in arms}
+            for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS:
+                label, source = command_resource_label(row, resource)
+                labels[resource] = label
+                sources[resource] = source
+                groups = ("all", "pip") if pip_command else ("all",)
+                for group in groups:
+                    raw[resource][group]["label_sources"][source] += 1
+                current_prediction = predictions["current"].get(resource)
+                for arm in arms:
+                    prediction = predictions[arm].get(resource)
+                    if (prediction is None) != (current_prediction is None):
+                        raise AssertionError(
+                            f"{arm} changed {resource} prediction availability"
+                        )
+                    if label is not None:
+                        for group in groups:
+                            _record_resource_prediction(
+                                raw[resource][group]["arms"][arm],
+                                label,
+                                prediction,
+                            )
+                    arm_values[arm][resource] = {
+                        "prediction": None if prediction is None else prediction.label,
+                        "probability_heavy": (
+                            None if prediction is None else prediction.probability_heavy
+                        ),
+                        "carrier": (
+                            False
+                            if arm == "current"
+                            else arm_diagnostics[arm][resource]["carrier"]
+                        ),
+                    }
+            sidecar.append(
+                {
+                    "sample_id": (
+                        f"{row.task_id}:{row.manifest_index}:call:{row.call_index}"
+                    ),
+                    "task_id": row.task_id,
+                    "task_ordinal": ordinal,
+                    "call_id": row.call_id,
+                    "command": row.command,
+                    "pip_command": pip_command,
+                    "resource_labels": labels,
+                    "resource_label_sources": sources,
+                    "arms": arm_values,
+                }
+            )
+            settled_semantic.extend(_settled_pip_observations(row, states))
+        settle_ts = query_ts + 0.5
+        for row in clauses_by_task[task_id]:
+            current.observe_completed_clause(row.observation(query_ts, settle_ts))
+        for row, signature, state in settled_semantic:
+            for resource, memory in memories.items():
+                value = _row_resource_value(row, resource)
+                if value is not None:
+                    memory.observe(
+                        task_id,
+                        replace(row, latency_ms=value),
+                        signature,
+                        state,
+                    )
+
+    resources: dict[str, Any] = {}
+    nonpip_identical = True
+    for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS:
+        group_metrics: dict[str, Any] = {}
+        for group in ("all", "pip"):
+            current_metric = _finalize_resource_metric(
+                raw[resource][group]["arms"]["current"],
+                raw[resource][group]["label_sources"],
+            )
+            group_metrics[group] = {
+                "majority": {
+                    "class": current_metric["majority_class"],
+                    "accuracy": (
+                        None
+                        if current_metric["eligible_n"] == 0
+                        else max(
+                            current_metric["heavy_count"],
+                            current_metric["eligible_n"]
+                            - current_metric["heavy_count"],
+                        )
+                        / current_metric["eligible_n"]
+                    ),
+                },
+                "arms": {
+                    arm: _finalize_resource_metric(
+                        raw[resource][group]["arms"][arm],
+                        raw[resource][group]["label_sources"],
+                    )
+                    for arm in arms
+                },
+            }
+        changes: dict[str, Any] = {}
+        for arm in arms[1:]:
+            counts = Counter()
+            for row in sidecar:
+                label = row["resource_labels"][resource]
+                if label is None:
+                    continue
+                current_label = row["arms"]["current"][resource]["prediction"]
+                candidate_label = row["arms"][arm][resource]["prediction"]
+                if current_label == candidate_label:
+                    continue
+                outcome = (
+                    "helpful"
+                    if (candidate_label == "heavy") == label
+                    else "harmful"
+                    if (current_label == "heavy") == label
+                    else "neutral"
+                )
+                counts["changed"] += 1
+                counts[outcome] += 1
+                if row["arms"][arm][resource]["carrier"]:
+                    counts["carrier_changed"] += 1
+                    counts[f"carrier_{outcome}"] += 1
+            changes[arm] = {
+                key: counts[key]
+                for key in (
+                    "changed",
+                    "helpful",
+                    "harmful",
+                    "neutral",
+                    "carrier_changed",
+                    "carrier_helpful",
+                    "carrier_harmful",
+                    "carrier_neutral",
+                )
+            }
+        resources[resource] = {
+            "threshold": CANONICAL_RESOURCE_HEAVY_THRESHOLDS[resource],
+            "direction": "higher accuracy is better",
+            **group_metrics,
+            "prediction_changes": changes,
+        }
+        nonpip_identical &= all(
+            row["arms"][arm][resource]["probability_heavy"]
+            == row["arms"]["current"][resource]["probability_heavy"]
+            for row in sidecar
+            if not row["pip_command"]
+            for arm in arms[1:]
+        )
+
+    result = {
+        "status": "development_exposed_pip_resource_transfer",
+        "claim_bearing": False,
+        "objective": "command_resource_pip_semantic_state_comparison",
+        "inputs": {
+            **dict(provenance),
+            "latency_gate_status": latency_gate.get("status"),
+        },
+        "protocol": {
+            "evaluation_unit": "eligible_exec_command",
+            "latency_gate_required": True,
+            "representation": "unchanged pip semantic Jaccard with alpha 16",
+            "causal_update": "KB observations settle only after whole task",
+            "resource_truth": "strict command bounds from retained clause aggregates",
+            "compound_composition": "pipeline sum then sequential max for CPU/RSS; additive Disk",
+        },
+        "counts": {
+            "tasks": len(task_ids),
+            "commands": len(command_rows),
+            "pip_commands": sum(row["pip_command"] for row in sidecar),
+            "target_online_clause_observations": len(clause_rows),
+            "public_online_clause_observations": len(public),
+            "stored_target_pip_observations_by_resource": {
+                resource: memory.observation_count
+                for resource, memory in memories.items()
+            },
+        },
+        "row_identity": {
+            "identical_command_ids_labels_and_availability": True,
+            "nonpip_probability_vectors_bit_identical": nonpip_identical,
+            "unique_sample_ids": len({row["sample_id"] for row in sidecar})
+            == len(sidecar),
+        },
+        "resources": resources,
     }
     return result, sidecar
 

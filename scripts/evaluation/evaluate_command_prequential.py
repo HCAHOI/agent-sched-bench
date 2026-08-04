@@ -15,6 +15,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 from scripts.evaluation.evaluate_clause_latency_buckets import (  # noqa: E402
     PipExecEvent,
     evaluate_interaction_commands,
+    evaluate_pip_resources,
     evaluate_pip_semantics,
     evaluate_poset_resources,
     evaluate_prequential_commands,
@@ -95,6 +96,11 @@ def main() -> None:
         action="store_true",
         help="score the frozen pip semantic and task-state latency arms",
     )
+    parser.add_argument(
+        "--pip-resources-after-latency",
+        type=Path,
+        help="transfer pip semantics when this matching latency result passed",
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--dump-rows", type=Path, required=True)
     args = parser.parse_args()
@@ -134,6 +140,7 @@ def main() -> None:
             args.interaction_architectures,
             args.poset_resources_after_latency,
             args.pip_semantics,
+            args.pip_resources_after_latency,
         )
     )
     if selected_modes > 1:
@@ -164,6 +171,18 @@ def main() -> None:
             commands,
             _load_exec_events(args.run_dir, task_ids),
             provenance,
+            expected_pip_baseline=(119, 97),
+        )
+    elif args.pip_resources_after_latency:
+        gate_path = args.pip_resources_after_latency.resolve()
+        result, rows = evaluate_pip_resources(
+            public,
+            task_ids,
+            clauses,
+            commands,
+            _load_exec_events(args.run_dir, task_ids),
+            {**provenance, "latency_gate_result": str(gate_path)},
+            json.loads(gate_path.read_text(encoding="utf-8")),
             expected_pip_baseline=(119, 97),
         )
     else:

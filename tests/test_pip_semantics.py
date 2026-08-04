@@ -1,10 +1,23 @@
+from dataclasses import replace
+
+import pytest
+
 from scripts.evaluation.evaluate_clause_latency_buckets import (
+    _PipSemanticKB,
     PipExecEvent,
     _pip_contexts_by_call,
+    _predict_pip_resources,
+    _row_resource_value,
+    evaluate_pip_resources,
     evaluate_pip_semantics,
 )
 from scripts.evaluation.evaluate_clause_resource_classes import CommandRow, Row
-from tool_resource.pip_semantics import PipTaskState, parse_pip_install
+from tool_resource.clause_parser import parse_command_clauses
+from tool_resource.pip_semantics import PipQueryState, PipTaskState, parse_pip_install
+from tool_resource.runtime_kb import (
+    CANONICAL_RESOURCE_HEAVY_THRESHOLDS,
+    ClauseResourceKB,
+)
 
 
 def test_pip_signature_and_causal_task_state() -> None:
@@ -101,3 +114,131 @@ def test_pip_evaluator_preserves_rows_and_task_boundaries() -> None:
     )
     assert result["case_study"]["pip_execution_modes"]["success_cache_only"]["commands"] == 2
     assert len(sidecar) == len(commands)
+
+    def with_resources(row: Row) -> Row:
+        heavy = row.latency_ms > 8000.0
+        return replace(
+            row,
+            peak_cpu_cores=3.0 if heavy else 1.0,
+            sampled_peak_rss_mb=600.0 if heavy else 100.0,
+            disk_read_write_bytes_total=200_000_000.0 if heavy else 1.0,
+        )
+
+    resource_public = [with_resources(row) for row in public]
+    resource_clauses = [with_resources(row) for row in clauses]
+    by_original_id = {
+        id(original): updated
+        for original, updated in zip(clauses, resource_clauses, strict=True)
+    }
+    resource_commands = [
+        replace(
+            command,
+            clauses=tuple(by_original_id[id(clause)] for clause in command.clauses),
+        )
+        for command in commands
+    ]
+    result["status"] = "development_exposed_pip_latency_go"
+    result["gates"]["latency"]["go"] = True
+    result["gates"]["resource_evaluation"]["go"] = True
+    resource_result, resource_sidecar = evaluate_pip_resources(
+        resource_public,
+        task_ids,
+        resource_clauses,
+        resource_commands,
+        events,
+        {},
+        result,
+    )
+    assert resource_result["row_identity"][
+        "nonpip_probability_vectors_bit_identical"
+    ]
+    assert len(resource_sidecar) == len(commands)
+    assert all(
+        metric["all"]["arms"]["current"]["eligible_n"] == len(commands)
+        for metric in resource_result["resources"].values()
+    )
+    assert any(
+        row["arms"]["pip_semantic"][resource]["probability_heavy"]
+        != row["arms"]["pip_semantic_state"][resource]["probability_heavy"]
+        for row in resource_sidecar
+        for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS
+    )
+    with pytest.raises(ValueError, match="latency GO"):
+        evaluate_pip_resources(
+            resource_public,
+            task_ids,
+            resource_clauses,
+            resource_commands,
+            events,
+            {"target_run_dir": "wrong"},
+            result,
+        )
+
+
+def test_pip_resource_compound_physics_and_short_null() -> None:
+    public = [
+        Row("public__repo-1", "public__repo", 0, "python3", ("python3", "-m", "pip", "install", package), 1000.0, 1.1, 300.0, 60_000_000.0)
+        for package in ("alpha", "beta")
+    ]
+    current = ClauseResourceKB.fit_public(
+        row.observation(0.0, 1.0) for row in public
+    )
+    memories = {
+        resource: _PipSemanticKB(
+            [replace(row, latency_ms=getattr(row, resource)) for row in public]
+        )
+        for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS
+    }
+
+    def predict(command: str) -> dict[str, str | None]:
+        parsed = parse_command_clauses(command)
+        row = CommandRow(
+            "target__repo-1",
+            "target__repo",
+            0,
+            0,
+            "call_compound",
+            command,
+            1000.0,
+            tuple(public),
+        )
+        baseline = current.predict_command_resource_classes_from_clauses(
+            row.repo,
+            parsed["clauses"],
+            3.0,
+            command=command,
+        )
+        predictions, _diagnostics = _predict_pip_resources(
+            memories,
+            current,
+            row,
+            parsed,
+            (PipQueryState("unknown", ("alpha",)), PipQueryState("unknown", ("beta",))),
+            baseline.classifications,
+            use_state=True,
+        )
+        return {
+            resource: None if prediction is None else prediction.label
+            for resource, prediction in predictions.items()
+        }
+
+    pipeline = predict(
+        "python3 -m pip install alpha | python3 -m pip install beta"
+    )
+    sequential = predict(
+        "python3 -m pip install alpha && python3 -m pip install beta"
+    )
+    assert pipeline == {
+        "peak_cpu_cores": "heavy",
+        "sampled_peak_rss_mb": "heavy",
+        "disk_read_write_bytes_total": "heavy",
+    }
+    assert sequential == {
+        "peak_cpu_cores": "light",
+        "sampled_peak_rss_mb": "light",
+        "disk_read_write_bytes_total": "heavy",
+    }
+    assert _row_resource_value(
+        replace(public[0], latency_ms=100.0, sampled_peak_rss_mb=None),
+        "sampled_peak_rss_mb",
+    ) == 0.0
