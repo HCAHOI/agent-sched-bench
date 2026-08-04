@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Semantic Work Signature · Phase A</title>
+<style>
+:root{--bg:#07131f;--panel:#102337;--panel2:#0b1b2b;--ink:#eef7ff;--muted:#9fb4c8;--line:#2a4963;--cyan:#4bdbc9;--blue:#79b5ff;--amber:#ffc86a;--red:#ff8995}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 85% 0,#173d59 0,transparent 30%),linear-gradient(155deg,#07131f,#091b2a 62%,#07131f);color:var(--ink);font:15px/1.5 "Noto Sans CJK SC",Inter,system-ui,sans-serif}main{width:min(1420px,calc(100% - 48px));margin:auto;padding:38px 0 64px}h1{font-size:42px;line-height:1.12;letter-spacing:-.03em;margin:8px 0 12px}h2{font-size:24px;margin:0 0 14px}h3{font-size:17px;margin:0 0 7px}p{color:var(--muted);margin:7px 0}.eyebrow{color:var(--cyan);font-size:12px;font-weight:800;letter-spacing:.13em;text-transform:uppercase}.lede{font-size:19px;max-width:1120px}.grid{display:grid;gap:16px}.cards{grid-template-columns:repeat(4,1fr);margin:26px 0 20px}.two{grid-template-columns:1fr 1fr}.card,.section{background:linear-gradient(180deg,rgba(16,35,55,.98),rgba(11,27,43,.98));border:1px solid var(--line);border-radius:16px;box-shadow:0 14px 34px rgba(0,0,0,.18)}.card{padding:18px}.card span{color:var(--muted);font-size:12px}.card b{display:block;font-size:28px;line-height:1.15;margin:5px 0}.section{padding:22px;margin:16px 0}.flow{display:flex;gap:9px;align-items:stretch}.node{flex:1;padding:14px;background:#081827;border:1px solid var(--line);border-radius:12px}.node.selected{border-color:var(--cyan);background:rgba(75,219,201,.06)}.arrow{align-self:center;color:var(--cyan);font-size:22px}.tag{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:3px 9px;color:var(--muted);font-size:11px;margin:3px 2px 0 0}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:10px 9px;border-bottom:1px solid rgba(42,73,99,.72);text-align:right;vertical-align:middle}th:first-child,td:first-child{text-align:left}thead th{color:#b8cada;font-size:11px;text-transform:uppercase;letter-spacing:.045em}tbody th{font-weight:700}.selected-row{background:rgba(75,219,201,.055)}.metric{font-weight:800;color:#fff}.pos{color:var(--cyan);font-weight:800}.neg{color:var(--red);font-weight:800}.zero{color:var(--muted)}small{display:block;color:var(--muted);font-size:10.5px}.callout{border-left:4px solid var(--amber);padding:12px 15px;background:rgba(255,200,106,.07);border-radius:0 10px 10px 0}.callout.good{border-color:var(--cyan);background:rgba(75,219,201,.065)}ul{padding-left:20px;margin:8px 0}li{color:var(--muted);margin:6px 0}li::marker{color:var(--cyan)}.bar{display:grid;grid-template-columns:180px 1fr 80px;gap:10px;align-items:center;margin:11px 0}.track{height:12px;background:#07131f;border-radius:8px;overflow:hidden}.fill{height:100%;background:linear-gradient(90deg,var(--blue),var(--cyan));border-radius:8px}.sources{font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#7893aa;overflow-wrap:anywhere}.verdict{font-size:21px;color:#fff}footer{text-align:center;color:#7893aa;font-size:11px;margin-top:22px}@media(max-width:900px){main{width:calc(100% - 24px)}.cards,.two{grid-template-columns:1fr}.flow{flex-direction:column}.arrow{transform:rotate(90deg)}.tablewrap{overflow-x:auto}}
+</style></head><body><main>
+<div class="eyebrow">SQLGlot100 · Phase A · development-exposed</div>
+<h1>pip 的收益来自 package-set overlap，<br>不是简单的参数归一化。</h1>
+<p class="lede">在相同的 100 个 task、1,792 个 command 上，canonical-exact 比 Current 少对 2 个；Jaccard 比 canonical-exact 多对 5 个，并满足预先冻结的 task/signature 分散 gate。因此 Phase A 选择 Jaccard，解锁第二个工具与 state 可辨识性审计。</p>
+
+<div class="grid cards">
+ <div class="card"><span>统一评估行</span><b>1,792</b><p>119 pip · 1,673 non-pip</p></div>
+ <div class="card"><span>Canonical vs Current</span><b class="neg">−2 correct</b><p>87.500% → 87.388%</p></div>
+ <div class="card"><span>Jaccard vs Canonical</span><b class="pos">+5 correct</b><p>7 carrier changes：6 helpful / 1 harmful</p></div>
+ <div class="card"><span>Gate 的独立覆盖</span><b class="pos">6 tasks · 5 keys</b><p>均为 positive-net groups</p></div>
+</div>
+
+<section class="section"><h2>三个 arm 只改变“什么算同一份工作”</h2><div class="flow">
+ <div class="node"><h3>Current · control</h3><p>raw exact → argv prefix → binary → frozen public</p><span class="tag">原始参数</span><span class="tag">task-final update</span></div><div class="arrow">→</div>
+ <div class="node"><h3>Canonical exact</h3><p>interpreter、invocation、flags 与完整 requirements 全相等；package 顺序可交换。</p><span class="tag">10 carriers</span><span class="tag">alpha = 16</span></div><div class="arrow">→</div>
+ <div class="node selected"><h3>Jaccard package overlap · selected</h3><p>相同 invocation/flags 内，按 normalized package-name overlap 加权。</p><span class="tag">15 carriers</span><span class="tag">6 tasks / 5 signatures</span></div>
+</div><p>三臂使用同一 public corpus、相同 alpha、相同 causal task settlement 与相同 command rows。无合格 semantic evidence 时回退 Current；所有非 pip PMF 逐位相同。</p></section>
+
+<section class="section"><h2>预注册 gate 的直接输入：accuracy 越高越好</h2><div class="tablewrap"><table><thead><tr><th>范围</th><th>Majority</th><th>Current</th><th>Canonical exact</th><th>Jaccard</th><th>State report-only</th></tr></thead><tbody>
+ <tr><th>全部 commands<small>n = 1,792</small></th><td>77.734%</td><td class="metric">87.500%<small>1,568 correct</small></td><td class="neg">87.388%<small>1,566 correct</small></td><td class="pos">87.667%<small>1,571 correct</small></td><td>87.667%</td></tr>
+ <tr class="selected-row"><th>pip commands<small>n = 119</small></th><td>64.706%</td><td class="metric">81.513%<small>97 correct</small></td><td class="neg">79.832%<small>95 correct</small></td><td class="pos">84.034%<small>100 correct</small></td><td>84.034%</td></tr>
+</tbody></table></div><p>Phase A 选择不依赖 state。State 与 Jaccard 在全部目标上的 PMF 仍完全相同，仅作为既有结果报告。</p></section>
+
+<div class="grid two"><section class="section"><h2>为什么不是 canonicalization story</h2>
+ <div class="bar"><span>Canonical − Current</span><div class="track"><div class="fill" style="width:33%;background:var(--red)"></div></div><b class="neg">1 H / 3 A</b></div>
+ <div class="bar"><span>Jaccard − Canonical</span><div class="track"><div class="fill" style="width:86%"></div></div><b class="pos">6 H / 1 A</b></div>
+ <p>Canonical exact 只修复 package 顺序与表面 invocation 碎片，但净损失 2 个正确预测，且正收益仅来自 1 个 task、1 个 signature。Jaccard 的部分集合复用产生净 +5，并跨 6 个 task、5 个 signature。</p>
+ <div class="callout good"><b>Observed：</b><p>按冻结 gate，Jaccard 在 overall 和 pip accuracy 上均严格高于 canonical；carrier helpful &gt; harmful；分散性两个阈值都通过。</p></div>
+ </section><section class="section"><h2>Carrier audit 可逐行追溯</h2>
+ <ul><li>row sidecar 共 1,792 行，其中 119 行标记为 pip command。</li><li>15 个 Jaccard non-exact carriers 全部记录 normalized signature、Current/canonical/Jaccard hard prediction、label 与 helpful/harmful。</li><li>每个 semantic clause 记录 local/public observation ID、task、manifest index、signature、观测值、similarity weight 和 pooled weight。</li><li>compound command 若不能唯一归因到一个 semantic clause，不计入“两种 signature”gate；本次没有这种未归因 carrier。</li></ul>
+ <div class="callout"><b>Inference：</b><p>当前证据支持“部分 package-set overlap 有用”，但效果只有 5 个净修正且仍来自单一 repo/tool；它还不是泛化或 scheduling claim。</p></div>
+ </section></div>
+
+<section class="section"><h2>既有资源迁移：只有 Disk 有 hard-decision 变化</h2><div class="tablewrap"><table><thead><tr><th>目标</th><th>Eligible n</th><th>Majority</th><th>Current</th><th>Selected Jaccard</th><th>变化</th></tr></thead><tbody>
+ <tr><th>Latency · 3 buckets</th><td>1,792</td><td>77.734%</td><td>87.500%</td><td class="pos">87.667%</td><td class="pos">+3 correct</td></tr>
+ <tr><th>CPU peak · Heavy/Light</th><td>1,105</td><td>86.787%</td><td>89.955%</td><td>89.955%</td><td class="zero">0 hard changes</td></tr>
+ <tr><th>Sampled RSS · Heavy/Light</th><td>1,225</td><td>88.408%</td><td>91.347%</td><td>91.347%</td><td class="zero">0 hard changes</td></tr>
+ <tr><th>Disk I/O · Heavy/Light</th><td>1,790</td><td>93.520%</td><td>98.827%</td><td class="pos">98.939%</td><td class="pos">+2 correct</td></tr>
+</tbody></table></div><p>这些资源数字来自 Phase A 之前已经完成的 unchanged-representation transfer，不是本轮重跑。CPU/RSS 的 pip subset 几乎全为 Light，存在明显 majority ceiling。</p></section>
+
+<div class="grid two"><section class="section"><h2>不确定性与证据边界</h2>
+ <table><thead><tr><th>Overall latency</th><th>Point</th><th>Task-bootstrap 95%</th></tr></thead><tbody><tr><th>Canonical − Current</th><td class="neg">−0.112 pp</td><td>[−0.340, +0.108] pp</td></tr><tr><th>Jaccard − Current</th><td class="pos">+0.167 pp</td><td>[−0.056, +0.432] pp</td></tr></tbody></table>
+ <p>两个区间都跨 0；bootstrap 仅报告不确定性，不参与冻结 gate。SQLGlot100、SWE100、SWE277 均已 development-exposed，不能作为 confirmation。</p>
+ </section><section class="section"><h2>下一步由 gate 决定</h2>
+ <ol><li><b>Phase B：</b>在现有 SWE100/277 上先做不看 label 的 pytest coverage gate，再做唯一一次 frozen latency test。</li><li><b>Phase C：</b>用现有 traces 审计同 signature、不同 causal state 是否足以修复至少 10 个 hard errors。</li><li><b>Phase D：</b>只有 C 通过才准备 96 次 paired collection；长跑仍需明确批准。</li><li><b>Phase E：</b>没有 named consumer 改变至少 20 commands / 10 tasks，就不实现 scheduler。</li></ol>
+ </section></div>
+
+<section class="section"><h2>结论</h2><div class="callout good"><p class="verdict">Phase A GO：选择 Jaccard work signature。它胜过 canonical exact，说明收益需要部分 package-set overlap；但效应很小、区间跨零、尚未跨工具验证。</p></div></section>
+
+<section class="section"><h2>可追溯输入</h2><p class="sources">Phase A JSON: analysis/results/tool-resource-clause-interactions-20260804/pip-carrier-audit-latency.json<br>Phase A rows: analysis/results/tool-resource-clause-interactions-20260804/pip-carrier-audit-latency-rows.jsonl<br>Prior resource JSON: analysis/results/tool-resource-clause-interactions-20260804/pip-semantic-resources.json<br>Protocol: analysis/development/tool-resource-canonical-objective.md · 2026-08-04 semantic work-signature amendment<br>Plan: analysis/development/clause-interaction-kb-plan.md</p></section>
+<footer>1,792 IDs reconciled · 119/119 pip audit rows · 15 Jaccard carriers · non-pip PMFs bit-identical · development-exposed</footer>
+</main></body></html>

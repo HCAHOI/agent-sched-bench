@@ -66,6 +66,7 @@ from tool_resource.runtime_kb import (  # noqa: E402
 INTERACTION_ALPHA = 16.0
 INTERACTION_FEATURE_VERSION = "generic-argv-v3-role-interaction-set-v1"
 PIP_SEMANTIC_FEATURE_VERSION = "pip-install-semantic-jaccard-v1"
+PIP_CANONICAL_FEATURE_VERSION = "pip-install-canonical-exact-v1"
 
 
 @dataclass(frozen=True)
@@ -170,6 +171,7 @@ class _PipObservation:
 class _PipMatch:
     evidence: _WeightedClauseEvidence
     state_fallback: bool
+    contributors: tuple[Mapping[str, Any], ...] = ()
 
 
 def _interaction_feature_set(
@@ -405,7 +407,8 @@ class _PipSemanticKB:
     """Slow episodic pip memory for the frozen development experiment."""
 
     def __init__(self, public_rows: Sequence[Row]) -> None:
-        self._next_observation_id = 0
+        self._public_rows = tuple(public_rows)
+        self._next_observation_id = len(self._public_rows)
         self._exact: dict[
             tuple[str, tuple[str, ...]], list[_PipObservation]
         ] = defaultdict(list)
@@ -415,20 +418,19 @@ class _PipSemanticKB:
         self._public: dict[
             tuple[str, str, tuple[str, ...]], list[_PipObservation]
         ] = defaultdict(list)
-        for row in public_rows:
+        for observation_id, row in enumerate(self._public_rows):
             signature = parse_pip_install(row.argv)
             if signature is None:
                 continue
             self._public[_pip_partition(signature)].append(
                 _PipObservation(
-                    observation_id=self._next_observation_id,
+                    observation_id=observation_id,
                     task_id=row.task_id,
                     row=row,
                     signature=signature,
                     state=PipQueryState("unknown", signature.package_names),
                 )
             )
-            self._next_observation_id += 1
 
     def observe(
         self,
@@ -450,9 +452,7 @@ class _PipSemanticKB:
 
     @property
     def observation_count(self) -> int:
-        return self._next_observation_id - sum(
-            len(items) for items in self._public.values()
-        )
+        return self._next_observation_id - len(self._public_rows)
 
     def query(
         self,
@@ -461,10 +461,16 @@ class _PipSemanticKB:
         state: PipQueryState,
         *,
         use_state: bool,
+        canonical_exact: bool = False,
         current_selected: tuple[
             Sequence[float], str, str, tuple[str, ...]
         ],
+        current_public_selected: tuple[
+            Sequence[float], str, str, tuple[str, ...]
+        ],
     ) -> _PipMatch:
+        if use_state and canonical_exact:
+            raise ValueError("canonical-exact pip matching does not use task state")
         exact = tuple(self._exact.get((row.bin, row.argv[1:]), ()))
         if exact:
             return _PipMatch(
@@ -497,28 +503,42 @@ class _PipSemanticKB:
                 query_packages = state.remaining_packages
             elif local:
                 state_fallback = True
-        local_pairs = tuple(
-            (item, weight)
-            for item in local
-            if (
-                weight := _jaccard(
-                    query_packages,
-                    (
-                        item.state.remaining_packages
-                        if use_state and not state_fallback
-                        else item.signature.package_names
-                    ),
-                )
+        if canonical_exact:
+            local_pairs = tuple(
+                (item, 1.0) for item in local if item.signature == signature
             )
-            > 0.0
-        )
-        public_pairs = tuple(
-            (item, weight)
-            for item in self._public.get(_pip_partition(signature), ())
-            if (weight := _jaccard(signature.package_names, item.signature.package_names))
-            > 0.0
-        )
-        if not public_pairs:
+            public_pairs = tuple(
+                (item, 1.0)
+                for item in self._public.get(_pip_partition(signature), ())
+                if item.signature == signature
+            )
+        else:
+            local_pairs = tuple(
+                (item, weight)
+                for item in local
+                if (
+                    weight := _jaccard(
+                        query_packages,
+                        (
+                            item.state.remaining_packages
+                            if use_state and not state_fallback
+                            else item.signature.package_names
+                        ),
+                    )
+                )
+                > 0.0
+            )
+            public_pairs = tuple(
+                (item, weight)
+                for item in self._public.get(_pip_partition(signature), ())
+                if (
+                    weight := _jaccard(
+                        signature.package_names, item.signature.package_names
+                    )
+                )
+                > 0.0
+            )
+        if not public_pairs and (not local_pairs or not canonical_exact):
             values, scope, kind, _path = current_selected
             return _PipMatch(
                 evidence=_WeightedClauseEvidence(
@@ -542,11 +562,36 @@ class _PipSemanticKB:
         normalized_local = tuple(
             weight * effective_n / local_total for weight in local_weights
         )
-        public_total = sum(weight for _item, weight in public_pairs)
-        normalized_public = tuple(
-            weight * INTERACTION_ALPHA / public_total
-            for _item, weight in public_pairs
-        )
+        if public_pairs:
+            public_values = tuple(
+                item.row.latency_ms for item, _weight in public_pairs
+            )
+            public_total = sum(weight for _item, weight in public_pairs)
+            normalized_public = tuple(
+                weight * INTERACTION_ALPHA / public_total
+                for _item, weight in public_pairs
+            )
+            public_key_kind = (
+                "pip_canonical_exact" if canonical_exact else "pip_semantic"
+            )
+        else:
+            _selected_values, selected_scope, selected_kind, _path = (
+                current_public_selected
+            )
+            if selected_scope != "public" or selected_kind not in {"bin", "global"}:
+                raise AssertionError("canonical prior is not a Current public node")
+            prior_rows = tuple(
+                (observation_id, item)
+                for observation_id, item in enumerate(self._public_rows)
+                if selected_kind == "global" or item.bin == row.bin
+            )
+            public_values = tuple(item.latency_ms for _id, item in prior_rows)
+            if sorted(public_values) != list(_selected_values):
+                raise AssertionError("canonical prior differs from Current public node")
+            normalized_public = (INTERACTION_ALPHA / len(public_values),) * len(
+                public_values
+            )
+            public_key_kind = f"current_public_{current_public_selected[2]}"
         shared = tuple(
             len(set(query_packages) & set(item.signature.package_names))
             for item, _weight in local_pairs
@@ -555,7 +600,7 @@ class _PipSemanticKB:
             evidence=_WeightedClauseEvidence(
                 values=(
                     *(item.row.latency_ms for item, _weight in local_pairs),
-                    *(item.row.latency_ms for item, _weight in public_pairs),
+                    *public_values,
                 ),
                 weights=(*normalized_local, *normalized_public),
                 exact=False,
@@ -567,15 +612,75 @@ class _PipSemanticKB:
                 ),
                 max_shared_feature_count=max(shared, default=0),
                 key_kind=(
-                    "pip_semantic_state"
+                    "pip_canonical_exact"
+                    if canonical_exact and local_pairs
+                    else "pip_canonical_exact_public"
+                    if canonical_exact
+                    else "pip_semantic_state"
                     if use_state and local_pairs and not state_fallback
                     else "pip_semantic"
                     if local_pairs
                     else "pip_semantic_public"
                 ),
-                public_key_kind="pip_semantic",
+                public_key_kind=public_key_kind,
             ),
             state_fallback=state_fallback,
+            contributors=(
+                *(
+                    {
+                        "scope": "repo",
+                        "observation_id": item.observation_id,
+                        "task_id": item.task_id,
+                        "manifest_index": item.row.manifest_index,
+                        "signature": asdict(item.signature),
+                        "value": item.row.latency_ms,
+                        "similarity_weight": raw_weight,
+                        "pooled_weight": pooled_weight,
+                    }
+                    for (item, raw_weight), pooled_weight in zip(
+                        local_pairs, normalized_local, strict=True
+                    )
+                ),
+                *(
+                    {
+                        "scope": "public",
+                        "observation_id": item.observation_id,
+                        "task_id": item.task_id,
+                        "manifest_index": item.row.manifest_index,
+                        "signature": asdict(item.signature),
+                        "value": item.row.latency_ms,
+                        "similarity_weight": raw_weight,
+                        "pooled_weight": pooled_weight,
+                    }
+                    for (item, raw_weight), pooled_weight in (
+                        zip(public_pairs, normalized_public, strict=True)
+                        if public_pairs
+                        else ()
+                    )
+                ),
+                *(
+                    {
+                        "scope": "public",
+                        "observation_id": observation_id,
+                        "task_id": item.task_id,
+                        "manifest_index": item.manifest_index,
+                        "signature": (
+                            None
+                            if (prior_signature := parse_pip_install(item.argv)) is None
+                            else asdict(prior_signature)
+                        ),
+                        "value": item.latency_ms,
+                        "similarity_weight": None,
+                        "pooled_weight": pooled_weight,
+                        "prior_key_kind": public_key_kind,
+                    }
+                    for (observation_id, item), pooled_weight in (
+                        zip(prior_rows, normalized_public, strict=True)
+                        if not public_pairs
+                        else ()
+                    )
+                ),
+            ),
         )
 
 
@@ -673,6 +778,7 @@ def _predict_pip_latency_command(
     current_prediction: ClauseLatencyBucketPrediction,
     *,
     use_state: bool,
+    canonical_exact: bool = False,
 ) -> tuple[ClauseLatencyBucketPrediction, dict[str, Any]]:
     parsed_clauses = parsed.get("clauses", ())
     query_clauses = _interaction_query_clauses(parsed_clauses)
@@ -699,6 +805,11 @@ def _predict_pip_latency_command(
         selected = current._select(row.repo, "latency_ms", clause.bin, clause.argv)
         if selected is None:
             raise ValueError("Current has no clause evidence")
+        _local_selected, public_selected = current._select_independent_scopes(
+            row.repo, "latency_ms", clause.bin, clause.argv
+        )
+        if public_selected is None:
+            raise ValueError("Current has no frozen public clause evidence")
         if signature is None:
             item = _current_weighted_evidence(selected)
             fallback = False
@@ -710,12 +821,16 @@ def _predict_pip_latency_command(
                 signature,
                 query_state,
                 use_state=use_state,
+                canonical_exact=canonical_exact,
                 current_selected=selected,
+                current_public_selected=public_selected,
             )
             item = match.evidence
             fallback = match.state_fallback
             state_fallback |= fallback
-            semantic_used |= item.key_kind.startswith("pip_semantic")
+            semantic_used |= not item.exact and not item.key_kind.startswith(
+                "current_"
+            )
         evidence.append(item)
         clause_diagnostics.append(
             {
@@ -724,6 +839,13 @@ def _predict_pip_latency_command(
                 "key_kind": item.key_kind,
                 "local_observation_count": item.local_observation_count,
                 "effective_sample_size": item.effective_sample_size,
+                "public_observation_count": (
+                    len(item.values) - item.local_observation_count
+                ),
+                "public_key_kind": item.public_key_kind,
+                "contributing_task_ids": sorted(item.contributing_task_ids),
+                "contributors": list(match.contributors) if signature is not None else [],
+                "signature": None if signature is None else asdict(signature),
                 "state": None if query_state is None else query_state.availability,
                 "remaining_packages": (
                     None if query_state is None else list(query_state.remaining_packages)
@@ -772,11 +894,31 @@ def _predict_pip_latency_command(
         fallback_path=tuple(
             f"clause[{index}]:{item.key_kind}" for index, item in enumerate(evidence)
         ),
-        canonicalizer_version=PIP_SEMANTIC_FEATURE_VERSION,
-        arbitration="current-or-pip-semantic-jaccard-v1",
-        local_key_kind="pip_semantic" if any(local_counts) else None,
+        canonicalizer_version=(
+            PIP_CANONICAL_FEATURE_VERSION
+            if canonical_exact
+            else PIP_SEMANTIC_FEATURE_VERSION
+        ),
+        arbitration=(
+            "current-or-pip-canonical-exact-v1"
+            if canonical_exact
+            else "current-or-pip-semantic-jaccard-v1"
+        ),
+        local_key_kind=(
+            ("pip_canonical_exact" if canonical_exact else "pip_semantic")
+            if any(local_counts)
+            else None
+        ),
         local_evidence_count=min(local_counts),
-        public_key_kind="pip_semantic",
+        public_key_kind="+".join(
+            sorted(
+                {
+                    item.public_key_kind
+                    for item in evidence
+                    if item.public_key_kind is not None
+                }
+            )
+        ),
         public_evidence_count=min(public_counts),
         shrinkage_alpha=INTERACTION_ALPHA,
     )
@@ -827,6 +969,11 @@ def _predict_pip_resources(
             selected = current._select(row.repo, resource, clause.bin, clause.argv)
             if selected is None:
                 raise ValueError(f"Current has no {resource} clause evidence")
+            _local_selected, public_selected = current._select_independent_scopes(
+                row.repo, resource, clause.bin, clause.argv
+            )
+            if public_selected is None:
+                raise ValueError(f"Current has no frozen public {resource} evidence")
             if signature is None:
                 item = _current_weighted_evidence(selected)
             else:
@@ -838,6 +985,7 @@ def _predict_pip_resources(
                     state,
                     use_state=use_state,
                     current_selected=selected,
+                    current_public_selected=public_selected,
                 ).evidence
                 semantic_used |= item.key_kind.startswith("pip_semantic")
             evidence.append(item)
@@ -2338,13 +2486,8 @@ def _prediction_changes(
         candidate_prediction = _argmax_bucket(candidate_row)
         if current_prediction == candidate_prediction:
             continue
-        outcome = (
-            "helpful"
-            if candidate_prediction == candidate_row.label_bucket
-            else "harmful"
-            if current_prediction == current_row.label_bucket
-            else "neutral"
-        )
+        outcome = _prediction_change_outcome(current_row, candidate_row)
+        assert outcome is not None
         counts["changed"] += 1
         counts[outcome] += 1
         if diagnostic["carrier"]:
@@ -2363,6 +2506,82 @@ def _prediction_changes(
                 carrier_counts["helpful"] - carrier_counts["harmful"]
             ),
         },
+    }
+
+
+def _prediction_change_outcome(
+    reference: ScoredRow,
+    candidate: ScoredRow,
+) -> str | None:
+    reference_prediction = _argmax_bucket(reference)
+    candidate_prediction = _argmax_bucket(candidate)
+    if reference_prediction == candidate_prediction:
+        return None
+    if candidate_prediction == candidate.label_bucket:
+        return "helpful"
+    if reference_prediction == reference.label_bucket:
+        return "harmful"
+    return "neutral"
+
+
+def _carrier_net_spread(
+    reference: Sequence[ScoredRow],
+    candidate: Sequence[ScoredRow],
+    diagnostics: Sequence[Mapping[str, Any]],
+    reference_diagnostics: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Count independent task/signature groups with positive carrier net gain."""
+
+    task_net: Counter[str] = Counter()
+    signature_net: Counter[str] = Counter()
+    unattributed_multi_clause_commands = 0
+    if reference_diagnostics is not None and len(reference_diagnostics) != len(
+        diagnostics
+    ):
+        raise AssertionError("carrier diagnostics are not aligned")
+    for index, (reference_row, candidate_row, diagnostic) in enumerate(
+        zip(reference, candidate, diagnostics, strict=True)
+    ):
+        outcome = _prediction_change_outcome(reference_row, candidate_row)
+        if outcome is None or not diagnostic["carrier"]:
+            continue
+        delta = 1 if outcome == "helpful" else -1 if outcome == "harmful" else 0
+        task_net[candidate_row.task_id] += delta
+        reference_clauses = (
+            None
+            if reference_diagnostics is None
+            else reference_diagnostics[index]["clauses"]
+        )
+        differing_signatures = [
+            json.dumps(clause["signature"], sort_keys=True, separators=(",", ":"))
+            for clause_index, clause in enumerate(diagnostic["clauses"])
+            if clause["pip"]
+            and not clause["exact"]
+            and not clause["key_kind"].startswith("current_")
+            and (
+                reference_clauses is None
+                or clause["contributors"]
+                != reference_clauses[clause_index]["contributors"]
+            )
+        ]
+        if len(differing_signatures) == 1:
+            signature_net[differing_signatures[0]] += delta
+        elif len(differing_signatures) > 1:
+            unattributed_multi_clause_commands += 1
+    return {
+        "positive_net_tasks": sorted(
+            task for task, net in task_net.items() if net > 0
+        ),
+        "positive_net_task_count": sum(net > 0 for net in task_net.values()),
+        "positive_net_signatures": sorted(
+            signature for signature, net in signature_net.items() if net > 0
+        ),
+        "positive_net_signature_count": sum(
+            net > 0 for net in signature_net.values()
+        ),
+        "net_by_task": dict(sorted(task_net.items())),
+        "net_by_signature": dict(sorted(signature_net.items())),
+        "unattributed_multi_clause_commands": unattributed_multi_clause_commands,
     }
 
 
@@ -2877,7 +3096,7 @@ def evaluate_pip_semantics(
     *,
     expected_pip_baseline: tuple[int, int] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Evaluate frozen pip semantics with and without causal task state."""
+    """Audit canonical-exact versus Jaccard pip work signatures."""
 
     if len(set(task_ids)) != len(task_ids):
         raise ValueError("target task order contains duplicates")
@@ -2912,7 +3131,12 @@ def evaluate_pip_semantics(
     for row in command_rows:
         commands_by_task[row.task_id].append(row)
 
-    arms = ("current", "pip_semantic", "pip_semantic_state")
+    arms = (
+        "current",
+        "pip_canonical_exact",
+        "pip_semantic",
+        "pip_semantic_state",
+    )
     scored: dict[str, list[ScoredRow]] = {arm: [] for arm in arms}
     diagnostics: dict[str, list[dict[str, Any]]] = {
         arm: [] for arm in arms[1:]
@@ -2956,9 +3180,10 @@ def evaluate_pip_semantics(
                     "probability_by_bucket": current_result.prediction.probability_by_bucket,
                 }
             }
-            for arm, use_state in (
-                ("pip_semantic", False),
-                ("pip_semantic_state", True),
+            for arm, use_state, canonical_exact in (
+                ("pip_canonical_exact", False, True),
+                ("pip_semantic", False, False),
+                ("pip_semantic_state", True, False),
             ):
                 prediction, diagnostic = _predict_pip_latency_command(
                     semantic,
@@ -2968,6 +3193,7 @@ def evaluate_pip_semantics(
                     states,
                     current_result.prediction,
                     use_state=use_state,
+                    canonical_exact=canonical_exact,
                 )
                 scored[arm].append(_command_scored_row(row, prediction, None))
                 diagnostics[arm].append(diagnostic)
@@ -3078,24 +3304,109 @@ def evaluate_pip_semantics(
         )
         for arm in arms[1:]
     }
+    pairwise_changes = {
+        "jaccard_minus_canonical_exact": _prediction_changes(
+            scored["pip_canonical_exact"],
+            scored["pip_semantic"],
+            diagnostics["pip_semantic"],
+        ),
+        "canonical_exact_minus_current": changes["pip_canonical_exact"],
+    }
+    carrier_spread = {
+        "jaccard_minus_canonical_exact": _carrier_net_spread(
+            scored["pip_canonical_exact"],
+            scored["pip_semantic"],
+            diagnostics["pip_semantic"],
+            diagnostics["pip_canonical_exact"],
+        ),
+        "canonical_exact_minus_current": _carrier_net_spread(
+            scored["current"],
+            scored["pip_canonical_exact"],
+            diagnostics["pip_canonical_exact"],
+        ),
+    }
     current_pip_correct = sum(
         _exact_bucket_correct(row) for row in pip_rows["current"]
     )
     baseline_reconciled = expected_pip_baseline is None or (
         len(pip_indices), current_pip_correct
     ) == expected_pip_baseline
-    state_change = changes["pip_semantic_state"][
+    jaccard_change = pairwise_changes["jaccard_minus_canonical_exact"][
         "nonexact_carrier_changed_commands"
     ]
-    latency_go = (
+    canonical_change = pairwise_changes["canonical_exact_minus_current"][
+        "nonexact_carrier_changed_commands"
+    ]
+    jaccard_go = (
         baseline_reconciled
         and nonpip_identical
-        and metrics["pip_semantic_state"]["three_class_accuracy"]
-        > current_accuracy
-        and pip_metrics["pip_semantic_state"]["three_class_accuracy"]
-        > pip_current_metrics["three_class_accuracy"]
-        and state_change["net_helpful_minus_harmful"] > 0
+        and metrics["pip_semantic"]["three_class_accuracy"]
+        > metrics["pip_canonical_exact"]["three_class_accuracy"]
+        and pip_metrics["pip_semantic"]["three_class_accuracy"]
+        > pip_metrics["pip_canonical_exact"]["three_class_accuracy"]
+        and jaccard_change["helpful"] > jaccard_change["harmful"]
+        and carrier_spread["jaccard_minus_canonical_exact"][
+            "positive_net_task_count"
+        ]
+        >= 2
+        and carrier_spread["jaccard_minus_canonical_exact"][
+            "positive_net_signature_count"
+        ]
+        >= 2
     )
+    canonical_go = (
+        baseline_reconciled
+        and nonpip_identical
+        and metrics["pip_canonical_exact"]["three_class_accuracy"]
+        > current_accuracy
+        and pip_metrics["pip_canonical_exact"]["three_class_accuracy"]
+        > pip_current_metrics["three_class_accuracy"]
+        and canonical_change["helpful"] > canonical_change["harmful"]
+        and carrier_spread["canonical_exact_minus_current"][
+            "positive_net_task_count"
+        ]
+        >= 2
+        and carrier_spread["canonical_exact_minus_current"][
+            "positive_net_signature_count"
+        ]
+        >= 2
+    )
+    selection = (
+        "jaccard_semantic"
+        if jaccard_go
+        else "canonical_exact"
+        if canonical_go
+        else "stop_semantic_method"
+    )
+    for index, row in enumerate(sidecar):
+        if not row["pip_command"]:
+            continue
+        row["carrier_audit"] = {
+            "normalized_signatures": [
+                clause["signature"]
+                for clause in diagnostics["pip_semantic"][index]["clauses"]
+                if clause["pip"]
+            ],
+            "canonical_exact_nonexact_carrier": diagnostics[
+                "pip_canonical_exact"
+            ][index]["carrier"],
+            "jaccard_nonexact_carrier": diagnostics["pip_semantic"][index][
+                "carrier"
+            ],
+            "canonical_exact_vs_current": (
+                _prediction_change_outcome(
+                    scored["current"][index], scored["pip_canonical_exact"][index]
+                )
+                or "unchanged"
+            ),
+            "jaccard_vs_canonical_exact": (
+                _prediction_change_outcome(
+                    scored["pip_canonical_exact"][index],
+                    scored["pip_semantic"][index],
+                )
+                or "unchanged"
+            ),
+        }
     mode_summary = {
         mode: {
             **dict(sorted(counts.items())),
@@ -3108,14 +3419,14 @@ def evaluate_pip_semantics(
     }
     result = {
         "status": (
-            "development_exposed_pip_latency_go"
-            if latency_go
-            else "development_exposed_pip_latency_no_go"
+            "development_exposed_pip_carrier_selected"
+            if selection != "stop_semantic_method"
+            else "development_exposed_pip_carrier_no_go"
             if baseline_reconciled
             else "invalid_pip_baseline_reconciliation"
         ),
         "claim_bearing": False,
-        "objective": "command_latency_pip_semantic_state_comparison",
+        "objective": "command_latency_pip_carrier_audit",
         "inputs": dict(provenance),
         "protocol": {
             "evaluation_unit": "eligible_exec_command",
@@ -3123,6 +3434,9 @@ def evaluate_pip_semantics(
             "state_information": "raw outputs of earlier exec calls in the same task",
             "pip_partition": "interpreter, invocation, normalized flags",
             "pip_similarity": "Jaccard over normalized package names",
+            "pip_canonical_exact": (
+                "exact normalized interpreter, invocation, flags, and complete requirements"
+            ),
             "pooling_alpha": INTERACTION_ALPHA,
             "exact_shortcut": "repository-local exact argv",
             "semantic_ablation": "same matching without availability or remaining-package state",
@@ -3161,6 +3475,8 @@ def evaluate_pip_semantics(
                 "arms": pip_metrics,
             },
             "prediction_changes": changes,
+            "pairwise_selection_changes": pairwise_changes,
+            "carrier_net_spread": carrier_spread,
             "uncertainty": {
                 f"{arm}_minus_current": _paired_task_cluster_bootstrap(
                     scored[arm],
@@ -3193,20 +3509,19 @@ def evaluate_pip_semantics(
                     "current_correct": current_pip_correct,
                 },
             },
-            "latency": {
-                "go": latency_go,
-                "requires_overall_above_current": True,
-                "requires_pip_above_current": True,
-                "requires_positive_nonexact_carrier_net_gain": True,
+            "phase_a_selection": {
+                "selected": selection,
+                "jaccard_go": jaccard_go,
+                "canonical_exact_go": canonical_go,
+                "requires_strict_overall_and_pip_accuracy_gain": True,
+                "requires_helpful_above_harmful": True,
+                "requires_two_positive_net_tasks": True,
+                "requires_two_positive_net_signatures": True,
                 "requires_nonpip_bit_identity": True,
             },
             "resource_evaluation": {
-                "go": latency_go,
-                "reason": (
-                    "latency gate passed"
-                    if latency_go
-                    else "latency gate failed; resource transfer must not run"
-                ),
+                "go": False,
+                "reason": "Phase A selects a representation; prior resource transfer is report-only",
             },
         },
     }
