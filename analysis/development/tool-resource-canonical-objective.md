@@ -1,6 +1,7 @@
 # Tool-Resource Prediction — Canonical Objective and Lock
 
-**Effective:** 2026-08-04
+**Effective:** 2026-08-04; amended to 5/3/3/3 classes after the earlier
+3/2/2/2-class SQLGlot results were visible
 **Status:** development-only; no confirmation corpus has been evaluated
 
 This is the authoritative contract for tool-resource prediction. It records
@@ -16,33 +17,40 @@ evidence used to predict that command; they are never scored as separate rows.
 For latency, predict one normalized probability mass function over:
 
 ```text
-[0, 2000] ms
+[0, 500] ms
+(500, 2000] ms
 (2000, 8000] ms
-(8000, +inf) ms
+(8000, 30000] ms
+(30000, +inf) ms
 ```
 
 The hard prediction is the highest-probability bucket; an exact tie selects the
-shorter bucket. The primary metric is exact three-class command accuracy.
+shorter bucket. The primary metric is exact five-class command accuracy.
 Compare it with one constant majority class computed over the identical
 evaluation commands. Report eligible count, label and prediction counts, the
-3x3 confusion matrix, majority accuracy, and deltas from majority and Current.
+5x5 confusion matrix, majority accuracy, within-one-bucket accuracy, severe
+underprediction rate (truth at least two buckets above prediction), and deltas
+from majority and Current.
 
-Predict CPU peak, sampled RSS, and Disk I/O independently as Heavy or Light:
+Predict CPU peak, sampled RSS, and Disk I/O independently as Low, Medium, or
+High. Boundaries belong to the lower bucket:
 
 ```text
-CPU Heavy  = peak_cpu_cores > 2.0
-RSS Heavy  = sampled_peak_rss_mb > 500 decimal MB
-Disk Heavy = read_bytes + write_bytes > 104857600 bytes
+CPU  = [0, 2], (2, 4], (4, +inf) peak cores
+RSS  = [0, 500], (500, 2000], (2000, +inf) decimal MB
+Disk = [0, 1048576], (1048576, 104857600], (104857600, +inf) bytes
 ```
 
 For these resource targets only, an observation explicitly marked by policy as
-null with command latency below 500 ms is imputed Light. Other nulls are
-unavailable. Report eligible, Heavy/Light and unavailable counts, TP/TN/FP/FN,
-accuracy, majority accuracy, and constant-Light accuracy.
+null with command latency below 500 ms is imputed Low. Other nulls are
+unavailable. The hard prediction is the highest-probability bucket with ties
+selecting the lower bucket. Report eligible, label and prediction counts, the
+3x3 confusion matrix, exact accuracy, majority accuracy, constant-Low accuracy,
+within-one-bucket accuracy, and severe underprediction rate.
 
-Old nine-bin latency accuracy, legacy 3500/5000 ms boundaries, balanced
-accuracy, Brier/NLL, bucket MAE, q-error, and hand-selected subsets cannot
-select a candidate.
+Old nine-bin latency accuracy, the superseded 2000/8000-only result, legacy
+3500/5000 ms boundaries, balanced accuracy, Brier/NLL, q-error, and
+hand-selected subsets cannot select a candidate.
 
 ## 2. Causal and physical contract
 
@@ -73,7 +81,7 @@ Compound commands compose empirical clause values according to shell structure:
 - concurrent pipelines: latency takes the maximum; CPU and RSS sum;
 - Disk sums across all clauses.
 
-Never compose bucket IDs or Heavy/Light labels with Boolean OR. Unsupported or
+Never compose bucket IDs or resource class labels with Boolean OR. Unsupported or
 ambiguous structures remain unavailable.
 
 ## 3. Current architecture and research boundary
@@ -124,7 +132,11 @@ collection and finalized observations. `src/tool_resource/` imports nothing
 from the rest of the repository. Offline trace adapters live in
 `src/tool_resource_eval/`. Phase 0 does not change runtime integration.
 
-## 4. Settled semantic evidence
+## 4. Settled semantic evidence under the superseded 3/2/2/2 target
+
+The results in this section were visible before the 5/3/3/3 amendment. They
+remain useful representation diagnostics but are not scores for the current
+target and cannot set its class boundaries or confirmation criteria.
 
 ### Phase A — pip representation: complete
 
@@ -213,18 +225,25 @@ ceiling, not a remaining-work signal.
   retained invalid downstream-pipeline evidence. It remains explicitly named
   `*.pre-public-structure-fix.invalid`; only the corrected artifact is
   reportable.
-- The 2000/8000 ms objective and resource thresholds were selected after older
-  SWE diagnostics were visible. All results under the current objective are
+- The superseded 2000/8000 ms objective and binary resource thresholds were
+  selected after older SWE diagnostics were visible. All resulting scores are
   development-only.
+- The 500/2000/8000/30000 ms, 2/4-core, 500/2000-MB, and 1/100-MiB boundaries
+  were fixed after all earlier SQLGlot 3/2/2/2-class results and the CacheWise
+  diagnostics were visible. They preserve existing physical cutoffs and add
+  allocation-relevant levels; they were not selected from 5/3/3/3 accuracy.
 
 ## 6. Non-negotiable task contract
 
 ```text
 Evaluation unit = eligible exec command; clauses are internal evidence.
-Latency buckets = [0,2000], (2000,8000], (8000,+inf) ms.
-Primary latency metric = exact three-class accuracy on identical rows.
-Resource thresholds = CPU >2 cores; RSS >500 MB; Disk >100 MiB.
-Short-null resource policy = Light only when explicitly marked and <500 ms.
+Latency buckets = [0,500], (500,2000], (2000,8000], (8000,30000],
+                  (30000,+inf) ms.
+Primary latency metric = exact five-class accuracy on identical rows.
+Resource buckets = CPU edges 2/4 cores; RSS edges 500/2000 MB;
+                   Disk edges 1/100 MiB.
+Resource hard labels = Low/Medium/High by PMF argmax; lower bucket wins ties.
+Short-null resource policy = Low only when explicitly marked and <500 ms.
 Causal visibility = observation end before query start, after task settlement.
 Compound commands = physical stage/pipeline composition, never Boolean OR.
 Current = unchanged raw exact/prefix/binary control.
