@@ -104,16 +104,17 @@ action set. It used each command's own timestamped execution prefix rather than
 cross-task similarity, but its hindsight action-space upper bound did not pass
 the frozen utility gate.
 
-The active development arm is now a task-local full-test phase correction. It
-was introduced only after the 5/3/3/3 error cases below were visible. It counts
-earlier completed full-suite command texts in the current task, uses no output
-or telemetry, and may only raise latency, CPU, or RSS predictions for the third
-or later full-suite call. Disk and all other commands remain Current. This is an
-explicit amendment to the previous rule that the current task was entirely
-invisible: resource observations still settle only after whole-task
-finalization, while prior command text is an allowed causal session signal for
-this named arm. The protocol and held-out gate live in
-`clause-interaction-kb-plan.md`. No runtime integration is authorized yet.
+The active development arm is a blind task-local state replay layered on the
+reviewed full-test phase correction. For this named arm only, a fixed agent may
+read earlier completed command text, exit status, and bounded result excerpts
+from the current task, but never timing, telemetry, labels, the current result,
+or future calls. It assigns a frozen environment state; the ordinary evaluator
+fits state-conditioned PMFs from the first 80 tasks and scores the final 20.
+This is an explicit amendment to the rule that the current task was entirely
+invisible. Resource observations still settle only after whole-task
+finalization, and the agent never receives them. The exact schema, support rule,
+and gate live in `clause-interaction-kb-plan.md`. No runtime integration is
+authorized.
 
 The reviewed post-hoc 80/20 replay passed its development continuation rule.
 Latency accuracy changed from 77.937% to 79.083%, CPU from 90.476% to 93.333%,
@@ -281,6 +282,10 @@ ceiling, not a remaining-work signal.
   post-hoc development evidence. The adjacent earlier SQLGlot collection had
   zero completed result rows when its held-out protocol was frozen; no result
   from that collection had been read.
+- Agent-guided residual opportunity counts were visible before the blind
+  causal-state schema and gate were frozen. The resulting 80/20 replay is also
+  post-hoc development evidence. It cannot change the frozen held-out primary,
+  whose collection remained scientifically unread at this amendment.
 
 ## 6. Non-negotiable task contract
 

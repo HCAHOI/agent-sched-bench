@@ -2,8 +2,8 @@
 
 **Effective:** 2026-08-04
 
-**Status:** development replay and agent-guided residual discovery complete;
-held-out SQLGlot collection running and unread
+**Status:** blind causal-state replay frozen before implementation; held-out
+SQLGlot collection running and unread
 
 This plan extends `tool-resource-canonical-objective.md`. The earlier semantic
 KB and early-execution routes are complete negative results. The active question
@@ -92,7 +92,42 @@ Artifact:
 
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot-agent-pattern-discovery.json`
 
-## 4. Held-out replication
+## 4. Blind causal-state replay
+
+This development-only arm tests whether an agent can turn prior command results
+into a useful state without seeing the resource labels it will be judged on.
+For every recognized full-suite query in all 100 existing SQLGlot tasks, the
+agent receives an opaque query ID, the current command, and the causally earlier
+completed exec commands with their exit status and bounded raw result excerpt
+(first and last 2,000 characters). It receives no task identity, durations,
+telemetry, bucket labels, current result, or future event. The fixed model is
+Codex `gpt-5.6-sol`; its output is exactly one of:
+
+- `unavailable`: the selected runner or interpreter cannot start and no later
+  successful remediation is visible;
+- `collection_blocked`: the runner starts, but the latest suite evidence stops
+  in import, collection, or setup and no later remediation is visible;
+- `ready`: a prior suite reached test execution, or every named earlier
+  runner/collection blocker has a later successful explicit remediation; or
+- `unknown`: evidence is absent, conflicting, or does not meet those rules.
+
+The agent emits only state, cited prior-event indices, and a short rationale; it
+does not predict latency, CPU, RSS, or Disk. The first 80 tasks fit an empirical
+bucket PMF per non-unknown state for latency, CPU, and RSS. A state is usable for
+a target only with eligible evidence from at least three distinct warm-up tasks.
+On the final 20 tasks, a usable state PMF replaces the reviewed full-test-phase
+PMF in either direction; otherwise that arm is unchanged. Disk and every
+non-full-suite prediction remain bit-identical to the full-test-phase arm.
+
+The replay continues only if, relative to the full-test-phase arm, latency, CPU,
+and RSS exact accuracy are each no lower; severe underprediction is no higher
+for any; target-level helpful changes outnumber harmful changes; and helpful
+changes cover at least three test tasks. Identical eligible rows and the stated
+PMF-identity checks are validity conditions. These criteria were frozen after
+the discovery counts were visible, so any result remains post-hoc development
+evidence and cannot alter the frozen held-out primary.
+
+## 5. Held-out replication
 
 Development passed and the implementation is frozen. After collection
 completion, fit state on all 100 existing SQLGlot tasks and evaluate every
@@ -117,7 +152,7 @@ The held-out gate is fixed before any result from that collection is read:
 This is a task-held-out same-repository replication, not a temporal deployment
 claim: the new tasks precede the development tasks by creation time.
 
-## 5. Implementation and checks
+## 6. Implementation and checks
 
 - Reuse the existing command loader, pytest parser, Current replay, bucket
   labels, and metrics. Add no KB class or runtime integration.
