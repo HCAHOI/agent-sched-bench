@@ -1,0 +1,885 @@
+{
+  "claim_bearing": false,
+  "counts": {
+    "commands": 1792,
+    "pip_commands": 119,
+    "public_online_clause_observations": 11761,
+    "stored_target_pip_observations_by_resource": {
+      "disk_read_write_bytes_total": 114,
+      "peak_cpu_cores": 114,
+      "sampled_peak_rss_mb": 114
+    },
+    "target_online_clause_observations": 3799,
+    "tasks": 100
+  },
+  "inputs": {
+    "latency_gate_result": "/home/chiyu/workspace/agent-sched-bench/analysis/results/tool-resource-clause-interactions-20260804/pip-semantic-latency.json",
+    "latency_gate_status": "development_exposed_pip_latency_go",
+    "public_clause_observations_after_repo_filter": 16680,
+    "public_clause_observations_before_repo_filter": 18224,
+    "public_excluded_repositories": [
+      "iterative__dvc",
+      "tobymao__sqlglot"
+    ],
+    "public_online_eligible_clause_observations": 11761,
+    "public_structure_recovery": "current parser validated against static_word_intent; earliest/latest ordered alignment must identify one static clause",
+    "public_structure_unknown": 0,
+    "public_telemetry": [
+      "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+      "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl"
+    ],
+    "target_run_dir": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803",
+    "target_task_order_source": "results.jsonl successful final attempts"
+  },
+  "objective": "command_resource_pip_semantic_state_comparison",
+  "protocol": {
+    "causal_update": "KB observations settle only after whole task",
+    "compound_composition": "pipeline sum then sequential max for CPU/RSS; additive Disk",
+    "evaluation_unit": "eligible_exec_command",
+    "latency_gate_required": true,
+    "representation": "unchanged pip semantic Jaccard with alpha 16",
+    "resource_truth": "strict command bounds from retained clause aggregates"
+  },
+  "resources": {
+    "disk_read_write_bytes_total": {
+      "all": {
+        "arms": {
+          "current": {
+            "accuracy": 0.988268156424581,
+            "available_only_accuracy": 0.988268156424581,
+            "composition_ambiguous": 1,
+            "composition_unavailable": 0,
+            "eligible_n": 1790,
+            "fn": 4,
+            "fp": 17,
+            "heavy_count": 116,
+            "heavy_rate": 0.06480446927374302,
+            "label_source_counts": {
+              "composition_ambiguous": 1,
+              "null_unavailable": 1,
+              "observed_composed_heavy": 116,
+              "observed_composed_light": 1674
+            },
+            "majority_class": "light",
+            "majority_class_accuracy": 0.9351955307262569,
+            "majority_light_accuracy": 0.9351955307262569,
+            "null_unavailable": 1,
+            "observed_heavy": 116,
+            "observed_light": 1674,
+            "prediction_available": 1790,
+            "prediction_unavailable": 0,
+            "provenance_counts": {
+              "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 10,
+              "public:global:raw-argv-prefix-v1:hard-first-nonempty-v1": 6,
+              "public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 13,
+              "repo+public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 329,
+              "repo:argv_prefix_depth_2:raw-argv-prefix-v1:hard-first-nonempty-v1": 12,
+              "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 101,
+              "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 104,
+              "repo:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 15,
+              "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 468,
+              "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 732
+            },
+            "short_null_imputed_light": 0,
+            "tn": 1657,
+            "tp": 112
+          },
+          "pip_semantic": {
+            "accuracy": 0.9893854748603352,
+            "available_only_accuracy": 0.9893854748603352,
+            "composition_ambiguous": 1,
+            "composition_unavailable": 0,
+            "eligible_n": 1790,
+            "fn": 5,
+            "fp": 14,
+            "heavy_count": 116,
+            "heavy_rate": 0.06480446927374302,
+            "label_source_counts": {
+              "composition_ambiguous": 1,
+              "null_unavailable": 1,
+              "observed_composed_heavy": 116,
+              "observed_composed_light": 1674
+            },
+            "majority_class": "light",
+            "majority_class_accuracy": 0.9351955307262569,
+            "majority_light_accuracy": 0.9351955307262569,
+            "null_unavailable": 1,
+            "observed_heavy": 116,
+            "observed_light": 1674,
+            "prediction_available": 1790,
+            "prediction_unavailable": 0,
+            "provenance_counts": {
+              "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 9,
+              "public:global:raw-argv-prefix-v1:hard-first-nonempty-v1": 6,
+              "public:pip_semantic_public:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 2,
+              "public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 13,
+              "repo+public:pip_semantic:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 8,
+              "repo+public:shell_execution_graph:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 5,
+              "repo+public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 329,
+              "repo:argv_prefix_depth_2:raw-argv-prefix-v1:hard-first-nonempty-v1": 12,
+              "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 101,
+              "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 95,
+              "repo:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 15,
+              "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 468,
+              "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 727
+            },
+            "short_null_imputed_light": 0,
+            "tn": 1660,
+            "tp": 111
+          },
+          "pip_semantic_state": {
+            "accuracy": 0.9893854748603352,
+            "available_only_accuracy": 0.9893854748603352,
+            "composition_ambiguous": 1,
+            "composition_unavailable": 0,
+            "eligible_n": 1790,
+            "fn": 5,
+            "fp": 14,
+            "heavy_count": 116,
+            "heavy_rate": 0.06480446927374302,
+            "label_source_counts": {
+              "composition_ambiguous": 1,
+              "null_unavailable": 1,
+              "observed_composed_heavy": 116,
+              "observed_composed_light": 1674
+            },
+            "majority_class": "light",
+            "majority_class_accuracy": 0.9351955307262569,
+            "majority_light_accuracy": 0.9351955307262569,
+            "null_unavailable": 1,
+            "observed_heavy": 116,
+            "observed_light": 1674,
+            "prediction_available": 1790,
+            "prediction_unavailable": 0,
+            "provenance_counts": {
+              "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 9,
+              "public:global:raw-argv-prefix-v1:hard-first-nonempty-v1": 6,
+              "public:pip_semantic_public:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 2,
+              "public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 13,
+              "repo+public:pip_semantic_state:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 8,
+              "repo+public:shell_execution_graph:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 5,
+              "repo+public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 329,
+              "repo:argv_prefix_depth_2:raw-argv-prefix-v1:hard-first-nonempty-v1": 12,
+              "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 101,
+              "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 95,
+              "repo:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 15,
+              "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 468,
+              "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 727
+            },
+            "short_null_imputed_light": 0,
+            "tn": 1660,
+            "tp": 111
+          }
+        },
+        "majority": {
+          "accuracy": 0.9351955307262569,
+          "class": "light"
+        }
+      },
+      "direction": "higher accuracy is better",
+      "pip": {
+        "arms": {
+          "current": {
+            "accuracy": 0.8739495798319328,
+            "available_only_accuracy": 0.8739495798319328,
+            "composition_ambiguous": 0,
+            "composition_unavailable": 0,
+            "eligible_n": 119,
+            "fn": 4,
+            "fp": 11,
+            "heavy_count": 95,
+            "heavy_rate": 0.7983193277310925,
+            "label_source_counts": {
+              "observed_composed_heavy": 95,
+              "observed_composed_light": 24
+            },
+            "majority_class": "heavy",
+            "majority_class_accuracy": 0.7983193277310925,
+            "majority_light_accuracy": 0.2016806722689075,
+            "null_unavailable": 0,
+            "observed_heavy": 95,
+            "observed_light": 24,
+            "prediction_available": 119,
+            "prediction_unavailable": 0,
+            "provenance_counts": {
+              "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 3,
+              "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 2,
+              "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 18,
+              "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 51,
+              "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 45
+            },
+            "short_null_imputed_light": 0,
+            "tn": 13,
+            "tp": 91
+          },
+          "pip_semantic": {
+            "accuracy": 0.8907563025210085,
+            "available_only_accuracy": 0.8907563025210085,
+            "composition_ambiguous": 0,
+            "composition_unavailable": 0,
+            "eligible_n": 119,
+            "fn": 5,
+            "fp": 8,
+            "heavy_count": 95,
+            "heavy_rate": 0.7983193277310925,
+            "label_source_counts": {
+              "observed_composed_heavy": 95,
+              "observed_composed_light": 24
+            },
+            "majority_class": "heavy",
+            "majority_class_accuracy": 0.7983193277310925,
+            "majority_light_accuracy": 0.2016806722689075,
+            "null_unavailable": 0,
+            "observed_heavy": 95,
+            "observed_light": 24,
+            "prediction_available": 119,
+            "prediction_unavailable": 0,
+            "provenance_counts": {
+              "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 2,
+              "public:pip_semantic_public:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 2,
+              "repo+public:pip_semantic:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 8,
+              "repo+public:shell_execution_graph:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 5,
+              "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 2,
+              "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 9,
+              "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 51,
+              "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 40
+            },
+            "short_null_imputed_light": 0,
+            "tn": 16,
+            "tp": 90
+          },
+          "pip_semantic_state": {
+            "accuracy": 0.8907563025210085,
+            "available_only_accuracy": 0.8907563025210085,
+            "composition_ambiguous": 0,
+            "composition_unavailable": 0,
+            "eligible_n": 119,
+            "fn": 5,
+            "fp": 8,
+            "heavy_count": 95,
+            "heavy_rate": 0.7983193277310925,
+            "label_source_counts": {
+              "observed_composed_heavy": 95,
+              "observed_composed_light": 24
+            },
+            "majority_class": "heavy",
+            "majority_class_accuracy": 0.7983193277310925,
+            "majority_light_accuracy": 0.2016806722689075,
+            "null_unavailable": 0,
+            "observed_heavy": 95,
+            "observed_light": 24,
+            "prediction_available": 119,
+            "prediction_unavailable": 0,
+            "provenance_counts": {
+              "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 2,
+              "public:pip_semantic_public:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 2,
+              "repo+public:pip_semantic_state:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 8,
+              "repo+public:shell_execution_graph:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 5,
+              "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 2,
+              "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 9,
+              "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 51,
+              "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 40
+            },
+            "short_null_imputed_light": 0,
+            "tn": 16,
+            "tp": 90
+          }
+        },
+        "majority": {
+          "accuracy": 0.7983193277310925,
+          "class": "heavy"
+        }
+      },
+      "prediction_changes": {
+        "pip_semantic": {
+          "carrier_changed": 4,
+          "carrier_harmful": 1,
+          "carrier_helpful": 3,
+          "carrier_neutral": 0,
+          "changed": 4,
+          "harmful": 1,
+          "helpful": 3,
+          "neutral": 0
+        },
+        "pip_semantic_state": {
+          "carrier_changed": 4,
+          "carrier_harmful": 1,
+          "carrier_helpful": 3,
+          "carrier_neutral": 0,
+          "changed": 4,
+          "harmful": 1,
+          "helpful": 3,
+          "neutral": 0
+        }
+      },
+      "threshold": 104857600.0
+    },
+    "peak_cpu_cores": {
+      "all": {
+        "arms": {
+          "current": {
+            "accuracy": 0.8995475113122172,
+            "available_only_accuracy": 0.8995475113122172,
+            "composition_ambiguous": 522,
+            "composition_unavailable": 0,
+            "eligible_n": 1105,
+            "fn": 72,
+            "fp": 39,
+            "heavy_count": 146,
+            "heavy_rate": 0.1321266968325792,
+            "label_source_counts": {
+              "composition_ambiguous": 522,
+              "null_unavailable": 165,
+              "observed_composed_heavy": 146,
+              "observed_composed_light": 320,
+              "short_null_composed_light": 639
+            },
+            "majority_class": "light",
+            "majority_class_accuracy": 0.8678733031674208,
+            "majority_light_accuracy": 0.8678733031674208,
+            "null_unavailable": 165,
+            "observed_heavy": 146,
+            "observed_light": 320,
+            "prediction_available": 1105,
+            "prediction_unavailable": 0,
+            "provenance_counts": {
+              "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 9,
+              "public:global:raw-argv-prefix-v1:hard-first-nonempty-v1": 6,
+              "public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 7,
+              "repo+public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 124,
+              "repo:argv_prefix_depth_2:raw-argv-prefix-v1:hard-first-nonempty-v1": 9,
+              "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 86,
+              "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 102,
+              "repo:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 11,
+              "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 444,
+              "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 307
+            },
+            "short_null_imputed_light": 639,
+            "tn": 920,
+            "tp": 74
+          },
+          "pip_semantic": {
+            "accuracy": 0.8995475113122172,
+            "available_only_accuracy": 0.8995475113122172,
+            "composition_ambiguous": 522,
+            "composition_unavailable": 0,
+            "eligible_n": 1105,
+            "fn": 72,
+            "fp": 39,
+            "heavy_count": 146,
+            "heavy_rate": 0.1321266968325792,
+            "label_source_counts": {
+              "composition_ambiguous": 522,
+              "null_unavailable": 165,
+              "observed_composed_heavy": 146,
+              "observed_composed_light": 320,
+              "short_null_composed_light": 639
+            },
+            "majority_class": "light",
+            "majority_class_accuracy": 0.8678733031674208,
+            "majority_light_accuracy": 0.8678733031674208,
+            "null_unavailable": 165,
+            "observed_heavy": 146,
+            "observed_light": 320,
+            "prediction_available": 1105,
+            "prediction_unavailable": 0,
+            "provenance_counts": {
+              "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 8,
+              "public:global:raw-argv-prefix-v1:hard-first-nonempty-v1": 6,
+              "public:pip_semantic_public:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 2,
+              "public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 7,
+              "repo+public:pip_semantic:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 8,
+              "repo+public:shell_execution_graph:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 2,
+              "repo+public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 124,
+              "repo:argv_prefix_depth_2:raw-argv-prefix-v1:hard-first-nonempty-v1": 9,
+              "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 86,
+              "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 93,
+              "repo:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 11,
+              "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 444,
+              "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 305
+            },
+            "short_null_imputed_light": 639,
+            "tn": 920,
+            "tp": 74
+          },
+          "pip_semantic_state": {
+            "accuracy": 0.8995475113122172,
+            "available_only_accuracy": 0.8995475113122172,
+            "composition_ambiguous": 522,
+            "composition_unavailable": 0,
+            "eligible_n": 1105,
+            "fn": 72,
+            "fp": 39,
+            "heavy_count": 146,
+            "heavy_rate": 0.1321266968325792,
+            "label_source_counts": {
+              "composition_ambiguous": 522,
+              "null_unavailable": 165,
+              "observed_composed_heavy": 146,
+              "observed_composed_light": 320,
+              "short_null_composed_light": 639
+            },
+            "majority_class": "light",
+            "majority_class_accuracy": 0.8678733031674208,
+            "majority_light_accuracy": 0.8678733031674208,
+            "null_unavailable": 165,
+            "observed_heavy": 146,
+            "observed_light": 320,
+            "prediction_available": 1105,
+            "prediction_unavailable": 0,
+            "provenance_counts": {
+              "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 8,
+              "public:global:raw-argv-prefix-v1:hard-first-nonempty-v1": 6,
+              "public:pip_semantic_public:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 2,
+              "public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 7,
+              "repo+public:pip_semantic_state:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 8,
+              "repo+public:shell_execution_graph:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 2,
+              "repo+public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 124,
+              "repo:argv_prefix_depth_2:raw-argv-prefix-v1:hard-first-nonempty-v1": 9,
+              "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 86,
+              "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 93,
+              "repo:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 11,
+              "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 444,
+              "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 305
+            },
+            "short_null_imputed_light": 639,
+            "tn": 920,
+            "tp": 74
+          }
+        },
+        "majority": {
+          "accuracy": 0.8678733031674208,
+          "class": "light"
+        }
+      },
+      "direction": "higher accuracy is better",
+      "pip": {
+        "arms": {
+          "current": {
+            "accuracy": 0.9827586206896551,
+            "available_only_accuracy": 0.9827586206896551,
+            "composition_ambiguous": 0,
+            "composition_unavailable": 0,
+            "eligible_n": 116,
+            "fn": 2,
+            "fp": 0,
+            "heavy_count": 2,
+            "heavy_rate": 0.017241379310344827,
+            "label_source_counts": {
+              "null_unavailable": 3,
+              "observed_composed_heavy": 2,
+              "observed_composed_light": 100,
+              "short_null_composed_light": 14
+            },
+            "majority_class": "light",
+            "majority_class_accuracy": 0.9827586206896551,
+            "majority_light_accuracy": 0.9827586206896551,
+            "null_unavailable": 3,
+            "observed_heavy": 2,
+            "observed_light": 100,
+            "prediction_available": 116,
+            "prediction_unavailable": 0,
+            "provenance_counts": {
+              "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 3,
+              "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 2,
+              "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 18,
+              "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 51,
+              "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 42
+            },
+            "short_null_imputed_light": 14,
+            "tn": 114,
+            "tp": 0
+          },
+          "pip_semantic": {
+            "accuracy": 0.9827586206896551,
+            "available_only_accuracy": 0.9827586206896551,
+            "composition_ambiguous": 0,
+            "composition_unavailable": 0,
+            "eligible_n": 116,
+            "fn": 2,
+            "fp": 0,
+            "heavy_count": 2,
+            "heavy_rate": 0.017241379310344827,
+            "label_source_counts": {
+              "null_unavailable": 3,
+              "observed_composed_heavy": 2,
+              "observed_composed_light": 100,
+              "short_null_composed_light": 14
+            },
+            "majority_class": "light",
+            "majority_class_accuracy": 0.9827586206896551,
+            "majority_light_accuracy": 0.9827586206896551,
+            "null_unavailable": 3,
+            "observed_heavy": 2,
+            "observed_light": 100,
+            "prediction_available": 116,
+            "prediction_unavailable": 0,
+            "provenance_counts": {
+              "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 2,
+              "public:pip_semantic_public:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 2,
+              "repo+public:pip_semantic:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 8,
+              "repo+public:shell_execution_graph:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 2,
+              "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 2,
+              "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 9,
+              "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 51,
+              "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 40
+            },
+            "short_null_imputed_light": 14,
+            "tn": 114,
+            "tp": 0
+          },
+          "pip_semantic_state": {
+            "accuracy": 0.9827586206896551,
+            "available_only_accuracy": 0.9827586206896551,
+            "composition_ambiguous": 0,
+            "composition_unavailable": 0,
+            "eligible_n": 116,
+            "fn": 2,
+            "fp": 0,
+            "heavy_count": 2,
+            "heavy_rate": 0.017241379310344827,
+            "label_source_counts": {
+              "null_unavailable": 3,
+              "observed_composed_heavy": 2,
+              "observed_composed_light": 100,
+              "short_null_composed_light": 14
+            },
+            "majority_class": "light",
+            "majority_class_accuracy": 0.9827586206896551,
+            "majority_light_accuracy": 0.9827586206896551,
+            "null_unavailable": 3,
+            "observed_heavy": 2,
+            "observed_light": 100,
+            "prediction_available": 116,
+            "prediction_unavailable": 0,
+            "provenance_counts": {
+              "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 2,
+              "public:pip_semantic_public:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 2,
+              "repo+public:pip_semantic_state:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 8,
+              "repo+public:shell_execution_graph:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 2,
+              "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 2,
+              "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 9,
+              "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 51,
+              "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 40
+            },
+            "short_null_imputed_light": 14,
+            "tn": 114,
+            "tp": 0
+          }
+        },
+        "majority": {
+          "accuracy": 0.9827586206896551,
+          "class": "light"
+        }
+      },
+      "prediction_changes": {
+        "pip_semantic": {
+          "carrier_changed": 0,
+          "carrier_harmful": 0,
+          "carrier_helpful": 0,
+          "carrier_neutral": 0,
+          "changed": 0,
+          "harmful": 0,
+          "helpful": 0,
+          "neutral": 0
+        },
+        "pip_semantic_state": {
+          "carrier_changed": 0,
+          "carrier_harmful": 0,
+          "carrier_helpful": 0,
+          "carrier_neutral": 0,
+          "changed": 0,
+          "harmful": 0,
+          "helpful": 0,
+          "neutral": 0
+        }
+      },
+      "threshold": 2.0
+    },
+    "sampled_peak_rss_mb": {
+      "all": {
+        "arms": {
+          "current": {
+            "accuracy": 0.913469387755102,
+            "available_only_accuracy": 0.913469387755102,
+            "composition_ambiguous": 505,
+            "composition_unavailable": 0,
+            "eligible_n": 1225,
+            "fn": 70,
+            "fp": 36,
+            "heavy_count": 142,
+            "heavy_rate": 0.11591836734693878,
+            "label_source_counts": {
+              "composition_ambiguous": 505,
+              "null_unavailable": 62,
+              "observed_composed_heavy": 142,
+              "observed_composed_light": 661,
+              "short_null_composed_light": 422
+            },
+            "majority_class": "light",
+            "majority_class_accuracy": 0.8840816326530613,
+            "majority_light_accuracy": 0.8840816326530612,
+            "null_unavailable": 62,
+            "observed_heavy": 142,
+            "observed_light": 661,
+            "prediction_available": 1225,
+            "prediction_unavailable": 0,
+            "provenance_counts": {
+              "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 10,
+              "public:global:raw-argv-prefix-v1:hard-first-nonempty-v1": 6,
+              "public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 10,
+              "repo+public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 137,
+              "repo:argv_prefix_depth_2:raw-argv-prefix-v1:hard-first-nonempty-v1": 12,
+              "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 102,
+              "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 104,
+              "repo:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 15,
+              "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 468,
+              "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 361
+            },
+            "short_null_imputed_light": 422,
+            "tn": 1047,
+            "tp": 72
+          },
+          "pip_semantic": {
+            "accuracy": 0.913469387755102,
+            "available_only_accuracy": 0.913469387755102,
+            "composition_ambiguous": 505,
+            "composition_unavailable": 0,
+            "eligible_n": 1225,
+            "fn": 70,
+            "fp": 36,
+            "heavy_count": 142,
+            "heavy_rate": 0.11591836734693878,
+            "label_source_counts": {
+              "composition_ambiguous": 505,
+              "null_unavailable": 62,
+              "observed_composed_heavy": 142,
+              "observed_composed_light": 661,
+              "short_null_composed_light": 422
+            },
+            "majority_class": "light",
+            "majority_class_accuracy": 0.8840816326530613,
+            "majority_light_accuracy": 0.8840816326530612,
+            "null_unavailable": 62,
+            "observed_heavy": 142,
+            "observed_light": 661,
+            "prediction_available": 1225,
+            "prediction_unavailable": 0,
+            "provenance_counts": {
+              "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 9,
+              "public:global:raw-argv-prefix-v1:hard-first-nonempty-v1": 6,
+              "public:pip_semantic_public:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 2,
+              "public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 10,
+              "repo+public:pip_semantic:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 8,
+              "repo+public:shell_execution_graph:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 5,
+              "repo+public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 137,
+              "repo:argv_prefix_depth_2:raw-argv-prefix-v1:hard-first-nonempty-v1": 12,
+              "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 102,
+              "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 95,
+              "repo:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 15,
+              "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 468,
+              "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 356
+            },
+            "short_null_imputed_light": 422,
+            "tn": 1047,
+            "tp": 72
+          },
+          "pip_semantic_state": {
+            "accuracy": 0.913469387755102,
+            "available_only_accuracy": 0.913469387755102,
+            "composition_ambiguous": 505,
+            "composition_unavailable": 0,
+            "eligible_n": 1225,
+            "fn": 70,
+            "fp": 36,
+            "heavy_count": 142,
+            "heavy_rate": 0.11591836734693878,
+            "label_source_counts": {
+              "composition_ambiguous": 505,
+              "null_unavailable": 62,
+              "observed_composed_heavy": 142,
+              "observed_composed_light": 661,
+              "short_null_composed_light": 422
+            },
+            "majority_class": "light",
+            "majority_class_accuracy": 0.8840816326530613,
+            "majority_light_accuracy": 0.8840816326530612,
+            "null_unavailable": 62,
+            "observed_heavy": 142,
+            "observed_light": 661,
+            "prediction_available": 1225,
+            "prediction_unavailable": 0,
+            "provenance_counts": {
+              "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 9,
+              "public:global:raw-argv-prefix-v1:hard-first-nonempty-v1": 6,
+              "public:pip_semantic_public:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 2,
+              "public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 10,
+              "repo+public:pip_semantic_state:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 8,
+              "repo+public:shell_execution_graph:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 5,
+              "repo+public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 137,
+              "repo:argv_prefix_depth_2:raw-argv-prefix-v1:hard-first-nonempty-v1": 12,
+              "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 102,
+              "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 95,
+              "repo:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 15,
+              "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 468,
+              "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 356
+            },
+            "short_null_imputed_light": 422,
+            "tn": 1047,
+            "tp": 72
+          }
+        },
+        "majority": {
+          "accuracy": 0.8840816326530613,
+          "class": "light"
+        }
+      },
+      "direction": "higher accuracy is better",
+      "pip": {
+        "arms": {
+          "current": {
+            "accuracy": 0.9830508474576272,
+            "available_only_accuracy": 0.9830508474576272,
+            "composition_ambiguous": 0,
+            "composition_unavailable": 0,
+            "eligible_n": 118,
+            "fn": 2,
+            "fp": 0,
+            "heavy_count": 2,
+            "heavy_rate": 0.01694915254237288,
+            "label_source_counts": {
+              "null_unavailable": 1,
+              "observed_composed_heavy": 2,
+              "observed_composed_light": 116
+            },
+            "majority_class": "light",
+            "majority_class_accuracy": 0.9830508474576272,
+            "majority_light_accuracy": 0.9830508474576272,
+            "null_unavailable": 1,
+            "observed_heavy": 2,
+            "observed_light": 116,
+            "prediction_available": 118,
+            "prediction_unavailable": 0,
+            "provenance_counts": {
+              "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 3,
+              "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 2,
+              "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 18,
+              "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 51,
+              "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 44
+            },
+            "short_null_imputed_light": 0,
+            "tn": 116,
+            "tp": 0
+          },
+          "pip_semantic": {
+            "accuracy": 0.9830508474576272,
+            "available_only_accuracy": 0.9830508474576272,
+            "composition_ambiguous": 0,
+            "composition_unavailable": 0,
+            "eligible_n": 118,
+            "fn": 2,
+            "fp": 0,
+            "heavy_count": 2,
+            "heavy_rate": 0.01694915254237288,
+            "label_source_counts": {
+              "null_unavailable": 1,
+              "observed_composed_heavy": 2,
+              "observed_composed_light": 116
+            },
+            "majority_class": "light",
+            "majority_class_accuracy": 0.9830508474576272,
+            "majority_light_accuracy": 0.9830508474576272,
+            "null_unavailable": 1,
+            "observed_heavy": 2,
+            "observed_light": 116,
+            "prediction_available": 118,
+            "prediction_unavailable": 0,
+            "provenance_counts": {
+              "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 2,
+              "public:pip_semantic_public:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 2,
+              "repo+public:pip_semantic:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 8,
+              "repo+public:shell_execution_graph:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 5,
+              "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 2,
+              "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 9,
+              "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 51,
+              "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 39
+            },
+            "short_null_imputed_light": 0,
+            "tn": 116,
+            "tp": 0
+          },
+          "pip_semantic_state": {
+            "accuracy": 0.9830508474576272,
+            "available_only_accuracy": 0.9830508474576272,
+            "composition_ambiguous": 0,
+            "composition_unavailable": 0,
+            "eligible_n": 118,
+            "fn": 2,
+            "fp": 0,
+            "heavy_count": 2,
+            "heavy_rate": 0.01694915254237288,
+            "label_source_counts": {
+              "null_unavailable": 1,
+              "observed_composed_heavy": 2,
+              "observed_composed_light": 116
+            },
+            "majority_class": "light",
+            "majority_class_accuracy": 0.9830508474576272,
+            "majority_light_accuracy": 0.9830508474576272,
+            "null_unavailable": 1,
+            "observed_heavy": 2,
+            "observed_light": 116,
+            "prediction_available": 118,
+            "prediction_unavailable": 0,
+            "provenance_counts": {
+              "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 2,
+              "public:pip_semantic_public:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 2,
+              "repo+public:pip_semantic_state:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 8,
+              "repo+public:shell_execution_graph:pip-install-semantic-jaccard-v1:current-or-pip-semantic-jaccard-v1": 5,
+              "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 2,
+              "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 9,
+              "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 51,
+              "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 39
+            },
+            "short_null_imputed_light": 0,
+            "tn": 116,
+            "tp": 0
+          }
+        },
+        "majority": {
+          "accuracy": 0.9830508474576272,
+          "class": "light"
+        }
+      },
+      "prediction_changes": {
+        "pip_semantic": {
+          "carrier_changed": 0,
+          "carrier_harmful": 0,
+          "carrier_helpful": 0,
+          "carrier_neutral": 0,
+          "changed": 0,
+          "harmful": 0,
+          "helpful": 0,
+          "neutral": 0
+        },
+        "pip_semantic_state": {
+          "carrier_changed": 0,
+          "carrier_harmful": 0,
+          "carrier_helpful": 0,
+          "carrier_neutral": 0,
+          "changed": 0,
+          "harmful": 0,
+          "helpful": 0,
+          "neutral": 0
+        }
+      },
+      "threshold": 500.0
+    }
+  },
+  "row_identity": {
+    "identical_command_ids_labels_and_availability": true,
+    "nonpip_probability_vectors_bit_identical": true,
+    "unique_sample_ids": true
+  },
+  "status": "development_exposed_pip_resource_transfer"
+}
