@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SQLGlot 80→20 command prediction</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #08101f; color: #f7f9fc; }
+    .slide { width: min(100vw, 1600px); aspect-ratio: 16 / 9; padding: 58px 70px 38px; background: radial-gradient(circle at 90% 5%, #173467 0, #0d1930 30%, #08101f 68%); display: flex; flex-direction: column; overflow: hidden; }
+    h1 { margin: 0; max-width: 1280px; font-size: 49px; line-height: 1.12; letter-spacing: -1.4px; }
+    .sub { margin: 15px 0 27px; color: #aebbd0; font-size: 21px; }
+    .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; flex: 1; min-height: 0; }
+    .card { padding: 22px 25px 18px; border: 1px solid #2b3d5d; border-radius: 18px; background: #101d32dc; }
+    .card-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 15px; }
+    h2 { margin: 0; font-size: 27px; }
+    .n { color: #93a6c4; font-size: 16px; }
+    .bar-row { display: grid; grid-template-columns: 118px 1fr 78px; gap: 12px; align-items: center; margin: 10px 0; font-size: 18px; }
+    .track { height: 18px; border-radius: 999px; background: #24334e; overflow: hidden; }
+    .bar { height: 100%; border-radius: inherit; }
+    .majority { background: #77849a; }
+    .frozen { background: #47a9ff; }
+    .dynamic { background: #39d3a2; }
+    .value { text-align: right; font-variant-numeric: tabular-nums; font-weight: 750; }
+    .delta { margin-top: 13px; color: #d7e2f1; font-size: 17px; }
+    .delta strong { color: #79e2c0; }
+    .definition { color: #93a6c4; font-size: 15px; }
+    footer { display: grid; grid-template-columns: 1.35fr 1fr; gap: 28px; margin-top: 24px; color: #aebbd0; font-size: 16px; line-height: 1.4; }
+    footer strong { color: #f7f9fc; }
+    .legend span { white-space: nowrap; margin-right: 18px; }
+    .dot { display: inline-block; width: 11px; height: 11px; margin-right: 6px; border-radius: 50%; }
+    .source { text-align: right; overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <main class="slide">
+    <h1>同 repo 的 KB 明显优于 Majority；但逐任务更新几乎没有额外收益</h1>
+    <p class="sub">SQLGlot：前 80 个 task 建库，后 20 个 task 按时间顺序测试｜评估单位 = 完整 command｜Accuracy ↑</p>
+
+    <section class="grid">
+      <article class="card">
+        <div class="card-head"><h2>Latency · 3 分类</h2><span class="n">n = 349 commands</span></div>
+        <div class="bar-row"><span>Majority</span><div class="track"><div class="bar majority" style="width:77.94%"></div></div><span class="value">77.94%</span></div>
+        <div class="bar-row"><span>Frozen KB</span><div class="track"><div class="bar frozen" style="width:86.25%"></div></div><span class="value">86.25%</span></div>
+        <div class="bar-row"><span>Dynamic KB</span><div class="track"><div class="bar dynamic" style="width:86.82%"></div></div><span class="value">86.82%</span></div>
+        <div class="delta">Frozen vs Majority <strong>+8.31 pp</strong> · Dynamic vs Frozen +0.57 pp</div>
+        <div class="definition">short ≤ 2 s · middle (2, 8] s · long &gt; 8 s</div>
+      </article>
+
+      <article class="card">
+        <div class="card-head"><h2>CPU peak · Heavy / Light</h2><span class="n">n = 210 / 349</span></div>
+        <div class="bar-row"><span>Majority</span><div class="track"><div class="bar majority" style="width:86.19%"></div></div><span class="value">86.19%</span></div>
+        <div class="bar-row"><span>Frozen KB</span><div class="track"><div class="bar frozen" style="width:90.48%"></div></div><span class="value">90.48%</span></div>
+        <div class="bar-row"><span>Dynamic KB</span><div class="track"><div class="bar dynamic" style="width:90.48%"></div></div><span class="value">90.48%</span></div>
+        <div class="delta">Frozen vs Majority <strong>+4.29 pp</strong> · Dynamic vs Frozen 0.00 pp</div>
+        <div class="definition">Heavy &gt; 2 cores · 103 bounds ambiguous · 36 unavailable</div>
+      </article>
+
+      <article class="card">
+        <div class="card-head"><h2>Memory peak · Heavy / Light</h2><span class="n">n = 237 / 349</span></div>
+        <div class="bar-row"><span>Majority</span><div class="track"><div class="bar majority" style="width:87.76%"></div></div><span class="value">87.76%</span></div>
+        <div class="bar-row"><span>Frozen KB</span><div class="track"><div class="bar frozen" style="width:91.14%"></div></div><span class="value">91.14%</span></div>
+        <div class="bar-row"><span>Dynamic KB</span><div class="track"><div class="bar dynamic" style="width:91.56%"></div></div><span class="value">91.56%</span></div>
+        <div class="delta">Frozen vs Majority <strong>+3.38 pp</strong> · Dynamic vs Frozen +0.42 pp</div>
+        <div class="definition">Heavy &gt; 500 MB sampled RSS · 101 bounds ambiguous · 11 unavailable</div>
+      </article>
+
+      <article class="card">
+        <div class="card-head"><h2>Disk I/O · Heavy / Light</h2><span class="n">n = 349 commands</span></div>
+        <div class="bar-row"><span>Majority</span><div class="track"><div class="bar majority" style="width:93.98%"></div></div><span class="value">93.98%</span></div>
+        <div class="bar-row"><span>Frozen KB</span><div class="track"><div class="bar frozen" style="width:99.14%"></div></div><span class="value">99.14%</span></div>
+        <div class="bar-row"><span>Dynamic KB</span><div class="track"><div class="bar dynamic" style="width:99.14%"></div></div><span class="value">99.14%</span></div>
+        <div class="delta">Frozen vs Majority <strong>+5.16 pp</strong> · Dynamic vs Frozen 0.00 pp</div>
+        <div class="definition">Heavy &gt; 100 MiB read + write · 全部 349 条真值可判定</div>
+      </article>
+    </section>
+
+    <footer>
+      <div>
+        <div class="legend"><span><i class="dot majority"></i>Majority：测试集中最多类别的常数预测</span><span><i class="dot frozen"></i>Frozen KB：80-task 冷启动后冻结</span><span><i class="dot dynamic"></i>Dynamic KB：每个测试 task 完成后更新</span></div>
+        <strong>结论：</strong>KB 的绝对预测有效；这 20 个测试 task 内，在线更新带来的增量很小。
+      </div>
+      <div class="source">Source: sqlglot80-20-current-baseline.json<br>development-exposed result · 2026-08-04</div>
+    </footer>
+  </main>
+</body>
+</html>

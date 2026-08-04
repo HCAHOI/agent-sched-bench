@@ -25,13 +25,14 @@ An opt-in ``repo_binary_first`` arbitration reorders step 3 ahead of steps 1-2,
 selecting the repository's binary-granularity node whenever it holds evidence.
 The default order is unchanged; see ``REPO_BINARY_FIRST_ARBITRATION``.
 
-Only observations completed strictly before a query become visible. Compound
-command bucket IDs remain uncomposed because sequential and pipeline clauses
-have different physical timing semantics.
+Only observations completed strictly before a query become visible. Command
+prediction composes empirical clause values by shell execution stage: pipeline
+members overlap, while successive stages run sequentially.
 """
 
 from __future__ import annotations
 
+import hashlib
 import heapq
 import math
 import re
@@ -72,6 +73,8 @@ GENERIC_ARGV_CANONICALIZER_VERSION = "generic-argv-v3-role"
 STRUCTURED_ARGV_REPRESENTATION = GENERIC_ARGV_CANONICALIZER_VERSION
 HARD_BACKOFF_ARBITRATION = "hard-first-nonempty-v1"
 POSTERIOR_SHRINKAGE_ARBITRATION = "public-local-posterior-v1"
+COMMAND_COMPOSITION_ARBITRATION = "empirical-shell-graph-v1"
+COMMAND_COMPOSITION_DRAWS = 256
 # Prefer the repository's binary-granularity node over deeper repository nodes.
 # Deepest-non-empty selects sparse exact/prefix nodes that usually hold no Heavy
 # observation, then falls through to a diluted cross-repository prior; the
@@ -262,13 +265,25 @@ class ClauseHeavyLightPrediction:
 
 @dataclass(frozen=True)
 class CommandLatencyBucketPrediction:
-    """Command result; compound commands remain explicitly uncomposed."""
+    """One command-level latency result composed from clause evidence."""
 
     repo: str
     command: str
     parse_failed: bool
     clause_bins: tuple[str, ...]
     prediction: ClauseLatencyBucketPrediction | None
+    unavailable_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class CommandResourceClassPrediction:
+    """One command-level resource-class result composed from clause evidence."""
+
+    repo: str
+    command: str
+    parse_failed: bool
+    clause_bins: tuple[str, ...]
+    classifications: dict[str, ClauseHeavyLightPrediction | None]
     unavailable_reason: str | None = None
 
 
@@ -560,6 +575,54 @@ def _clause_public_keys(bin_: str) -> tuple[NodeKey, ...]:
     """Public clause keys: coarse bin prior then global."""
 
     return (("bin", bin_), ("global", ""))
+
+
+def _command_stages(
+    clauses: Sequence[Mapping[str, Any]],
+) -> tuple[tuple[int, ...], ...] | None:
+    """Group ordered clauses into sequential stages of concurrent pipelines."""
+
+    stages: list[tuple[int, ...]] = []
+    pipeline: list[int] = []
+    for index, clause in enumerate(clauses):
+        if clause.get("in_subst") is True:
+            return None
+        if clause.get("in_pipe") is not True:
+            if pipeline:
+                stages.append(tuple(pipeline))
+                pipeline = []
+            stages.append((index,))
+            continue
+        position = clause.get("pipeline_position")
+        if position == 0:
+            if pipeline:
+                stages.append(tuple(pipeline))
+            pipeline = [index]
+        elif isinstance(position, int) and position == len(pipeline):
+            pipeline.append(index)
+        else:
+            return None
+    if pipeline:
+        stages.append(tuple(pipeline))
+    return tuple(stages)
+
+
+def _stratified_empirical_draws(
+    values: Sequence[float],
+    seed_material: str,
+) -> tuple[float, ...]:
+    """Deterministic marginally uniform draws without runtime RNG state."""
+
+    digest = hashlib.blake2s(seed_material.encode(), digest_size=4).digest()
+    offset = int.from_bytes(digest, "big") % COMMAND_COMPOSITION_DRAWS
+    return tuple(
+        values[
+            ((draw + offset) % COMMAND_COMPOSITION_DRAWS)
+            * len(values)
+            // COMMAND_COMPOSITION_DRAWS
+        ]
+        for draw in range(COMMAND_COMPOSITION_DRAWS)
+    )
 
 
 class ClauseResourceKB:
@@ -1139,6 +1202,78 @@ class ClauseResourceKB:
             for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS
         }
 
+    def _composed_command_values(
+        self,
+        repo: str,
+        command: str,
+        clauses: Sequence[Mapping[str, Any]],
+        source: str,
+    ) -> tuple[
+        tuple[float, ...],
+        tuple[tuple[Sequence[float], str, str, tuple[str, ...]], ...],
+    ] | None:
+        if self._shrinkage_alpha is not None:
+            return None
+        stages = _command_stages(clauses)
+        if stages is None:
+            return None
+        selected = tuple(
+            self._select(
+                repo,
+                source,
+                str(clause["bin"]),
+                tuple(str(value) for value in clause["argv"]),
+            )
+            for clause in clauses
+        )
+        if any(node is None for node in selected):
+            return None
+        nodes = tuple(node for node in selected if node is not None)
+        draws_by_clause = [
+            _stratified_empirical_draws(
+                node[0],
+                f"{command}\0{source}\0{index}\0{node[1]}\0{node[2]}",
+            )
+            for index, node in enumerate(nodes)
+        ]
+        composed: list[float] = []
+        for draw in range(COMMAND_COMPOSITION_DRAWS):
+            stage_values = [
+                (
+                    max(draws_by_clause[index][draw] for index in stage)
+                    if source == _LATENCY_MS
+                    else sum(draws_by_clause[index][draw] for index in stage)
+                )
+                for stage in stages
+            ]
+            composed.append(
+                sum(stage_values)
+                if source in {_LATENCY_MS, _DISK_READ_WRITE_BYTES_TOTAL}
+                else max(stage_values)
+            )
+        return tuple(_ordered_node(composed)), nodes
+
+    def _composed_prediction_provenance(
+        self,
+        nodes: Sequence[tuple[Sequence[float], str, str, tuple[str, ...]]],
+    ) -> dict[str, Any]:
+        scopes = {node[1] for node in nodes}
+        return {
+            "scope": (
+                "repo+public"
+                if scopes == {"repo", "public"}
+                else next(iter(scopes))
+            ),
+            "key_kind": "shell_execution_graph",
+            "evidence_count": min(len(node[0]) for node in nodes),
+            "fallback_path": tuple(
+                f"clause[{index}]:{node[1]}:{node[2]}"
+                for index, node in enumerate(nodes)
+            ),
+            "canonicalizer_version": self.canonicalizer_version,
+            "arbitration": COMMAND_COMPOSITION_ARBITRATION,
+        }
+
     def predict_command_latency_bucket_from_clauses(
         self,
         repo: str,
@@ -1149,7 +1284,7 @@ class ClauseResourceKB:
         command: str = "",
         parse_failed: bool = False,
     ) -> CommandLatencyBucketPrediction:
-        """Predict only a parsed single clause; never compose bucket IDs."""
+        """Predict one command, composing empirical clause values when needed."""
 
         self._advance(ts_start)
         effective = list(clauses)
@@ -1158,9 +1293,11 @@ class ClauseResourceKB:
         prediction = None
         if parse_failed:
             reason = "parse_failed"
-        elif len(effective) != 1:
-            reason = "compound_command_uncomposed"
-        else:
+        elif not effective:
+            reason = "no_executable_clause"
+        elif _command_stages(effective) is None:
+            reason = "compound_composition_unavailable"
+        elif len(effective) == 1:
             clause = effective[0]
             prediction = self.predict_clause_latency_bucket(
                 repo,
@@ -1168,12 +1305,97 @@ class ClauseResourceKB:
                 tuple(clause["argv"]),
                 buckets,
             )
+        else:
+            composed = self._composed_command_values(
+                repo,
+                command,
+                effective,
+                _LATENCY_MS,
+            )
+            if composed is None:
+                reason = "compound_composition_unavailable"
+            else:
+                values, nodes = composed
+                prediction = ClauseLatencyBucketPrediction(
+                    probability_by_bucket=self._bucket_probabilities(values, buckets),
+                    **self._composed_prediction_provenance(nodes),
+                )
         return CommandLatencyBucketPrediction(
             repo=repo,
             command=command,
             parse_failed=parse_failed,
             clause_bins=clause_bins,
             prediction=prediction,
+            unavailable_reason=reason,
+        )
+
+    def predict_command_resource_classes_from_clauses(
+        self,
+        repo: str,
+        clauses: Sequence[Mapping[str, Any]],
+        ts_start: float,
+        *,
+        command: str = "",
+        parse_failed: bool = False,
+    ) -> CommandResourceClassPrediction:
+        """Predict command CPU/RSS/Disk classes with the shell composer."""
+
+        self._advance(ts_start)
+        effective = list(clauses)
+        clause_bins = tuple(str(clause["bin"]) for clause in effective)
+        if parse_failed:
+            reason = "parse_failed"
+        elif not effective:
+            reason = "no_executable_clause"
+        elif _command_stages(effective) is None or (
+            len(effective) > 1 and self._shrinkage_alpha is not None
+        ):
+            reason = "compound_composition_unavailable"
+        else:
+            reason = None
+        classifications: dict[str, ClauseHeavyLightPrediction | None] = {}
+        if reason is None:
+            for resource, threshold in CANONICAL_RESOURCE_HEAVY_THRESHOLDS.items():
+                if len(effective) == 1:
+                    clause = effective[0]
+                    classifications[resource] = self.predict_clause_heavy_light(
+                        repo,
+                        str(clause["bin"]),
+                        tuple(clause["argv"]),
+                        resource,
+                    )
+                    continue
+                composed = self._composed_command_values(
+                    repo,
+                    command,
+                    effective,
+                    resource,
+                )
+                if composed is None:
+                    classifications[resource] = None
+                    continue
+                values, nodes = composed
+                probability_heavy = (
+                    len(values) - bisect_right(values, threshold)
+                ) / len(values)
+                classifications[resource] = ClauseHeavyLightPrediction(
+                    resource=resource,
+                    threshold=threshold,
+                    probability_heavy=probability_heavy,
+                    heavy_decision_threshold=self._heavy_decision_threshold,
+                    label=(
+                        "heavy"
+                        if probability_heavy > self._heavy_decision_threshold
+                        else "light"
+                    ),
+                    **self._composed_prediction_provenance(nodes),
+                )
+        return CommandResourceClassPrediction(
+            repo=repo,
+            command=command,
+            parse_failed=parse_failed,
+            clause_bins=clause_bins,
+            classifications=classifications,
             unavailable_reason=reason,
         )
 
@@ -1184,7 +1406,7 @@ class ClauseResourceKB:
         ts_start: float,
         buckets: LatencyBuckets,
     ) -> CommandLatencyBucketPrediction:
-        """Parse a command and predict its bucket when composition is unnecessary.
+        """Parse a command and predict its command-level latency bucket.
 
         Enforces the monotonic-query guard and releases causally-prior repo
         clauses before predicting.
@@ -1196,6 +1418,21 @@ class ClauseResourceKB:
             parsed["clauses"],
             ts_start,
             buckets,
+            command=command,
+            parse_failed=bool(parsed["parse_failed"]),
+        )
+
+    def predict_command_resource_classes(
+        self,
+        repo: str,
+        command: str,
+        ts_start: float,
+    ) -> CommandResourceClassPrediction:
+        parsed = parse_command_clauses(command)
+        return self.predict_command_resource_classes_from_clauses(
+            repo,
+            parsed["clauses"],
+            ts_start,
             command=command,
             parse_failed=bool(parsed["parse_failed"]),
         )
@@ -1330,6 +1567,8 @@ __all__ = [
     "CANONICAL_LATENCY_BUCKETS",
     "CANONICAL_LATENCY_BUCKET_EDGES_MS",
     "CANONICAL_RESOURCE_HEAVY_THRESHOLDS",
+    "COMMAND_COMPOSITION_ARBITRATION",
+    "COMMAND_COMPOSITION_DRAWS",
     "GENERIC_ARGV_CANONICALIZER_VERSION",
     "HARD_BACKOFF_ARBITRATION",
     "POSTERIOR_SHRINKAGE_ARBITRATION",
@@ -1342,6 +1581,7 @@ __all__ = [
     "ClauseObservation",
     "ClauseResourceKB",
     "CommandLatencyBucketPrediction",
+    "CommandResourceClassPrediction",
     "LatencyBuckets",
     "generic_argv_keys",
 ]

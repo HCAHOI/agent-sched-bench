@@ -8,9 +8,10 @@ current implementation or evaluation contracts.
 
 ## 1. Current objective
 
-Predict clause latency as one probability mass function over fixed ordered
-buckets, plus clause CPU peak, sampled RSS, and Disk I/O as independent
-Heavy/Light classifications.
+Predict each eligible `exec` command's latency as one probability mass function
+over fixed ordered buckets, plus command CPU peak, sampled RSS, and Disk I/O as
+independent Heavy/Light classifications. Clauses are the predictor's internal
+evidence units, not evaluation rows.
 
 The human-authorized fixed boundaries are, in milliseconds:
 
@@ -64,7 +65,7 @@ null value and `latency_ms < 500` is an imputed Light label. A null at or above
 500 ms remains unavailable. Reports must separate observed Heavy, observed
 Light, short-null-imputed Light, and null-unavailable counts. Primary resource
 diagnostics include eligible count, Heavy count/rate, TP/TN/FP/FN, accuracy,
-and the majority-Light baseline.
+the most frequent command label, and the constant-Light baseline.
 
 ## 2. One implementation for offline and online
 
@@ -74,7 +75,7 @@ only in their event source and metric sink.
 The canonical core exposes the equivalent of:
 
 ```python
-predict(repo, clauses, ts_start, runtime_context) -> bucket PMF + provenance
+predict(repo, command, parsed_clauses, ts_start) -> command predictions + provenance
 observe(completed_clause_observations) -> None
 ```
 
@@ -95,7 +96,7 @@ sufficient statistics.
 ```text
 externally parsed clauses
         ↓
-one ClauseResourceKB / predictor core
+one ClauseResourceKB / command predictor core
         ├── frozen cross-repo public binary/global evidence
         └── causal repo exact/prefix/binary evidence
         ↓
@@ -122,10 +123,12 @@ this repository, so it can be copied out and used on its own. The offline lane
 that reads this repository's trace formats lives outside it, in
 `src/tool_resource_eval/`.
 
-Compound-command bucket composition is out of scope. Sequential clauses can
-accumulate while pipeline members overlap; until a physical composition
-contract is separately approved, compound commands return an explicit
-unavailable result rather than ORing, adding, or maximizing bucket IDs.
+Compound commands compose empirical clause values, never bucket IDs. The parser
+groups clauses into sequential stages and concurrent pipelines. Per empirical
+draw, latency takes pipeline max then stage sum; CPU and RSS take pipeline sum
+then stage max; Disk I/O sums all clauses. Deterministic stratified draws retain
+each selected clause node's empirical marginal. Substitutions and unsupported
+structures remain explicitly unavailable.
 
 ## 4. Evidence boundary
 
@@ -184,8 +187,9 @@ Run the canonical core on the development-exposed SWE fit/replay corpora with
 the exact `2000/8000` boundaries. Report three-class accuracy, the
 same-evaluation majority baseline, the 3x3 confusion matrix, class counts, and
 the required provenance. This is a diagnostic baseline, not confirmation.
-P1 scores each mapped non-structural clause against its aligned segment latency;
-outer command bucket composition remains out of scope.
+P1 scores each eligible command. Exact latency truth is the tool-call duration.
+CPU/RSS command truth is emitted only when retained clause aggregates prove the
+same side of the threshold under pipeline bounds; Disk truth is additive.
 Use manifest task order as a serialized virtual deployment: predict every call
 in one source trace before successful finalization releases its observations,
 preserve repository state across later traces, and use synthetic monotonic
@@ -215,6 +219,31 @@ similarity while latency is the only target.
 
 An open amendment is legitimate; an amendment described as pre-registration is
 not. Each entry records the date and what was visible when the criterion moved.
+
+### 2026-08-04 — command-level evaluation and physical composition
+
+Visible before this amendment: the completed SQLGlot-100 trace corpus, earlier
+clause-level SWE diagnostics, and plumbing-only synthetic tests. No formal
+SQLGlot 80/20 command-level baseline number had been read.
+
+The human corrected the evaluation unit to the whole `exec` command: majority
+is one constant class over the identical held-out command labels, while clauses
+only provide finer-grained KB evidence. Compound prediction now uses the shell
+stage composition in §3. Command latency truth comes directly from
+`tool_calls.json`. Retained clause aggregates cannot reconstruct simultaneous
+CPU/RSS peaks exactly, so their command labels use strict lower/upper bounds and
+withhold ambiguous cases; Disk bytes are additive. The SQLGlot first-80/last-20
+result is development-exposed and cannot be described as confirmation. Matching
+online ingestion, downstream pipeline members inform command labels but do not
+enter KB evidence because their wall time includes upstream blocking.
+
+The first post-amendment run was read before discovering that the older public
+aggregate had omitted those structural fields; it therefore retained downstream
+pipeline evidence and is preserved with `.pre-public-structure-fix.invalid` in
+its filename. The corrected loader reconstructs structure by exact ordered
+alignment with each call's static parser output, excludes unsupported alignments,
+and then applies the online head-only evidence rule. Both runs are
+development-exposed; only the corrected artifact is reportable.
 
 ### 2026-07-28 — three-bucket development objective
 
@@ -331,14 +360,16 @@ untouched.
 Every result-affecting KB/predictor task must preserve:
 
 ```text
-Targets = latency bucket PMF plus CPU peak, sampled RSS, and Disk I/O Heavy/Light.
+Evaluation unit = one eligible exec command; clauses are internal KB evidence.
+Targets = command latency PMF plus CPU peak, sampled RSS, and Disk I/O Heavy/Light.
 Boundaries_ms = [2000, 8000].
 Latency truth = exact bucket in [0,2000], (2000,8000], or (8000,+inf).
 Latency prediction = argmax normalized PMF; exact ties select the shorter bucket.
 Primary latency score = exact three-class accuracy vs same-evaluation majority.
 Resource truth = CPU > 2 cores; RSS > 500 decimal MB; Disk read+write > 100 MiB.
 Short-null resource policy = Light only when explicitly marked and latency_ms < 500.
-Scores include n, positive rate, TP/TN/FP/FN, accuracy, and majority-Light baseline.
+Scores include n, positive rate, TP/TN/FP/FN, accuracy, majority, and constant-Light.
 Offline and online use one predictor implementation and identical causal updates.
-No compound composition, legacy predictor path, or non-SWE benchmark access.
+Compound composition follows shell stages; never OR or combine bucket IDs.
+No legacy predictor path or non-SWE benchmark access.
 ```

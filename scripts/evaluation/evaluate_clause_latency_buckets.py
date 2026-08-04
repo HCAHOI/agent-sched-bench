@@ -14,7 +14,7 @@ import random
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -25,14 +25,21 @@ sys.path.insert(0, str(_REPO_ROOT))
 # Canonical clause telemetry is already loaded by the resource-class evaluator;
 # reuse that loader rather than re-deriving the artifact shape here.
 from scripts.evaluation.evaluate_clause_resource_classes import (  # noqa: E402
+    CommandRow,
     Row,
+    _empty_confusion,
+    _finalize_resource_metric,
+    command_resource_label,
     load_rows,
 )
 from tool_resource_eval.labels import repo_of  # noqa: E402
 from tool_resource.runtime_kb import (  # noqa: E402
     CANONICAL_LATENCY_BUCKETS,
+    CANONICAL_RESOURCE_HEAVY_THRESHOLDS,
     SHRINKAGE_ALPHA_GRID,
+    SHORT_NULL_LIGHT_MAX_LATENCY_MS,
     STRUCTURED_ARGV_REPRESENTATION,
+    ClauseHeavyLightPrediction,
     ClauseLatencyBucketPrediction,
     ClauseResourceKB,
 )
@@ -159,6 +166,20 @@ def _scored_row(
         shrinkage_alpha=None if prediction is None else prediction.shrinkage_alpha,
         unavailable_reason=unavailable_reason,
         mapping_evidence="canonical_clause_telemetry",
+    )
+
+
+def _command_scored_row(
+    row: CommandRow,
+    prediction: ClauseLatencyBucketPrediction | None,
+    unavailable_reason: str | None,
+) -> ScoredRow:
+    return replace(
+        _scored_row(row.clauses[0], row.call_index, prediction, unavailable_reason),
+        sample_id=f"{row.task_id}:{row.manifest_index}:call:{row.call_index}",
+        command=row.command,
+        label_bucket=CANONICAL_LATENCY_BUCKETS.bucket_id(row.duration_ms),
+        mapping_evidence="command_predictor",
     )
 
 
@@ -663,6 +684,265 @@ def _telemetry_metrics(
             )
         },
     }
+
+
+def _record_resource_prediction(
+    raw: dict[str, Any],
+    label: bool,
+    prediction: ClauseHeavyLightPrediction | None,
+) -> None:
+    if prediction is None:
+        raw["prediction_unavailable"] += 1
+        return
+    raw["provenance_counts"][
+        f"{prediction.scope}:{prediction.key_kind}:"
+        f"{prediction.canonicalizer_version}:{prediction.arbitration}"
+    ] += 1
+    predicted = prediction.label == "heavy"
+    outcome = "tp" if label and predicted else "fn" if label else "fp" if predicted else "tn"
+    raw[outcome] += 1
+
+
+def _accuracy_delta(left: float | None, right: float | None) -> float | None:
+    return None if left is None or right is None else 100.0 * (left - right)
+
+
+def evaluate_prequential_commands(
+    public_rows: Sequence[Row],
+    task_ids: Sequence[str],
+    clause_rows: Sequence[Row],
+    command_rows: Sequence[CommandRow],
+    provenance: Mapping[str, Any],
+    *,
+    warmup_task_count: int,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Evaluate the command predictor after a causal same-repo warm-up."""
+
+    if not 0 < warmup_task_count < len(task_ids):
+        raise ValueError("warmup task count must leave at least one test task")
+    if len(set(task_ids)) != len(task_ids):
+        raise ValueError("target task order contains duplicates")
+    target_repos = {repo_of(task_id) for task_id in task_ids}
+    if len(target_repos) != 1:
+        raise ValueError("same-repo prequential evaluation requires one target repo")
+    target_repo = next(iter(target_repos))
+    if any(row.repo == target_repo for row in public_rows):
+        raise ValueError("public evidence contains the target repository")
+    task_index = {task_id: index for index, task_id in enumerate(task_ids)}
+    if any(
+        row.task_id not in task_index
+        or row.manifest_index != task_index[row.task_id]
+        for row in (*clause_rows, *command_rows)
+    ):
+        raise ValueError("target rows differ from results.jsonl task order")
+
+    clauses_by_task: dict[str, list[Row]] = defaultdict(list)
+    commands_by_task: dict[str, list[CommandRow]] = defaultdict(list)
+    for row in clause_rows:
+        clauses_by_task[row.task_id].append(row)
+    for row in command_rows:
+        commands_by_task[row.task_id].append(row)
+    public_evidence = [
+        row
+        for row in public_rows
+        if row.structure_known and row.pipeline_position <= 0
+    ]
+    kb = ClauseResourceKB.fit_public(
+        row.observation(0.0, 1.0) for row in public_evidence
+    )
+    for ordinal, task_id in enumerate(task_ids[:warmup_task_count]):
+        query_ts = float(ordinal * 2 + 3)
+        settle_ts = query_ts + 0.5
+        for row in clauses_by_task[task_id]:
+            kb.observe_completed_clause(row.observation(query_ts, settle_ts))
+
+    snapshot = kb.to_json_obj()
+    kbs = {
+        "current_dynamic": ClauseResourceKB.from_json_obj(snapshot),
+        "frozen_at_80": ClauseResourceKB.from_json_obj(snapshot),
+    }
+    latency_arms: dict[str, list[ScoredRow]] = {
+        arm: [] for arm in kbs
+    }
+    resource_raw = {
+        resource: {
+            "label_source_counts": Counter(),
+            "arms": {arm: _empty_confusion() for arm in kbs},
+        }
+        for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS
+    }
+    sidecar: list[dict[str, Any]] = []
+    test_ids = list(task_ids[warmup_task_count:])
+    for ordinal, task_id in enumerate(test_ids, start=warmup_task_count):
+        query_ts = float(ordinal * 2 + 3)
+        for row in commands_by_task[task_id]:
+            predictions: dict[str, dict[str, Any]] = {}
+            resource_predictions: dict[
+                str, Mapping[str, ClauseHeavyLightPrediction | None]
+            ] = {}
+            for arm, arm_kb in kbs.items():
+                latency = arm_kb.predict_command_latency_bucket(
+                    row.repo,
+                    row.command,
+                    query_ts,
+                    CANONICAL_LATENCY_BUCKETS,
+                )
+                resources = arm_kb.predict_command_resource_classes(
+                    row.repo,
+                    row.command,
+                    query_ts,
+                )
+                resource_predictions[arm] = resources.classifications
+                latency_arms[arm].append(
+                    _command_scored_row(
+                        row,
+                        latency.prediction,
+                        latency.unavailable_reason,
+                    )
+                )
+                predictions[arm] = {
+                    "latency": (
+                        None
+                        if latency.prediction is None
+                        else _argmax_probabilities(
+                            latency.prediction.probability_by_bucket
+                        )
+                    ),
+                    **{
+                        resource: None if prediction is None else prediction.label
+                        for resource, prediction in resources.classifications.items()
+                    },
+                }
+            resource_labels: dict[str, bool | None] = {}
+            resource_sources: dict[str, str] = {}
+            for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS:
+                label, source = command_resource_label(row, resource)
+                resource_labels[resource] = label
+                resource_sources[resource] = source
+                resource_raw[resource]["label_source_counts"][source] += 1
+                if label is None:
+                    continue
+                for arm in kbs:
+                    _record_resource_prediction(
+                        resource_raw[resource]["arms"][arm],
+                        label,
+                        resource_predictions[arm][resource],
+                    )
+            sidecar.append(
+                {
+                    "sample_id": f"{row.task_id}:{row.call_index}",
+                    "task_id": row.task_id,
+                    "command": row.command,
+                    "clause_count": len(row.clauses),
+                    "latency_label": CANONICAL_LATENCY_BUCKETS.bucket_id(
+                        row.duration_ms
+                    ),
+                    "resource_labels": resource_labels,
+                    "resource_label_sources": resource_sources,
+                    **predictions,
+                }
+            )
+        settle_ts = query_ts + 0.5
+        for row in clauses_by_task[task_id]:
+            kbs["current_dynamic"].observe_completed_clause(
+                row.observation(query_ts, settle_ts)
+            )
+
+    latency_identity = [
+        (row.sample_id, row.label_bucket) for row in latency_arms["current_dynamic"]
+    ]
+    if latency_identity != [
+        (row.sample_id, row.label_bucket) for row in latency_arms["frozen_at_80"]
+    ]:
+        raise AssertionError("command latency arms differ in rows or labels")
+    dynamic_latency = _telemetry_metrics(latency_arms["current_dynamic"])
+    frozen_latency = _telemetry_metrics(latency_arms["frozen_at_80"])
+    resources: dict[str, Any] = {}
+    for resource, raw in resource_raw.items():
+        dynamic = _finalize_resource_metric(
+            raw["arms"]["current_dynamic"],
+            raw["label_source_counts"],
+        )
+        frozen = _finalize_resource_metric(
+            raw["arms"]["frozen_at_80"],
+            raw["label_source_counts"],
+        )
+        resources[resource] = {
+            "threshold": CANONICAL_RESOURCE_HEAVY_THRESHOLDS[resource],
+            "majority": {
+                "class": dynamic["majority_class"],
+                "accuracy": dynamic["majority_class_accuracy"],
+            },
+            "constant_light_accuracy": dynamic["majority_light_accuracy"],
+            "current_dynamic": dynamic,
+            "frozen_at_80": frozen,
+            "dynamic_minus_frozen_percentage_points": _accuracy_delta(
+                dynamic["accuracy"], frozen["accuracy"]
+            ),
+            "dynamic_minus_majority_percentage_points": _accuracy_delta(
+                dynamic["accuracy"], dynamic["majority_class_accuracy"]
+            ),
+        }
+    result = {
+        "status": "development_exposed_same_repo_command_prequential_baseline",
+        "claim_bearing": False,
+        "objective": "command_latency_and_resource_prediction",
+        "inputs": dict(provenance),
+        "protocol": {
+            "evaluation_unit": "eligible_exec_command",
+            "warmup_task_count": warmup_task_count,
+            "test_task_count": len(test_ids),
+            "public_layer": "frozen cross-repository bin/global",
+            "local_layer": "causal repository exact/argv-prefix/bin",
+            "arbitration": "hard repository-first first-nonempty",
+            "dynamic_update": "after successful whole-task finalization",
+            "majority": "constant class from the identical eligible test labels",
+            "compound_composition": "empirical-shell-graph-v1",
+        },
+        "tasks": {
+            "ordered": list(task_ids),
+            "warmup": list(task_ids[:warmup_task_count]),
+            "test": test_ids,
+        },
+        "counts": {
+            "public_clause_observations": len(public_evidence),
+            "target_clause_observations": len(clause_rows),
+            "target_commands": len(command_rows),
+            "test_commands": len(sidecar),
+        },
+        "row_identity": {
+            "identical_command_rows_and_labels_across_arms": True,
+            "test_sample_ids_unique": len({row["sample_id"] for row in sidecar})
+            == len(sidecar),
+        },
+        "latency": {
+            "bucket_edges_ms": list(CANONICAL_LATENCY_BUCKETS.edges_ms),
+            "bucket_intervals": _bucket_intervals(),
+            "majority": {
+                "class": dynamic_latency["majority_class"],
+                "class_id": dynamic_latency["majority_class_id"],
+                "accuracy": dynamic_latency["majority_class_accuracy"],
+            },
+            "current_dynamic": dynamic_latency,
+            "frozen_at_80": frozen_latency,
+            "dynamic_minus_frozen_percentage_points": _accuracy_delta(
+                dynamic_latency["three_class_accuracy"],
+                frozen_latency["three_class_accuracy"],
+            ),
+        },
+        "resources": resources,
+        "label_policy": {
+            "latency_truth": "tool_calls.json command duration_ms",
+            "resource_truth": (
+                "strict bounds from retained clause aggregates; ambiguous "
+                "pipeline peaks are unavailable"
+            ),
+            "short_null_light_max_latency_ms_exclusive": (
+                SHORT_NULL_LIGHT_MAX_LATENCY_MS
+            ),
+        },
+    }
+    return result, sidecar
 
 
 def _percentile(values: Sequence[float], probability: float) -> float:

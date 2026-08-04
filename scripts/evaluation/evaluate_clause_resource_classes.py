@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Mapping
@@ -25,6 +26,8 @@ from tool_resource.runtime_kb import (  # noqa: E402
     STRUCTURED_ARGV_REPRESENTATION,
     ClauseObservation,
     ClauseResourceKB,
+    _command_stages,
+    parse_command_clauses,
 )
 
 _RESOURCE_FIELDS = {
@@ -45,6 +48,11 @@ class Row:
     peak_cpu_cores: float | None
     sampled_peak_rss_mb: float | None
     disk_read_write_bytes_total: float | None
+    in_loop: bool = False
+    in_pipe: bool = False
+    in_subst: bool = False
+    pipeline_position: int = -1
+    structure_known: bool = True
 
     def observation(self, ts_start: float, ts_end: float) -> ClauseObservation:
         return ClauseObservation(
@@ -58,7 +66,23 @@ class Row:
             sampled_peak_rss_mb=self.sampled_peak_rss_mb,
             disk_read_write_bytes_total=self.disk_read_write_bytes_total,
             impute_short_null_resources_as_light=True,
+            in_loop=self.in_loop,
+            in_pipe=self.in_pipe,
+            in_subst=self.in_subst,
+            pipeline_position=self.pipeline_position,
         )
+
+
+@dataclass(frozen=True)
+class CommandRow:
+    task_id: str
+    repo: str
+    manifest_index: int
+    call_index: int
+    call_id: str
+    command: str
+    duration_ms: float
+    clauses: tuple[Row, ...]
 
 
 @dataclass(frozen=True)
@@ -135,6 +159,85 @@ def _number(value: Any) -> float | None:
     return None if value is None else float(value)
 
 
+def _row_from_clause(
+    task_id: str,
+    manifest_index: int,
+    clause: Mapping[str, Any],
+    structure: Mapping[str, Any] | None = None,
+) -> Row | None:
+    if clause.get("eligible_for_kb") is not True:
+        return None
+    latency = clause.get("latency_ms")
+    argv = clause.get("argv")
+    if latency is None or not isinstance(argv, list) or not argv:
+        return None
+    disk = clause.get("disk_io")
+    disk_total = (
+        disk.get("read_write_bytes_total") if isinstance(disk, Mapping) else None
+    )
+    shape = clause if structure is None else structure
+    return Row(
+        task_id=task_id,
+        repo=repo_of(task_id),
+        manifest_index=manifest_index,
+        bin=str(clause["bin"]),
+        argv=tuple(str(value) for value in argv),
+        latency_ms=float(latency),
+        peak_cpu_cores=_number(clause.get("peak_cpu_cores")),
+        sampled_peak_rss_mb=_number(clause.get("sampled_peak_rss_mb")),
+        disk_read_write_bytes_total=_number(disk_total),
+        in_loop=shape.get("in_loop") is True,
+        in_pipe=shape.get("in_pipe") is True,
+        in_subst=shape.get("in_subst") is True,
+        pipeline_position=int(shape.get("pipeline_position", -1)),
+        structure_known=structure is not None
+        or all(
+            key in clause
+            for key in ("in_loop", "in_pipe", "in_subst", "pipeline_position")
+        ),
+    )
+
+
+def _aligned_structures(
+    telemetry: Mapping[str, Any],
+) -> list[Mapping[str, Any] | None]:
+    observed = telemetry.get("clauses", [])
+    static = telemetry.get("static_word_intent")
+    parsed = parse_command_clauses(str(telemetry.get("command", "")))
+    structures = parsed["clauses"]
+    identity = lambda row: (  # noqa: E731 - local matching key
+        str(row.get("bin")),
+        tuple(map(str, row.get("argv", []))),
+    )
+    if (
+        not isinstance(observed, list)
+        or not isinstance(static, list)
+        or parsed["parse_failed"] is not False
+        or len(static) != len(structures)
+        or any(identity(left) != identity(right) for left, right in zip(static, structures))
+    ):
+        return [None] * len(observed)
+
+    def greedy(indices: range) -> list[int] | None:
+        matches: list[int] = []
+        remaining = iter(indices)
+        for clause in observed[:: indices.step]:
+            match = next((index for index in remaining if identity(static[index]) == identity(clause)), None)
+            if match is None:
+                return None
+            matches.append(match)
+        return matches[:: indices.step]
+
+    earliest = greedy(range(len(static)))
+    latest = greedy(range(len(static) - 1, -1, -1))
+    if earliest is None or latest is None:
+        return [None] * len(observed)
+    return [
+        structures[left] if left == right else None
+        for left, right in zip(earliest, latest, strict=True)
+    ]
+
+
 def load_rows(path: Path) -> list[Row]:
     rows: list[Row] = []
     with path.open(encoding="utf-8") as handle:
@@ -153,38 +256,142 @@ def load_rows(path: Path) -> list[Row]:
             manifest_index = data.get("manifest_index")
             if not isinstance(task_id, str) or not isinstance(manifest_index, int):
                 raise ValueError(f"{path}: clause telemetry row lacks task identity")
-            for clause in telemetry.get("clauses", []):
-                if (
-                    not isinstance(clause, dict)
-                    or clause.get("eligible_for_kb") is not True
-                ):
+            clauses = telemetry.get("clauses", [])
+            for clause, structure in zip(
+                clauses, _aligned_structures(telemetry), strict=True
+            ):
+                if not isinstance(clause, Mapping):
                     continue
-                latency = clause.get("latency_ms")
-                argv = clause.get("argv")
-                if latency is None or not isinstance(argv, list) or not argv:
-                    continue
-                disk = clause.get("disk_io")
-                disk_total = (
-                    disk.get("read_write_bytes_total")
-                    if isinstance(disk, dict)
-                    else None
-                )
-                rows.append(
-                    Row(
-                        task_id=task_id,
-                        repo=repo_of(task_id),
-                        manifest_index=manifest_index,
-                        bin=str(clause["bin"]),
-                        argv=tuple(str(value) for value in argv),
-                        latency_ms=float(latency),
-                        peak_cpu_cores=_number(clause.get("peak_cpu_cores")),
-                        sampled_peak_rss_mb=_number(clause.get("sampled_peak_rss_mb")),
-                        disk_read_write_bytes_total=_number(disk_total),
-                    )
-                )
+                row = _row_from_clause(task_id, manifest_index, clause, structure)
+                if row is not None:
+                    rows.append(row)
     if not rows:
         raise ValueError(f"{path}: no eligible clause telemetry rows")
     return rows
+
+
+def load_run_rows(run_dir: Path) -> tuple[list[str], list[Row], list[CommandRow]]:
+    """Load only successful final attempts referenced by a collector run."""
+
+    run_dir = run_dir.resolve()
+    results_path = run_dir / "results.jsonl"
+    task_ids: list[str] = []
+    rows: list[Row] = []
+    commands: list[CommandRow] = []
+    seen: set[str] = set()
+    with results_path.open(encoding="utf-8") as handle:
+        for manifest_index, line in enumerate(handle):
+            record = json.loads(line)
+            task_id = record.get("instance_id")
+            attempt_value = record.get("attempt_dir")
+            if (
+                not isinstance(task_id, str)
+                or not isinstance(attempt_value, str)
+                or record.get("success") is not True
+            ):
+                raise ValueError(
+                    f"{results_path}: result {manifest_index} is not a successful "
+                    "final attempt"
+                )
+            if task_id in seen:
+                raise ValueError(f"{results_path}: duplicate task {task_id}")
+            seen.add(task_id)
+            attempt_dir = Path(attempt_value)
+            if not attempt_dir.is_absolute():
+                attempt_dir = run_dir / attempt_dir
+            attempt_dir = attempt_dir.resolve()
+            if not attempt_dir.is_relative_to(run_dir) or attempt_dir.parent.name != task_id:
+                raise ValueError(
+                    f"{results_path}: attempt path does not belong to task {task_id}"
+                )
+            artifact_path = attempt_dir / "resource_observations.json"
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+            required_status = {
+                "collection_validity": "valid",
+                "workload_execution": "completed",
+                "telemetry_quality": "ok",
+                "cleanup": "ok",
+            }
+            mismatches = {
+                key: artifact.get(key)
+                for key, expected in required_status.items()
+                if artifact.get(key) != expected
+            }
+            if mismatches:
+                raise ValueError(
+                    f"{artifact_path}: final telemetry is not evidence-valid: "
+                    f"{mismatches}"
+                )
+            tool_calls_path = attempt_dir / "tool_calls.json"
+            tool_calls = json.loads(tool_calls_path.read_text(encoding="utf-8"))
+            if not isinstance(tool_calls, list):
+                raise ValueError(f"{tool_calls_path}: expected a JSON array")
+            exec_calls: dict[str, Mapping[str, Any]] = {}
+            for tool_call in tool_calls:
+                if not isinstance(tool_call, Mapping) or tool_call.get("tool") != "exec":
+                    continue
+                tool_id = tool_call.get("id")
+                if not isinstance(tool_id, str) or "call_" not in tool_id:
+                    raise ValueError(f"{tool_calls_path}: exec call lacks an id")
+                call_id = tool_id[tool_id.index("call_") :]
+                if call_id in exec_calls:
+                    raise ValueError(f"{tool_calls_path}: duplicate exec call {call_id}")
+                exec_calls[call_id] = tool_call
+            task_ids.append(task_id)
+            for call_index, call in enumerate(artifact.get("calls", [])):
+                if not isinstance(call, Mapping) or call.get("eligible_for_kb") is not True:
+                    continue
+                call_id = call.get("tool_call_id")
+                command = call.get("command")
+                if not isinstance(call_id, str) or not isinstance(command, str):
+                    raise ValueError(f"{artifact_path}: eligible call lacks identity")
+                tool_call = exec_calls.get(call_id)
+                tool_input = None if tool_call is None else tool_call.get("input")
+                duration_ms = None if tool_call is None else tool_call.get("duration_ms")
+                if (
+                    not isinstance(tool_input, Mapping)
+                    or tool_input.get("command") != command
+                    or not isinstance(duration_ms, (int, float))
+                    or isinstance(duration_ms, bool)
+                    or not math.isfinite(duration_ms)
+                    or duration_ms < 0.0
+                ):
+                    raise ValueError(
+                        f"{artifact_path}: eligible call {call_id} has no matching "
+                        "tool-call duration"
+                    )
+                call_rows: list[Row] = []
+                for clause in call.get("clauses", []):
+                    if not isinstance(clause, Mapping):
+                        continue
+                    row = _row_from_clause(task_id, manifest_index, clause)
+                    if row is not None:
+                        call_rows.append(row)
+                        if row.pipeline_position <= 0:
+                            rows.append(row)
+                if not call_rows:
+                    raise ValueError(
+                        f"{artifact_path}: eligible call {call_id} has no eligible clauses"
+                    )
+                commands.append(
+                    CommandRow(
+                        task_id=task_id,
+                        repo=repo_of(task_id),
+                        manifest_index=manifest_index,
+                        call_index=call_index,
+                        call_id=call_id,
+                        command=command,
+                        duration_ms=float(duration_ms),
+                        clauses=tuple(call_rows),
+                    )
+                )
+    if not task_ids:
+        raise ValueError(f"{results_path}: no successful final tasks")
+    if not rows:
+        raise ValueError(f"{run_dir}: no eligible clause telemetry rows")
+    if not commands:
+        raise ValueError(f"{run_dir}: no eligible command rows")
+    return task_ids, rows, commands
 
 
 def _label(row: Row, resource: str) -> tuple[bool | None, str]:
@@ -195,6 +402,59 @@ def _label(row: Row, resource: str) -> tuple[bool | None, str]:
     if row.latency_ms < SHORT_NULL_LIGHT_MAX_LATENCY_MS:
         return False, "short_null_imputed_light"
     return None, "null_unavailable"
+
+
+def command_resource_label(
+    row: CommandRow,
+    resource: str,
+) -> tuple[bool | None, str]:
+    """Return only command labels proven by the retained clause aggregates."""
+
+    threshold = CANONICAL_RESOURCE_HEAVY_THRESHOLDS[resource]
+    field = _RESOURCE_FIELDS[resource]
+    bounds: list[tuple[float, float]] = []
+    saw_short_null = False
+    saw_long_null = False
+    for clause in row.clauses:
+        value = getattr(clause, field)
+        if value is not None:
+            bounds.append((value, value))
+        elif clause.latency_ms < SHORT_NULL_LIGHT_MAX_LATENCY_MS:
+            bounds.append((0.0, threshold))
+            saw_short_null = True
+        else:
+            bounds.append((0.0, math.inf))
+            saw_long_null = True
+    stages = _command_stages(
+        [
+            {
+                "in_pipe": clause.in_pipe,
+                "in_subst": clause.in_subst,
+                "pipeline_position": clause.pipeline_position,
+            }
+            for clause in row.clauses
+        ]
+    )
+    if stages is None:
+        return None, "composition_unavailable"
+    if resource == "disk_read_write_bytes_total":
+        lower = sum(bound[0] for bound in bounds)
+        upper = sum(bound[1] for bound in bounds)
+    else:
+        lower = max(max(bounds[index][0] for index in stage) for stage in stages)
+        upper = max(sum(bounds[index][1] for index in stage) for stage in stages)
+    if lower > threshold:
+        return True, "observed_composed_heavy"
+    if upper <= threshold:
+        source = (
+            "short_null_composed_light"
+            if saw_short_null
+            else "observed_composed_light"
+        )
+        return False, source
+    if saw_long_null:
+        return None, "null_unavailable"
+    return None, "composition_ambiguous"
 
 
 def _empty_confusion() -> dict[str, Any]:
@@ -217,20 +477,33 @@ def _finalize_resource_metric(
     label_eligible_n = sum(
         count
         for source, count in label_source_counts.items()
-        if source != "null_unavailable"
+        if source
+        not in {"null_unavailable", "composition_ambiguous", "composition_unavailable"}
     )
     if predicted_n + raw["prediction_unavailable"] != label_eligible_n:
         raise AssertionError("resource confusion matrix does not reconcile")
-    heavy = label_source_counts["observed_heavy"]
+    heavy = sum(
+        count for source, count in label_source_counts.items() if source.endswith("heavy")
+    )
+    light = label_eligible_n - heavy
+    majority_class = "heavy" if heavy > light else "light"
     return {
         "eligible_n": label_eligible_n,
         "prediction_available": predicted_n,
-        "observed_heavy": label_source_counts["observed_heavy"],
-        "observed_light": label_source_counts["observed_light"],
-        "short_null_imputed_light": label_source_counts[
-            "short_null_imputed_light"
-        ],
+        "observed_heavy": heavy,
+        "observed_light": sum(
+            label_source_counts[source]
+            for source in ("observed_light", "observed_composed_light")
+        ),
+        "short_null_imputed_light": sum(
+            label_source_counts[source]
+            for source in ("short_null_imputed_light", "short_null_composed_light")
+        ),
         "null_unavailable": label_source_counts["null_unavailable"],
+        "composition_ambiguous": label_source_counts["composition_ambiguous"],
+        "composition_unavailable": label_source_counts[
+            "composition_unavailable"
+        ],
         "heavy_count": heavy,
         "heavy_rate": heavy / label_eligible_n if label_eligible_n else None,
         "accuracy": (
@@ -243,6 +516,10 @@ def _finalize_resource_metric(
         ),
         "majority_light_accuracy": (
             1.0 - heavy / label_eligible_n if label_eligible_n else None
+        ),
+        "majority_class": majority_class if label_eligible_n else None,
+        "majority_class_accuracy": (
+            max(heavy, light) / label_eligible_n if label_eligible_n else None
         ),
         "tp": tp,
         "tn": tn,

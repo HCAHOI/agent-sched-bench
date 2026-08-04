@@ -16,9 +16,11 @@ from scripts.evaluation.evaluate_clause_latency_buckets import (
     _telemetry_scored_rows,
     _validate_partition,
     evaluate_clause_telemetry,
+    evaluate_prequential_commands,
 )
 from scripts.evaluation.evaluate_clause_resource_classes import (
     CandidateSSelection,
+    CommandRow,
     Row,
     evaluate as evaluate_resources,
     load_candidate_s_selection,
@@ -122,6 +124,80 @@ def test_cli_requires_both_telemetry_corpora() -> None:
     assert candidate_args.candidate_s is True
 
 
+def test_command_prequential_baseline_updates_only_between_tasks() -> None:
+    mib = 1024 * 1024
+
+    def row(task: int, latency: float, heavy: bool) -> Row:
+        return Row(
+            task_id=f"target__repo-{task}",
+            repo="target__repo",
+            manifest_index=task - 1,
+            bin="x",
+            argv=("x",),
+            latency_ms=latency,
+            peak_cpu_cores=3.0 if heavy else 1.0,
+            sampled_peak_rss_mb=600.0 if heavy else 100.0,
+            disk_read_write_bytes_total=(200 if heavy else 1) * mib,
+        )
+
+    warm = row(1, 3000.0, False)
+    test_rows = [row(2, 9000.0, True), row(2, 9000.0, True), row(3, 9000.0, True)]
+    clauses = [warm, *test_rows]
+    commands = [
+        CommandRow(
+            task_id=clause.task_id,
+            repo=clause.repo,
+            manifest_index=clause.manifest_index,
+            call_index=call_index,
+            call_id=f"call-{index}",
+            command="x",
+            duration_ms=clause.latency_ms,
+            clauses=(clause,),
+        )
+        for index, (call_index, clause) in enumerate(
+            zip((0, 0, 1, 0), clauses, strict=True)
+        )
+    ]
+    public = [
+        Row(
+            task_id="public__repo-1",
+            repo="public__repo",
+            manifest_index=0,
+            bin="x",
+            argv=("x",),
+            latency_ms=100.0,
+            peak_cpu_cores=1.0,
+            sampled_peak_rss_mb=100.0,
+            disk_read_write_bytes_total=mib,
+        )
+    ]
+
+    result, sidecar = evaluate_prequential_commands(
+        public,
+        ["target__repo-1", "target__repo-2", "target__repo-3"],
+        clauses,
+        commands,
+        {"fixture": True},
+        warmup_task_count=1,
+    )
+
+    assert len(sidecar) == 3
+    assert [item["current_dynamic"]["latency"] for item in sidecar] == [1, 1, 2]
+    assert [item["frozen_at_80"]["latency"] for item in sidecar] == [1, 1, 1]
+    assert result["latency"]["majority"] == {
+        "class": "long",
+        "class_id": 2,
+        "accuracy": 1.0,
+    }
+    assert result["latency"]["current_dynamic"]["three_class_accuracy"] == 1 / 3
+    assert result["latency"]["frozen_at_80"]["three_class_accuracy"] == 0.0
+    for metric in result["resources"].values():
+        assert metric["majority"] == {"class": "heavy", "accuracy": 1.0}
+        assert metric["constant_light_accuracy"] == 0.0
+        assert metric["current_dynamic"]["accuracy"] == 1 / 3
+        assert metric["frozen_at_80"]["accuracy"] == 0.0
+
+
 def _telemetry_record(
     task_id: str,
     manifest_index: int,
@@ -152,6 +228,34 @@ def _telemetry_record(
 def _write_telemetry(path: Path, lines: list[str]) -> Path:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
+
+
+def test_public_loader_recovers_pipeline_positions(tmp_path: Path) -> None:
+    record = json.loads(
+        _telemetry_record(
+            "owner__repo-1",
+            0,
+            (("a", ("a",), 1.0), ("b", ("b",), 1.0)),
+        )
+    )
+    telemetry = record["data"]["clause_telemetry"]
+    telemetry["command"] = "a | b"
+    telemetry["static_word_intent"] = [
+        {"bin": "a", "argv": ["a"]},
+        {"bin": "b", "argv": ["b"]},
+    ]
+    path = tmp_path / "public.jsonl"
+    path.write_text(json.dumps(record) + "\n")
+    assert [row.pipeline_position for row in load_rows(path)] == [0, 1]
+
+    telemetry["command"] = "a | a"
+    telemetry["static_word_intent"] = [
+        {"bin": "a", "argv": ["a"]},
+        {"bin": "a", "argv": ["a"]},
+    ]
+    telemetry["clauses"] = telemetry["clauses"][:1]
+    path.write_text(json.dumps(record) + "\n")
+    assert load_rows(path)[0].structure_known is False
 
 
 def test_clause_telemetry_path_is_causal_and_reports_bucket_semantics(

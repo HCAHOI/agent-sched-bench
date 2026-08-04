@@ -581,26 +581,49 @@ def test_repo_prefix_backoff_and_isolation() -> None:
     assert other.probability_by_bucket == (1.0, 0.0)
 
 
-def test_leading_cd_command_is_still_compound_and_not_composed() -> None:
+def test_compound_command_composes_sequential_and_pipeline_stages() -> None:
     buckets = LatencyBuckets((1000.0,))
+    mib = 1024 * 1024
     kb = _fit(
-        _obs("pub", "cd", ("cd", "/tmp"), 0.0, 1.0, latency_ms=1.0),
-        _obs("pub", "cat", ("cat", "x"), 1.0, 2.0, latency_ms=2000.0),
+        _obs(
+            "pub",
+            "a",
+            ("a",),
+            0.0,
+            1.0,
+            latency_ms=600.0,
+            cpu=1.5,
+            rss=300.0,
+            disk=60 * mib,
+        )
     )
 
-    leading_cd = kb.predict_command_latency_bucket(
-        "r1", "cd /tmp && cat x", 10.0, buckets
+    sequential = kb.predict_command_latency_bucket("r1", "a; a", 10.0, buckets)
+    pipeline = kb.predict_command_latency_bucket("r1", "a | a", 11.0, buckets)
+    substitution = kb.predict_command_latency_bucket("r1", "x=$(a)", 11.0, buckets)
+    sequential_resources = kb.predict_command_resource_classes(
+        "r1", "a; a", 12.0
     )
-    compound = kb.predict_command_latency_bucket(
-        "r1", "cat x && echo done", 11.0, buckets
-    )
+    pipeline_resources = kb.predict_command_resource_classes("r1", "a | a", 13.0)
 
-    assert leading_cd.clause_bins == ("cd", "cat")
-    assert leading_cd.prediction is None
-    assert leading_cd.unavailable_reason == "compound_command_uncomposed"
-    assert compound.clause_bins == ("cat", "echo")
-    assert compound.prediction is None
-    assert compound.unavailable_reason == "compound_command_uncomposed"
+    assert sequential.prediction is not None
+    assert sequential.prediction.probability_by_bucket == (0.0, 1.0)
+    assert pipeline.prediction is not None
+    assert pipeline.prediction.probability_by_bucket == (1.0, 0.0)
+    assert substitution.unavailable_reason == "compound_composition_unavailable"
+    assert sequential.prediction.arbitration == "empirical-shell-graph-v1"
+    assert {
+        resource: prediction.label
+        for resource, prediction in sequential_resources.classifications.items()
+    } == {
+        "peak_cpu_cores": "light",
+        "sampled_peak_rss_mb": "light",
+        "disk_read_write_bytes_total": "heavy",
+    }
+    assert all(
+        prediction.label == "heavy"
+        for prediction in pipeline_resources.classifications.values()
+    )
 
 
 def test_external_clauses_advance_state_and_backdated_queries_fail() -> None:

@@ -1395,43 +1395,34 @@ class ResourceService:
         parsed: Mapping[str, Any],
         query_timestamp: float,
     ) -> dict[str, Any]:
-        clauses = list(parsed["clauses"])
-        reason = None
-        if parsed["parse_failed"]:
-            reason = "parse_failed"
-        elif len(clauses) != 1:
-            reason = "compound_command_uncomposed"
-        if reason is not None:
-            return {
-                "command": command,
-                "clause_bins": [str(clause["bin"]) for clause in clauses],
-                "classifications": {},
-                "unavailable_reason": reason,
-            }
-        clause = clauses[0]
         try:
             with run.lock:
-                predictions = run.kb.predict_clause_resource_classes(
+                prediction = run.kb.predict_command_resource_classes_from_clauses(
                     run.workspace_scope,
-                    str(clause["bin"]),
-                    tuple(clause["argv"]),
-                    ts_start=query_timestamp,
+                    parsed["clauses"],
+                    query_timestamp,
+                    command=command,
+                    parse_failed=bool(parsed["parse_failed"]),
                 )
             return {
                 "command": command,
-                "clause_bins": [str(clause["bin"])],
+                "clause_bins": list(prediction.clause_bins),
                 "classifications": {
                     resource: (
-                        None if prediction is None else dataclasses.asdict(prediction)
+                        None
+                        if classification is None
+                        else dataclasses.asdict(classification)
                     )
-                    for resource, prediction in predictions.items()
+                    for resource, classification in prediction.classifications.items()
                 },
-                "unavailable_reason": None,
+                "unavailable_reason": prediction.unavailable_reason,
             }
         except Exception as exc:  # noqa: BLE001 - latency prediction remains usable
             return {
                 "command": command,
-                "clause_bins": [str(clause["bin"])],
+                "clause_bins": [
+                    str(clause["bin"]) for clause in parsed.get("clauses", [])
+                ],
                 "classifications": {},
                 "unavailable_reason": f"{type(exc).__name__}: {exc}",
             }

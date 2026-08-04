@@ -62,8 +62,9 @@ tool_resource:
 ```
 
 Latency intervals are `[0, 2000]`, `(2000, 8000]`, and `(8000, +inf)`: an
-exact boundary belongs to the lower bucket. Compound-command buckets are not
-composed.
+exact boundary belongs to the lower bucket. Command prediction composes raw
+empirical clause values by shell stage: pipeline members overlap and successive
+stages run sequentially; it never composes bucket IDs.
 
 The serving default remains `raw-argv-prefix-v1`: repository exact/prefix/bin
 evidence backs off to public bin/global evidence. Development evaluation may
