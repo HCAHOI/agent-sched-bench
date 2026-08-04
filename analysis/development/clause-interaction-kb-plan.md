@@ -61,7 +61,7 @@ Do not change `alpha`, flags, support thresholds, or package-specific rules.
 Obtain one bounded independent review before reading the formal result, then
 commit the implementation and result artifact.
 
-## 3. Phase B — fixed second tool: pytest
+## 3. Phase B — fixed second tool: pytest (complete, no-go)
 
 Run this phase only if Phase A passes. Failure does not authorize switching to
 `apt` or another tool.
@@ -85,8 +85,8 @@ its unchanged frozen public prior. The pytest candidate may use semantic
 evidence only from settled earlier SQLGlot tasks and falls back to Current when
 none exists. Before reading pytest labels, require at least 100 parsed pytest
 commands, coverage across at least 20 tasks, and 20 commands whose semantic
-signature has causal earlier-task evidence but whose raw argv has no exact
-earlier-task match; otherwise stop.
+signature has causal earlier-task evidence but whose Current exact clause key
+has no earlier-task match; otherwise stop.
 
 Latency passes only if the pytest subset and overall accuracy are both strictly
 higher than Current, changed commands are net helpful, positive net gains span
@@ -95,6 +95,13 @@ bit-identical. Report paired
 task-cluster bootstrap uncertainty without tuning on it. Only after this gate
 passes, transfer the unchanged representation to CPU, RSS, and Disk without
 target-specific parser or weight changes.
+
+Observed after freezing the gate: coverage passed at 339 parsed commands, 88
+tasks, and 125 non-exact carriers. Accuracy improved by four commands overall
+and on the pytest subset, with four helpful, zero harmful, and three neutral
+hard changes. The gain spanned four tasks but only one positive-net semantic
+signature, so the frozen two-signature gate failed. Resource transfer and any
+replacement second tool are stopped.
 
 ## 4. Phase C — state identifiability
 

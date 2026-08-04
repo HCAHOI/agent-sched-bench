@@ -19,6 +19,7 @@ from scripts.evaluation.evaluate_clause_latency_buckets import (  # noqa: E402
     evaluate_pip_semantics,
     evaluate_poset_resources,
     evaluate_prequential_commands,
+    evaluate_pytest_semantics,
 )
 from scripts.evaluation.evaluate_clause_resource_classes import (  # noqa: E402
     load_rows,
@@ -101,6 +102,11 @@ def main() -> None:
         type=Path,
         help="transfer pip semantics when this matching latency result passed",
     )
+    parser.add_argument(
+        "--pytest-semantics",
+        action="store_true",
+        help="score the frozen SQLGlot-local pytest work signature",
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--dump-rows", type=Path, required=True)
     args = parser.parse_args()
@@ -141,6 +147,7 @@ def main() -> None:
             args.poset_resources_after_latency,
             args.pip_semantics,
             args.pip_resources_after_latency,
+            args.pytest_semantics,
         )
     )
     if selected_modes > 1:
@@ -184,6 +191,16 @@ def main() -> None:
             {**provenance, "latency_gate_result": str(gate_path)},
             json.loads(gate_path.read_text(encoding="utf-8")),
             expected_pip_baseline=(119, 97),
+        )
+    elif args.pytest_semantics:
+        result, rows = evaluate_pytest_semantics(
+            public,
+            task_ids,
+            clauses,
+            commands,
+            provenance,
+            expected_current=(1792, 1568),
+            expected_coverage=(398, 339, 88, 125),
         )
     else:
         result, rows = evaluate_prequential_commands(

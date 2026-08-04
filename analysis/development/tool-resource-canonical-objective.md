@@ -121,7 +121,7 @@ Authoritative artifacts:
 - `analysis/results/tool-resource-clause-interactions-20260804/pip-carrier-audit-latency-rows.jsonl`
 - `analysis/results/tool-resource-clause-interactions-20260804/semantic-work-signature.html`
 
-### Phase B — second tool in the same SQLGlot corpus: next
+### Phase B — second tool in the same SQLGlot corpus: complete, no-go
 
 The fixed second tool is pytest. Its semantic evidence may come only from
 causally settled earlier SQLGlot tasks. Current retains its unchanged frozen
@@ -133,14 +133,19 @@ Before reading pytest labels, require all of:
 - at least 100 parsed pytest commands;
 - coverage across at least 20 SQLGlot tasks; and
 - at least 20 commands whose semantic signature has causal earlier-task
-  evidence but whose raw argv has no exact earlier-task match.
+  evidence but whose Current exact clause key has no earlier-task match.
 
-Failure stops Phase B without changing tools or thresholds. If coverage passes,
-the latency candidate passes only when overall and pytest-subset accuracy both
-strictly exceed Current, helpful changes outnumber harmful ones, positive net
-gain spans at least two tasks and two semantic signatures, and every non-pytest
-PMF is bit-identical. Only a passing latency representation transfers unchanged
-to CPU, RSS, and Disk.
+The pre-label coverage gate passed with 339 parsed pytest commands across 88
+tasks and 125 non-exact carriers. The frozen latency run then improved Current
+from 1,568/1,792 (87.500%) to 1,572/1,792 (87.723%) overall, and from 284/398
+(71.357%) to 288/398 (72.362%) on pytest commands. Seven hard predictions
+changed: four helpfully, none harmfully, and three neutrally. Non-pytest PMFs
+were bit-identical.
+
+The result is nevertheless a frozen no-go: positive net gain covered four
+tasks but only one semantic signature, the single-file pytest shape, below the
+required two signatures. Phase B therefore stops without changing the parser,
+tool, thresholds, or gate, and does not transfer to CPU, RSS, or Disk.
 
 State identifiability, controlled state intervention, and scheduler
 actionability remain downstream gates in `clause-interaction-kb-plan.md`. They
@@ -150,10 +155,9 @@ cannot authorize new collection or scheduler implementation by themselves.
 
 - The Phase A numbers above were visible before Phase B was corrected from a
   cross-repository SWE test to a same-repository SQLGlot test.
-- At correction time, no SQLGlot pytest coverage count, pytest label, Phase B
-  prediction, or Phase B result artifact had been read or produced. The scope
-  correction therefore fixes the experimental condition; it does not respond
-  to a Phase B outcome.
+- At the SQLGlot-only scope correction, no SQLGlot pytest coverage count or
+  label had been read. Coverage was then frozen and passed before the Phase B
+  labels above were read.
 - Earlier SWE100/277 trie, generic-argv, resource, and concurrency diagnostics
   are development-exposed negative evidence. They motivate controlling
   repository relatedness but do not evaluate the SQLGlot semantic candidate.

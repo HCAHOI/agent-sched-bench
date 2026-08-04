@@ -46,6 +46,11 @@ from tool_resource.pip_semantics import (  # noqa: E402
     apt_installs_system_pip,
     parse_pip_install,
 )
+from tool_resource.pytest_semantics import (  # noqa: E402
+    PytestSignature,
+    is_pytest_invocation,
+    parse_pytest,
+)
 from tool_resource.runtime_kb import (  # noqa: E402
     CANONICAL_LATENCY_BUCKETS,
     CANONICAL_RESOURCE_HEAVY_THRESHOLDS,
@@ -67,6 +72,7 @@ INTERACTION_ALPHA = 16.0
 INTERACTION_FEATURE_VERSION = "generic-argv-v3-role-interaction-set-v1"
 PIP_SEMANTIC_FEATURE_VERSION = "pip-install-semantic-jaccard-v1"
 PIP_CANONICAL_FEATURE_VERSION = "pip-install-canonical-exact-v1"
+PYTEST_SEMANTIC_FEATURE_VERSION = "pytest-work-shape-exact-v1"
 
 
 @dataclass(frozen=True)
@@ -172,6 +178,14 @@ class _PipMatch:
     evidence: _WeightedClauseEvidence
     state_fallback: bool
     contributors: tuple[Mapping[str, Any], ...] = ()
+
+
+@dataclass(frozen=True)
+class _PytestObservation:
+    observation_id: int
+    task_id: str
+    row: Row
+    signature: PytestSignature
 
 
 def _interaction_feature_set(
@@ -684,6 +698,82 @@ class _PipSemanticKB:
         )
 
 
+class _PytestSemanticKB:
+    """Repo-local exact semantic memory for the frozen SQLGlot experiment."""
+
+    def __init__(self) -> None:
+        self._next_observation_id = 0
+        self._exact: dict[
+            tuple[str, tuple[str, ...]], list[_PytestObservation]
+        ] = defaultdict(list)
+        self._semantic: dict[PytestSignature, list[_PytestObservation]] = defaultdict(list)
+
+    def observe(
+        self,
+        task_id: str,
+        row: Row,
+        signature: PytestSignature,
+    ) -> None:
+        observation = _PytestObservation(
+            self._next_observation_id,
+            task_id,
+            row,
+            signature,
+        )
+        self._next_observation_id += 1
+        self._exact[(row.bin, row.argv[1:])].append(observation)
+        self._semantic[signature].append(observation)
+
+    def query(
+        self,
+        row: Row | _InteractionQueryClause,
+        signature: PytestSignature,
+        current_selected: tuple[Sequence[float], str, str, tuple[str, ...]],
+        current_public_selected: tuple[
+            Sequence[float], str, str, tuple[str, ...]
+        ],
+    ) -> tuple[_WeightedClauseEvidence, tuple[Mapping[str, Any], ...]]:
+        if self._exact.get((row.bin, row.argv[1:])):
+            return _current_weighted_evidence(current_selected), ()
+        matches = tuple(self._semantic.get(signature, ()))
+        if not matches:
+            return _current_weighted_evidence(current_selected), ()
+        public_values, scope, kind, _path = current_public_selected
+        if scope != "public" or kind not in {"bin", "global"}:
+            raise AssertionError("pytest prior is not a Current public node")
+        public_weight = INTERACTION_ALPHA / len(public_values)
+        evidence = _WeightedClauseEvidence(
+            values=(
+                *(item.row.latency_ms for item in matches),
+                *map(float, public_values),
+            ),
+            weights=(
+                *((1.0,) * len(matches)),
+                *((public_weight,) * len(public_values)),
+            ),
+            exact=False,
+            nonexact_local=True,
+            local_observation_count=len(matches),
+            effective_sample_size=float(len(matches)),
+            contributing_task_ids=frozenset(item.task_id for item in matches),
+            max_shared_feature_count=0,
+            key_kind="pytest_semantic",
+            public_key_kind=f"current_public_{kind}",
+        )
+        return evidence, tuple(
+            {
+                "scope": "repo",
+                "observation_id": item.observation_id,
+                "task_id": item.task_id,
+                "manifest_index": item.row.manifest_index,
+                "signature": asdict(item.signature),
+                "value": item.row.latency_ms,
+                "pooled_weight": 1.0,
+            }
+            for item in matches
+        )
+
+
 def _pip_query_contexts(
     command: str,
     state: PipTaskState,
@@ -926,6 +1016,145 @@ def _predict_pip_latency_command(
         "carrier": True,
         "pip_clause_count": sum(signature is not None for signature in signatures),
         "state_fallback": state_fallback,
+        "clauses": clause_diagnostics,
+    }
+
+
+def _predict_pytest_latency_command(
+    memory: _PytestSemanticKB,
+    current: ClauseResourceKB,
+    row: CommandRow,
+    parsed: Mapping[str, Any],
+    current_prediction: ClauseLatencyBucketPrediction,
+) -> tuple[ClauseLatencyBucketPrediction, dict[str, Any]]:
+    parsed_clauses = parsed.get("clauses", ())
+    query_clauses = _interaction_query_clauses(parsed_clauses)
+    pytest_clauses = tuple(is_pytest_invocation(clause.argv) for clause in query_clauses)
+    signatures = tuple(
+        parse_pytest(clause.argv) if is_pytest else None
+        for clause, is_pytest in zip(query_clauses, pytest_clauses, strict=True)
+    )
+    if not any(pytest_clauses):
+        return current_prediction, {
+            "carrier": False,
+            "pytest_command": False,
+            "parsed": False,
+            "clauses": [],
+        }
+    if any(is_pytest and signature is None for is_pytest, signature in zip(pytest_clauses, signatures, strict=True)):
+        return current_prediction, {
+            "carrier": False,
+            "pytest_command": True,
+            "parsed": False,
+            "clauses": [],
+        }
+    stages = _command_stages(parsed_clauses)
+    if stages is None:
+        raise ValueError(f"{row.call_id}: pytest query structure is unavailable")
+    evidence: list[_WeightedClauseEvidence] = []
+    composition_seeds: list[str] = []
+    clause_diagnostics: list[dict[str, Any]] = []
+    semantic_used = False
+    for clause, is_pytest, signature in zip(
+        query_clauses, pytest_clauses, signatures, strict=True
+    ):
+        selected = current._select(row.repo, "latency_ms", clause.bin, clause.argv)
+        if selected is None:
+            raise ValueError("Current has no clause evidence")
+        composition_seeds.append(
+            f"{row.command}\0latency_ms\0{len(composition_seeds)}\0"
+            f"{selected[1]}\0{selected[2]}"
+        )
+        contributors: tuple[Mapping[str, Any], ...] = ()
+        if not is_pytest:
+            item = _current_weighted_evidence(selected)
+        else:
+            assert signature is not None
+            _local, public_selected = current._select_independent_scopes(
+                row.repo, "latency_ms", clause.bin, clause.argv
+            )
+            if public_selected is None:
+                raise ValueError("Current has no frozen public clause evidence")
+            item, contributors = memory.query(
+                clause,
+                signature,
+                selected,
+                public_selected,
+            )
+            semantic_used |= item.key_kind == "pytest_semantic"
+        evidence.append(item)
+        clause_diagnostics.append(
+            {
+                "pytest": is_pytest,
+                "exact": item.exact,
+                "key_kind": item.key_kind,
+                "local_observation_count": item.local_observation_count,
+                "contributing_task_ids": sorted(item.contributing_task_ids),
+                "contributors": list(contributors),
+                "signature": None if signature is None else asdict(signature),
+            }
+        )
+    if not semantic_used:
+        return current_prediction, {
+            "carrier": False,
+            "pytest_command": True,
+            "parsed": True,
+            "clauses": clause_diagnostics,
+        }
+    if len(evidence) == 1:
+        probabilities = _weighted_bucket_probabilities(
+            evidence[0].values,
+            evidence[0].weights,
+        )
+    else:
+        draws = tuple(
+            _weighted_stratified_draws(
+                item.values,
+                item.weights,
+                composition_seeds[index],
+            )
+            for index, item in enumerate(evidence)
+        )
+        composed = tuple(
+            sum(max(draws[index][draw] for index in stage) for stage in stages)
+            for draw in range(COMMAND_COMPOSITION_DRAWS)
+        )
+        probabilities = _weighted_bucket_probabilities(
+            composed,
+            (1.0,) * len(composed),
+        )
+    local_counts = [item.local_observation_count for item in evidence]
+    public_counts = [len(item.values) - item.local_observation_count for item in evidence]
+    prediction = ClauseLatencyBucketPrediction(
+        probability_by_bucket=probabilities,
+        scope="repo+public",
+        key_kind=(
+            evidence[0].key_kind if len(evidence) == 1 else "shell_execution_graph"
+        ),
+        evidence_count=min(len(item.values) for item in evidence),
+        fallback_path=tuple(
+            f"clause[{index}]:{item.key_kind}" for index, item in enumerate(evidence)
+        ),
+        canonicalizer_version=PYTEST_SEMANTIC_FEATURE_VERSION,
+        arbitration="current-or-pytest-semantic-exact-v1",
+        local_key_kind="pytest_semantic",
+        local_evidence_count=min(local_counts),
+        public_key_kind="+".join(
+            sorted(
+                {
+                    item.public_key_kind
+                    for item in evidence
+                    if item.public_key_kind is not None
+                }
+            )
+        ),
+        public_evidence_count=min(public_counts),
+        shrinkage_alpha=INTERACTION_ALPHA,
+    )
+    return prediction, {
+        "carrier": True,
+        "pytest_command": True,
+        "parsed": True,
         "clauses": clause_diagnostics,
     }
 
@@ -2529,6 +2758,8 @@ def _carrier_net_spread(
     candidate: Sequence[ScoredRow],
     diagnostics: Sequence[Mapping[str, Any]],
     reference_diagnostics: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    tool_key: str = "pip",
 ) -> dict[str, Any]:
     """Count independent task/signature groups with positive carrier net gain."""
 
@@ -2555,7 +2786,7 @@ def _carrier_net_spread(
         differing_signatures = [
             json.dumps(clause["signature"], sort_keys=True, separators=(",", ":"))
             for clause_index, clause in enumerate(diagnostic["clauses"])
-            if clause["pip"]
+            if clause[tool_key]
             and not clause["exact"]
             and not clause["key_kind"].startswith("current_")
             and (
@@ -3523,6 +3754,321 @@ def evaluate_pip_semantics(
                 "go": False,
                 "reason": "Phase A selects a representation; prior resource transfer is report-only",
             },
+        },
+    }
+    return result, sidecar
+
+
+def _settled_pytest_observations(
+    command: CommandRow,
+) -> tuple[tuple[Row, PytestSignature], ...]:
+    signatures = tuple(
+        parse_pytest(clause.get("argv", ()))
+        for clause in parse_command_clauses(command.command).get("clauses", ())
+    )
+    unused = set(range(len(signatures)))
+    observations: list[tuple[Row, PytestSignature]] = []
+    for row in command.clauses:
+        if row.pipeline_position > 0 or (signature := parse_pytest(row.argv)) is None:
+            continue
+        index = next(
+            (
+                candidate
+                for candidate in sorted(unused)
+                if signatures[candidate] == signature
+            ),
+            None,
+        )
+        if index is None:
+            raise ValueError(f"{command.call_id}: pytest telemetry cannot be aligned")
+        unused.remove(index)
+        observations.append((row, signature))
+    return tuple(observations)
+
+
+def evaluate_pytest_semantics(
+    public_rows: Sequence[Row],
+    task_ids: Sequence[str],
+    clause_rows: Sequence[Row],
+    command_rows: Sequence[CommandRow],
+    provenance: Mapping[str, Any],
+    *,
+    expected_current: tuple[int, int] | None = None,
+    expected_coverage: tuple[int, int, int, int] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Compare Current with repo-local exact pytest work signatures."""
+
+    if len(set(task_ids)) != len(task_ids) or len(
+        {repo_of(task_id) for task_id in task_ids}
+    ) != 1:
+        raise ValueError("pytest evaluation requires unique tasks from one repo")
+    target_repo = repo_of(task_ids[0])
+    if any(row.repo == target_repo for row in public_rows):
+        raise ValueError("public evidence contains the target repository")
+    task_index = {task_id: index for index, task_id in enumerate(task_ids)}
+    if any(
+        row.task_id not in task_index
+        or row.manifest_index != task_index[row.task_id]
+        for row in (*clause_rows, *command_rows)
+    ):
+        raise ValueError("target rows differ from accepted task order")
+    public = tuple(
+        row
+        for row in public_rows
+        if row.structure_known and row.pipeline_position <= 0
+    )
+    current = ClauseResourceKB.fit_public(
+        row.observation(0.0, 1.0) for row in public
+    )
+    semantic = _PytestSemanticKB()
+    clauses_by_task: dict[str, list[Row]] = defaultdict(list)
+    commands_by_task: dict[str, list[CommandRow]] = defaultdict(list)
+    for row in clause_rows:
+        clauses_by_task[row.task_id].append(row)
+    for row in command_rows:
+        commands_by_task[row.task_id].append(row)
+
+    scored: dict[str, list[ScoredRow]] = {"current": [], "pytest_semantic": []}
+    diagnostics: list[dict[str, Any]] = []
+    sidecar: list[dict[str, Any]] = []
+    for ordinal, task_id in enumerate(task_ids):
+        query_ts = float(ordinal * 2 + 3)
+        settled: list[tuple[Row, PytestSignature]] = []
+        for row in commands_by_task[task_id]:
+            parsed = parse_command_clauses(row.command)
+            current_result = current.predict_command_latency_bucket_from_clauses(
+                row.repo,
+                parsed["clauses"],
+                query_ts,
+                CANONICAL_LATENCY_BUCKETS,
+                command=row.command,
+                parse_failed=bool(parsed["parse_failed"]),
+            )
+            if current_result.prediction is None:
+                raise ValueError(f"{row.call_id}: Current prediction unavailable")
+            candidate, diagnostic = _predict_pytest_latency_command(
+                semantic,
+                current,
+                row,
+                parsed,
+                current_result.prediction,
+            )
+            current_row = _command_scored_row(row, current_result.prediction, None)
+            candidate_row = _command_scored_row(row, candidate, None)
+            scored["current"].append(current_row)
+            scored["pytest_semantic"].append(candidate_row)
+            diagnostics.append(diagnostic)
+            sidecar.append(
+                {
+                    "sample_id": current_row.sample_id,
+                    "task_id": row.task_id,
+                    "task_ordinal": ordinal,
+                    "call_id": row.call_id,
+                    "command": row.command,
+                    "pytest_command": diagnostic["pytest_command"],
+                    "pytest_parsed": diagnostic["parsed"],
+                    "latency_label": current_row.label_bucket,
+                    "current_probability_by_bucket": list(
+                        current_result.prediction.probability_by_bucket
+                    ),
+                    "candidate_probability_by_bucket": list(
+                        candidate.probability_by_bucket
+                    ),
+                    **diagnostic,
+                }
+            )
+            settled.extend(_settled_pytest_observations(row))
+        settle_ts = query_ts + 0.5
+        for row in clauses_by_task[task_id]:
+            current.observe_completed_clause(row.observation(query_ts, settle_ts))
+        for row, signature in settled:
+            semantic.observe(task_id, row, signature)
+
+    identity = [
+        (row.sample_id, row.label_bucket, row.probability_by_bucket is not None)
+        for row in scored["current"]
+    ]
+    if identity != [
+        (row.sample_id, row.label_bucket, row.probability_by_bucket is not None)
+        for row in scored["pytest_semantic"]
+    ]:
+        raise AssertionError("pytest candidate differs in rows, labels, or availability")
+    pytest_indices = [
+        index for index, diagnostic in enumerate(diagnostics)
+        if diagnostic["pytest_command"]
+    ]
+    parsed_indices = [
+        index for index in pytest_indices if diagnostics[index]["parsed"]
+    ]
+    carrier_indices = [index for index in parsed_indices if diagnostics[index]["carrier"]]
+    parsed_tasks = {scored["current"][index].task_id for index in parsed_indices}
+    coverage = (
+        len(pytest_indices),
+        len(parsed_indices),
+        len(parsed_tasks),
+        len(carrier_indices),
+    )
+    coverage_pass = (
+        len(parsed_indices) >= 100
+        and len(parsed_tasks) >= 20
+        and len(carrier_indices) >= 20
+        and (expected_coverage is None or coverage == expected_coverage)
+    )
+    if expected_coverage is not None and not coverage_pass:
+        raise ValueError(
+            f"pytest coverage differs from the frozen pre-label gate: {coverage}"
+        )
+    current_correct = sum(_exact_bucket_correct(row) for row in scored["current"])
+    baseline_reconciled = expected_current is None or (
+        len(scored["current"]), current_correct
+    ) == expected_current
+    if expected_current is not None and not baseline_reconciled:
+        raise ValueError(
+            "pytest Current baseline differs from Phase A: "
+            f"{(len(scored['current']), current_correct)}"
+        )
+
+    current_metrics = _telemetry_metrics(scored["current"])
+    current_accuracy = current_metrics["three_class_accuracy"]
+    assert current_accuracy is not None
+    candidate_metrics = _telemetry_metrics(
+        scored["pytest_semantic"], current_accuracy=current_accuracy
+    )
+    pytest_scored = {
+        arm: [rows[index] for index in pytest_indices]
+        for arm, rows in scored.items()
+    }
+    pytest_current_metrics = _telemetry_metrics(pytest_scored["current"])
+    pytest_candidate_metrics = _telemetry_metrics(
+        pytest_scored["pytest_semantic"],
+        current_accuracy=pytest_current_metrics["three_class_accuracy"],
+    )
+    nonpytest_identical = all(
+        scored["current"][index].probability_by_bucket
+        == scored["pytest_semantic"][index].probability_by_bucket
+        for index in range(len(diagnostics))
+        if index not in set(pytest_indices)
+    )
+    changes = _prediction_changes(
+        scored["current"], scored["pytest_semantic"], diagnostics
+    )
+    spread = _carrier_net_spread(
+        scored["current"],
+        scored["pytest_semantic"],
+        diagnostics,
+        tool_key="pytest",
+    )
+    carrier_changes = changes["nonexact_carrier_changed_commands"]
+    go = (
+        coverage_pass
+        and baseline_reconciled
+        and nonpytest_identical
+        and candidate_metrics["three_class_accuracy"] > current_accuracy
+        and pytest_candidate_metrics["three_class_accuracy"]
+        > pytest_current_metrics["three_class_accuracy"]
+        and carrier_changes["helpful"] > carrier_changes["harmful"]
+        and spread["positive_net_task_count"] >= 2
+        and spread["positive_net_signature_count"] >= 2
+    )
+    result = {
+        "status": (
+            "development_exposed_pytest_latency_go"
+            if go
+            else "development_exposed_pytest_latency_no_go"
+        ),
+        "claim_bearing": False,
+        "objective": "command_latency_pytest_semantic_comparison",
+        "inputs": dict(provenance),
+        "protocol": {
+            "evaluation_unit": "eligible_exec_command",
+            "task_order": "results.jsonl successful final attempts",
+            "causal_update": "all task commands predict before task clauses settle",
+            "semantic_evidence": "settled earlier SQLGlot tasks only",
+            "public_prior": "unchanged Current public bin/global at alpha 16",
+            "matching": "exact name-free PytestSignature",
+            "fallback": "Current for exact argv, absent semantics, or parser refusal",
+            "compound_composition": "weighted-empirical-shell-graph-v1",
+            "weighted_composition_draws": COMMAND_COMPOSITION_DRAWS,
+        },
+        "counts": {
+            "tasks": len(task_ids),
+            "commands": len(command_rows),
+            "pytest_invocation_commands": len(pytest_indices),
+            "parsed_pytest_commands": len(parsed_indices),
+            "parsed_pytest_tasks": len(parsed_tasks),
+            "nonexact_carrier_commands": len(carrier_indices),
+            "unparsed_pytest_commands": len(pytest_indices) - len(parsed_indices),
+            "stored_target_pytest_observations": semantic._next_observation_id,
+            "target_online_clause_observations": len(clause_rows),
+            "public_online_clause_observations": len(public),
+        },
+        "row_identity": {
+            "identical_command_ids_labels_and_availability": True,
+            "nonpytest_probability_vectors_bit_identical": nonpytest_identical,
+            "unique_sample_ids": len({row[0] for row in identity}) == len(identity),
+        },
+        "latency": {
+            "bucket_edges_ms": list(CANONICAL_LATENCY_BUCKETS.edges_ms),
+            "direction": "higher accuracy is better",
+            "overall": {
+                "majority": {
+                    "class": current_metrics["majority_class"],
+                    "accuracy": current_metrics["majority_class_accuracy"],
+                },
+                "arms": {
+                    "current": current_metrics,
+                    "pytest_semantic": candidate_metrics,
+                },
+            },
+            "pytest_commands": {
+                "majority": {
+                    "class": pytest_current_metrics["majority_class"],
+                    "accuracy": pytest_current_metrics["majority_class_accuracy"],
+                },
+                "arms": {
+                    "current": pytest_current_metrics,
+                    "pytest_semantic": pytest_candidate_metrics,
+                },
+            },
+            "prediction_changes": changes,
+            "carrier_net_spread": spread,
+            "uncertainty": _paired_task_cluster_bootstrap(
+                scored["pytest_semantic"],
+                scored["current"],
+                left_name="pytest_semantic",
+                right_name="current",
+            ),
+        },
+        "gates": {
+            "coverage": {
+                "pass": coverage_pass,
+                "expected_prelabel_counts": (
+                    None
+                    if expected_coverage is None
+                    else {
+                        "pytest_invocation_commands": expected_coverage[0],
+                        "parsed_pytest_commands": expected_coverage[1],
+                        "parsed_pytest_tasks": expected_coverage[2],
+                        "nonexact_carrier_commands": expected_coverage[3],
+                    }
+                ),
+                "requires_parsed_commands_at_least": 100,
+                "requires_tasks_at_least": 20,
+                "requires_nonexact_carriers_at_least": 20,
+            },
+            "baseline_reconciliation": {
+                "pass": baseline_reconciled,
+                "expected": expected_current,
+                "observed": [len(scored["current"]), current_correct],
+            },
+            "latency": {
+                "go": go,
+                "requires_strict_overall_and_pytest_accuracy_gain": True,
+                "requires_helpful_above_harmful": True,
+                "requires_two_positive_net_tasks_and_signatures": True,
+                "requires_nonpytest_bit_identity": True,
+            },
+            "resource_evaluation": {"go": go},
         },
     }
     return result, sidecar

@@ -1,13 +1,13 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Semantic Work Signature · Phase A</title>
+<title>Semantic Work Signature · Phase A–B</title>
 <style>
 :root{--bg:#07131f;--panel:#102337;--panel2:#0b1b2b;--ink:#eef7ff;--muted:#9fb4c8;--line:#2a4963;--cyan:#4bdbc9;--blue:#79b5ff;--amber:#ffc86a;--red:#ff8995}
 *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 85% 0,#173d59 0,transparent 30%),linear-gradient(155deg,#07131f,#091b2a 62%,#07131f);color:var(--ink);font:15px/1.5 "Noto Sans CJK SC",Inter,system-ui,sans-serif}main{width:min(1420px,calc(100% - 48px));margin:auto;padding:38px 0 64px}h1{font-size:42px;line-height:1.12;letter-spacing:-.03em;margin:8px 0 12px}h2{font-size:24px;margin:0 0 14px}h3{font-size:17px;margin:0 0 7px}p{color:var(--muted);margin:7px 0}.eyebrow{color:var(--cyan);font-size:12px;font-weight:800;letter-spacing:.13em;text-transform:uppercase}.lede{font-size:19px;max-width:1120px}.grid{display:grid;gap:16px}.cards{grid-template-columns:repeat(4,1fr);margin:26px 0 20px}.two{grid-template-columns:1fr 1fr}.card,.section{background:linear-gradient(180deg,rgba(16,35,55,.98),rgba(11,27,43,.98));border:1px solid var(--line);border-radius:16px;box-shadow:0 14px 34px rgba(0,0,0,.18)}.card{padding:18px}.card span{color:var(--muted);font-size:12px}.card b{display:block;font-size:28px;line-height:1.15;margin:5px 0}.section{padding:22px;margin:16px 0}.flow{display:flex;gap:9px;align-items:stretch}.node{flex:1;padding:14px;background:#081827;border:1px solid var(--line);border-radius:12px}.node.selected{border-color:var(--cyan);background:rgba(75,219,201,.06)}.arrow{align-self:center;color:var(--cyan);font-size:22px}.tag{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:3px 9px;color:var(--muted);font-size:11px;margin:3px 2px 0 0}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:10px 9px;border-bottom:1px solid rgba(42,73,99,.72);text-align:right;vertical-align:middle}th:first-child,td:first-child{text-align:left}thead th{color:#b8cada;font-size:11px;text-transform:uppercase;letter-spacing:.045em}tbody th{font-weight:700}.selected-row{background:rgba(75,219,201,.055)}.metric{font-weight:800;color:#fff}.pos{color:var(--cyan);font-weight:800}.neg{color:var(--red);font-weight:800}.zero{color:var(--muted)}small{display:block;color:var(--muted);font-size:10.5px}.callout{border-left:4px solid var(--amber);padding:12px 15px;background:rgba(255,200,106,.07);border-radius:0 10px 10px 0}.callout.good{border-color:var(--cyan);background:rgba(75,219,201,.065)}ul{padding-left:20px;margin:8px 0}li{color:var(--muted);margin:6px 0}li::marker{color:var(--cyan)}.bar{display:grid;grid-template-columns:180px 1fr 80px;gap:10px;align-items:center;margin:11px 0}.track{height:12px;background:#07131f;border-radius:8px;overflow:hidden}.fill{height:100%;background:linear-gradient(90deg,var(--blue),var(--cyan));border-radius:8px}.sources{font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#7893aa;overflow-wrap:anywhere}.verdict{font-size:21px;color:#fff}footer{text-align:center;color:#7893aa;font-size:11px;margin-top:22px}@media(max-width:900px){main{width:calc(100% - 24px)}.cards,.two{grid-template-columns:1fr}.flow{flex-direction:column}.arrow{transform:rotate(90deg)}.tablewrap{overflow-x:auto}}
 </style></head><body><main>
-<div class="eyebrow">SQLGlot100 · Phase A · development-exposed</div>
-<h1>pip 的收益来自 package-set overlap，<br>不是简单的参数归一化。</h1>
-<p class="lede">在相同的 100 个 task、1,792 个 command 上，canonical-exact 比 Current 少对 2 个；Jaccard 比 canonical-exact 多对 5 个，并满足预先冻结的 task/signature 分散 gate。因此 Phase A 选择 Jaccard，解锁第二个工具与 state 可辨识性审计。</p>
+<div class="eyebrow">SQLGlot100 · Phase A–B · development-exposed</div>
+<h1>语义表示能修复少量预测，<br>但第二个工具的收益只落在一种 work shape。</h1>
+<p class="lede">Phase A 证明 pip 的收益来自 package-set overlap，而不是简单参数归一化。Phase B 在同一 SQLGlot100 task stream 上将 pytest semantic accuracy 提高 4 个 command，但全部净收益只来自“单个 test file”这一种 signature，因此按冻结的两-signature gate 判定 NO-GO。</p>
 
 <div class="grid cards">
  <div class="card"><span>统一评估行</span><b>1,792</b><p>119 pip · 1,673 non-pip</p></div>
@@ -44,15 +44,25 @@
  <tr><th>Disk I/O · Heavy/Light</th><td>1,790</td><td>93.520%</td><td>98.827%</td><td class="pos">98.939%</td><td class="pos">+2 correct</td></tr>
 </tbody></table></div><p>这些资源数字来自 Phase A 之前已经完成的 unchanged-representation transfer，不是本轮重跑。CPU/RSS 的 pip subset 几乎全为 Light，存在明显 majority ceiling。</p></section>
 
+<section class="section"><h2>Phase B：accuracy 上升，但独立机制覆盖不足</h2><div class="tablewrap"><table><thead><tr><th>范围</th><th>Majority</th><th>Current</th><th>Pytest semantic</th><th>净变化</th></tr></thead><tbody>
+ <tr><th>全部 commands<small>n = 1,792</small></th><td>77.734%</td><td>87.500%<small>1,568 correct</small></td><td class="pos">87.723%<small>1,572 correct</small></td><td class="pos">+4</td></tr>
+ <tr class="selected-row"><th>pytest commands<small>n = 398</small></th><td>63.568%</td><td>71.357%<small>284 correct</small></td><td class="pos">72.362%<small>288 correct</small></td><td class="pos">+4</td></tr>
+</tbody></table></div><div class="grid cards">
+ <div class="card"><span>Pre-label coverage</span><b class="pos">PASS</b><p>339 parsed · 88 tasks · 125 carriers</p></div>
+ <div class="card"><span>Hard changes</span><b>7</b><p>4 helpful · 0 harmful · 3 neutral</p></div>
+ <div class="card"><span>Positive-net tasks</span><b class="pos">4</b><p>冻结要求 ≥ 2，PASS</p></div>
+ <div class="card"><span>Positive-net signatures</span><b class="neg">1</b><p>冻结要求 ≥ 2，FAIL</p></div>
+</div><div class="callout"><b>Observed：</b><p>四个修复分别出现在四个 task，但 signature 都是“一个 file target、无 selection/parallel/early-stop mode”。两个 file target 的两个重复 call 只从 long 改成 short，而真值是 middle，因此均为 neutral。</p></div><p><b>Inference：</b>同 repo 的重复性确实足以让 name-free pytest shape 改变预测；但目前只证明最常见的单文件测试形状有用，不能声称该表示跨多种 pytest workloads 泛化。按冻结 gate 停止 resource transfer，不调 parser。</p></section>
+
 <div class="grid two"><section class="section"><h2>不确定性与证据边界</h2>
  <table><thead><tr><th>Overall latency</th><th>Point</th><th>Task-bootstrap 95%</th></tr></thead><tbody><tr><th>Canonical − Current</th><td class="neg">−0.112 pp</td><td>[−0.340, +0.108] pp</td></tr><tr><th>Jaccard − Current</th><td class="pos">+0.167 pp</td><td>[−0.056, +0.432] pp</td></tr></tbody></table>
- <p>两个区间都跨 0；bootstrap 仅报告不确定性，不参与冻结 gate。SQLGlot100、SWE100、SWE277 均已 development-exposed，不能作为 confirmation。</p>
+ <p>两个 Phase A 区间都跨 0；bootstrap 仅报告不确定性，不参与冻结 gate。Phase B 的 overall delta 为 +0.223 pp，task-bootstrap 95% 区间为 [+0.054, +0.464] pp，但同样不覆盖 signature-diversity gate。SQLGlot100 已 development-exposed，不能作为 confirmation。</p>
  </section><section class="section"><h2>下一步由 gate 决定</h2>
- <ol><li><b>Phase B：</b>在现有 SWE100/277 上先做不看 label 的 pytest coverage gate，再做唯一一次 frozen latency test。</li><li><b>Phase C：</b>用现有 traces 审计同 signature、不同 causal state 是否足以修复至少 10 个 hard errors。</li><li><b>Phase D：</b>只有 C 通过才准备 96 次 paired collection；长跑仍需明确批准。</li><li><b>Phase E：</b>没有 named consumer 改变至少 20 commands / 10 tasks，就不实现 scheduler。</li></ol>
+ <ol><li><b>Phase B 已停止：</b>不换第二个 tool，不迁移 pytest 到 CPU/RSS/Disk。</li><li><b>Phase C：</b>只用 SQLGlot100 审计同一 pip signature 是否存在不同 causal state，以及 oracle state 是否至少净修复 10 个 hard errors。</li><li><b>Phase D：</b>只有 C 通过才准备 96 次 paired collection；长跑仍需明确批准。</li><li><b>Phase E：</b>没有 named consumer 改变至少 20 commands / 10 tasks，就不实现 scheduler。</li></ol>
  </section></div>
 
-<section class="section"><h2>结论</h2><div class="callout good"><p class="verdict">Phase A GO：选择 Jaccard work signature。它胜过 canonical exact，说明收益需要部分 package-set overlap；但效应很小、区间跨零、尚未跨工具验证。</p></div></section>
+<section class="section"><h2>结论</h2><div class="callout"><p class="verdict">Phase A 选择 pip Jaccard；Phase B pytest 严格 NO-GO。同 repo task repetition 确实产生可复用信号，但当前证据只覆盖 package overlap 和单文件 pytest 两个窄机制，尚不足以支持通用 semantic KB claim。</p></div></section>
 
-<section class="section"><h2>可追溯输入</h2><p class="sources">Phase A JSON: analysis/results/tool-resource-clause-interactions-20260804/pip-carrier-audit-latency.json<br>Phase A rows: analysis/results/tool-resource-clause-interactions-20260804/pip-carrier-audit-latency-rows.jsonl<br>Prior resource JSON: analysis/results/tool-resource-clause-interactions-20260804/pip-semantic-resources.json<br>Protocol: analysis/development/tool-resource-canonical-objective.md · 2026-08-04 semantic work-signature amendment<br>Plan: analysis/development/clause-interaction-kb-plan.md</p></section>
-<footer>1,792 IDs reconciled · 119/119 pip audit rows · 15 Jaccard carriers · non-pip PMFs bit-identical · development-exposed</footer>
+<section class="section"><h2>可追溯输入</h2><p class="sources">Phase A JSON: analysis/results/tool-resource-clause-interactions-20260804/pip-carrier-audit-latency.json<br>Phase A rows: analysis/results/tool-resource-clause-interactions-20260804/pip-carrier-audit-latency-rows.jsonl<br>Phase B JSON: analysis/results/tool-resource-clause-interactions-20260804/pytest-semantic-latency.json<br>Phase B rows: analysis/results/tool-resource-clause-interactions-20260804/pytest-semantic-latency-rows.jsonl<br>Prior resource JSON: analysis/results/tool-resource-clause-interactions-20260804/pip-semantic-resources.json<br>Protocol: analysis/development/tool-resource-canonical-objective.md<br>Plan: analysis/development/clause-interaction-kb-plan.md</p></section>
+<footer>1,792 IDs reconciled · Phase A Jaccard GO · Phase B pytest NO-GO · non-target PMFs bit-identical · development-exposed</footer>
 </main></body></html>
