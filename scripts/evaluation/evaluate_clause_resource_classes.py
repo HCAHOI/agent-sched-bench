@@ -7,6 +7,7 @@ import argparse
 import json
 import math
 import sys
+from bisect import bisect_left
 from collections import Counter, defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -19,11 +20,13 @@ sys.path.insert(0, str(_REPO_ROOT / "src"))
 from tool_resource_eval.labels import repo_of  # noqa: E402
 from tool_resource.runtime_kb import (  # noqa: E402
     CANONICAL_LATENCY_BUCKETS,
+    CANONICAL_RESOURCE_BUCKET_EDGES,
     CANONICAL_RESOURCE_HEAVY_THRESHOLDS,
     DEFAULT_HEAVY_DECISION_THRESHOLD,
     SHRINKAGE_ALPHA_GRID,
     SHORT_NULL_LIGHT_MAX_LATENCY_MS,
     STRUCTURED_ARGV_REPRESENTATION,
+    RESOURCE_BUCKET_LABELS,
     ClauseObservation,
     ClauseResourceKB,
     _command_stages,
@@ -122,7 +125,7 @@ def load_candidate_s_selection(
     if selection.get("alpha_grid") != list(SHRINKAGE_ALPHA_GRID):
         raise ValueError("latency result alpha grid differs from the fixed grid")
     if (
-        selection.get("selection_target") != "three_class_latency_accuracy"
+        selection.get("selection_target") != "exact_latency_class_accuracy"
         or selection.get("tie_break") != "larger_alpha"
         or selection.get("outer_labels_used") is not False
     ):
@@ -452,6 +455,60 @@ def command_resource_label(
             else "observed_composed_light"
         )
         return False, source
+    if saw_long_null:
+        return None, "null_unavailable"
+    return None, "composition_ambiguous"
+
+
+def command_resource_bucket_label(
+    row: CommandRow,
+    resource: str,
+) -> tuple[int | None, str]:
+    """Return a three-class command label only when its interval is unambiguous."""
+
+    edges = CANONICAL_RESOURCE_BUCKET_EDGES[resource]
+    field = _RESOURCE_FIELDS[resource]
+    bounds: list[tuple[float, float]] = []
+    saw_short_null = False
+    saw_long_null = False
+    for clause in row.clauses:
+        value = getattr(clause, field)
+        if value is not None:
+            bounds.append((value, value))
+        elif clause.latency_ms < SHORT_NULL_LIGHT_MAX_LATENCY_MS:
+            bounds.append((0.0, edges[0]))
+            saw_short_null = True
+        else:
+            bounds.append((0.0, math.inf))
+            saw_long_null = True
+    stages = _command_stages(
+        [
+            {
+                "in_pipe": clause.in_pipe,
+                "in_subst": clause.in_subst,
+                "pipeline_position": clause.pipeline_position,
+            }
+            for clause in row.clauses
+        ]
+    )
+    if stages is None:
+        return None, "composition_unavailable"
+    if resource == "disk_read_write_bytes_total":
+        lower = sum(bound[0] for bound in bounds)
+        upper = sum(bound[1] for bound in bounds)
+    else:
+        lower = max(max(bounds[index][0] for index in stage) for stage in stages)
+        upper = max(sum(bounds[index][1] for index in stage) for stage in stages)
+    lower_bucket = bisect_left(edges, lower)
+    upper_bucket = len(edges) if math.isinf(upper) else bisect_left(edges, upper)
+    if lower_bucket == upper_bucket:
+        label = RESOURCE_BUCKET_LABELS[lower_bucket]
+        source = (
+            "short_null_composed_low"
+            if saw_short_null and lower_bucket == 0
+            else f"observed_composed_{label}"
+        )
+        return lower_bucket, source
     if saw_long_null:
         return None, "null_unavailable"
     return None, "composition_ambiguous"

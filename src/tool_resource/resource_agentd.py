@@ -36,7 +36,7 @@ from tool_resource.resource_protocol import (
 )
 from tool_resource.runtime_kb import (
     CANONICAL_LATENCY_BUCKETS,
-    DEFAULT_HEAVY_DECISION_THRESHOLD,
+    CANONICAL_RESOURCE_BUCKET_EDGES,
     RAW_ARGV_REPRESENTATION,
     ClauseObservation,
     ClauseResourceKB,
@@ -132,7 +132,6 @@ class ResourceService:
         result_ttl_s: float = DEFAULT_RESULT_TTL_S,
         kb_representation: str = RAW_ARGV_REPRESENTATION,
         kb_shrinkage_alpha: float | None = None,
-        kb_heavy_decision_threshold: float = DEFAULT_HEAVY_DECISION_THRESHOLD,
     ) -> None:
         if not math.isfinite(result_ttl_s) or result_ttl_s <= 0:
             raise ValueError("result_ttl_s must be finite and positive")
@@ -144,10 +143,8 @@ class ResourceService:
         self.kb_representation = ClauseResourceKB(
             representation=kb_representation,
             shrinkage_alpha=kb_shrinkage_alpha,
-            heavy_decision_threshold=kb_heavy_decision_threshold,
         ).representation
         self.kb_shrinkage_alpha = kb_shrinkage_alpha
-        self.kb_heavy_decision_threshold = kb_heavy_decision_threshold
         self._runs: dict[str, _Run] = {}
         self._traces: dict[str, _Trace] = {}
         self._operation_results: dict[
@@ -252,9 +249,9 @@ class ResourceService:
         return {
             "prediction_targets": [
                 "latency_bucket",
-                "peak_cpu_cores_heavy_light",
-                "sampled_peak_rss_mb_heavy_light",
-                "disk_read_write_bytes_total_heavy_light",
+                "peak_cpu_cores_bucket",
+                "sampled_peak_rss_mb_bucket",
+                "disk_read_write_bytes_total_bucket",
             ],
             "canonicalizer_version": CANONICALIZER_VERSION,
             "store_schema_version": STORE_SCHEMA_VERSION,
@@ -354,13 +351,11 @@ class ResourceService:
                     public,
                     representation=self.kb_representation,
                     shrinkage_alpha=self.kb_shrinkage_alpha,
-                    heavy_decision_threshold=self.kb_heavy_decision_threshold,
                 )
                 if public
                 else ClauseResourceKB(
                     representation=self.kb_representation,
                     shrinkage_alpha=self.kb_shrinkage_alpha,
-                    heavy_decision_threshold=self.kb_heavy_decision_threshold,
                 )
             )
             for observation in observations:
@@ -1336,7 +1331,10 @@ class ResourceService:
                     "kb_canonicalizer_version": run.kb.canonicalizer_version,
                     "kb_arbitration": run.kb.arbitration,
                     "kb_shrinkage_alpha": run.kb.shrinkage_alpha,
-                    "kb_heavy_decision_threshold": run.kb.heavy_decision_threshold,
+                    "resource_bucket_edges": {
+                        resource: list(edges)
+                        for resource, edges in CANONICAL_RESOURCE_BUCKET_EDGES.items()
+                    },
                     "store_schema_version": STORE_SCHEMA_VERSION,
                     "latency_bucket_edges_ms": list(run.buckets.edges_ms),
                     "update_policy": run.update_policy,
@@ -1397,7 +1395,7 @@ class ResourceService:
     ) -> dict[str, Any]:
         try:
             with run.lock:
-                prediction = run.kb.predict_command_resource_classes_from_clauses(
+                prediction = run.kb.predict_command_resource_buckets_from_clauses(
                     run.workspace_scope,
                     parsed["clauses"],
                     query_timestamp,
@@ -2158,17 +2156,6 @@ def build_cli_parser() -> argparse.ArgumentParser:
     parser.add_argument("--socket-mode", type=_parse_mode, default=0o600)
     parser.add_argument("--result-ttl", type=float, default=DEFAULT_RESULT_TTL_S)
     parser.add_argument(
-        "--heavy-decision-threshold",
-        type=float,
-        default=DEFAULT_HEAVY_DECISION_THRESHOLD,
-        help=(
-            "Cut on P(Heavy) for the resource classes. Declare it as C/(B+C) from "
-            "the cost of a wrong action against a missed Heavy; the 0.5 default is "
-            "correct only when those cost the same. Recorded per run and per "
-            "prediction. Never select this value from an evaluation result."
-        ),
-    )
-    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose logging.",
@@ -2194,7 +2181,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             expected_peer_uid=args.telemetry_peer_uid,
         ),
         result_ttl_s=args.result_ttl,
-        kb_heavy_decision_threshold=args.heavy_decision_threshold,
     )
     with ResourceServer(
         args.socket,

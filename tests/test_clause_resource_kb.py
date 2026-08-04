@@ -278,8 +278,10 @@ def test_latency_buckets_match_strict_threshold_decisions() -> None:
     assert buckets.bucket_id(1000.0) == 1
     assert buckets.bucket_id(1e12) == 2
     assert CANONICAL_LATENCY_BUCKET_EDGES_MS == (
+        500.0,
         2000.0,
         8000.0,
+        30_000.0,
     )
 
 
@@ -605,6 +607,8 @@ def test_compound_command_composes_sequential_and_pipeline_stages() -> None:
         "r1", "a; a", 12.0
     )
     pipeline_resources = kb.predict_command_resource_classes("r1", "a | a", 13.0)
+    sequential_buckets = kb.predict_command_resource_buckets("r1", "a; a", 14.0)
+    pipeline_buckets = kb.predict_command_resource_buckets("r1", "a | a", 15.0)
 
     assert sequential.prediction is not None
     assert sequential.prediction.probability_by_bucket == (0.0, 1.0)
@@ -624,6 +628,40 @@ def test_compound_command_composes_sequential_and_pipeline_stages() -> None:
         prediction.label == "heavy"
         for prediction in pipeline_resources.classifications.values()
     )
+    assert {
+        resource: prediction.label
+        for resource, prediction in sequential_buckets.classifications.items()
+    } == {
+        "peak_cpu_cores": "low",
+        "sampled_peak_rss_mb": "low",
+        "disk_read_write_bytes_total": "high",
+    }
+    assert {
+        resource: prediction.label
+        for resource, prediction in pipeline_buckets.classifications.items()
+    } == {
+        "peak_cpu_cores": "medium",
+        "sampled_peak_rss_mb": "medium",
+        "disk_read_write_bytes_total": "high",
+    }
+
+
+def test_resource_bucket_pmf_uses_lower_bucket_on_boundaries_and_ties() -> None:
+    kb = _fit(
+        _obs("pub", "x", ("x", "low"), 0.0, 1.0, latency_ms=10.0, cpu=2.0),
+        _obs("pub", "x", ("x", "mid"), 1.0, 2.0, latency_ms=10.0, cpu=4.0),
+        _obs("pub", "x", ("x", "high"), 2.0, 3.0, latency_ms=10.0, cpu=5.0),
+    )
+
+    prediction = kb.predict_clause_resource_bucket(
+        "repo", "x", ("x", "new"), "peak_cpu_cores"
+    )
+
+    assert prediction is not None
+    assert prediction.bucket_edges == (2.0, 4.0)
+    assert prediction.probability_by_bucket == pytest.approx((1 / 3, 1 / 3, 1 / 3))
+    assert prediction.bucket_id == 0
+    assert prediction.label == "low"
 
 
 def test_external_clauses_advance_state_and_backdated_queries_fail() -> None:
@@ -1191,8 +1229,10 @@ def test_repo_binary_first_also_moves_the_latency_prediction() -> None:
     )
     assert default.evidence_count == 1
     assert reordered.evidence_count == 5
-    assert default.probability_by_bucket == (1.0, 0.0, 0.0)
-    assert reordered.probability_by_bucket == pytest.approx((1 / 5, 0.0, 4 / 5))
+    assert default.probability_by_bucket == (1.0, 0.0, 0.0, 0.0, 0.0)
+    assert reordered.probability_by_bucket == pytest.approx(
+        (1 / 5, 0.0, 0.0, 4 / 5, 0.0)
+    )
 
 
 def test_repo_binary_first_falls_back_when_the_binary_node_is_absent() -> None:

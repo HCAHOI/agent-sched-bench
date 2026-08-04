@@ -133,6 +133,15 @@ CANONICAL_RESOURCE_HEAVY_THRESHOLDS = {
     _SAMPLED_PEAK_RSS_MB: 500.0,
     _DISK_READ_WRITE_BYTES_TOTAL: float(100 * 1024 * 1024),
 }
+CANONICAL_RESOURCE_BUCKET_EDGES = {
+    _PEAK_CPU_CORES: (2.0, 4.0),
+    _SAMPLED_PEAK_RSS_MB: (500.0, 2000.0),
+    _DISK_READ_WRITE_BYTES_TOTAL: (
+        float(1024 * 1024),
+        float(100 * 1024 * 1024),
+    ),
+}
+RESOURCE_BUCKET_LABELS = ("low", "medium", "high")
 
 
 @dataclass(frozen=True)
@@ -217,8 +226,10 @@ class LatencyBuckets:
 
 
 CANONICAL_LATENCY_BUCKET_EDGES_MS = (
+    500.0,
     2000.0,
     8000.0,
+    30_000.0,
 )
 CANONICAL_LATENCY_BUCKETS = LatencyBuckets(CANONICAL_LATENCY_BUCKET_EDGES_MS)
 
@@ -264,6 +275,28 @@ class ClauseHeavyLightPrediction:
 
 
 @dataclass(frozen=True)
+class ClauseResourceBucketPrediction:
+    """Empirical Low/Medium/High prediction for one clause resource."""
+
+    resource: str
+    bucket_edges: tuple[float, float]
+    probability_by_bucket: tuple[float, float, float]
+    bucket_id: int
+    label: str
+    scope: str
+    key_kind: str
+    evidence_count: int
+    fallback_path: tuple[str, ...]
+    canonicalizer_version: str
+    arbitration: str = HARD_BACKOFF_ARBITRATION
+    local_key_kind: str | None = None
+    local_evidence_count: int = 0
+    public_key_kind: str | None = None
+    public_evidence_count: int = 0
+    shrinkage_alpha: float | None = None
+
+
+@dataclass(frozen=True)
 class CommandLatencyBucketPrediction:
     """One command-level latency result composed from clause evidence."""
 
@@ -284,6 +317,18 @@ class CommandResourceClassPrediction:
     parse_failed: bool
     clause_bins: tuple[str, ...]
     classifications: dict[str, ClauseHeavyLightPrediction | None]
+    unavailable_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class CommandResourceBucketPrediction:
+    """One command-level Low/Medium/High result per resource."""
+
+    repo: str
+    command: str
+    parse_failed: bool
+    clause_bins: tuple[str, ...]
+    classifications: dict[str, ClauseResourceBucketPrediction | None]
     unavailable_reason: str | None = None
 
 
@@ -1080,6 +1125,91 @@ class ClauseResourceKB:
         )
         return (posterior, *empirical)
 
+    def _resource_bucket_prediction(
+        self,
+        resource: str,
+        prediction: ClauseLatencyBucketPrediction,
+    ) -> ClauseResourceBucketPrediction:
+        probabilities = prediction.probability_by_bucket
+        bucket_id = max(range(len(probabilities)), key=probabilities.__getitem__)
+        return ClauseResourceBucketPrediction(
+            resource=resource,
+            bucket_edges=CANONICAL_RESOURCE_BUCKET_EDGES[resource],
+            probability_by_bucket=(
+                probabilities[0],
+                probabilities[1],
+                probabilities[2],
+            ),
+            bucket_id=bucket_id,
+            label=RESOURCE_BUCKET_LABELS[bucket_id],
+            scope=prediction.scope,
+            key_kind=prediction.key_kind,
+            evidence_count=prediction.evidence_count,
+            fallback_path=prediction.fallback_path,
+            canonicalizer_version=prediction.canonicalizer_version,
+            arbitration=prediction.arbitration,
+            local_key_kind=prediction.local_key_kind,
+            local_evidence_count=prediction.local_evidence_count,
+            public_key_kind=prediction.public_key_kind,
+            public_evidence_count=prediction.public_evidence_count,
+            shrinkage_alpha=prediction.shrinkage_alpha,
+        )
+
+    def predict_clause_resource_bucket(
+        self,
+        repo: str,
+        bin_: str,
+        argv: Sequence[str],
+        resource: str,
+        *,
+        ts_start: float | None = None,
+    ) -> ClauseResourceBucketPrediction | None:
+        """Predict one resource as a canonical Low/Medium/High PMF."""
+
+        try:
+            edges = CANONICAL_RESOURCE_BUCKET_EDGES[resource]
+        except KeyError as exc:
+            raise ValueError(f"unknown resource bucket target {resource!r}") from exc
+        if ts_start is not None:
+            self._advance(ts_start)
+        buckets = LatencyBuckets(edges)
+        if self._shrinkage_alpha is not None:
+            local, public = self._select_independent_scopes(
+                repo,
+                resource,
+                bin_,
+                argv,
+            )
+            if local is None and public is None:
+                return None
+            prediction = self._posterior_latency_prediction(
+                local,
+                public,
+                buckets,
+                self._shrinkage_alpha,
+            )
+        else:
+            selected = self._select(repo, resource, bin_, argv)
+            if selected is None:
+                return None
+            prediction = self._latency_prediction(selected, buckets)
+        return self._resource_bucket_prediction(resource, prediction)
+
+    def predict_clause_resource_buckets(
+        self,
+        repo: str,
+        bin_: str,
+        argv: Sequence[str],
+        *,
+        ts_start: float | None = None,
+    ) -> dict[str, ClauseResourceBucketPrediction | None]:
+        if ts_start is not None:
+            self._advance(ts_start)
+        return {
+            resource: self.predict_clause_resource_bucket(repo, bin_, argv, resource)
+            for resource in CANONICAL_RESOURCE_BUCKET_EDGES
+        }
+
     def predict_clause_heavy_light(
         self,
         repo: str,
@@ -1329,6 +1459,80 @@ class ClauseResourceKB:
             unavailable_reason=reason,
         )
 
+    def predict_command_resource_buckets_from_clauses(
+        self,
+        repo: str,
+        clauses: Sequence[Mapping[str, Any]],
+        ts_start: float,
+        *,
+        command: str = "",
+        parse_failed: bool = False,
+    ) -> CommandResourceBucketPrediction:
+        """Predict command CPU/RSS/Disk Low/Medium/High PMFs."""
+
+        self._advance(ts_start)
+        effective = list(clauses)
+        clause_bins = tuple(str(clause["bin"]) for clause in effective)
+        if parse_failed:
+            reason = "parse_failed"
+        elif not effective:
+            reason = "no_executable_clause"
+        elif _command_stages(effective) is None or (
+            len(effective) > 1 and self._shrinkage_alpha is not None
+        ):
+            reason = "compound_composition_unavailable"
+        else:
+            reason = None
+        classifications: dict[str, ClauseResourceBucketPrediction | None] = {}
+        if reason is None:
+            for resource, edges in CANONICAL_RESOURCE_BUCKET_EDGES.items():
+                if len(effective) == 1:
+                    clause = effective[0]
+                    classifications[resource] = self.predict_clause_resource_bucket(
+                        repo,
+                        str(clause["bin"]),
+                        tuple(clause["argv"]),
+                        resource,
+                    )
+                    continue
+                composed = self._composed_command_values(
+                    repo,
+                    command,
+                    effective,
+                    resource,
+                )
+                if composed is None:
+                    classifications[resource] = None
+                    continue
+                values, nodes = composed
+                probabilities = self._bucket_probabilities(
+                    values,
+                    LatencyBuckets(edges),
+                )
+                bucket_id = max(
+                    range(len(probabilities)), key=probabilities.__getitem__
+                )
+                classifications[resource] = ClauseResourceBucketPrediction(
+                    resource=resource,
+                    bucket_edges=edges,
+                    probability_by_bucket=(
+                        probabilities[0],
+                        probabilities[1],
+                        probabilities[2],
+                    ),
+                    bucket_id=bucket_id,
+                    label=RESOURCE_BUCKET_LABELS[bucket_id],
+                    **self._composed_prediction_provenance(nodes),
+                )
+        return CommandResourceBucketPrediction(
+            repo=repo,
+            command=command,
+            parse_failed=parse_failed,
+            clause_bins=clause_bins,
+            classifications=classifications,
+            unavailable_reason=reason,
+        )
+
     def predict_command_resource_classes_from_clauses(
         self,
         repo: str,
@@ -1430,6 +1634,21 @@ class ClauseResourceKB:
     ) -> CommandResourceClassPrediction:
         parsed = parse_command_clauses(command)
         return self.predict_command_resource_classes_from_clauses(
+            repo,
+            parsed["clauses"],
+            ts_start,
+            command=command,
+            parse_failed=bool(parsed["parse_failed"]),
+        )
+
+    def predict_command_resource_buckets(
+        self,
+        repo: str,
+        command: str,
+        ts_start: float,
+    ) -> CommandResourceBucketPrediction:
+        parsed = parse_command_clauses(command)
+        return self.predict_command_resource_buckets_from_clauses(
             repo,
             parsed["clauses"],
             ts_start,
@@ -1566,6 +1785,7 @@ class ClauseResourceKB:
 __all__ = [
     "CANONICAL_LATENCY_BUCKETS",
     "CANONICAL_LATENCY_BUCKET_EDGES_MS",
+    "CANONICAL_RESOURCE_BUCKET_EDGES",
     "CANONICAL_RESOURCE_HEAVY_THRESHOLDS",
     "COMMAND_COMPOSITION_ARBITRATION",
     "COMMAND_COMPOSITION_DRAWS",
@@ -1573,15 +1793,18 @@ __all__ = [
     "HARD_BACKOFF_ARBITRATION",
     "POSTERIOR_SHRINKAGE_ARBITRATION",
     "RAW_ARGV_REPRESENTATION",
+    "RESOURCE_BUCKET_LABELS",
     "SHRINKAGE_ALPHA_GRID",
     "SHORT_NULL_LIGHT_MAX_LATENCY_MS",
     "STRUCTURED_ARGV_REPRESENTATION",
     "ClauseHeavyLightPrediction",
     "ClauseLatencyBucketPrediction",
     "ClauseObservation",
+    "ClauseResourceBucketPrediction",
     "ClauseResourceKB",
     "CommandLatencyBucketPrediction",
     "CommandResourceClassPrediction",
+    "CommandResourceBucketPrediction",
     "LatencyBuckets",
     "generic_argv_keys",
 ]

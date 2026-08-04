@@ -37,7 +37,7 @@
     "concurrency": 2,
     "container": "docker",
     "telemetry": "canonical required-for-valid-evidence eBPF",
-    "latency_bucket_edges_ms": [2000, 8000]
+    "latency_bucket_edges_ms": [500, 2000, 8000, 30000]
   },
   "evaluation": {
     "question": "Does dense task-disjoint same-repository history make CacheWise whole-argument clustering outperform a same-repository tool-name baseline?",

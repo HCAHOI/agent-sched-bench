@@ -35,6 +35,7 @@ from scripts.evaluation.evaluate_clause_resource_classes import (  # noqa: E402
     _empty_confusion,
     _finalize_resource_metric,
     command_resource_label,
+    command_resource_bucket_label,
     load_rows,
 )
 from tool_resource_eval.labels import repo_of  # noqa: E402
@@ -53,14 +54,17 @@ from tool_resource.pytest_semantics import (  # noqa: E402
 )
 from tool_resource.runtime_kb import (  # noqa: E402
     CANONICAL_LATENCY_BUCKETS,
+    CANONICAL_RESOURCE_BUCKET_EDGES,
     CANONICAL_RESOURCE_HEAVY_THRESHOLDS,
     COMMAND_COMPOSITION_DRAWS,
     DEFAULT_HEAVY_DECISION_THRESHOLD,
     SHRINKAGE_ALPHA_GRID,
     SHORT_NULL_LIGHT_MAX_LATENCY_MS,
     STRUCTURED_ARGV_REPRESENTATION,
+    RESOURCE_BUCKET_LABELS,
     ClauseHeavyLightPrediction,
     ClauseLatencyBucketPrediction,
+    ClauseResourceBucketPrediction,
     ClauseResourceKB,
     _canonical_dynamic_value,
     _command_stages,
@@ -1805,8 +1809,27 @@ def _validate_partition(
 
 def _exact_bucket_metrics(rows: Sequence[ScoredRow]) -> dict[str, Any]:
     correct = sum(_exact_bucket_correct(row) for row in rows)
+    predictions = [_argmax_bucket(row) for row in rows]
     return {
-        "three_class_accuracy": correct / len(rows) if rows else None,
+        "exact_class_accuracy": correct / len(rows) if rows else None,
+        "within_one_bucket_accuracy": (
+            sum(
+                abs(row.label_bucket - predicted) <= 1
+                for row, predicted in zip(rows, predictions, strict=True)
+            )
+            / len(rows)
+            if rows
+            else None
+        ),
+        "severe_underprediction_rate": (
+            sum(
+                row.label_bucket - predicted >= 2
+                for row, predicted in zip(rows, predictions, strict=True)
+            )
+            / len(rows)
+            if rows
+            else None
+        ),
         "eligible_examples": len(rows),
     }
 
@@ -1821,10 +1844,7 @@ def _argmax_bucket(row: ScoredRow) -> int:
 def _argmax_probabilities(probabilities: Sequence[float]) -> int:
     """Highest-probability bucket, with the shortest bucket winning ties."""
 
-    return max(
-        range(CANONICAL_LATENCY_BUCKETS.bucket_count),
-        key=probabilities.__getitem__,
-    )
+    return max(range(len(probabilities)), key=probabilities.__getitem__)
 
 
 def _exact_bucket_correct(row: ScoredRow) -> bool:
@@ -2042,7 +2062,7 @@ def _select_shrinkage_alpha(fit_rows: Sequence[Row]) -> dict[str, Any]:
         "fold_count": fold_count,
         "alpha_grid": list(SHRINKAGE_ALPHA_GRID),
         "tie_break": "larger_alpha",
-        "selection_target": "three_class_latency_accuracy",
+        "selection_target": "exact_latency_class_accuracy",
         "fit_repo_count": len(repositories),
         "fit_row_count": len(fit_rows),
         "accuracy_by_alpha": {
@@ -2273,7 +2293,7 @@ def _telemetry_metrics(
     current_accuracy: float | None = None,
 ) -> dict[str, Any]:
     bucket_count = CANONICAL_LATENCY_BUCKETS.bucket_count
-    if bucket_count != 3:
+    if bucket_count != 5:
         raise AssertionError(f"canonical latency objective has {bucket_count} classes")
     if not rows:
         raise ValueError("no rows to score")
@@ -2289,7 +2309,7 @@ def _telemetry_metrics(
         predicted = _argmax_bucket(row)
         confusion[row.label_bucket][predicted] += 1
         predicted_counts[predicted] += 1
-    class_names = ("short", "middle", "long")
+    class_names = ("instant", "short", "medium", "long", "very_long")
     per_class = []
     for bucket in range(bucket_count):
         support = label_counts.get(bucket, 0)
@@ -2304,7 +2324,8 @@ def _telemetry_metrics(
                 "predicted_share": predicted_total / len(rows),
             }
         )
-    available_accuracy = _exact_bucket_metrics(known)["three_class_accuracy"]
+    exact_metrics = _exact_bucket_metrics(known)
+    available_accuracy = exact_metrics["exact_class_accuracy"]
     complete_accuracy = available_accuracy if len(known) == len(rows) else None
     majority_accuracy = majority_count / len(rows)
     if current_accuracy is None and complete_accuracy is not None:
@@ -2313,8 +2334,12 @@ def _telemetry_metrics(
     evidence_count_counts = Counter(row.evidence_count for row in known)
     return {
         "eligible_examples": len(rows),
-        "three_class_accuracy": complete_accuracy,
+        "exact_class_accuracy": complete_accuracy,
         "available_only_accuracy": available_accuracy,
+        "within_one_bucket_accuracy": exact_metrics["within_one_bucket_accuracy"],
+        "severe_underprediction_rate": exact_metrics[
+            "severe_underprediction_rate"
+        ],
         "prediction_available": len(known),
         "prediction_coverage": len(known) / len(rows),
         "majority_class": class_names[majority_bucket],
@@ -2418,6 +2443,101 @@ def _record_resource_prediction(
     raw[outcome] += 1
 
 
+def _empty_resource_bucket_confusion() -> dict[str, Any]:
+    return {
+        "provenance_counts": Counter(),
+        "confusion_label_by_prediction": [[0] * 3 for _ in range(3)],
+        "prediction_unavailable": 0,
+    }
+
+
+def _record_resource_bucket_prediction(
+    raw: dict[str, Any],
+    label: int,
+    prediction: ClauseResourceBucketPrediction | None,
+) -> None:
+    if prediction is None:
+        raw["prediction_unavailable"] += 1
+        return
+    raw["provenance_counts"][
+        f"{prediction.scope}:{prediction.key_kind}:"
+        f"{prediction.canonicalizer_version}:{prediction.arbitration}"
+    ] += 1
+    raw["confusion_label_by_prediction"][label][prediction.bucket_id] += 1
+
+
+def _finalize_resource_bucket_metric(
+    raw: dict[str, Any],
+    label_counts: Counter[int],
+    label_source_counts: Counter[str],
+) -> dict[str, Any]:
+    confusion = raw["confusion_label_by_prediction"]
+    eligible = sum(label_counts.values())
+    predicted = sum(sum(row) for row in confusion)
+    if predicted + raw["prediction_unavailable"] != eligible:
+        raise AssertionError("resource bucket confusion matrix does not reconcile")
+    majority_id = min(
+        label_counts,
+        key=lambda bucket: (-label_counts[bucket], bucket),
+    )
+    correct = sum(confusion[bucket][bucket] for bucket in range(3))
+    within_one = sum(
+        count
+        for truth, row in enumerate(confusion)
+        for prediction, count in enumerate(row)
+        if abs(truth - prediction) <= 1
+    )
+    severe_under = sum(
+        count
+        for truth, row in enumerate(confusion)
+        for prediction, count in enumerate(row)
+        if truth - prediction >= 2
+    )
+    prediction_counts = [
+        sum(confusion[truth][prediction] for truth in range(3))
+        for prediction in range(3)
+    ]
+    return {
+        "eligible_n": eligible,
+        "prediction_available": predicted,
+        "prediction_unavailable": raw["prediction_unavailable"],
+        "accuracy": (
+            correct / eligible
+            if eligible and raw["prediction_unavailable"] == 0
+            else None
+        ),
+        "available_only_accuracy": correct / predicted if predicted else None,
+        "within_one_bucket_accuracy": (
+            within_one / eligible
+            if eligible and raw["prediction_unavailable"] == 0
+            else None
+        ),
+        "severe_underprediction_rate": (
+            severe_under / eligible
+            if eligible and raw["prediction_unavailable"] == 0
+            else None
+        ),
+        "majority_class": RESOURCE_BUCKET_LABELS[majority_id],
+        "majority_class_id": majority_id,
+        "majority_class_accuracy": label_counts[majority_id] / eligible,
+        "constant_low_accuracy": label_counts[0] / eligible,
+        "confusion_label_by_prediction": confusion,
+        "per_class": [
+            {
+                "class": RESOURCE_BUCKET_LABELS[bucket],
+                "class_id": bucket,
+                "label_count": label_counts[bucket],
+                "label_share": label_counts[bucket] / eligible,
+                "predicted_count": prediction_counts[bucket],
+                "predicted_share": prediction_counts[bucket] / eligible,
+            }
+            for bucket in range(3)
+        ],
+        "label_source_counts": dict(label_source_counts),
+        "provenance_counts": dict(raw["provenance_counts"]),
+    }
+
+
 def _accuracy_delta(left: float | None, right: float | None) -> float | None:
     return None if left is None or right is None else 100.0 * (left - right)
 
@@ -2482,9 +2602,12 @@ def evaluate_prequential_commands(
     resource_raw = {
         resource: {
             "label_source_counts": Counter(),
-            "arms": {arm: _empty_confusion() for arm in kbs},
+            "label_counts": Counter(),
+            "arms": {
+                arm: _empty_resource_bucket_confusion() for arm in kbs
+            },
         }
-        for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS
+        for resource in CANONICAL_RESOURCE_BUCKET_EDGES
     }
     sidecar: list[dict[str, Any]] = []
     test_ids = list(task_ids[warmup_task_count:])
@@ -2493,7 +2616,7 @@ def evaluate_prequential_commands(
         for row in commands_by_task[task_id]:
             predictions: dict[str, dict[str, Any]] = {}
             resource_predictions: dict[
-                str, Mapping[str, ClauseHeavyLightPrediction | None]
+                str, Mapping[str, ClauseResourceBucketPrediction | None]
             ] = {}
             for arm, arm_kb in kbs.items():
                 latency = arm_kb.predict_command_latency_bucket(
@@ -2502,7 +2625,7 @@ def evaluate_prequential_commands(
                     query_ts,
                     CANONICAL_LATENCY_BUCKETS,
                 )
-                resources = arm_kb.predict_command_resource_classes(
+                resources = arm_kb.predict_command_resource_buckets(
                     row.repo,
                     row.command,
                     query_ts,
@@ -2528,17 +2651,18 @@ def evaluate_prequential_commands(
                         for resource, prediction in resources.classifications.items()
                     },
                 }
-            resource_labels: dict[str, bool | None] = {}
+            resource_labels: dict[str, int | None] = {}
             resource_sources: dict[str, str] = {}
-            for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS:
-                label, source = command_resource_label(row, resource)
+            for resource in CANONICAL_RESOURCE_BUCKET_EDGES:
+                label, source = command_resource_bucket_label(row, resource)
                 resource_labels[resource] = label
                 resource_sources[resource] = source
                 resource_raw[resource]["label_source_counts"][source] += 1
                 if label is None:
                     continue
+                resource_raw[resource]["label_counts"][label] += 1
                 for arm in kbs:
-                    _record_resource_prediction(
+                    _record_resource_bucket_prediction(
                         resource_raw[resource]["arms"][arm],
                         label,
                         resource_predictions[arm][resource],
@@ -2574,21 +2698,24 @@ def evaluate_prequential_commands(
     frozen_latency = _telemetry_metrics(latency_arms["frozen_at_80"])
     resources: dict[str, Any] = {}
     for resource, raw in resource_raw.items():
-        dynamic = _finalize_resource_metric(
+        dynamic = _finalize_resource_bucket_metric(
             raw["arms"]["current_dynamic"],
+            raw["label_counts"],
             raw["label_source_counts"],
         )
-        frozen = _finalize_resource_metric(
+        frozen = _finalize_resource_bucket_metric(
             raw["arms"]["frozen_at_80"],
+            raw["label_counts"],
             raw["label_source_counts"],
         )
         resources[resource] = {
-            "threshold": CANONICAL_RESOURCE_HEAVY_THRESHOLDS[resource],
+            "bucket_edges": list(CANONICAL_RESOURCE_BUCKET_EDGES[resource]),
             "majority": {
                 "class": dynamic["majority_class"],
+                "class_id": dynamic["majority_class_id"],
                 "accuracy": dynamic["majority_class_accuracy"],
             },
-            "constant_light_accuracy": dynamic["majority_light_accuracy"],
+            "constant_low_accuracy": dynamic["constant_low_accuracy"],
             "current_dynamic": dynamic,
             "frozen_at_80": frozen,
             "dynamic_minus_frozen_percentage_points": _accuracy_delta(
@@ -2641,8 +2768,8 @@ def evaluate_prequential_commands(
             "current_dynamic": dynamic_latency,
             "frozen_at_80": frozen_latency,
             "dynamic_minus_frozen_percentage_points": _accuracy_delta(
-                dynamic_latency["three_class_accuracy"],
-                frozen_latency["three_class_accuracy"],
+                dynamic_latency["exact_class_accuracy"],
+                frozen_latency["exact_class_accuracy"],
             ),
         },
         "resources": resources,
@@ -2652,7 +2779,7 @@ def evaluate_prequential_commands(
                 "strict bounds from retained clause aggregates; ambiguous "
                 "pipeline peaks are unavailable"
             ),
-            "short_null_light_max_latency_ms_exclusive": (
+            "short_null_low_max_latency_ms_exclusive": (
                 SHORT_NULL_LIGHT_MAX_LATENCY_MS
             ),
         },
@@ -2684,7 +2811,7 @@ def _quartile_metrics(
                 if arm == "current"
                 else _telemetry_metrics(
                     rows,
-                    current_accuracy=current["three_class_accuracy"],
+                    current_accuracy=current["exact_class_accuracy"],
                 )
             )
             for arm, rows in selected.items()
@@ -3030,7 +3157,7 @@ def evaluate_interaction_commands(
         ]:
             raise AssertionError(f"{arm} differs in command rows, labels, or availability")
     current_metrics = _telemetry_metrics(rows_by_arm["current"])
-    current_accuracy = current_metrics["three_class_accuracy"]
+    current_accuracy = current_metrics["exact_class_accuracy"]
     if current_accuracy is None:
         raise ValueError("interaction evaluation requires complete command predictions")
     metrics = {
@@ -3076,8 +3203,8 @@ def evaluate_interaction_commands(
     stage1_go = {
         arm: (
             stage0_pass
-            and metrics[arm]["three_class_accuracy"] > current_accuracy
-            and metrics[arm]["three_class_accuracy"] > majority_accuracy
+            and metrics[arm]["exact_class_accuracy"] > current_accuracy
+            and metrics[arm]["exact_class_accuracy"] > majority_accuracy
             and changes[arm]["nonexact_carrier_changed_commands"][
                 "net_helpful_minus_harmful"
             ]
@@ -3489,7 +3616,7 @@ def evaluate_pip_semantics(
         ]:
             raise AssertionError(f"{arm} differs in rows, labels, or availability")
     current_metrics = _telemetry_metrics(scored["current"])
-    current_accuracy = current_metrics["three_class_accuracy"]
+    current_accuracy = current_metrics["exact_class_accuracy"]
     assert current_accuracy is not None
     metrics = {
         arm: (
@@ -3518,7 +3645,7 @@ def evaluate_pip_semantics(
             if arm == "current"
             else _telemetry_metrics(
                 pip_rows[arm],
-                current_accuracy=pip_current_metrics["three_class_accuracy"],
+                current_accuracy=pip_current_metrics["exact_class_accuracy"],
             )
         )
         for arm in arms
@@ -3571,10 +3698,10 @@ def evaluate_pip_semantics(
     jaccard_go = (
         baseline_reconciled
         and nonpip_identical
-        and metrics["pip_semantic"]["three_class_accuracy"]
-        > metrics["pip_canonical_exact"]["three_class_accuracy"]
-        and pip_metrics["pip_semantic"]["three_class_accuracy"]
-        > pip_metrics["pip_canonical_exact"]["three_class_accuracy"]
+        and metrics["pip_semantic"]["exact_class_accuracy"]
+        > metrics["pip_canonical_exact"]["exact_class_accuracy"]
+        and pip_metrics["pip_semantic"]["exact_class_accuracy"]
+        > pip_metrics["pip_canonical_exact"]["exact_class_accuracy"]
         and jaccard_change["helpful"] > jaccard_change["harmful"]
         and carrier_spread["jaccard_minus_canonical_exact"][
             "positive_net_task_count"
@@ -3588,10 +3715,10 @@ def evaluate_pip_semantics(
     canonical_go = (
         baseline_reconciled
         and nonpip_identical
-        and metrics["pip_canonical_exact"]["three_class_accuracy"]
+        and metrics["pip_canonical_exact"]["exact_class_accuracy"]
         > current_accuracy
-        and pip_metrics["pip_canonical_exact"]["three_class_accuracy"]
-        > pip_current_metrics["three_class_accuracy"]
+        and pip_metrics["pip_canonical_exact"]["exact_class_accuracy"]
+        > pip_current_metrics["exact_class_accuracy"]
         and canonical_change["helpful"] > canonical_change["harmful"]
         and carrier_spread["canonical_exact_minus_current"][
             "positive_net_task_count"
@@ -3929,7 +4056,7 @@ def evaluate_pytest_semantics(
         )
 
     current_metrics = _telemetry_metrics(scored["current"])
-    current_accuracy = current_metrics["three_class_accuracy"]
+    current_accuracy = current_metrics["exact_class_accuracy"]
     assert current_accuracy is not None
     candidate_metrics = _telemetry_metrics(
         scored["pytest_semantic"], current_accuracy=current_accuracy
@@ -3941,7 +4068,7 @@ def evaluate_pytest_semantics(
     pytest_current_metrics = _telemetry_metrics(pytest_scored["current"])
     pytest_candidate_metrics = _telemetry_metrics(
         pytest_scored["pytest_semantic"],
-        current_accuracy=pytest_current_metrics["three_class_accuracy"],
+        current_accuracy=pytest_current_metrics["exact_class_accuracy"],
     )
     nonpytest_identical = all(
         scored["current"][index].probability_by_bucket
@@ -3963,9 +4090,9 @@ def evaluate_pytest_semantics(
         coverage_pass
         and baseline_reconciled
         and nonpytest_identical
-        and candidate_metrics["three_class_accuracy"] > current_accuracy
-        and pytest_candidate_metrics["three_class_accuracy"]
-        > pytest_current_metrics["three_class_accuracy"]
+        and candidate_metrics["exact_class_accuracy"] > current_accuracy
+        and pytest_candidate_metrics["exact_class_accuracy"]
+        > pytest_current_metrics["exact_class_accuracy"]
         and carrier_changes["helpful"] > carrier_changes["harmful"]
         and spread["positive_net_task_count"] >= 2
         and spread["positive_net_signature_count"] >= 2
@@ -4926,7 +5053,7 @@ def evaluate_clause_telemetry(
     ):
         raise AssertionError("baseline/oracle row identity or labels differ")
     current_metrics = _telemetry_metrics(rows)
-    current_accuracy = current_metrics["three_class_accuracy"]
+    current_accuracy = current_metrics["exact_class_accuracy"]
     assert current_accuracy is not None
     candidate_metrics = _telemetry_metrics(
         arms["candidate_r"],

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections import Counter
 from dataclasses import replace
 from itertools import combinations
 from pathlib import Path
@@ -15,6 +16,8 @@ from scripts.evaluation.evaluate_clause_latency_buckets import (
     _argmax_bucket,
     _bounded_node_oracle_candidates,
     _exact_bucket_metrics,
+    _empty_resource_bucket_confusion,
+    _finalize_resource_bucket_metric,
     _interaction_feature_set,
     _maximal_intersections,
     _parser,
@@ -77,9 +80,31 @@ def test_exact_bucket_metrics_use_lowest_argmax_on_ties() -> None:
 
     assert _argmax_bucket(tie) == 0
     assert _exact_bucket_metrics([tie, hit]) == {
-        "three_class_accuracy": 0.5,
+        "exact_class_accuracy": 0.5,
+        "within_one_bucket_accuracy": 1.0,
+        "severe_underprediction_rate": 0.0,
         "eligible_examples": 2,
     }
+
+
+def test_resource_bucket_metrics_count_severe_underprediction() -> None:
+    raw = _empty_resource_bucket_confusion()
+    raw["confusion_label_by_prediction"] = [
+        [1, 0, 0],
+        [0, 1, 0],
+        [1, 0, 0],
+    ]
+
+    metric = _finalize_resource_bucket_metric(
+        raw,
+        Counter({0: 1, 1: 1, 2: 1}),
+        Counter({"observed": 3}),
+    )
+
+    assert metric["accuracy"] == pytest.approx(2 / 3)
+    assert metric["within_one_bucket_accuracy"] == pytest.approx(2 / 3)
+    assert metric["severe_underprediction_rate"] == pytest.approx(1 / 3)
+    assert metric["majority_class_id"] == 0
 
 
 def test_node_oracle_excludes_raw_prefix_candidates() -> None:
@@ -319,18 +344,18 @@ def test_command_prequential_baseline_updates_only_between_tasks() -> None:
     )
 
     assert len(sidecar) == 3
-    assert [item["current_dynamic"]["latency"] for item in sidecar] == [1, 1, 2]
-    assert [item["frozen_at_80"]["latency"] for item in sidecar] == [1, 1, 1]
+    assert [item["current_dynamic"]["latency"] for item in sidecar] == [2, 2, 3]
+    assert [item["frozen_at_80"]["latency"] for item in sidecar] == [2, 2, 2]
     assert result["latency"]["majority"] == {
         "class": "long",
-        "class_id": 2,
+        "class_id": 3,
         "accuracy": 1.0,
     }
-    assert result["latency"]["current_dynamic"]["three_class_accuracy"] == 1 / 3
-    assert result["latency"]["frozen_at_80"]["three_class_accuracy"] == 0.0
+    assert result["latency"]["current_dynamic"]["exact_class_accuracy"] == 1 / 3
+    assert result["latency"]["frozen_at_80"]["exact_class_accuracy"] == 0.0
     for metric in result["resources"].values():
-        assert metric["majority"] == {"class": "heavy", "accuracy": 1.0}
-        assert metric["constant_light_accuracy"] == 0.0
+        assert metric["majority"]["accuracy"] == 1.0
+        assert metric["constant_low_accuracy"] == 0.0
         assert metric["current_dynamic"]["accuracy"] == 1 / 3
         assert metric["frozen_at_80"]["accuracy"] == 0.0
 
@@ -388,8 +413,8 @@ def test_interaction_evaluator_updates_only_after_task_settlement() -> None:
     )
 
     for arm in ("current", "interaction_poset", "subset_kernel"):
-        assert [item["arms"][arm]["prediction"] for item in sidecar] == [0, 0, 2]
-        assert result["latency"]["arms"][arm]["three_class_accuracy"] == 1 / 3
+        assert [item["arms"][arm]["prediction"] for item in sidecar] == [0, 0, 3]
+        assert result["latency"]["arms"][arm]["exact_class_accuracy"] == 1 / 3
     assert result["row_identity"][
         "identical_command_ids_labels_and_availability"
     ] is True
@@ -671,31 +696,31 @@ def test_clause_telemetry_path_is_causal_and_reports_bucket_semantics(
     # No intra-task leakage: both clauses still fall back to the public prior.
     assert [row.layer for row in first_task] == ["public", "public"]
     assert [_argmax_bucket(row) for row in first_task] == [0, 0]
-    assert [row.label_bucket for row in first_task] == [1, 1]
+    assert [row.label_bucket for row in first_task] == [2, 2]
 
     second_task = {row.command: row for row in rows if row.task_id.endswith("-2")}
     learned = second_task["sleep 9"]
     # The earlier task settled before this one queried, so repo evidence wins.
     assert learned.layer == "repo"
-    assert _argmax_bucket(learned) == 1
+    assert _argmax_bucket(learned) == 2
     assert learned.evidence_count == 2
-    # 500 ms is below the first edge and belongs to the short bucket.
+    # 500 ms is exactly the first edge and belongs to the instant bucket.
     assert second_task["sleep 1"].label_bucket == 0
 
     metrics = _telemetry_metrics(rows)
     assert metrics["eligible_examples"] == 4
-    assert metrics["three_class_accuracy"] == 0.25
-    assert metrics["majority_class"] == "middle"
-    assert metrics["majority_class_id"] == 1
+    assert metrics["exact_class_accuracy"] == 0.25
+    assert metrics["majority_class"] == "medium"
+    assert metrics["majority_class_id"] == 2
     assert metrics["majority_class_accuracy"] == 0.75
     assert metrics["accuracy_minus_majority_percentage_points"] == -50.0
     assert metrics["accuracy_minus_current_percentage_points"] == 0.0
     assert metrics["prediction_unavailable"] == 0
     assert sum(sum(row) for row in metrics["confusion_label_by_prediction"]) == 4
-    assert metrics["confusion_label_by_prediction"][1][0] == 2
-    assert metrics["per_class"][1] == {
-        "class": "middle",
-        "class_id": 1,
+    assert metrics["confusion_label_by_prediction"][2][0] == 2
+    assert metrics["per_class"][2] == {
+        "class": "medium",
+        "class_id": 2,
         "label_count": 3,
         "label_share": 0.75,
         "predicted_count": 2,
@@ -730,16 +755,16 @@ def test_clause_telemetry_path_is_causal_and_reports_bucket_semantics(
         "current_public",
         "current_and_candidate_nodes",
     }
-    current = result["baselines"]["current"]["three_class_accuracy"]
-    public = result["baselines"]["public_only"]["three_class_accuracy"]
+    current = result["baselines"]["current"]["exact_class_accuracy"]
+    public = result["baselines"]["public_only"]["exact_class_accuracy"]
     assert current is not None and public is not None
-    assert result["oracles"]["current_public"]["three_class_accuracy"] >= max(
+    assert result["oracles"]["current_public"]["exact_class_accuracy"] >= max(
         current,
         public,
     )
     assert result["oracles"]["current_and_candidate_nodes"][
-        "three_class_accuracy"
-    ] >= result["oracles"]["current_public"]["three_class_accuracy"]
+        "exact_class_accuracy"
+    ] >= result["oracles"]["current_public"]["exact_class_accuracy"]
     assert result["oracles"]["current_and_candidate_nodes"]["oracle"] is True
     candidate = result["candidates"]["candidate_r"]
     assert candidate["prediction_unavailable"] == 0
@@ -752,7 +777,7 @@ def test_clause_telemetry_path_is_causal_and_reports_bucket_semantics(
     local = result["baselines"]["local_only_diagnostic"]
     assert local["selection_forbidden"] is True
     assert local["prediction_coverage"] == 0.5
-    assert local["three_class_accuracy"] is None
+    assert local["exact_class_accuracy"] is None
 
 
 def test_clause_telemetry_path_backs_off_to_global_and_reports_the_path(
@@ -909,7 +934,7 @@ def test_resource_candidate_s_selection_verifies_latency_result_inputs(
         path.write_text("", encoding="utf-8")
     result_path = tmp_path / "latency.json"
     result = {
-        "bucket_edges_ms": [2000.0, 8000.0],
+        "bucket_edges_ms": [500.0, 2000.0, 8000.0, 30000.0],
         "fit_clause_observation_count": 5,
         "eval_clause_observation_count": 2,
         "row_identity": {"identical_row_ids_and_labels": True},
@@ -917,7 +942,7 @@ def test_resource_candidate_s_selection_verifies_latency_result_inputs(
             "candidate_s_alpha": {
                 "alpha_grid": [1.0, 4.0, 16.0, 64.0],
                 "selected_alpha": 16.0,
-                "selection_target": "three_class_latency_accuracy",
+                "selection_target": "exact_latency_class_accuracy",
                 "tie_break": "larger_alpha",
                 "fit_row_count": 5,
                 "outer_labels_used": False,
