@@ -1,0 +1,146 @@
+{
+  "status": "development_exposed_hypothesis_discovery_complete",
+  "claim_bearing": false,
+  "created_at": "2026-08-05",
+  "agent": {
+    "provider": "codex",
+    "model": "gpt-5.6-sol",
+    "codex_cli_version": "0.146.0",
+    "thread_id": "019fceac-18d9-7a03-b9de-ba69cf38fc85",
+    "temperature": "provider-fixed 0.0 semantics",
+    "service_tier_requested": "fast",
+    "service_tier_observed": null,
+    "sandbox": "read-only"
+  },
+  "scope": {
+    "development_only": true,
+    "source_run": "traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803",
+    "source_result": "analysis/results/tool-resource-5-3-3-3-20260804/sqlglot80-20-full-test-phase.json",
+    "source_rows": "analysis/results/tool-resource-5-3-3-3-20260804/sqlglot80-20-full-test-phase.rows.jsonl",
+    "heldout_path": "traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804",
+    "heldout_touched": false,
+    "causal_features_allowed": [
+      "current command text and parsed structure",
+      "earlier completed command text",
+      "earlier completed exit status",
+      "earlier completed generic tool-result category"
+    ],
+    "features_forbidden": [
+      "current-command output, duration, telemetry, label, or counters",
+      "future commands or results",
+      "repository, task, file, test, or package literals in a rule"
+    ]
+  },
+  "residuals": {
+    "latency": {"eligible": 349, "correct": 276, "over": 51, "under": 22, "severe_under": 0},
+    "peak_cpu_cores": {"eligible": 210, "correct": 196, "over": 13, "under": 1, "severe_under": 1},
+    "sampled_peak_rss_mb": {"eligible": 237, "correct": 223, "over": 13, "under": 1, "severe_under": 1},
+    "disk_read_write_bytes_total": {"eligible": 349, "correct": 284, "over": 44, "under": 21, "severe_under": 0}
+  },
+  "candidates": [
+    {
+      "id": "P1",
+      "rank": 1,
+      "name": "scope-conditioned test environment readiness",
+      "hardcode_risk": "medium",
+      "supporting_error_rows": 11,
+      "supporting_tasks": 6,
+      "in_scope_target_errors": 32,
+      "matched_correct_rows": 9,
+      "matched_correct_tasks": 9,
+      "support_sample_ids": [
+        "tobymao__sqlglot-4519:12",
+        "tobymao__sqlglot-4519:15",
+        "tobymao__sqlglot-4545:12",
+        "tobymao__sqlglot-4545:14",
+        "tobymao__sqlglot-4569:12",
+        "tobymao__sqlglot-4569:14",
+        "tobymao__sqlglot-4618:8",
+        "tobymao__sqlglot-4618:11",
+        "tobymao__sqlglot-4696:9",
+        "tobymao__sqlglot-4696:11",
+        "tobymao__sqlglot-4550:19"
+      ],
+      "matched_control_sample_ids": [
+        "tobymao__sqlglot-4519:17",
+        "tobymao__sqlglot-4523:10",
+        "tobymao__sqlglot-4545:16",
+        "tobymao__sqlglot-4563:6",
+        "tobymao__sqlglot-4569:16",
+        "tobymao__sqlglot-4618:13",
+        "tobymao__sqlglot-4628:9",
+        "tobymao__sqlglot-4696:13",
+        "tobymao__sqlglot-4935:9"
+      ],
+      "mechanism": "Attempt count conflates unavailable runner, runnable but collection-blocked environment, and a suite whose dependency closure is satisfied.",
+      "selection": "recommended for a blind state-classification replay; no prediction gain is claimed"
+    },
+    {
+      "id": "P2",
+      "rank": 2,
+      "name": "selected-test versus full-suite scope",
+      "hardcode_risk": "medium",
+      "supporting_error_rows": 3,
+      "supporting_tasks": 2,
+      "in_scope_target_errors": 9,
+      "matched_correct_rows": 5,
+      "matched_correct_tasks": 5,
+      "selection": "rejected as too task-concentrated"
+    },
+    {
+      "id": "P3",
+      "rank": 3,
+      "name": "warm-repeat test Disk state",
+      "hardcode_risk": "medium",
+      "supporting_error_rows": 12,
+      "supporting_tasks": 8,
+      "in_scope_target_errors": 12,
+      "matched_correct_rows": 5,
+      "matched_correct_tasks": 4,
+      "selection": "diagnostic only because OS cache and setup are uncontrolled confounders"
+    },
+    {
+      "id": "P4",
+      "rank": 4,
+      "name": "bounded read-only environment probe bundles",
+      "hardcode_risk": "low",
+      "supporting_error_rows": 6,
+      "supporting_tasks": 6,
+      "in_scope_target_errors": 12,
+      "matched_correct_rows": 3,
+      "matched_correct_tasks": 3,
+      "selection": "fallback candidate if P1 cannot be operationalized"
+    },
+    {
+      "id": "P5",
+      "rank": 5,
+      "name": "repair-then-first-suite compound phase",
+      "hardcode_risk": "medium",
+      "supporting_error_rows": 3,
+      "supporting_tasks": 3,
+      "in_scope_target_errors": 3,
+      "matched_correct_rows": 4,
+      "matched_correct_tasks": 4,
+      "selection": "rejected for insufficient support"
+    }
+  ],
+  "reconciliation": {
+    "all_cited_support_rows_exist": true,
+    "all_cited_support_rows_are_residual_errors": true,
+    "agent_reported_metrics_trusted_without_recomputation": false
+  },
+  "decision": {
+    "selected_hypothesis": "P1",
+    "predictor_implemented": false,
+    "counterfactual_predictions_generated": false,
+    "accuracy_gain_claimed": false,
+    "next_step": "freeze a small result-category schema and run a blind causal state-classification replay",
+    "required_before_next_step": "amend the objective to permit earlier completed exit status and generic result categories; keep held-out data unread"
+  },
+  "limitations": [
+    "The agent inspected development-exposed labels to generate hypotheses.",
+    "All evidence comes from one repository and one runtime family.",
+    "P1 is a mechanism description, not yet an executable predictor.",
+    "CPU has no Medium labels and RSS has only two Medium labels."
+  ]
+}

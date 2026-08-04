@@ -2,7 +2,8 @@
 
 **Effective:** 2026-08-04
 
-**Status:** development replay passed; held-out SQLGlot collection running and unread
+**Status:** development replay and agent-guided residual discovery complete;
+held-out SQLGlot collection running and unread
 
 This plan extends `tool-resource-canonical-objective.md`. The earlier semantic
 KB and early-execution routes are complete negative results. The active question
@@ -66,7 +67,32 @@ Artifacts:
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot80-20-full-test-phase.json`
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot80-20-full-test-phase.rows.jsonl`
 
-## 3. Held-out replication
+## 3. Agent-guided residual discovery
+
+A read-only Codex `gpt-5.6-sol` pass inspected only the development-exposed
+SQLGlot100 rows and their causal trace prefixes. The adjacent SQLGlot100
+held-out collection was explicitly forbidden and remained unread. The agent
+proposed five generic trace-history patterns; a separate mechanical
+reconciliation verified that every cited support row is a real residual error.
+
+The selected hypothesis is scope-conditioned test-environment readiness. It
+distinguishes an unavailable runner, a runnable but collection-blocked suite,
+and a suite whose dependency closure is satisfied. Its 11 cited error commands
+span six tasks and contain 32 latency/CPU/RSS target errors; nine matched correct
+controls span nine tasks. These are opportunity counts, not repaired
+predictions. No candidate replay or accuracy gain is claimed.
+
+This pass establishes that attempt count is only a proxy for environment state,
+but it does not yet define an executable predictor. Before any follow-up, freeze
+a small generic result-category schema, record the amendment allowing earlier
+completed exit status and result categories, and perform a blind causal replay.
+Do not use this discovery to tune the frozen held-out primary.
+
+Artifact:
+
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot-agent-pattern-discovery.json`
+
+## 4. Held-out replication
 
 Development passed and the implementation is frozen. After collection
 completion, fit state on all 100 existing SQLGlot tasks and evaluate every
@@ -91,7 +117,7 @@ The held-out gate is fixed before any result from that collection is read:
 This is a task-held-out same-repository replication, not a temporal deployment
 claim: the new tasks precede the development tasks by creation time.
 
-## 4. Implementation and checks
+## 5. Implementation and checks
 
 - Reuse the existing command loader, pytest parser, Current replay, bucket
   labels, and metrics. Add no KB class or runtime integration.
