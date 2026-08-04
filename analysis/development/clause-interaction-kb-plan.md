@@ -194,6 +194,32 @@ support is instead counted by applying that frozen expression to warm-up text;
 package/test tokens inside it remain forbidden. The exact source and both prompt
 hashes stay unchanged, and replay performs no additional model call.
 
+The frozen replay is complete and is a no-go. The agent autonomously selected
+the repeated `collection failure -> successful install -> full-suite retry`
+family and generated one local causal rule. It fired on 31 warm-up commands
+across 15 tasks and six test commands across three tasks. However, 14 of the 15
+warm-up tasks contained both a 0.5--2 second retry and a later over-30-second
+execution under the same generated signature, usually in that order. The fitted
+state was therefore intrinsically bimodal rather than a remaining-work state.
+
+All four exact accuracies were unchanged from Current: latency 77.937%, CPU
+90.476%, RSS 91.561%, and Disk 81.375%. Severe underprediction fell from 1.146%
+to 0.860% for latency, 3.333% to 2.857% for CPU, and 2.954% to 2.532% for RSS,
+but every rescued low-to-high error was paired with an incorrect high
+overprediction. Across targets there were five helpful and five harmful changes
+covering only two helpful tasks, failing both frozen positive-net and three-task
+requirements. Empty-history replay produced no signature, confirming that the
+rule used causal history rather than command text alone.
+
+The two agent calls consumed 213,257 input and 2,077 output tokens in 45.43
+seconds, within the 541,465-byte combined prompt bound. The frozen local rule's
+p95 was 0.001843 ms over 1,792 queries, so runtime agent cost was zero. The
+negative mechanism result is that recognizing “an install happened” does not
+establish dependency closure; useful follow-up would have to relate the named
+collection blocker to the exact remediation or otherwise distinguish partial
+from complete remediation. This run must not be regenerated on the exposed
+split.
+
 ## 6. Held-out replication
 
 Development passed and the implementation is frozen. After collection

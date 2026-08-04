@@ -1,0 +1,1351 @@
+{
+  "artifact": {
+    "catalog_sha256": "32e3d1e4eef5dc16fce55f37828cbcd0b7aa3b13af30785377d545b308d8492f",
+    "codex_version": "codex-cli 0.146.0",
+    "cost": {
+      "combined_prompt_bytes": 541465,
+      "generation": {
+        "prompt_bytes": 134062,
+        "usage": {
+          "cached_input_tokens": 0,
+          "input_tokens": 54386,
+          "output_tokens": 1464
+        },
+        "wall_seconds": 28.833385531790555
+      },
+      "selection": {
+        "prompt_bytes": 407403,
+        "usage": {
+          "cached_input_tokens": 0,
+          "input_tokens": 158871,
+          "output_tokens": 613
+        },
+        "wall_seconds": 16.594717225059867
+      }
+    },
+    "generation": {
+      "abstain": false,
+      "explanation": "Detects a full test-suite retry after a prior collection failure was followed by a successful dependency installation.",
+      "source": "def extract(query):\n    command = query.get(\"current_command\")\n    if not isinstance(command, str) or not re.fullmatch(r\"\\s*(?:python3?\\s+-m\\s+pytest|pytest)(?:\\s+-[A-Za-z0-9_-]+)*\\s*\", command):\n        return None\n\n    collection_event = None\n    for event in query.get(\"prior_events\", []):\n        excerpt = event.get(\"result_excerpt\")\n        if isinstance(excerpt, str) and event.get(\"exit_code\") not in (0, None):\n            lowered = excerpt.lower()\n            if \"error collecting\" in lowered or \"errors during collection\" in lowered:\n                if collection_event is None or event.get(\"event_index\", -1) > collection_event.get(\"event_index\", -1):\n                    collection_event = event\n\n    if collection_event is None:\n        return None\n\n    install_event = None\n    for event in query.get(\"prior_events\", []):\n        event_command = event.get(\"command\")\n        if not isinstance(event_command, str) or event.get(\"exit_code\") != 0:\n            continue\n        if event.get(\"event_index\", -1) <= collection_event.get(\"event_index\", -1):\n            continue\n        if \"pip install\" in event_command or \"apt-get install\" in event_command:\n            if install_event is None or event.get(\"event_index\", -1) > install_event.get(\"event_index\", -1):\n                install_event = event\n\n    if install_event is None:\n        return None\n\n    return {\n        \"rule_id\": \"full_suite_retry_after_collection_remediation\",\n        \"state\": \"dependencies_remediated\",\n        \"evidence_event_indices\": [\n            collection_event[\"event_index\"],\n            install_event[\"event_index\"],\n        ],\n    }"
+    },
+    "model": "gpt-5.6-sol",
+    "prompt_sha256": {
+      "generation": "0704573ce2bf6e485f27c385192b95c11052db025c67061b72ceb03066cbcb5f",
+      "selection": "51d6f12b4fb771bff974b2a213ca912015df033ef3e5c6b871c4b1a5c5947706"
+    },
+    "reasoning_effort": "medium",
+    "schema": "offline-agent-causal-extractor-v1",
+    "selection": {
+      "hypothesis": "For repository-wide test commands, predict an early dependency-gated failure mode versus a genuine full-suite execution mode from causally earlier exit status/result excerpts and successful dependency-install commands. The early-failure mode has low latency/resources, while the same command after missing dependencies are installed reaches high latency, CPU, and RSS; Current repeatedly conflates these modes.",
+      "selected_sample_ids": [
+        "S00067",
+        "S00071",
+        "S00129",
+        "S00134",
+        "S00195",
+        "S00200",
+        "S00300",
+        "S00304",
+        "S00359",
+        "S00364",
+        "S00628",
+        "S00635"
+      ],
+      "why_agent_needed": "An agent must interpret bounded earlier results to determine whether prior full-suite attempts stopped on missing imports and whether subsequent installs succeeded; command structure alone cannot distinguish the two execution modes."
+    },
+    "service_tier": "fast",
+    "source_sha256": "7a49f375773607b66005fc5af6dea06f8697dab7d7f87502eae42dc1ab1ec09b"
+  },
+  "baseline": {
+    "latency": {
+      "accuracy_minus_current_percentage_points": 0.0,
+      "accuracy_minus_majority_percentage_points": 16.6189111747851,
+      "arbitration_counts": {
+        "empirical-shell-graph-v1": 196,
+        "hard-first-nonempty-v1": 153
+      },
+      "available_only_accuracy": 0.7793696275071633,
+      "canonicalizer_version_counts": {
+        "raw-argv-prefix-v1": 349
+      },
+      "confusion_label_by_prediction": [
+        [
+          192,
+          11,
+          7,
+          1,
+          3
+        ],
+        [
+          15,
+          24,
+          10,
+          0,
+          9
+        ],
+        [
+          0,
+          4,
+          11,
+          1,
+          4
+        ],
+        [
+          0,
+          0,
+          3,
+          20,
+          5
+        ],
+        [
+          0,
+          4,
+          0,
+          0,
+          25
+        ]
+      ],
+      "current_accuracy": 0.7793696275071633,
+      "eligible_examples": 349,
+      "evidence_count_counts": {
+        "1": 67,
+        "11": 2,
+        "12": 6,
+        "13": 1,
+        "14": 9,
+        "15": 3,
+        "16": 4,
+        "160": 2,
+        "162": 2,
+        "164": 2,
+        "166": 2,
+        "168": 2,
+        "17": 4,
+        "170": 2,
+        "172": 2,
+        "174": 2,
+        "176": 2,
+        "178": 2,
+        "18": 4,
+        "180": 6,
+        "182": 2,
+        "184": 2,
+        "186": 2,
+        "188": 2,
+        "19": 3,
+        "190": 3,
+        "192": 2,
+        "194": 2,
+        "196": 2,
+        "198": 3,
+        "2": 40,
+        "20": 3,
+        "21": 2,
+        "22": 5,
+        "23": 5,
+        "24": 5,
+        "25": 1,
+        "27": 3,
+        "29": 1,
+        "3": 16,
+        "30": 3,
+        "33": 4,
+        "354": 1,
+        "36": 3,
+        "39": 3,
+        "4": 15,
+        "43": 7,
+        "45": 1,
+        "47": 1,
+        "49": 4,
+        "5": 4,
+        "6": 15,
+        "7": 36,
+        "8": 7,
+        "85": 2,
+        "87": 2,
+        "88": 1,
+        "9": 7,
+        "92": 2,
+        "95": 1
+      },
+      "exact_class_accuracy": 0.7793696275071633,
+      "fallback_path_counts": {
+        "clause[0]:public:global:clause[1]:public:global:clause[2]:public:global:clause[3]:public:global:clause[4]:public:global:clause[5]:public:global:clause[6]:public:global:clause[7]:public:global:clause[8]:public:global:clause[9]:public:global:clause[10]:repo:argv_prefix_depth_3:clause[11]:repo:argv_prefix_depth_2:clause[12]:repo:bin": 1,
+        "clause[0]:public:global:clause[1]:public:global:clause[2]:public:global:clause[3]:public:global:clause[4]:public:global:clause[5]:public:global:clause[6]:public:global:clause[7]:public:global:clause[8]:repo:argv_prefix_depth_3:clause[9]:repo:bin:clause[10]:repo:exact_clause:clause[11]:public:global": 1,
+        "clause[0]:public:global:clause[1]:public:global:clause[2]:public:global:clause[3]:public:global:clause[4]:public:global:clause[5]:public:global:clause[6]:repo:argv_prefix_depth_3:clause[7]:public:global:clause[8]:repo:exact_clause:clause[9]:public:global": 1,
+        "clause[0]:public:global:clause[1]:public:global:clause[2]:public:global:clause[3]:public:global:clause[4]:repo:argv_prefix_depth_4:clause[5]:repo:bin:clause[6]:repo:exact_clause:clause[7]:repo:argv_prefix_depth_2": 1,
+        "clause[0]:public:global:clause[1]:public:global:clause[2]:repo:argv_prefix_depth_4:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:argv_prefix_depth_4:clause[5]:repo:argv_prefix_depth_2:clause[6]:repo:exact_clause:clause[7]:public:global": 1,
+        "clause[0]:public:global:clause[1]:public:global:clause[2]:repo:argv_prefix_depth_4:clause[3]:repo:bin:clause[4]:repo:exact_clause:clause[5]:public:global:clause[6]:repo:exact_clause:clause[7]:public:global": 1,
+        "clause[0]:public:global:clause[1]:public:global:clause[2]:repo:argv_prefix_depth_4:clause[3]:repo:exact_clause:clause[4]:repo:bin": 1,
+        "clause[0]:public:global:clause[1]:public:global:clause[2]:repo:exact_clause:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:exact_clause:clause[5]:public:global:clause[6]:repo:exact_clause:clause[7]:repo:bin": 1,
+        "clause[0]:public:global:clause[1]:public:global:clause[2]:repo:exact_clause:clause[3]:repo:argv_prefix_depth_3:clause[4]:repo:exact_clause:clause[5]:repo:argv_prefix_depth_3": 1,
+        "clause[0]:public:global:clause[1]:public:global:clause[2]:repo:exact_clause:clause[3]:repo:bin:clause[4]:repo:bin:clause[5]:repo:exact_clause:clause[6]:repo:bin": 1,
+        "clause[0]:public:global:clause[1]:public:global:clause[2]:repo:exact_clause:clause[3]:repo:bin:clause[4]:repo:exact_clause:clause[5]:repo:bin:clause[6]:repo:exact_clause": 1,
+        "clause[0]:public:global:clause[1]:public:global:clause[2]:repo:exact_clause:clause[3]:repo:exact_clause:clause[4]:public:global:clause[5]:repo:exact_clause:clause[6]:repo:bin": 1,
+        "clause[0]:public:global:clause[1]:repo:argv_prefix_depth_2:clause[2]:public:global:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:argv_prefix_depth_2:clause[5]:repo:argv_prefix_depth_2:clause[6]:repo:argv_prefix_depth_3:clause[7]:repo:argv_prefix_depth_2": 1,
+        "clause[0]:public:global:clause[1]:repo:argv_prefix_depth_2:clause[2]:public:global:clause[3]:repo:argv_prefix_depth_3:clause[4]:repo:exact_clause:clause[5]:repo:argv_prefix_depth_4": 1,
+        "clause[0]:public:global:clause[1]:repo:argv_prefix_depth_3:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:argv_prefix_depth_3:clause[4]:repo:argv_prefix_depth_2": 1,
+        "clause[0]:public:global:clause[1]:repo:exact_clause": 20,
+        "clause[0]:public:global:clause[1]:repo:exact_clause:clause[2]:repo:bin": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:public:global:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:bin:clause[4]:repo:argv_prefix_depth_2:clause[5]:repo:argv_prefix_depth_2": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:argv_prefix_depth_2:clause[2]:public:bin": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:argv_prefix_depth_2": 2,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:argv_prefix_depth_2:clause[5]:repo:argv_prefix_depth_2:clause[6]:repo:argv_prefix_depth_2:clause[7]:repo:bin": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:exact_clause": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:argv_prefix_depth_3:clause[4]:repo:argv_prefix_depth_2": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:bin": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:bin:clause[4]:repo:argv_prefix_depth_2:clause[5]:repo:argv_prefix_depth_2": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:bin:clause[4]:repo:argv_prefix_depth_2:clause[5]:repo:bin": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:bin:clause[4]:repo:argv_prefix_depth_3": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:argv_prefix_depth_3:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:bin:clause[5]:repo:argv_prefix_depth_2": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:bin:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:bin:clause[5]:repo:argv_prefix_depth_2:clause[6]:repo:bin": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:bin:clause[3]:repo:exact_clause:clause[4]:repo:argv_prefix_depth_2:clause[5]:repo:bin": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:exact_clause:clause[3]:repo:exact_clause": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:argv_prefix_depth_3": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:bin": 10,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:bin:clause[2]:public:global:clause[3]:repo:argv_prefix_depth_4:clause[4]:repo:bin:clause[5]:repo:argv_prefix_depth_2:clause[6]:repo:argv_prefix_depth_2:clause[7]:repo:bin": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:bin:clause[2]:repo:argv_prefix_depth_2": 4,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:bin:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:argv_prefix_depth_2": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:bin:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:argv_prefix_depth_2:clause[5]:repo:argv_prefix_depth_2:clause[6]:repo:argv_prefix_depth_2": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:bin:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:argv_prefix_depth_2:clause[5]:repo:argv_prefix_depth_3": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:bin:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:argv_prefix_depth_2:clause[5]:repo:bin": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:bin:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:bin": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:bin:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:exact_clause": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:bin:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:bin": 5,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:bin:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:bin:clause[4]:repo:argv_prefix_depth_2": 3,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:bin:clause[2]:repo:argv_prefix_depth_3:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:bin": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:bin:clause[2]:repo:argv_prefix_depth_4:clause[3]:repo:bin:clause[4]:repo:exact_clause:clause[5]:public:global": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:bin:clause[2]:repo:exact_clause:clause[3]:public:global:clause[4]:repo:exact_clause:clause[5]:public:global:clause[6]:repo:exact_clause": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:bin:clause[2]:repo:exact_clause:clause[3]:public:global:clause[4]:repo:exact_clause:clause[5]:repo:bin": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:bin:clause[2]:repo:exact_clause:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:bin": 2,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:bin:clause[2]:repo:exact_clause:clause[3]:repo:bin:clause[4]:repo:bin:clause[5]:repo:argv_prefix_depth_2:clause[6]:repo:bin": 1,
+        "clause[0]:repo:argv_prefix_depth_2:clause[1]:repo:exact_clause:clause[2]:repo:exact_clause:clause[3]:repo:argv_prefix_depth_3": 1,
+        "clause[0]:repo:argv_prefix_depth_3:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:argv_prefix_depth_2": 1,
+        "clause[0]:repo:argv_prefix_depth_3:clause[1]:repo:argv_prefix_depth_3:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:bin": 1,
+        "clause[0]:repo:argv_prefix_depth_3:clause[1]:repo:argv_prefix_depth_3:clause[2]:repo:exact_clause:clause[3]:repo:exact_clause": 1,
+        "clause[0]:repo:argv_prefix_depth_3:clause[1]:repo:bin:clause[2]:public:bin:clause[3]:public:global:clause[4]:repo:argv_prefix_depth_3:clause[5]:repo:argv_prefix_depth_3": 1,
+        "clause[0]:repo:argv_prefix_depth_3:clause[1]:repo:bin:clause[2]:public:global:clause[3]:public:global:clause[4]:public:global:clause[5]:public:global:clause[6]:public:global:clause[7]:public:global": 1,
+        "clause[0]:repo:argv_prefix_depth_3:clause[1]:repo:bin:clause[2]:repo:argv_prefix_depth_2": 1,
+        "clause[0]:repo:argv_prefix_depth_3:clause[1]:repo:bin:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:argv_prefix_depth_2:clause[5]:repo:argv_prefix_depth_2": 1,
+        "clause[0]:repo:argv_prefix_depth_3:clause[1]:repo:bin:clause[2]:repo:argv_prefix_depth_3:clause[3]:public:global:clause[4]:repo:argv_prefix_depth_4:clause[5]:repo:bin": 1,
+        "clause[0]:repo:argv_prefix_depth_3:clause[1]:repo:exact_clause:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:exact_clause:clause[5]:public:global:clause[6]:repo:exact_clause:clause[7]:repo:bin:clause[8]:public:global": 1,
+        "clause[0]:repo:argv_prefix_depth_3:clause[1]:repo:exact_clause:clause[2]:repo:exact_clause": 1,
+        "clause[0]:repo:argv_prefix_depth_4:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:bin:clause[3]:repo:argv_prefix_depth_2": 1,
+        "clause[0]:repo:argv_prefix_depth_4:clause[1]:repo:argv_prefix_depth_3:clause[2]:repo:exact_clause": 1,
+        "clause[0]:repo:argv_prefix_depth_4:clause[1]:repo:argv_prefix_depth_4": 1,
+        "clause[0]:repo:argv_prefix_depth_4:clause[1]:repo:argv_prefix_depth_4:clause[2]:repo:argv_prefix_depth_3": 1,
+        "clause[0]:repo:argv_prefix_depth_4:clause[1]:repo:bin:clause[2]:public:global:clause[3]:public:global:clause[4]:repo:exact_clause:clause[5]:public:global:clause[6]:repo:exact_clause:clause[7]:repo:bin:clause[8]:public:global": 1,
+        "clause[0]:repo:argv_prefix_depth_4:clause[1]:repo:bin:clause[2]:repo:exact_clause:clause[3]:public:global": 1,
+        "clause[0]:repo:argv_prefix_depth_4:clause[1]:repo:exact_clause": 2,
+        "clause[0]:repo:bin:clause[1]:repo:argv_prefix_depth_3": 1,
+        "clause[0]:repo:exact_clause:clause[1]:public:global:clause[2]:public:global:clause[3]:public:global:clause[4]:repo:exact_clause:clause[5]:public:global:clause[6]:repo:exact_clause:clause[7]:repo:bin": 1,
+        "clause[0]:repo:exact_clause:clause[1]:public:global:clause[2]:public:global:clause[3]:repo:bin:clause[4]:repo:bin": 1,
+        "clause[0]:repo:exact_clause:clause[1]:public:global:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:bin": 1,
+        "clause[0]:repo:exact_clause:clause[1]:public:global:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:bin:clause[4]:repo:exact_clause": 1,
+        "clause[0]:repo:exact_clause:clause[1]:public:global:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:bin:clause[4]:repo:exact_clause:clause[5]:repo:bin:clause[6]:public:global": 1,
+        "clause[0]:repo:exact_clause:clause[1]:public:global:clause[2]:repo:argv_prefix_depth_4:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:exact_clause:clause[5]:repo:argv_prefix_depth_3": 1,
+        "clause[0]:repo:exact_clause:clause[1]:public:global:clause[2]:repo:exact_clause:clause[3]:public:global:clause[4]:repo:bin:clause[5]:public:global:clause[6]:repo:exact_clause:clause[7]:public:global:clause[8]:repo:exact_clause:clause[9]:public:global:clause[10]:repo:argv_prefix_depth_4:clause[11]:repo:bin": 1,
+        "clause[0]:repo:exact_clause:clause[1]:public:global:clause[2]:repo:exact_clause:clause[3]:public:global:clause[4]:repo:exact_clause:clause[5]:public:global:clause[6]:public:global:clause[7]:public:global:clause[8]:repo:argv_prefix_depth_4": 1,
+        "clause[0]:repo:exact_clause:clause[1]:public:global:clause[2]:repo:exact_clause:clause[3]:public:global:clause[4]:repo:exact_clause:clause[5]:repo:bin": 1,
+        "clause[0]:repo:exact_clause:clause[1]:public:global:clause[2]:repo:exact_clause:clause[3]:repo:bin:clause[4]:repo:exact_clause": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:argv_prefix_depth_2:clause[2]:public:global:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:argv_prefix_depth_2:clause[5]:repo:bin": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:argv_prefix_depth_2": 2,
+        "clause[0]:repo:exact_clause:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:argv_prefix_depth_2": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:bin:clause[4]:repo:argv_prefix_depth_2:clause[5]:repo:argv_prefix_depth_2": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:argv_prefix_depth_3:clause[3]:public:global:clause[4]:repo:argv_prefix_depth_2": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:bin": 5,
+        "clause[0]:repo:exact_clause:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:bin:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:bin": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:bin:clause[3]:repo:exact_clause:clause[4]:public:global:clause[5]:repo:bin:clause[6]:repo:bin": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:argv_prefix_depth_2:clause[2]:repo:exact_clause:clause[3]:repo:exact_clause": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:argv_prefix_depth_3": 2,
+        "clause[0]:repo:exact_clause:clause[1]:repo:argv_prefix_depth_4": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:argv_prefix_depth_4:clause[2]:repo:argv_prefix_depth_2:clause[3]:public:global:clause[4]:repo:argv_prefix_depth_2:clause[5]:repo:bin": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:argv_prefix_depth_4:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:bin": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:bin:clause[2]:public:global:clause[3]:public:global:clause[4]:repo:exact_clause:clause[5]:public:global": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:bin:clause[2]:public:global:clause[3]:repo:exact_clause:clause[4]:repo:exact_clause:clause[5]:repo:bin": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:bin:clause[2]:repo:exact_clause": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:bin:clause[2]:repo:exact_clause:clause[3]:public:global:clause[4]:repo:exact_clause:clause[5]:repo:argv_prefix_depth_2:clause[6]:repo:bin:clause[7]:public:global": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:bin:clause[2]:repo:exact_clause:clause[3]:public:global:clause[4]:repo:exact_clause:clause[5]:repo:bin:clause[6]:public:global": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:exact_clause": 19,
+        "clause[0]:repo:exact_clause:clause[1]:repo:exact_clause:clause[2]:public:global:clause[3]:public:bin": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:exact_clause:clause[2]:public:global:clause[3]:public:global:clause[4]:public:global:clause[5]:public:global:clause[6]:public:global:clause[7]:public:global:clause[8]:public:global:clause[9]:repo:argv_prefix_depth_2:clause[10]:repo:bin": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:exact_clause:clause[2]:repo:argv_prefix_depth_2": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:exact_clause:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:argv_prefix_depth_2": 2,
+        "clause[0]:repo:exact_clause:clause[1]:repo:exact_clause:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:argv_prefix_depth_4:clause[4]:repo:bin": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:exact_clause:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:bin": 2,
+        "clause[0]:repo:exact_clause:clause[1]:repo:exact_clause:clause[2]:repo:argv_prefix_depth_2:clause[3]:repo:bin:clause[4]:repo:argv_prefix_depth_3:clause[5]:repo:argv_prefix_depth_2": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:exact_clause:clause[2]:repo:argv_prefix_depth_3:clause[3]:public:global:clause[4]:public:global:clause[5]:public:global:clause[6]:public:global:clause[7]:public:global:clause[8]:repo:argv_prefix_depth_4:clause[9]:repo:bin": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:exact_clause:clause[2]:repo:argv_prefix_depth_3:clause[3]:public:global:clause[4]:repo:argv_prefix_depth_3": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:exact_clause:clause[2]:repo:argv_prefix_depth_4": 3,
+        "clause[0]:repo:exact_clause:clause[1]:repo:exact_clause:clause[2]:repo:bin": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:exact_clause:clause[2]:repo:exact_clause": 15,
+        "clause[0]:repo:exact_clause:clause[1]:repo:exact_clause:clause[2]:repo:exact_clause:clause[3]:repo:argv_prefix_depth_2": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:exact_clause:clause[2]:repo:exact_clause:clause[3]:repo:argv_prefix_depth_2:clause[4]:repo:bin:clause[5]:public:global:clause[6]:repo:exact_clause": 1,
+        "clause[0]:repo:exact_clause:clause[1]:repo:exact_clause:clause[2]:repo:exact_clause:clause[3]:repo:argv_prefix_depth_4": 3,
+        "repo:exact_clause": 118,
+        "repo:exact_clause:repo:argv_prefix_depth_3:repo:argv_prefix_depth_2": 1,
+        "repo:exact_clause:repo:argv_prefix_depth_3:repo:argv_prefix_depth_2:repo:bin": 2,
+        "repo:exact_clause:repo:argv_prefix_depth_3:repo:argv_prefix_depth_2:repo:bin:public:bin": 2,
+        "repo:exact_clause:repo:argv_prefix_depth_4": 18,
+        "repo:exact_clause:repo:argv_prefix_depth_4:repo:argv_prefix_depth_3": 11,
+        "repo:exact_clause:repo:argv_prefix_depth_4:repo:argv_prefix_depth_3:repo:argv_prefix_depth_2:repo:bin:public:bin": 1
+      },
+      "key_kind_counts": {
+        "argv_prefix_depth_2": 1,
+        "argv_prefix_depth_3": 11,
+        "argv_prefix_depth_4": 18,
+        "bin": 5,
+        "exact_clause": 118,
+        "shell_execution_graph": 196
+      },
+      "local_key_kind_counts": {},
+      "local_support_band_counts": {},
+      "majority_class": "instant",
+      "majority_class_accuracy": 0.6131805157593123,
+      "majority_class_id": 0,
+      "per_class": [
+        {
+          "class": "instant",
+          "class_id": 0,
+          "label_count": 214,
+          "label_share": 0.6131805157593123,
+          "predicted_count": 207,
+          "predicted_share": 0.5931232091690545
+        },
+        {
+          "class": "short",
+          "class_id": 1,
+          "label_count": 58,
+          "label_share": 0.166189111747851,
+          "predicted_count": 43,
+          "predicted_share": 0.12320916905444126
+        },
+        {
+          "class": "medium",
+          "class_id": 2,
+          "label_count": 20,
+          "label_share": 0.05730659025787966,
+          "predicted_count": 31,
+          "predicted_share": 0.08882521489971347
+        },
+        {
+          "class": "long",
+          "class_id": 3,
+          "label_count": 28,
+          "label_share": 0.08022922636103152,
+          "predicted_count": 22,
+          "predicted_share": 0.06303724928366762
+        },
+        {
+          "class": "very_long",
+          "class_id": 4,
+          "label_count": 29,
+          "label_share": 0.0830945558739255,
+          "predicted_count": 46,
+          "predicted_share": 0.1318051575931232
+        }
+      ],
+      "prediction_available": 349,
+      "prediction_coverage": 1.0,
+      "prediction_unavailable": 0,
+      "public_key_kind_counts": {},
+      "public_support_band_counts": {},
+      "scope_counts": {
+        "public": 3,
+        "repo": 275,
+        "repo+public": 71
+      },
+      "severe_underprediction_rate": 0.011461318051575931,
+      "shrinkage_alpha_counts": {},
+      "support_band_counts": {
+        "1": 67,
+        "2-4": 71,
+        "5+": 211
+      },
+      "within_one_bucket_accuracy": 0.9197707736389685
+    },
+    "resources": {
+      "disk_read_write_bytes_total": {
+        "accuracy": 0.8137535816618912,
+        "available_only_accuracy": 0.8137535816618912,
+        "confusion_label_by_prediction": [
+          [
+            199,
+            43,
+            1
+          ],
+          [
+            19,
+            66,
+            0
+          ],
+          [
+            0,
+            2,
+            19
+          ]
+        ],
+        "constant_low_accuracy": 0.6962750716332379,
+        "eligible_n": 349,
+        "label_source_counts": {
+          "observed_composed_high": 21,
+          "observed_composed_low": 243,
+          "observed_composed_medium": 85
+        },
+        "majority_class": "low",
+        "majority_class_accuracy": 0.6962750716332379,
+        "majority_class_id": 0,
+        "per_class": [
+          {
+            "class": "low",
+            "class_id": 0,
+            "label_count": 243,
+            "label_share": 0.6962750716332379,
+            "predicted_count": 218,
+            "predicted_share": 0.6246418338108882
+          },
+          {
+            "class": "medium",
+            "class_id": 1,
+            "label_count": 85,
+            "label_share": 0.24355300859598855,
+            "predicted_count": 111,
+            "predicted_share": 0.31805157593123207
+          },
+          {
+            "class": "high",
+            "class_id": 2,
+            "label_count": 21,
+            "label_share": 0.06017191977077364,
+            "predicted_count": 20,
+            "predicted_share": 0.05730659025787966
+          }
+        ],
+        "prediction_available": 349,
+        "prediction_unavailable": 0,
+        "provenance_counts": {
+          "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 3,
+          "repo+public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 71,
+          "repo:argv_prefix_depth_2:raw-argv-prefix-v1:hard-first-nonempty-v1": 1,
+          "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 11,
+          "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 18,
+          "repo:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 2,
+          "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 118,
+          "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 125
+        },
+        "severe_underprediction_rate": 0.0,
+        "within_one_bucket_accuracy": 0.997134670487106
+      },
+      "peak_cpu_cores": {
+        "accuracy": 0.9047619047619048,
+        "available_only_accuracy": 0.9047619047619048,
+        "confusion_label_by_prediction": [
+          [
+            168,
+            0,
+            13
+          ],
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            7,
+            0,
+            22
+          ]
+        ],
+        "constant_low_accuracy": 0.861904761904762,
+        "eligible_n": 210,
+        "label_source_counts": {
+          "composition_ambiguous": 103,
+          "null_unavailable": 36,
+          "observed_composed_high": 29,
+          "observed_composed_low": 63,
+          "short_null_composed_low": 118
+        },
+        "majority_class": "low",
+        "majority_class_accuracy": 0.861904761904762,
+        "majority_class_id": 0,
+        "per_class": [
+          {
+            "class": "low",
+            "class_id": 0,
+            "label_count": 181,
+            "label_share": 0.861904761904762,
+            "predicted_count": 175,
+            "predicted_share": 0.8333333333333334
+          },
+          {
+            "class": "medium",
+            "class_id": 1,
+            "label_count": 0,
+            "label_share": 0.0,
+            "predicted_count": 0,
+            "predicted_share": 0.0
+          },
+          {
+            "class": "high",
+            "class_id": 2,
+            "label_count": 29,
+            "label_share": 0.1380952380952381,
+            "predicted_count": 35,
+            "predicted_share": 0.16666666666666666
+          }
+        ],
+        "prediction_available": 210,
+        "prediction_unavailable": 0,
+        "provenance_counts": {
+          "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 3,
+          "repo+public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 24,
+          "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 8,
+          "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 17,
+          "repo:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 1,
+          "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 111,
+          "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 46
+        },
+        "severe_underprediction_rate": 0.03333333333333333,
+        "within_one_bucket_accuracy": 0.9047619047619048
+      },
+      "sampled_peak_rss_mb": {
+        "accuracy": 0.9156118143459916,
+        "available_only_accuracy": 0.9156118143459916,
+        "confusion_label_by_prediction": [
+          [
+            195,
+            0,
+            13
+          ],
+          [
+            0,
+            2,
+            0
+          ],
+          [
+            7,
+            0,
+            20
+          ]
+        ],
+        "constant_low_accuracy": 0.8776371308016878,
+        "eligible_n": 237,
+        "label_source_counts": {
+          "composition_ambiguous": 101,
+          "null_unavailable": 11,
+          "observed_composed_high": 27,
+          "observed_composed_low": 142,
+          "observed_composed_medium": 2,
+          "short_null_composed_low": 66
+        },
+        "majority_class": "low",
+        "majority_class_accuracy": 0.8776371308016878,
+        "majority_class_id": 0,
+        "per_class": [
+          {
+            "class": "low",
+            "class_id": 0,
+            "label_count": 208,
+            "label_share": 0.8776371308016878,
+            "predicted_count": 202,
+            "predicted_share": 0.8523206751054853
+          },
+          {
+            "class": "medium",
+            "class_id": 1,
+            "label_count": 2,
+            "label_share": 0.008438818565400843,
+            "predicted_count": 2,
+            "predicted_share": 0.008438818565400843
+          },
+          {
+            "class": "high",
+            "class_id": 2,
+            "label_count": 27,
+            "label_share": 0.11392405063291139,
+            "predicted_count": 33,
+            "predicted_share": 0.13924050632911392
+          }
+        ],
+        "prediction_available": 237,
+        "prediction_unavailable": 0,
+        "provenance_counts": {
+          "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 3,
+          "repo+public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 25,
+          "repo:argv_prefix_depth_2:raw-argv-prefix-v1:hard-first-nonempty-v1": 1,
+          "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 11,
+          "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 18,
+          "repo:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 2,
+          "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 118,
+          "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 59
+        },
+        "severe_underprediction_rate": 0.029535864978902954,
+        "within_one_bucket_accuracy": 0.9156118143459916
+      }
+    }
+  },
+  "candidate": {
+    "changes": {
+      "disk_read_write_bytes_total": {
+        "changed": 4,
+        "harmful": 2,
+        "helpful": 2,
+        "helpful_task_ids": [
+          "tobymao__sqlglot-4546",
+          "tobymao__sqlglot-4618"
+        ],
+        "neutral": 0,
+        "tasks": 2
+      },
+      "latency": {
+        "changed": 2,
+        "harmful": 1,
+        "helpful": 1,
+        "helpful_task_ids": [
+          "tobymao__sqlglot-4546"
+        ],
+        "neutral": 0,
+        "tasks": 1
+      },
+      "peak_cpu_cores": {
+        "changed": 2,
+        "harmful": 1,
+        "helpful": 1,
+        "helpful_task_ids": [
+          "tobymao__sqlglot-4546"
+        ],
+        "neutral": 0,
+        "tasks": 1
+      },
+      "sampled_peak_rss_mb": {
+        "changed": 2,
+        "harmful": 1,
+        "helpful": 1,
+        "helpful_task_ids": [
+          "tobymao__sqlglot-4546"
+        ],
+        "neutral": 0,
+        "tasks": 1
+      }
+    },
+    "gate": {
+      "go": false,
+      "harmful": 5,
+      "helpful": 5,
+      "helpful_tasks": 2,
+      "no_accuracy_regression": true,
+      "no_severe_underprediction_regression": true,
+      "requires_helpful_tasks_at_least": 3
+    },
+    "metrics": {
+      "disk_read_write_bytes_total": {
+        "accuracy": 0.8137535816618912,
+        "confusion_label_by_prediction": [
+          [
+            201,
+            41,
+            1
+          ],
+          [
+            21,
+            64,
+            0
+          ],
+          [
+            0,
+            2,
+            19
+          ]
+        ],
+        "eligible_n": 349,
+        "prediction_unavailable": 0,
+        "severe_underprediction_rate": 0.0,
+        "within_one_bucket_accuracy": 0.997134670487106
+      },
+      "latency": {
+        "confusion_label_by_prediction": [
+          [
+            192,
+            11,
+            7,
+            1,
+            3
+          ],
+          [
+            15,
+            23,
+            10,
+            0,
+            10
+          ],
+          [
+            0,
+            4,
+            11,
+            1,
+            4
+          ],
+          [
+            0,
+            0,
+            3,
+            20,
+            5
+          ],
+          [
+            0,
+            3,
+            0,
+            0,
+            26
+          ]
+        ],
+        "eligible_examples": 349,
+        "exact_class_accuracy": 0.7793696275071633,
+        "prediction_unavailable": 0,
+        "severe_underprediction_rate": 0.008595988538681949,
+        "within_one_bucket_accuracy": 0.9197707736389685
+      },
+      "peak_cpu_cores": {
+        "accuracy": 0.9047619047619048,
+        "confusion_label_by_prediction": [
+          [
+            167,
+            0,
+            14
+          ],
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            6,
+            0,
+            23
+          ]
+        ],
+        "eligible_n": 210,
+        "prediction_unavailable": 0,
+        "severe_underprediction_rate": 0.02857142857142857,
+        "within_one_bucket_accuracy": 0.9047619047619048
+      },
+      "sampled_peak_rss_mb": {
+        "accuracy": 0.9156118143459916,
+        "confusion_label_by_prediction": [
+          [
+            194,
+            0,
+            14
+          ],
+          [
+            0,
+            2,
+            0
+          ],
+          [
+            6,
+            0,
+            21
+          ]
+        ],
+        "eligible_n": 237,
+        "prediction_unavailable": 0,
+        "severe_underprediction_rate": 0.02531645569620253,
+        "within_one_bucket_accuracy": 0.9156118143459916
+      }
+    }
+  },
+  "claim_bearing": false,
+  "coverage": {
+    "selected_samples": 12,
+    "selected_tasks": 6,
+    "test_any_target_applied": 6,
+    "test_non_abstain": 6,
+    "training_catalog_commands": 1443,
+    "warmup_non_abstain": 31
+  },
+  "diagnostics": {
+    "empty_history": {
+      "changes": {
+        "disk_read_write_bytes_total": {
+          "changed": 0,
+          "harmful": 0,
+          "helpful": 0,
+          "helpful_task_ids": [],
+          "neutral": 0,
+          "tasks": 0
+        },
+        "latency": {
+          "changed": 0,
+          "harmful": 0,
+          "helpful": 0,
+          "helpful_task_ids": [],
+          "neutral": 0,
+          "tasks": 0
+        },
+        "peak_cpu_cores": {
+          "changed": 0,
+          "harmful": 0,
+          "helpful": 0,
+          "helpful_task_ids": [],
+          "neutral": 0,
+          "tasks": 0
+        },
+        "sampled_peak_rss_mb": {
+          "changed": 0,
+          "harmful": 0,
+          "helpful": 0,
+          "helpful_task_ids": [],
+          "neutral": 0,
+          "tasks": 0
+        }
+      },
+      "gate": {
+        "go": false,
+        "harmful": 0,
+        "helpful": 0,
+        "helpful_tasks": 0,
+        "no_accuracy_regression": true,
+        "no_severe_underprediction_regression": true,
+        "requires_helpful_tasks_at_least": 3
+      },
+      "metrics": {
+        "disk_read_write_bytes_total": {
+          "accuracy": 0.8137535816618912,
+          "confusion_label_by_prediction": [
+            [
+              199,
+              43,
+              1
+            ],
+            [
+              19,
+              66,
+              0
+            ],
+            [
+              0,
+              2,
+              19
+            ]
+          ],
+          "eligible_n": 349,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.0,
+          "within_one_bucket_accuracy": 0.997134670487106
+        },
+        "latency": {
+          "confusion_label_by_prediction": [
+            [
+              192,
+              11,
+              7,
+              1,
+              3
+            ],
+            [
+              15,
+              24,
+              10,
+              0,
+              9
+            ],
+            [
+              0,
+              4,
+              11,
+              1,
+              4
+            ],
+            [
+              0,
+              0,
+              3,
+              20,
+              5
+            ],
+            [
+              0,
+              4,
+              0,
+              0,
+              25
+            ]
+          ],
+          "eligible_examples": 349,
+          "exact_class_accuracy": 0.7793696275071633,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.011461318051575931,
+          "within_one_bucket_accuracy": 0.9197707736389685
+        },
+        "peak_cpu_cores": {
+          "accuracy": 0.9047619047619048,
+          "confusion_label_by_prediction": [
+            [
+              168,
+              0,
+              13
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              7,
+              0,
+              22
+            ]
+          ],
+          "eligible_n": 210,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.03333333333333333,
+          "within_one_bucket_accuracy": 0.9047619047619048
+        },
+        "sampled_peak_rss_mb": {
+          "accuracy": 0.9156118143459916,
+          "confusion_label_by_prediction": [
+            [
+              195,
+              0,
+              13
+            ],
+            [
+              0,
+              2,
+              0
+            ],
+            [
+              7,
+              0,
+              20
+            ]
+          ],
+          "eligible_n": 237,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.029535864978902954,
+          "within_one_bucket_accuracy": 0.9156118143459916
+        }
+      },
+      "support": {}
+    },
+    "full_test_phase": {
+      "gate": {
+        "changed_tasks": 5,
+        "disk_bit_identical": true,
+        "go": true,
+        "harmful": 0,
+        "helpful": 16,
+        "helpful_tasks": 5,
+        "no_accuracy_regression": true,
+        "no_severe_underprediction_regression": true,
+        "requires_helpful_tasks_at_least": 3
+      },
+      "latency": {
+        "accuracy_minus_current_percentage_points": 1.1461318051575908,
+        "accuracy_minus_majority_percentage_points": 17.76504297994269,
+        "arbitration_counts": {
+          "current": 345,
+          "monotone_upward_override": 4
+        },
+        "available_only_accuracy": 0.7908309455587392,
+        "canonicalizer_version_counts": {
+          "current": 345,
+          "full-test-third-or-later-v1": 4
+        },
+        "confusion_label_by_prediction": [
+          [
+            192,
+            11,
+            7,
+            1,
+            3
+          ],
+          [
+            15,
+            24,
+            10,
+            0,
+            9
+          ],
+          [
+            0,
+            4,
+            11,
+            1,
+            4
+          ],
+          [
+            0,
+            0,
+            3,
+            20,
+            5
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            29
+          ]
+        ],
+        "current_accuracy": 0.7793696275071633,
+        "eligible_examples": 349,
+        "evidence_count_counts": {
+          "0": 345,
+          "32": 4
+        },
+        "exact_class_accuracy": 0.7908309455587392,
+        "fallback_path_counts": {
+          "": 349
+        },
+        "key_kind_counts": {
+          "current": 345,
+          "full_test_phase": 4
+        },
+        "local_key_kind_counts": {},
+        "local_support_band_counts": {},
+        "majority_class": "instant",
+        "majority_class_accuracy": 0.6131805157593123,
+        "majority_class_id": 0,
+        "per_class": [
+          {
+            "class": "instant",
+            "class_id": 0,
+            "label_count": 214,
+            "label_share": 0.6131805157593123,
+            "predicted_count": 207,
+            "predicted_share": 0.5931232091690545
+          },
+          {
+            "class": "short",
+            "class_id": 1,
+            "label_count": 58,
+            "label_share": 0.166189111747851,
+            "predicted_count": 39,
+            "predicted_share": 0.11174785100286533
+          },
+          {
+            "class": "medium",
+            "class_id": 2,
+            "label_count": 20,
+            "label_share": 0.05730659025787966,
+            "predicted_count": 31,
+            "predicted_share": 0.08882521489971347
+          },
+          {
+            "class": "long",
+            "class_id": 3,
+            "label_count": 28,
+            "label_share": 0.08022922636103152,
+            "predicted_count": 22,
+            "predicted_share": 0.06303724928366762
+          },
+          {
+            "class": "very_long",
+            "class_id": 4,
+            "label_count": 29,
+            "label_share": 0.0830945558739255,
+            "predicted_count": 50,
+            "predicted_share": 0.14326647564469913
+          }
+        ],
+        "prediction_available": 349,
+        "prediction_coverage": 1.0,
+        "prediction_unavailable": 0,
+        "public_key_kind_counts": {},
+        "public_support_band_counts": {},
+        "scope_counts": {
+          "current": 345,
+          "task_local": 4
+        },
+        "severe_underprediction_rate": 0.0,
+        "shrinkage_alpha_counts": {},
+        "support_band_counts": {
+          "1": 0,
+          "2-4": 345,
+          "5+": 4
+        },
+        "within_one_bucket_accuracy": 0.9312320916905444
+      },
+      "resources": {
+        "disk_read_write_bytes_total": {
+          "accuracy": 0.8137535816618912,
+          "available_only_accuracy": 0.8137535816618912,
+          "confusion_label_by_prediction": [
+            [
+              199,
+              43,
+              1
+            ],
+            [
+              19,
+              66,
+              0
+            ],
+            [
+              0,
+              2,
+              19
+            ]
+          ],
+          "constant_low_accuracy": 0.6962750716332379,
+          "eligible_n": 349,
+          "label_source_counts": {
+            "observed_composed_high": 21,
+            "observed_composed_low": 243,
+            "observed_composed_medium": 85
+          },
+          "majority_class": "low",
+          "majority_class_accuracy": 0.6962750716332379,
+          "majority_class_id": 0,
+          "per_class": [
+            {
+              "class": "low",
+              "class_id": 0,
+              "label_count": 243,
+              "label_share": 0.6962750716332379,
+              "predicted_count": 218,
+              "predicted_share": 0.6246418338108882
+            },
+            {
+              "class": "medium",
+              "class_id": 1,
+              "label_count": 85,
+              "label_share": 0.24355300859598855,
+              "predicted_count": 111,
+              "predicted_share": 0.31805157593123207
+            },
+            {
+              "class": "high",
+              "class_id": 2,
+              "label_count": 21,
+              "label_share": 0.06017191977077364,
+              "predicted_count": 20,
+              "predicted_share": 0.05730659025787966
+            }
+          ],
+          "prediction_available": 349,
+          "prediction_unavailable": 0,
+          "provenance_counts": {
+            "current:unchanged:current": 349
+          },
+          "severe_underprediction_rate": 0.0,
+          "within_one_bucket_accuracy": 0.997134670487106
+        },
+        "peak_cpu_cores": {
+          "accuracy": 0.9333333333333333,
+          "available_only_accuracy": 0.9333333333333333,
+          "confusion_label_by_prediction": [
+            [
+              168,
+              0,
+              13
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              1,
+              0,
+              28
+            ]
+          ],
+          "constant_low_accuracy": 0.861904761904762,
+          "eligible_n": 210,
+          "label_source_counts": {
+            "composition_ambiguous": 103,
+            "null_unavailable": 36,
+            "observed_composed_high": 29,
+            "observed_composed_low": 63,
+            "short_null_composed_low": 118
+          },
+          "majority_class": "low",
+          "majority_class_accuracy": 0.861904761904762,
+          "majority_class_id": 0,
+          "per_class": [
+            {
+              "class": "low",
+              "class_id": 0,
+              "label_count": 181,
+              "label_share": 0.861904761904762,
+              "predicted_count": 169,
+              "predicted_share": 0.8047619047619048
+            },
+            {
+              "class": "medium",
+              "class_id": 1,
+              "label_count": 0,
+              "label_share": 0.0,
+              "predicted_count": 0,
+              "predicted_share": 0.0
+            },
+            {
+              "class": "high",
+              "class_id": 2,
+              "label_count": 29,
+              "label_share": 0.1380952380952381,
+              "predicted_count": 41,
+              "predicted_share": 0.19523809523809524
+            }
+          ],
+          "prediction_available": 210,
+          "prediction_unavailable": 0,
+          "provenance_counts": {
+            "current:unchanged:current": 204,
+            "task_local:full_test_phase:full-test-third-or-later-v1": 6
+          },
+          "severe_underprediction_rate": 0.004761904761904762,
+          "within_one_bucket_accuracy": 0.9333333333333333
+        },
+        "sampled_peak_rss_mb": {
+          "accuracy": 0.9409282700421941,
+          "available_only_accuracy": 0.9409282700421941,
+          "confusion_label_by_prediction": [
+            [
+              195,
+              0,
+              13
+            ],
+            [
+              0,
+              2,
+              0
+            ],
+            [
+              1,
+              0,
+              26
+            ]
+          ],
+          "constant_low_accuracy": 0.8776371308016878,
+          "eligible_n": 237,
+          "label_source_counts": {
+            "composition_ambiguous": 101,
+            "null_unavailable": 11,
+            "observed_composed_high": 27,
+            "observed_composed_low": 142,
+            "observed_composed_medium": 2,
+            "short_null_composed_low": 66
+          },
+          "majority_class": "low",
+          "majority_class_accuracy": 0.8776371308016878,
+          "majority_class_id": 0,
+          "per_class": [
+            {
+              "class": "low",
+              "class_id": 0,
+              "label_count": 208,
+              "label_share": 0.8776371308016878,
+              "predicted_count": 196,
+              "predicted_share": 0.8270042194092827
+            },
+            {
+              "class": "medium",
+              "class_id": 1,
+              "label_count": 2,
+              "label_share": 0.008438818565400843,
+              "predicted_count": 2,
+              "predicted_share": 0.008438818565400843
+            },
+            {
+              "class": "high",
+              "class_id": 2,
+              "label_count": 27,
+              "label_share": 0.11392405063291139,
+              "predicted_count": 39,
+              "predicted_share": 0.16455696202531644
+            }
+          ],
+          "prediction_available": 237,
+          "prediction_unavailable": 0,
+          "provenance_counts": {
+            "current:unchanged:current": 231,
+            "task_local:full_test_phase:full-test-third-or-later-v1": 6
+          },
+          "severe_underprediction_rate": 0.004219409282700422,
+          "within_one_bucket_accuracy": 0.9409282700421941
+        }
+      }
+    }
+  },
+  "extractor_runtime": {
+    "p50_ms": 0.001082,
+    "p95_ms": 0.001843,
+    "queries": 1792
+  },
+  "objective": "offline_agent_generated_causal_command_signature",
+  "protocol": {
+    "fallback": "Current per unsupported signature-target",
+    "minimum_distinct_warmup_tasks_per_signature_target": 5,
+    "runtime_agent_calls": 0,
+    "test_tasks": 20,
+    "warmup_tasks": 80
+  },
+  "row_identity": {
+    "identical_sample_ids_and_labels": true,
+    "test_commands": 349
+  },
+  "status": "development_exposed_offline_agent_extractor_no_go",
+  "support": {
+    "full_suite_retry_after_collection_remediation::dependencies_remediated::disk_read_write_bytes_total": {
+      "distinct_tasks": 15,
+      "label_counts": {
+        "0": 25,
+        "1": 6
+      },
+      "pmf": [
+        0.8064516129032258,
+        0.1935483870967742,
+        0.0
+      ],
+      "usable": true
+    },
+    "full_suite_retry_after_collection_remediation::dependencies_remediated::latency": {
+      "distinct_tasks": 15,
+      "label_counts": {
+        "1": 14,
+        "4": 17
+      },
+      "pmf": [
+        0.0,
+        0.45161290322580644,
+        0.0,
+        0.0,
+        0.5483870967741935
+      ],
+      "usable": true
+    },
+    "full_suite_retry_after_collection_remediation::dependencies_remediated::peak_cpu_cores": {
+      "distinct_tasks": 15,
+      "label_counts": {
+        "0": 14,
+        "2": 17
+      },
+      "pmf": [
+        0.45161290322580644,
+        0.0,
+        0.5483870967741935
+      ],
+      "usable": true
+    },
+    "full_suite_retry_after_collection_remediation::dependencies_remediated::sampled_peak_rss_mb": {
+      "distinct_tasks": 15,
+      "label_counts": {
+        "0": 14,
+        "2": 17
+      },
+      "pmf": [
+        0.45161290322580644,
+        0.0,
+        0.5483870967741935
+      ],
+      "usable": true
+    }
+  }
+}

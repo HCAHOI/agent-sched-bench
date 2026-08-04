@@ -136,6 +136,17 @@ output, cost, support, and continuation rules are in
 `clause-interaction-kb-plan.md`. This arm does not replace or tune the unread
 blind-state held-out primary.
 
+That lower-cost arm is now complete and is a development no-go. Its single
+agent-generated causal signature covered 31 warm-up commands in 15 tasks and
+six test commands in three tasks. Exact accuracy stayed unchanged at 77.937%
+latency, 90.476% CPU, 91.561% RSS, and 81.375% Disk. Severe underprediction fell
+slightly for latency, CPU, and RSS, but the ten target changes split evenly into
+five helpful and five harmful and helpful changes covered only two tasks. The
+mechanism collapsed partial and complete dependency remediation: 14/15 warm-up
+support tasks contained both a short retry and a later real full-suite execution
+under the same signature. The method therefore stops without regeneration;
+the frozen blind-state held-out primary remains unchanged.
+
 The fixed full-command targets in Section 1 remain the static-predictor
 baseline. Their first causal 80-task warm-up / 20-task test replay contains 349
 test commands. It is development-exposed, not confirmation evidence:
@@ -302,6 +313,13 @@ ceiling, not a remaining-work signal.
   state result was visible but before its catalog, agent selection, generated
   source, or 20-task score existed. It is development-only and cannot replace
   the already frozen held-out primary.
+- The first generated source and both prompts were frozen before candidate PMFs
+  or final-20 scores were read. Its first replay stopped before scoring because
+  regex source text was mistakenly treated as a required literal training
+  substring. The validator was corrected and independently reviewed to measure
+  matches of the exact frozen regex while rejecting package/test/file argument
+  dependence; the same source and prompt hashes were then replayed with no
+  additional model call. The resulting no-go numbers above are the first score.
 
 ## 6. Non-negotiable task contract
 
