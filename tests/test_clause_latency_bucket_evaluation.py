@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import math
+from itertools import combinations
 from pathlib import Path
 
 import pytest
 
 from scripts.evaluation.evaluate_clause_latency_buckets import (
+    _EpisodicSubsetKB,
     _InteractionPosetKB,
     ScoredRow,
     _argmax_bucket,
@@ -15,6 +18,8 @@ from scripts.evaluation.evaluate_clause_latency_buckets import (
     _maximal_intersections,
     _parser,
     _select_shrinkage_alpha,
+    _subset_count,
+    _subset_kernel,
     _telemetry_metrics,
     _telemetry_scored_rows,
     _validate_partition,
@@ -164,6 +169,58 @@ def test_interaction_poset_features_and_maximal_frontier() -> None:
     assert [item.row for item in match.observations] == history[1:]
     assert len({item.observation_id for item in match.observations}) == 2
     assert poset.query(history[1]).observations[0].row == history[1]
+
+
+def test_episodic_subset_kernel_matches_explicit_subsets() -> None:
+    query = frozenset({"a", "b", "c"})
+    history = frozenset({"b", "c", "d", "e"})
+
+    def explicit_subsets(values: frozenset[str], order: int | None) -> set[tuple[str, ...]]:
+        limit = len(values) if order is None else min(order, len(values))
+        return {
+            subset
+            for size in range(1, limit + 1)
+            for subset in combinations(sorted(values), size)
+        }
+
+    for order in (None, 1, 2, 3):
+        query_subsets = explicit_subsets(query, order)
+        history_subsets = explicit_subsets(history, order)
+        expected = len(query_subsets & history_subsets) / math.sqrt(
+            len(query_subsets) * len(history_subsets)
+        )
+        assert _subset_kernel(query, history, order) == pytest.approx(expected)
+        assert _subset_count(len(query), order) == len(query_subsets)
+    assert _subset_kernel(frozenset(), history) == 0.0
+    with pytest.raises(ValueError, match="positive"):
+        _subset_count(2, 0)
+
+    def row(task: int, *options: str) -> Row:
+        return Row(
+            task_id=f"owner__repo-{task}",
+            repo="owner__repo",
+            manifest_index=task - 1,
+            bin="runner",
+            argv=("runner", "deploy", *options),
+            latency_ms=100.0,
+            peak_cpu_cores=None,
+            sampled_peak_rss_mb=None,
+            disk_read_write_bytes_total=None,
+        )
+
+    memory = _EpisodicSubsetKB(frozenset({("runner", "deploy")}))
+    histories = [row(1, "--a=x", "--b=x"), row(2, "--a=x", "--c=x")]
+    memory.observe(histories)
+    match = memory.query(row(3, "--a=x", "--b=x", "--c=x"))
+    assert match.exact is False
+    assert [item.observation.row for item in match.contributions] == histories
+    assert all(item.weight > 0.0 for item in match.contributions)
+    assert len({item.observation.observation_id for item in match.contributions}) == 2
+    exact = memory.query(histories[0])
+    assert exact.exact is True
+    assert [(item.observation.row, item.weight) for item in exact.contributions] == [
+        (histories[0], 1.0)
+    ]
 
 
 def test_cli_has_no_bucket_override() -> None:

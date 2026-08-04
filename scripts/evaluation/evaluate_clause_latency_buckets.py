@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import random
 import sys
 from collections import Counter, defaultdict
@@ -94,6 +95,19 @@ class _PosetMatch:
     exact: bool
     observations: tuple[_InteractionObservation, ...]
     frontier: frozenset[frozenset[str]]
+
+
+@dataclass(frozen=True)
+class _KernelContribution:
+    observation: _InteractionObservation
+    shared_feature_count: int
+    weight: float
+
+
+@dataclass(frozen=True)
+class _KernelMatch:
+    exact: bool
+    contributions: tuple[_KernelContribution, ...]
 
 
 def _interaction_feature_set(
@@ -200,6 +214,110 @@ class _InteractionPosetKB:
             observations=selected,
             frontier=frontier,
         )
+
+
+def _subset_count(size: int, order: int | None = None) -> int:
+    """Count non-empty subsets, optionally limited to a maximum order."""
+
+    if size <= 0:
+        return 0
+    if order is None:
+        return 2**size - 1
+    if order <= 0:
+        raise ValueError("subset order must be positive")
+    return sum(math.comb(size, degree) for degree in range(1, min(order, size) + 1))
+
+
+def _subset_kernel(
+    query: frozenset[str],
+    history: frozenset[str],
+    order: int | None = None,
+) -> float:
+    """Length-normalized overlap in the non-empty subset feature space."""
+
+    shared = len(query & history)
+    numerator = _subset_count(shared, order)
+    denominator = math.sqrt(
+        _subset_count(len(query), order) * _subset_count(len(history), order)
+    )
+    return numerator / denominator if denominator else 0.0
+
+
+class _EpisodicSubsetKB:
+    """Observation memory weighted by the all-subset kernel; no trie index."""
+
+    def __init__(
+        self,
+        stable_subcommands: frozenset[tuple[str, str]] = frozenset(),
+        *,
+        order: int | None = None,
+    ) -> None:
+        if order is not None and order <= 0:
+            raise ValueError("subset order must be positive")
+        self.stable_subcommands = stable_subcommands
+        self.order = order
+        self._next_observation_id = 0
+        self._exact: dict[
+            tuple[str, tuple[str, ...]], list[_InteractionObservation]
+        ] = defaultdict(list)
+        self._by_bin: dict[str, list[_InteractionObservation]] = defaultdict(list)
+
+    def observe(self, rows: Sequence[Row]) -> None:
+        for row in rows:
+            observation = _InteractionObservation(
+                observation_id=self._next_observation_id,
+                task_id=row.task_id,
+                row=row,
+                feature_set=_interaction_feature_set(
+                    row.bin,
+                    row.argv,
+                    self.stable_subcommands,
+                ),
+            )
+            self._next_observation_id += 1
+            self._exact[(row.bin, row.argv[1:])].append(observation)
+            self._by_bin[row.bin].append(observation)
+
+    def query(self, row: Row) -> _KernelMatch:
+        exact = tuple(self._exact.get((row.bin, row.argv[1:]), ()))
+        if exact:
+            return _KernelMatch(
+                exact=True,
+                contributions=tuple(
+                    _KernelContribution(
+                        observation=observation,
+                        shared_feature_count=len(observation.feature_set.features),
+                        weight=1.0,
+                    )
+                    for observation in exact
+                ),
+            )
+        query = _interaction_feature_set(
+            row.bin,
+            row.argv,
+            self.stable_subcommands,
+        ).features
+        contributions = tuple(
+            _KernelContribution(
+                observation=observation,
+                shared_feature_count=len(query & observation.feature_set.features),
+                weight=weight,
+            )
+            for observation in self._by_bin.get(row.bin, ())
+            if (
+                weight := _subset_kernel(
+                    query,
+                    observation.feature_set.features,
+                    self.order,
+                )
+            )
+            > 0.0
+        )
+        if len({item.observation.observation_id for item in contributions}) != len(
+            contributions
+        ):
+            raise AssertionError("subset kernel matched one observation more than once")
+        return _KernelMatch(exact=False, contributions=contributions)
 
 
 def _validate_partition(
