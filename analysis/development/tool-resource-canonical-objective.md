@@ -126,6 +126,16 @@ CPU and RSS. All 16 changed target predictions were helpful across five tasks;
 none were harmful. This does not establish generalization. The unread adjacent
 SQLGlot100 collection is the frozen task-held-out replication.
 
+A separate development-only amendment tests a lower-cost agent boundary: two
+bounded, tool-free calls inspect only the first 80 exposed tasks and emit one
+frozen causal feature function. The function runs locally on future commands,
+emits a signature rather than a bucket, and leaves PMF fitting and unsupported
+fallback to the ordinary evaluator. It may discover its own scope, but the
+framework names no tool or hand-selected residual family. The fixed input,
+output, cost, support, and continuation rules are in
+`clause-interaction-kb-plan.md`. This arm does not replace or tune the unread
+blind-state held-out primary.
+
 The fixed full-command targets in Section 1 remain the static-predictor
 baseline. Their first causal 80-task warm-up / 20-task test replay contains 349
 test commands. It is development-exposed, not confirmation evidence:
@@ -288,6 +298,10 @@ ceiling, not a remaining-work signal.
   causal-state schema and gate were frozen. The resulting 80/20 replay is also
   post-hoc development evidence. It cannot change the frozen held-out primary,
   whose collection remained scientifically unread at this amendment.
+- The offline generated-extractor protocol was frozen after the post-hoc blind
+  state result was visible but before its catalog, agent selection, generated
+  source, or 20-task score existed. It is development-only and cannot replace
+  the already frozen held-out primary.
 
 ## 6. Non-negotiable task contract
 

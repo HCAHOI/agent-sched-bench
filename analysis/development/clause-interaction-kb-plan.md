@@ -134,7 +134,58 @@ PMF-identity checks are validity conditions. These criteria were frozen after
 the discovery counts were visible, so any result remains post-hoc development
 evidence and cannot alter the frozen held-out primary.
 
-## 5. Held-out replication
+## 5. Offline-generated causal extractor
+
+This development-only arm tests whether an agent is useful as a batch feature
+program generator rather than a per-command predictor. It does not alter the
+blind-state held-out primary in Section 6.
+
+The first 80 development tasks are exposed through a generic catalog. Every
+eligible command has opaque task and sample IDs, command text, parsed clauses,
+the four labels, and Current's four causal predictions and PMFs. The catalog
+builder contains no executable, option, package, test, or result-text allowlist.
+The first agent call sees the complete catalog and may select at most 24 samples
+from at most 12 tasks for one hypothesis, or abstain. The second call sees only
+those selected rows plus their de-duplicated causal task prefixes: earlier
+command text, exit status, and a first/last result excerpt bounded to 500 total
+characters per event. Both calls use Codex `gpt-5.6-sol`, requested fast tier,
+medium reasoning, no tools, and separate ephemeral contexts. Their combined
+serialized prompts must not exceed 800,000 UTF-8 bytes. Actual tokens and wall
+time are recorded; the byte limit is an engineering cost ceiling, not a success
+criterion.
+
+The output is exactly one frozen Python `extract(query)` function or an
+abstention. At prediction time `query` contains the current command, parsed
+clauses, and only causally earlier events from the same task. The function may
+return `rule_id`, `state`, and `evidence_event_indices`, or `None`; it cannot
+return a resource bucket or PMF. It receives no task/repository identity,
+timing, telemetry, labels, Current prediction, current result, future event,
+filesystem, network, clock, or randomness. The host validates and runs it with
+restricted builtins and fits the four empirical PMFs independently. A
+signature-target is usable only with eligible support from at least five
+distinct warm-up tasks; otherwise that target falls back to Current.
+
+The source is generated once and frozen before the final 20 development tasks
+are scored. Candidate and Current use identical command rows, labels, order,
+availability, compound composition, and dynamic task-final updates. The
+candidate may replace Current in either direction for any of latency, CPU, RSS,
+or Disk when support exists. Continue only if:
+
+- exact accuracy is no lower for every target;
+- severe underprediction is no higher for every target;
+- target-level helpful changes outnumber harmful changes; and
+- helpful changes cover at least three test tasks.
+
+Report all commands, plus selected-scope coverage, abstentions, generated-rule
+support, agent token cost, and local extractor p50/p95 latency. An abstention or
+failed gate is a complete negative result; do not regenerate the source, change
+the prompt or support threshold, or report only its selected subset. A positive
+result is still development evidence. To attribute the mechanism, also replay
+the same frozen source with an empty causal history and compare against the
+existing non-agent full-test phase arm; neither diagnostic selects the
+candidate.
+
+## 6. Held-out replication
 
 Development passed and the implementation is frozen. After collection
 completion, fit state on all 100 existing SQLGlot tasks and evaluate every
@@ -159,7 +210,7 @@ The held-out gate is fixed before any result from that collection is read:
 This is a task-held-out same-repository replication, not a temporal deployment
 claim: the new tasks precede the development tasks by creation time.
 
-## 6. Implementation and checks
+## 7. Implementation and checks
 
 - Reuse the existing command loader, pytest parser, Current replay, bucket
   labels, and metrics. Add no KB class or runtime integration.
@@ -173,3 +224,5 @@ claim: the new tasks precede the development tasks by creation time.
   artifact is treated as evidence.
 - Commit the method before reading the held-out collection. Do not tune the
   detector, third-attempt boundary, targets, or gate from held-out results.
+- The generated-extractor arm reuses this evaluator and raw-event loader; it
+  adds no KB class, runtime service, online agent call, rule DSL, or registry.
