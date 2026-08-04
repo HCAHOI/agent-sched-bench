@@ -115,6 +115,14 @@ finalization, while prior command text is an allowed causal session signal for
 this named arm. The protocol and held-out gate live in
 `clause-interaction-kb-plan.md`. No runtime integration is authorized yet.
 
+The reviewed post-hoc 80/20 replay passed its development continuation rule.
+Latency accuracy changed from 77.937% to 79.083%, CPU from 90.476% to 93.333%,
+RSS from 91.561% to 94.093%, and Disk remained 81.375% with bit-identical PMFs.
+Severe underpredictions fell from 4 to 0 for latency and from 7 to 1 for both
+CPU and RSS. All 16 changed target predictions were helpful across five tasks;
+none were harmful. This does not establish generalization. The unread adjacent
+SQLGlot100 collection is the frozen task-held-out replication.
+
 The fixed full-command targets in Section 1 remain the static-predictor
 baseline. Their first causal 80-task warm-up / 20-task test replay contains 349
 test commands. It is development-exposed, not confirmation evidence:

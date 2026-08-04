@@ -2,7 +2,7 @@
 
 **Effective:** 2026-08-04
 
-**Status:** development replay pending; held-out SQLGlot collection running and unread
+**Status:** development replay passed; held-out SQLGlot collection running and unread
 
 This plan extends `tool-resource-canonical-objective.md`. The earlier semantic
 KB and early-execution routes are complete negative results. The active question
@@ -54,11 +54,23 @@ the 80/20 phase table were visible. Continue only if the formal causal replay:
 - has more helpful than harmful changed predictions; and
 - improves commands from at least three test tasks.
 
+The reviewed formal replay passed. Across the identical 349 commands, latency
+accuracy rose from 77.937% to 79.083%, CPU from 90.476% to 93.333%, and RSS from
+91.561% to 94.093%. Severe underpredictions fell from 4 to 0, 7 to 1, and 7 to
+1 respectively. Disk stayed at 81.375% with bit-identical PMFs. Six commands
+changed at least one target; all 16 target-level changes were helpful, none were
+harmful, across five tasks. This remains post-hoc development evidence.
+
+Artifacts:
+
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot80-20-full-test-phase.json`
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot80-20-full-test-phase.rows.jsonl`
+
 ## 3. Held-out replication
 
-Only if development passes, freeze the implementation and fit state on all 100
-existing SQLGlot tasks. Then evaluate every evidence-valid task from the unread
-collection:
+Development passed and the implementation is frozen. After collection
+completion, fit state on all 100 existing SQLGlot tasks and evaluate every
+evidence-valid task from the unread collection:
 
 `traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804`
 
