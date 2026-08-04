@@ -26,6 +26,7 @@ from scripts.evaluation.evaluate_clause_latency_buckets import (
     _validate_partition,
     evaluate_clause_telemetry,
     evaluate_interaction_commands,
+    evaluate_poset_resources,
     evaluate_prequential_commands,
 )
 from scripts.evaluation.evaluate_clause_resource_classes import (
@@ -453,6 +454,7 @@ def test_interaction_queries_use_static_not_observed_argv() -> None:
 
 
 def test_interaction_exact_compound_uses_current_composition() -> None:
+    mib = 1024 * 1024
     values = ((100.0, 9000.0), (9000.0, 100.0), (100.0, 100.0))
     clauses: list[Row] = []
     commands: list[CommandRow] = []
@@ -465,9 +467,9 @@ def test_interaction_exact_compound_uses_current_composition() -> None:
                 bin=bin_,
                 argv=(bin_,),
                 latency_ms=latency,
-                peak_cpu_cores=None,
-                sampled_peak_rss_mb=None,
-                disk_read_write_bytes_total=None,
+                peak_cpu_cores=3.0 if latency > 8000 else 1.0,
+                sampled_peak_rss_mb=600.0 if latency > 8000 else 100.0,
+                disk_read_write_bytes_total=(200 if latency > 8000 else 1) * mib,
             )
             for bin_, latency in (("a", a_latency), ("b", b_latency))
         )
@@ -504,6 +506,75 @@ def test_interaction_exact_compound_uses_current_composition() -> None:
     for arm in ("interaction_poset", "subset_kernel", "subset_k1", "subset_k2", "subset_k3"):
         assert sidecar[2]["arms"][arm]["all_clauses_exact"] is True
         assert sidecar[2]["arms"][arm]["probability_by_bucket"] == current
+
+    resource_provenance = {
+        "target_run_dir": "fixture-run",
+        "public_telemetry": ["fixture-public"],
+        "public_excluded_repositories": ["target__repo"],
+        "public_clause_observations_before_repo_filter": 1,
+        "public_clause_observations_after_repo_filter": 1,
+        "public_online_eligible_clause_observations": 1,
+    }
+    latency_gate = {
+        "status": "development_exposed_latency_go",
+        "objective": "command_latency_interaction_kb_comparison",
+        "inputs": resource_provenance,
+        "counts": {
+            "tasks": 3,
+            "commands": 3,
+            "target_online_clause_observations": 6,
+            "public_online_clause_observations": 1,
+        },
+        "protocol": {
+            "evaluation_unit": "eligible_exec_command",
+            "pooling_alpha": 16.0,
+        },
+        "row_identity": {
+            "identical_command_ids_labels_and_availability": True,
+        },
+        "gates": {
+            "stage0": {"pass": True},
+            "stage1_resource_evaluation": {
+                "interaction_poset": {"go": True}
+            },
+        },
+    }
+    resource_result, resource_sidecar = evaluate_poset_resources(
+        public,
+        [f"target__repo-{task}" for task in range(1, 4)],
+        clauses,
+        commands,
+        resource_provenance,
+        latency_gate,
+    )
+    assert resource_result["row_identity"][
+        "identical_command_ids_labels_and_availability"
+    ] is True
+    for resource in (
+        "peak_cpu_cores",
+        "sampled_peak_rss_mb",
+        "disk_read_write_bytes_total",
+    ):
+        assert resource_sidecar[2]["arms"]["interaction_poset"][resource][
+            "all_clauses_exact"
+        ] is True
+        assert resource_sidecar[2]["arms"]["interaction_poset"][resource][
+            "probability_heavy"
+        ] == resource_sidecar[2]["arms"]["current"][resource][
+            "probability_heavy"
+        ]
+
+    wrong_gate = json.loads(json.dumps(latency_gate))
+    wrong_gate["inputs"]["target_run_dir"] = "different-run"
+    with pytest.raises(ValueError, match="does not match"):
+        evaluate_poset_resources(
+            public,
+            [f"target__repo-{task}" for task in range(1, 4)],
+            clauses,
+            commands,
+            resource_provenance,
+            wrong_gate,
+        )
 
 
 def _telemetry_record(

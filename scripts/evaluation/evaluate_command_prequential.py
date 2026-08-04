@@ -14,6 +14,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 
 from scripts.evaluation.evaluate_clause_latency_buckets import (  # noqa: E402
     evaluate_interaction_commands,
+    evaluate_poset_resources,
     evaluate_prequential_commands,
 )
 from scripts.evaluation.evaluate_clause_resource_classes import (  # noqa: E402
@@ -33,6 +34,11 @@ def main() -> None:
         "--interaction-architectures",
         action="store_true",
         help="score the full causal stream with the two frozen non-trie candidates",
+    )
+    parser.add_argument(
+        "--poset-resources-after-latency",
+        type=Path,
+        help="score resources only when this latency result contains a poset GO",
     )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--dump-rows", type=Path, required=True)
@@ -67,7 +73,19 @@ def main() -> None:
         ),
         "target_task_order_source": "results.jsonl successful final attempts",
     }
-    if args.interaction_architectures:
+    if args.interaction_architectures and args.poset_resources_after_latency:
+        raise ValueError("latency and gated resource modes are mutually exclusive")
+    if args.poset_resources_after_latency:
+        gate_path = args.poset_resources_after_latency.resolve()
+        result, rows = evaluate_poset_resources(
+            public,
+            task_ids,
+            clauses,
+            commands,
+            {**provenance, "latency_gate_result": str(gate_path)},
+            json.loads(gate_path.read_text(encoding="utf-8")),
+        )
+    elif args.interaction_architectures:
         result, rows = evaluate_interaction_commands(
             public,
             task_ids,

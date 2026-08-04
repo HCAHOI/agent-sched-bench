@@ -42,6 +42,7 @@ from tool_resource.runtime_kb import (  # noqa: E402
     CANONICAL_LATENCY_BUCKETS,
     CANONICAL_RESOURCE_HEAVY_THRESHOLDS,
     COMMAND_COMPOSITION_DRAWS,
+    DEFAULT_HEAVY_DECISION_THRESHOLD,
     SHRINKAGE_ALPHA_GRID,
     SHORT_NULL_LIGHT_MAX_LATENCY_MS,
     STRUCTURED_ARGV_REPRESENTATION,
@@ -611,6 +612,222 @@ def _predict_interaction_command(
         ],
     }
     return prediction, None, diagnostics
+
+
+def _row_resource_value(row: Row, resource: str) -> float | None:
+    value = getattr(row, resource)
+    if value is None and row.latency_ms < SHORT_NULL_LIGHT_MAX_LATENCY_MS:
+        return 0.0
+    return value
+
+
+def _poset_resource_evidence(
+    kb: _InteractionPosetKB,
+    row: _InteractionQueryClause,
+    public_by_bin: Mapping[str, Sequence[Row]],
+    public_global: Sequence[Row],
+    resource: str,
+) -> _WeightedClauseEvidence:
+    match = kb.query(row)
+    observations = match.observations
+    local_values = tuple(
+        value
+        for observation in observations
+        if (value := _row_resource_value(observation.row, resource)) is not None
+    )
+    if len(local_values) != len(observations):
+        raise AssertionError("resource-specific poset contains unavailable evidence")
+    task_ids = frozenset(observation.task_id for observation in observations)
+    query_features = _interaction_feature_set(
+        row.bin,
+        row.argv,
+        kb.stable_subcommands,
+    ).features
+    shared_counts = tuple(
+        len(query_features & observation.feature_set.features)
+        for observation in observations
+    )
+    if match.exact:
+        return _WeightedClauseEvidence(
+            values=local_values,
+            weights=(1.0,) * len(local_values),
+            exact=True,
+            nonexact_local=False,
+            local_observation_count=len(observations),
+            effective_sample_size=float(len(observations)),
+            contributing_task_ids=task_ids,
+            max_shared_feature_count=max(shared_counts, default=0),
+            key_kind="exact_clause",
+            public_key_kind=None,
+        )
+    public = tuple(public_by_bin.get(row.bin, ()))
+    public_key_kind = "bin"
+    if not public:
+        public = tuple(public_global)
+        public_key_kind = "global"
+    public_values = tuple(
+        value
+        for item in public
+        if (value := _row_resource_value(item, resource)) is not None
+    )
+    if len(public_values) != len(public) or not public_values:
+        raise AssertionError("resource public prior contains unavailable evidence")
+    effective_n = float(len(observations))
+    public_weight = INTERACTION_ALPHA / len(public_values)
+    return _WeightedClauseEvidence(
+        values=(*local_values, *public_values),
+        weights=(
+            *(1.0 for _ in local_values),
+            *(public_weight for _ in public_values),
+        ),
+        exact=False,
+        nonexact_local=bool(observations),
+        local_observation_count=len(observations),
+        effective_sample_size=effective_n,
+        contributing_task_ids=task_ids,
+        max_shared_feature_count=max(shared_counts, default=0),
+        key_kind="interaction_poset" if observations else "public_only",
+        public_key_kind=public_key_kind,
+    )
+
+
+def _predict_poset_resources(
+    kbs: Mapping[str, _InteractionPosetKB],
+    row: CommandRow,
+    parsed_clauses: Sequence[Mapping[str, Any]],
+    *,
+    parse_failed: bool,
+    public_by_resource_bin: Mapping[str, Mapping[str, Sequence[Row]]],
+    public_by_resource: Mapping[str, Sequence[Row]],
+) -> tuple[dict[str, ClauseHeavyLightPrediction | None], str | None, dict[str, Any]]:
+    if parse_failed:
+        return {}, "parse_failed", {}
+    query_clauses = _interaction_query_clauses(parsed_clauses)
+    if not query_clauses:
+        return {}, "no_executable_clause", {}
+    stages = _command_stages(parsed_clauses)
+    if stages is None:
+        return {}, "compound_composition_unavailable", {}
+    predictions: dict[str, ClauseHeavyLightPrediction | None] = {}
+    diagnostics: dict[str, Any] = {}
+    for resource, threshold in CANONICAL_RESOURCE_HEAVY_THRESHOLDS.items():
+        evidence = tuple(
+            _poset_resource_evidence(
+                kbs[resource],
+                clause,
+                public_by_resource_bin[resource],
+                public_by_resource[resource],
+                resource,
+            )
+            for clause in query_clauses
+        )
+        if len(evidence) == 1:
+            total = sum(evidence[0].weights)
+            probability_heavy = sum(
+                weight
+                for value, weight in zip(
+                    evidence[0].values,
+                    evidence[0].weights,
+                    strict=True,
+                )
+                if value > threshold
+            ) / total
+        else:
+            draws = tuple(
+                _weighted_stratified_draws(
+                    item.values,
+                    item.weights,
+                    (
+                        f"{row.command}\0{resource}\0{index}\0"
+                        f"{'repo' if item.exact else 'repo+public' if item.nonexact_local else 'public'}\0"
+                        f"{'exact_clause' if item.exact else 'weighted_pool' if item.nonexact_local else item.public_key_kind}"
+                    ),
+                )
+                for index, item in enumerate(evidence)
+            )
+            composed = tuple(
+                (
+                    sum(
+                        sum(draws[index][draw] for index in stage)
+                        for stage in stages
+                    )
+                    if resource == "disk_read_write_bytes_total"
+                    else max(
+                        sum(draws[index][draw] for index in stage)
+                        for stage in stages
+                    )
+                )
+                for draw in range(COMMAND_COMPOSITION_DRAWS)
+            )
+            probability_heavy = sum(value > threshold for value in composed) / len(
+                composed
+            )
+        local_counts = [item.local_observation_count for item in evidence]
+        public_counts = [
+            len(item.values) - item.local_observation_count for item in evidence
+        ]
+        all_exact = all(item.exact for item in evidence)
+        carrier = any(item.nonexact_local for item in evidence)
+        predictions[resource] = ClauseHeavyLightPrediction(
+            resource=resource,
+            threshold=threshold,
+            probability_heavy=probability_heavy,
+            heavy_decision_threshold=DEFAULT_HEAVY_DECISION_THRESHOLD,
+            label=(
+                "heavy"
+                if probability_heavy > DEFAULT_HEAVY_DECISION_THRESHOLD
+                else "light"
+            ),
+            scope=(
+                "repo"
+                if all_exact
+                else "repo+public"
+                if any(local_counts)
+                else "public"
+            ),
+            key_kind=(
+                evidence[0].key_kind
+                if len(evidence) == 1
+                else "shell_execution_graph"
+            ),
+            evidence_count=min(len(item.values) for item in evidence),
+            fallback_path=tuple(
+                f"clause[{index}]:{item.key_kind}"
+                for index, item in enumerate(evidence)
+            ),
+            canonicalizer_version=INTERACTION_FEATURE_VERSION,
+            arbitration="exact-or-weighted-public-pooling-v1",
+            local_key_kind="interaction_poset" if any(local_counts) else None,
+            local_evidence_count=min(local_counts),
+            public_key_kind=(
+                None
+                if all_exact
+                else "+".join(
+                    sorted(
+                        {
+                            item.public_key_kind
+                            for item in evidence
+                            if item.public_key_kind is not None
+                        }
+                    )
+                )
+            ),
+            public_evidence_count=min(public_counts),
+            shrinkage_alpha=None if all_exact else INTERACTION_ALPHA,
+        )
+        diagnostics[resource] = {
+            "carrier": carrier,
+            "all_clauses_exact": all_exact,
+            "distinct_contributing_tasks": len(
+                frozenset().union(
+                    *(item.contributing_task_ids for item in evidence)
+                )
+            ),
+            "minimum_effective_sample_size": min(
+                item.effective_sample_size for item in evidence
+            ),
+        }
+    return predictions, None, diagnostics
 
 
 def _validate_partition(
@@ -1956,6 +2173,317 @@ def evaluate_interaction_commands(
                 for arm, go in stage1_go.items()
             },
         },
+    }
+    return result, sidecar
+
+
+def evaluate_poset_resources(
+    public_rows: Sequence[Row],
+    task_ids: Sequence[str],
+    clause_rows: Sequence[Row],
+    command_rows: Sequence[CommandRow],
+    provenance: Mapping[str, Any],
+    latency_gate: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Apply the frozen poset arm to command CPU, RSS, and Disk targets."""
+
+    if len(set(task_ids)) != len(task_ids):
+        raise ValueError("target task order contains duplicates")
+    if len({repo_of(task_id) for task_id in task_ids}) != 1:
+        raise ValueError("poset resource evaluation requires one target repository")
+    target_repo = repo_of(task_ids[0])
+    if any(row.repo == target_repo for row in public_rows):
+        raise ValueError("public evidence contains the target repository")
+    task_index = {task_id: index for index, task_id in enumerate(task_ids)}
+    if any(
+        row.task_id not in task_index
+        or row.manifest_index != task_index[row.task_id]
+        for row in (*clause_rows, *command_rows)
+    ):
+        raise ValueError("target rows differ from results.jsonl task order")
+    public = tuple(
+        row
+        for row in public_rows
+        if row.structure_known and row.pipeline_position <= 0
+    )
+    gate_inputs = latency_gate.get("inputs")
+    gate_counts = latency_gate.get("counts")
+    gate_protocol = latency_gate.get("protocol")
+    gate_identity = latency_gate.get("row_identity")
+    required_input_keys = (
+        "target_run_dir",
+        "public_telemetry",
+        "public_excluded_repositories",
+        "public_clause_observations_before_repo_filter",
+        "public_clause_observations_after_repo_filter",
+        "public_online_eligible_clause_observations",
+    )
+    gate_matches = (
+        latency_gate.get("status") == "development_exposed_latency_go"
+        and latency_gate.get("objective")
+        == "command_latency_interaction_kb_comparison"
+        and isinstance(gate_inputs, Mapping)
+        and all(gate_inputs.get(key) == provenance.get(key) for key in required_input_keys)
+        and isinstance(gate_counts, Mapping)
+        and gate_counts.get("tasks") == len(task_ids)
+        and gate_counts.get("commands") == len(command_rows)
+        and gate_counts.get("target_online_clause_observations") == len(clause_rows)
+        and gate_counts.get("public_online_clause_observations") == len(public)
+        and isinstance(gate_protocol, Mapping)
+        and gate_protocol.get("evaluation_unit") == "eligible_exec_command"
+        and gate_protocol.get("pooling_alpha") == INTERACTION_ALPHA
+        and isinstance(gate_identity, Mapping)
+        and gate_identity.get("identical_command_ids_labels_and_availability") is True
+        and latency_gate.get("gates", {}).get("stage0", {}).get("pass") is True
+        and latency_gate.get("gates", {})
+        .get("stage1_resource_evaluation", {})
+        .get("interaction_poset", {})
+        .get("go")
+        is True
+    )
+    if not gate_matches:
+        raise ValueError("latency GO does not match this resource replay")
+    current = ClauseResourceKB.fit_public(
+        row.observation(0.0, 1.0) for row in public
+    )
+    stable_subcommands = _fit_stable_subcommands(
+        row.observation(0.0, 1.0) for row in public
+    )
+    posets = {
+        resource: _InteractionPosetKB(stable_subcommands)
+        for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS
+    }
+    public_by_resource = {
+        resource: tuple(
+            row for row in public if _row_resource_value(row, resource) is not None
+        )
+        for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS
+    }
+    if any(not rows for rows in public_by_resource.values()):
+        raise ValueError("a resource has no usable frozen public evidence")
+    public_by_resource_bin: dict[str, dict[str, list[Row]]] = {
+        resource: defaultdict(list)
+        for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS
+    }
+    for resource, rows in public_by_resource.items():
+        for row in rows:
+            public_by_resource_bin[resource][row.bin].append(row)
+    clauses_by_task: dict[str, list[Row]] = defaultdict(list)
+    commands_by_task: dict[str, list[CommandRow]] = defaultdict(list)
+    for row in clause_rows:
+        clauses_by_task[row.task_id].append(row)
+    for row in command_rows:
+        commands_by_task[row.task_id].append(row)
+    raw = {
+        resource: {
+            "label_source_counts": Counter(),
+            "arms": {
+                arm: _empty_confusion()
+                for arm in ("current", "interaction_poset")
+            },
+        }
+        for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS
+    }
+    sidecar: list[dict[str, Any]] = []
+    for ordinal, task_id in enumerate(task_ids):
+        query_ts = float(ordinal * 2 + 3)
+        for row in commands_by_task[task_id]:
+            parsed = parse_command_clauses(row.command)
+            parsed_clauses = parsed["clauses"]
+            parse_failed = bool(parsed["parse_failed"])
+            current_result = current.predict_command_resource_classes_from_clauses(
+                row.repo,
+                parsed_clauses,
+                query_ts,
+                command=row.command,
+                parse_failed=parse_failed,
+            )
+            candidate, unavailable, diagnostics = _predict_poset_resources(
+                posets,
+                row,
+                parsed_clauses,
+                parse_failed=parse_failed,
+                public_by_resource_bin=public_by_resource_bin,
+                public_by_resource=public_by_resource,
+            )
+            labels: dict[str, bool | None] = {}
+            sources: dict[str, str] = {}
+            arm_values: dict[str, Any] = {
+                "current": {},
+                "interaction_poset": {},
+            }
+            for resource in CANONICAL_RESOURCE_HEAVY_THRESHOLDS:
+                label, source = command_resource_label(row, resource)
+                labels[resource] = label
+                sources[resource] = source
+                raw[resource]["label_source_counts"][source] += 1
+                current_prediction = current_result.classifications.get(resource)
+                candidate_prediction = candidate.get(resource)
+                if label is not None:
+                    if (current_prediction is None) != (candidate_prediction is None):
+                        raise AssertionError(
+                            f"{resource} prediction availability differs across arms"
+                        )
+                    _record_resource_prediction(
+                        raw[resource]["arms"]["current"],
+                        label,
+                        current_prediction,
+                    )
+                    _record_resource_prediction(
+                        raw[resource]["arms"]["interaction_poset"],
+                        label,
+                        candidate_prediction,
+                    )
+                arm_values["current"][resource] = {
+                    "prediction": (
+                        None if current_prediction is None else current_prediction.label
+                    ),
+                    "probability_heavy": (
+                        None
+                        if current_prediction is None
+                        else current_prediction.probability_heavy
+                    ),
+                    "unavailable_reason": current_result.unavailable_reason,
+                }
+                arm_values["interaction_poset"][resource] = {
+                    "prediction": (
+                        None
+                        if candidate_prediction is None
+                        else candidate_prediction.label
+                    ),
+                    "probability_heavy": (
+                        None
+                        if candidate_prediction is None
+                        else candidate_prediction.probability_heavy
+                    ),
+                    "unavailable_reason": unavailable,
+                    **diagnostics.get(resource, {}),
+                }
+            sidecar.append(
+                {
+                    "sample_id": (
+                        f"{row.task_id}:{row.manifest_index}:call:{row.call_index}"
+                    ),
+                    "task_id": row.task_id,
+                    "task_ordinal": ordinal,
+                    "call_id": row.call_id,
+                    "command": row.command,
+                    "resource_labels": labels,
+                    "resource_label_sources": sources,
+                    "arms": arm_values,
+                }
+            )
+        settle_ts = query_ts + 0.5
+        settled = clauses_by_task[task_id]
+        for row in settled:
+            current.observe_completed_clause(row.observation(query_ts, settle_ts))
+        for resource, kb in posets.items():
+            kb.observe(
+                [
+                    row
+                    for row in settled
+                    if _row_resource_value(row, resource) is not None
+                ]
+            )
+    resources: dict[str, Any] = {}
+    for resource, resource_raw in raw.items():
+        current_metric = _finalize_resource_metric(
+            resource_raw["arms"]["current"],
+            resource_raw["label_source_counts"],
+        )
+        candidate_metric = _finalize_resource_metric(
+            resource_raw["arms"]["interaction_poset"],
+            resource_raw["label_source_counts"],
+        )
+        changes = Counter()
+        for row in sidecar:
+            label = row["resource_labels"][resource]
+            if label is None:
+                continue
+            current_label = row["arms"]["current"][resource]["prediction"]
+            candidate_label = row["arms"]["interaction_poset"][resource][
+                "prediction"
+            ]
+            if current_label == candidate_label:
+                continue
+            outcome = (
+                "helpful"
+                if (candidate_label == "heavy") == label
+                else "harmful"
+                if (current_label == "heavy") == label
+                else "neutral"
+            )
+            changes["changed"] += 1
+            changes[outcome] += 1
+            if row["arms"]["interaction_poset"][resource]["carrier"]:
+                changes["carrier_changed"] += 1
+                changes[f"carrier_{outcome}"] += 1
+        resources[resource] = {
+            "threshold": CANONICAL_RESOURCE_HEAVY_THRESHOLDS[resource],
+            "direction": "higher accuracy is better",
+            "majority": {
+                "class": current_metric["majority_class"],
+                "accuracy": current_metric["majority_class_accuracy"],
+            },
+            "constant_light_accuracy": current_metric["majority_light_accuracy"],
+            "current": current_metric,
+            "interaction_poset": candidate_metric,
+            "candidate_minus_current_percentage_points": _accuracy_delta(
+                candidate_metric["accuracy"],
+                current_metric["accuracy"],
+            ),
+            "prediction_changes": {
+                key: changes[key]
+                for key in (
+                    "changed",
+                    "helpful",
+                    "harmful",
+                    "neutral",
+                    "carrier_changed",
+                    "carrier_helpful",
+                    "carrier_harmful",
+                    "carrier_neutral",
+                )
+            },
+        }
+    result = {
+        "status": "development_exposed_poset_resource_evaluation",
+        "claim_bearing": False,
+        "objective": "command_resource_interaction_poset_comparison",
+        "inputs": {
+            **dict(provenance),
+            "latency_gate_status": latency_gate.get("status"),
+        },
+        "protocol": {
+            "evaluation_unit": "eligible_exec_command",
+            "candidate": "latency-gated interaction_poset only",
+            "causal_update": "all task commands predict before task clauses settle",
+            "public_layer": "identical frozen cross-repository bin/global values",
+            "exact_shortcut": "resource-usable repo-local exact hash; no pooling",
+            "pooling_alpha": INTERACTION_ALPHA,
+            "compound_composition": {
+                "cpu_rss": "pipeline sum then stage max",
+                "disk": "sum all clauses",
+            },
+            "short_null_light_max_latency_ms_exclusive": (
+                SHORT_NULL_LIGHT_MAX_LATENCY_MS
+            ),
+        },
+        "counts": {
+            "tasks": len(task_ids),
+            "commands": len(command_rows),
+            "target_online_clause_observations": len(clause_rows),
+            "public_online_clause_observations": len(public),
+            "stored_usable_target_observations_by_resource": {
+                resource: kb._next_observation_id for resource, kb in posets.items()
+            },
+        },
+        "row_identity": {
+            "identical_command_ids_labels_and_availability": True,
+            "unique_sample_ids": len({row["sample_id"] for row in sidecar})
+            == len(sidecar),
+        },
+        "resources": resources,
     }
     return result, sidecar
 
