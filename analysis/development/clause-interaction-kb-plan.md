@@ -65,12 +65,12 @@ timestamp, not command-exclusive. Persisted eBPF clause observations are
 attached only after the exec completes, so they are not an early signal in the
 current interface.
 
-## 3. Phase 1 — hindsight actionability (mechanism pass; utility open)
+## 3. Phase 1 — hindsight CPU-reservation oracle (protocol frozen)
 
-Run only if Phase 0 passes. The candidate action is CPU allocation among task
-containers sharing the measured eight-core host. A cgroup limit by itself is
-not a consumer: the comparison must name the shared CPU-budget policy whose
-decision and cost change.
+Run only if Phase 0 passes. The consumer is the existing EAR shared CPU lease
+pool, where a page held by one task is unavailable for another admission or
+growth request. Reuse its current Docker pages `{1, 2, 4, 8}`; do not invent a
+new controller or page set.
 
 First measure the supported limits, update latency, and update cost on the real
 runtime. Sampling and updating are serial, so the earliest effective action is
@@ -91,14 +91,24 @@ the existing cgroup experiment shows that lowering it below current use can
 reclaim and then OOM-kill the workload. A future memory experiment would need a
 separate `memory.high` or reserving-admission protocol.
 
-The current replay consumes the CPU/network timeline only to preserve
-source-equivalent timeout progress; it does not implement a shared CPU-budget
-policy. Do not infer benefit from lower quota-time. First name and freeze a real
-consumer, baseline, and false/missed-action costs; otherwise Phase 1 stops.
+Evaluate the 100 successful SQLGlot traces only. For each exec action, the first
+complete 0.5-second sample becomes visible after the frozen 50 ms pad and the
+CPU change becomes effective after the measured 91.32007875 ms p95 update. A
+row is eligible only if one complete 0.5-second interval remains after that
+effective time.
+
+The control keeps an eight-core lease. The hindsight oracle reads later samples
+only to select the smallest page no lower than the maximum later interval CPU
+rate, capped by the recorded physical quota. It holds that page until command
+completion. Primary cost is post-decision reserved CPU core-seconds. The prefix
+and update delay are charged by excluding them from both arms. False shrink is
+any selected page below later demand; missed shrink is reservation above the
+smallest safe page.
 
 Continue only if the hindsight policy changes an action for at least 20
-commands across at least 10 tasks and its benefit exceeds the observation and
-resource-update costs. CPU is the only target in this route.
+commands across at least 10 tasks, has zero modeled false-shrink slowdown, and
+reduces post-decision reservation by at least 10%. This phase is an action-space
+upper bound; it cannot claim latency or scheduling improvement.
 
 ## 4. Phase 2 — early-prefix prediction
 

@@ -93,7 +93,7 @@ no scheduler consumer existed.
 
 The active research question is now whether the current command's early,
 timestamped system behavior predicts its remaining work well enough to change a
-real CPU or memory action. Phase 0 may audit existing SQLGlot, SWE, and
+real CPU reservation action. Phase 0 may audit existing SQLGlot, SWE, and
 Terminal-Bench traces because this mechanism uses each command's own execution
 prefix rather than cross-task semantic similarity. All are development-exposed;
 no new collection is authorized by this lock.
@@ -102,6 +102,18 @@ The fixed full-command targets in Section 1 remain the static-predictor
 baseline. Phase 0 is only an observability and coverage audit. If it passes, the
 action set, decision time, future-work target, and cost metric must be frozen in
 this lock before a formal predictor result is read.
+
+The frozen Phase 1 consumer is the existing EAR shared CPU lease pool. Its
+checked-in Docker policy at EAR commit `244d1f58` uses integer pages
+`{1, 2, 4, 8}` on this eight-core host. For each eligible SQLGlot command, the
+hindsight oracle acts at its first complete sample endpoint plus 0.14132007875
+seconds, nominally about 0.641 seconds, and chooses the smallest page no lower
+than any later 0.5-second average CPU demand. The primary action cost is reserved
+CPU core-seconds after that time. Always reserving eight cores is the control.
+Continue only if the oracle causes zero modeled source slowdown,
+changes at least 20 commands across ten tasks, and reduces post-decision
+reservation by at least 10%. This is a capacity upper bound, not a latency or
+scheduler-gain claim.
 
 The runtime boundary remains unchanged: `resource-agentd` owns parsing,
 prediction, state, persistence, and orchestration; `telemetryd` owns privileged
@@ -211,6 +223,7 @@ Compound commands = physical stage/pipeline composition, never Boolean OR.
 Current = unchanged raw exact/prefix/binary control.
 Active early-execution audit = existing development-exposed traces only.
 Current-command prefix is visible only up to a frozen decision timestamp.
+Phase 1 pages = {1,2,4,8}; control = 8; act at first full endpoint +0.14132007875 s.
 No result-dependent tuning, package/test-name outcome rules, or hindsight state.
 No new collection, runtime integration, or scheduler implementation without a
 separate approved protocol.
