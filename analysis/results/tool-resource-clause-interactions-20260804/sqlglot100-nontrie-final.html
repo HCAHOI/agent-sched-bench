@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SQLGlot100 Non-Trie KB Evaluation</title>
+<style>
+:root{--bg:#07111f;--panel:#0d1b2d;--panel2:#10243a;--ink:#edf5ff;--muted:#9fb1c5;--cyan:#43d3c4;--blue:#6aa9ff;--amber:#ffc766;--red:#ff7c87;--line:#29425e}
+*{box-sizing:border-box} body{margin:0;background:linear-gradient(150deg,#07111f,#0a1829 55%,#07111f);color:var(--ink);font:15px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}
+main{width:min(1460px,calc(100% - 48px));margin:auto;padding:42px 0 64px} h1{font-size:42px;line-height:1.08;margin:8px 0 12px;letter-spacing:-.025em} h2{font-size:25px;margin:0 0 16px} h3{font-size:17px;margin:0 0 9px} p{margin:7px 0;color:var(--muted)} .eyebrow{color:var(--cyan);text-transform:uppercase;letter-spacing:.14em;font-weight:750;font-size:12px} .lede{font-size:19px;max-width:1050px} .grid{display:grid;gap:16px} .cards{grid-template-columns:repeat(4,1fr);margin:28px 0 22px} .card,.section{background:linear-gradient(180deg,rgba(16,36,58,.96),rgba(13,27,45,.96));border:1px solid var(--line);border-radius:16px;box-shadow:0 14px 35px rgba(0,0,0,.18)} .card{padding:18px} .card b{display:block;font-size:29px;line-height:1.1;margin-top:6px} .card span{color:var(--muted);font-size:12px} .section{padding:24px;margin:16px 0} .two{grid-template-columns:1.05fr .95fr} .three{grid-template-columns:repeat(3,1fr)} .flow{display:flex;gap:10px;align-items:stretch;margin-top:15px} .node{flex:1;padding:14px;border-radius:12px;background:#0a1728;border:1px solid var(--line)} .arrow{align-self:center;color:var(--cyan);font-size:22px} .tag{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:3px 9px;color:var(--muted);font-size:11px;margin:2px} table{width:100%;border-collapse:collapse;font-size:12.5px} th,td{padding:9px 8px;border-bottom:1px solid rgba(41,66,94,.72);text-align:right;vertical-align:middle} th:first-child,td:first-child{text-align:left} thead th{color:#b9c9da;font-size:11px;text-transform:uppercase;letter-spacing:.04em} tbody th{font-weight:650} .candidate{background:rgba(67,211,196,.055)} .metric{font-weight:800;color:#fff} .pos{color:var(--cyan);font-weight:750} .neg{color:var(--red);font-weight:750} .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;white-space:nowrap} small{display:block;color:var(--muted);font-size:10.5px;margin-top:2px} .note{font-size:12px;color:var(--muted);margin-top:10px} .callout{border-left:4px solid var(--amber);padding:11px 14px;background:rgba(255,199,102,.07);border-radius:0 10px 10px 0} ul{padding-left:20px;margin:8px 0} li{margin:6px 0;color:var(--muted)} li::marker{color:var(--cyan)} .barrow{display:grid;grid-template-columns:140px 1fr 72px;gap:10px;align-items:center;margin:9px 0} .track{height:10px;background:#07111f;border-radius:6px;overflow:hidden} .fill{height:100%;background:linear-gradient(90deg,var(--blue),var(--cyan));border-radius:6px} .verdict{font-size:22px;color:#fff;margin-top:8px} footer{color:#7f94aa;font-size:11px;text-align:center;margin-top:22px} @media(max-width:900px){.cards,.two,.three{grid-template-columns:1fr} main{width:calc(100% - 24px)} .flow{flex-direction:column} .arrow{transform:rotate(90deg)} .tablewrap{overflow-x:auto}}
+</style></head><body><main>
+<div class="eyebrow">SQLGlot100 · development-exposed · causal command replay</div>
+<h1>Non-trie matching changes decisions,<br>but does not produce a robust unified KB win.</h1>
+<p class="lede">Two genuinely non-trie architectures were compared against the current exact/prefix/bin control on the same 1,792 commands. The poset wins latency by one command, the subset kernel ties, and the latency-gated poset then loses two of three resource targets.</p>
+<div class="grid cards">
+ <div class="card"><span>Evaluation stream</span><b>100 tasks</b><p>1,792 commands · 3,799 causal clauses</p></div>
+ <div class="card"><span>Latency · Current</span><b>87.50%</b><p>Majority 77.73%</p></div>
+ <div class="card"><span>Latency · Poset delta</span><b class="pos">+0.06 pp</b><p>23 helpful · 22 harmful</p></div>
+ <div class="card"><span>Overall decision</span><b class="neg">NO ROBUST WIN</b><p>CPU − · RSS + · Disk −</p></div>
+</div>
+<section class="section"><h2>What was tested</h2><div class="flow">
+ <div class="node"><h3>Current trie · control</h3><p>repo exact → ordered argv prefix → repo binary → frozen public binary/global</p><span class="tag">hard first-hit</span></div><div class="arrow">→</div>
+ <div class="node"><h3>Interaction-poset</h3><p>After exact miss, keep maximal non-dominated feature intersections; each selected observation contributes once.</p><span class="tag">alpha=16</span><span class="tag">no local bin fallback</span></div><div class="arrow">+</div>
+ <div class="node"><h3>Episodic subset kernel</h3><p>Weight every prior observation by normalized shared non-empty subsets; full kernel plus fixed k=1/2/3 ablations.</p><span class="tag">n_eff pooling</span><span class="tag">no trie</span></div>
+</div><p class="note">Every arm uses pre-execution parsed clauses, frozen public values, exact hash shortcut, task-finalization release, and physical shell-stage composition. Higher accuracy is better.</p></section>
+<section class="section"><h2>Latency: complete command-level table</h2><div class="tablewrap"><table><thead><tr><th>Method</th><th>n</th><th>Accuracy ↑</th><th>Δ Current</th><th>Confusion S/M/L rows</th><th>Helpful / harmful / neutral</th><th>Non-exact changed</th><th>Lookup p50 / p95</th></tr></thead><tbody>
+      <tr class="">
+        <th>Majority</th><td>1792</td><td class="metric">77.73%</td>
+        <td class="neg">-9.77 pp</td>
+        <td class="mono">1393 0 0 / 128 0 0 / 271 0 0</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+      </tr>
+      <tr class="">
+        <th>Current trie</th><td>1792</td><td class="metric">87.50%</td>
+        <td class="">+0.00 pp</td>
+        <td class="mono">1292 50 51 / 38 68 22 / 39 24 208</td>
+        <td>—</td>
+        <td>—</td>
+        <td>4.6 / 11.4 ms</td>
+      </tr>
+      <tr class="candidate">
+        <th>Interaction-poset</th><td>1792</td><td class="metric">87.56%</td>
+        <td class="pos">+0.06 pp</td>
+        <td class="mono">1308 38 47 / 52 64 12 / 54 20 197</td>
+        <td>23 / 22 / 17</td>
+        <td>62</td>
+        <td>8.2 / 111.7 ms</td>
+      </tr>
+      <tr class="">
+        <th>Subset kernel (full)</th><td>1792</td><td class="metric">87.50%</td>
+        <td class="">+0.00 pp</td>
+        <td class="mono">1304 40 49 / 53 61 14 / 52 16 203</td>
+        <td>20 / 20 / 15</td>
+        <td>55</td>
+        <td>11.1 / 114.1 ms</td>
+      </tr>
+      <tr class="">
+        <th>Subset k=1</th><td>1792</td><td class="metric">87.33%</td>
+        <td class="neg">-0.17 pp</td>
+        <td class="mono">1303 41 49 / 54 60 14 / 53 16 202</td>
+        <td>19 / 22 / 16</td>
+        <td>57</td>
+        <td>13.8 / 125.1 ms</td>
+      </tr>
+      <tr class="">
+        <th>Subset k=2</th><td>1792</td><td class="metric">87.44%</td>
+        <td class="neg">-0.06 pp</td>
+        <td class="mono">1303 41 49 / 53 61 14 / 52 16 203</td>
+        <td>20 / 21 / 15</td>
+        <td>56</td>
+        <td>13.5 / 123.1 ms</td>
+      </tr>
+      <tr class="">
+        <th>Subset k=3</th><td>1792</td><td class="metric">87.44%</td>
+        <td class="neg">-0.06 pp</td>
+        <td class="mono">1303 41 49 / 53 61 14 / 52 16 203</td>
+        <td>20 / 21 / 15</td>
+        <td>56</td>
+        <td>13.7 / 123.0 ms</td>
+      </tr></tbody></table></div>
+<p class="note">Confusion cells are label rows × prediction columns: “S S→S S→M S→L / M→S … / L→S …”. Majority is one constant class over the same 1,792 labels. Timings include the slow exact Python evaluator with tracemalloc, not an indexed serving implementation.</p></section>
+<div class="grid two">
+<section class="section"><h2>Uncertainty: the +1 command is fragile</h2><table><thead><tr><th>Paired comparison</th><th>Point</th><th>Task-bootstrap 95%</th><th>P(Δ&gt;0)</th></tr></thead><tbody><tr><th>Poset − Current</th><td>+0.06 pp</td><td>[-0.65, +0.81] pp</td><td>53.85%</td></tr><tr><th>Full subset − Current</th><td>+0.00 pp</td><td>[-0.68, +0.67] pp</td><td>46.65%</td></tr><tr><th>Poset − Full subset</th><td>+0.06 pp</td><td>[-0.38, +0.46] pp</td><td>56.35%</td></tr></tbody></table><p class="note">Paired task-cluster percentile bootstrap, seed 0, 2,000 draws. All intervals cross zero; these are development diagnostics, not confirmatory claims.</p></section>
+<section class="section"><h2>Decision changes, not just fit</h2>
+<div class="barrow"><span>Poset helpful</span><div class="track"><div class="fill" style="width:37.1%"></div></div><b>23</b></div>
+<div class="barrow"><span>Poset harmful</span><div class="track"><div class="fill" style="width:35.5%;background:var(--red)"></div></div><b>22</b></div>
+<div class="barrow"><span>Subset helpful</span><div class="track"><div class="fill" style="width:36.4%"></div></div><b>20</b></div>
+<div class="barrow"><span>Subset harmful</span><div class="track"><div class="fill" style="width:36.4%;background:var(--red)"></div></div><b>20</b></div>
+<div class="callout"><b>Mechanical gate ≠ robust evidence.</b><p>Poset passed the frozen rule because 23−22 = +1 and accuracy exceeded Current. The uncertainty interval still spans roughly −0.65 to +0.81 pp.</p></div></section></div>
+<section class="section"><h2>Coverage exists; the signal does not stabilize</h2><div class="grid three">
+<div class="card"><span>Exact-miss clause queries</span><b>3,612</b><p>m≥1: 2,426 (67.2%)<br>m≥2: 1,912 (52.9%)<br>m≥3: 853 (23.6%)</p></div>
+<div class="card"><span>Non-exact carrier commands</span><b>1,045</b><p>58.3% of commands used positive local poset evidence.</p></div>
+<div class="card"><span>Effective local support · p50 / p95</span><b>4 / 299</b><p>Full subset p50 / p95: 15.3 / 403.7; more support did not improve accuracy.</p></div></div></section>
+<section class="section"><h2>Warm-up behavior is not monotonic</h2><div class="tablewrap"><table><thead><tr><th>Task-order quartile</th><th>Current trie</th><th>Interaction-poset</th><th>Subset kernel (full)</th><th>Subset k=1</th><th>Subset k=2</th><th>Subset k=3</th></tr></thead><tbody><tr><th>Q1 · n=457</th><td>86.87%</td><td>87.96%</td><td>88.18%</td><td>88.18%</td><td>88.18%</td><td>88.18%</td></tr><tr><th>Q2 · n=442</th><td>88.24%</td><td>86.88%</td><td>87.78%</td><td>87.56%</td><td>87.78%</td><td>87.78%</td></tr><tr><th>Q3 · n=462</th><td>87.88%</td><td>88.10%</td><td>86.80%</td><td>86.58%</td><td>86.58%</td><td>86.58%</td></tr><tr><th>Q4 · n=431</th><td>87.01%</td><td>87.24%</td><td>87.24%</td><td>87.01%</td><td>87.24%</td><td>87.24%</td></tr></tbody></table></div><p class="note">Quartiles preserve manifest order. Poset improves Q1, loses Q2, and is nearly tied later; this is not a clean “more history fixes it” pattern.</p></section>
+<section class="section"><h2>Latency-gated resource transfer</h2><div class="tablewrap"><table><thead><tr><th>Target</th><th>Eligible n</th><th>Heavy rate</th><th>Majority</th><th>Current<small>TP/TN/FP/FN</small></th><th>Poset<small>TP/TN/FP/FN</small></th><th>Δ Current</th><th>Helpful / harmful</th></tr></thead><tbody>
+      <tr><th>CPU peak</th><td>1105</td><td>13.21%</td>
+      <td>86.79%</td><td>89.95%<small>74/920/39/72</small></td>
+      <td>89.86%<small>72/921/38/74</small></td>
+      <td class="neg">-0.09 pp</td>
+      <td>8 / 9</td></tr>
+      <tr><th>Sampled RSS</th><td>1225</td><td>11.59%</td>
+      <td>88.41%</td><td>91.35%<small>72/1047/36/70</small></td>
+      <td>91.67%<small>69/1054/29/73</small></td>
+      <td class="pos">+0.33 pp</td>
+      <td>7 / 3</td></tr>
+      <tr><th>Disk I/O</th><td>1790</td><td>6.48%</td>
+      <td>93.52%</td><td>98.83%<small>112/1657/17/4</small></td>
+      <td>98.44%<small>96/1666/8/20</small></td>
+      <td class="neg">-0.39 pp</td>
+      <td>9 / 16</td></tr></tbody></table></div><p class="note">Strict thresholds: CPU &gt;2 cores; sampled RSS &gt;500 MB; Disk read+write &gt;100 MiB. Short nulls are Light only below 500 ms. Subset arms were not evaluated here because the frozen latency gate rejected them.</p></section>
+<div class="grid two"><section class="section"><h2>System cost of the exact evaluator</h2>
+<table><thead><tr><th>Arm</th><th>p50</th><th>p95</th></tr></thead><tbody>
+<tr><th>Current</th><td>4.6 ms</td><td>11.4 ms</td></tr>
+<tr><th>Interaction-poset</th><td>8.2 ms</td><td>111.7 ms</td></tr>
+<tr><th>Full subset</th><td>11.1 ms</td><td>114.1 ms</td></tr></tbody></table>
+<p>Peak traced evaluator memory: 43.5 MiB. The slow scan is intentionally exact; serving-index work was gated on predictive evidence and was not started.</p></section>
+<section class="section"><h2>Evidence vs inference</h2><h3>Observed</h3><ul><li>Poset latency: +1 correct command out of 1,792; CI crosses zero.</li><li>Full subset ties Current; every bounded-order ablation is at or below Current.</li><li>Frozen poset transfers as CPU −0.09 pp, RSS +0.33 pp, Disk −0.39 pp.</li></ul><h3>Inference</h3><ul><li>Shared argument interactions are common enough to affect predictions.</li><li>They are not stable enough to replace the current unified KB on this cohort.</li></ul></section></div>
+<section class="section"><div class="eyebrow">Takeaway</div><p class="verdict">Stop feature/kernel tuning on SQLGlot100. The experiment falsifies “more flexible interaction matching is sufficient”: it changes many decisions, but helpful and harmful changes nearly cancel and resource transfer is mixed.</p><p>Any next claim needs a fresh repository/task stream and a new predeclared decision—not another weight, alpha, threshold, or parser tweak selected on these exposed labels.</p></section>
+<footer>Recomputed from JSONL sidecars · 1,792 IDs reconciled · task bootstrap seed 0 / 2,000 draws · development-exposed, not claim-bearing</footer>
+</main></body></html>
