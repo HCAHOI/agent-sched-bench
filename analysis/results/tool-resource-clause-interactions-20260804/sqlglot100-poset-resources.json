@@ -1,0 +1,346 @@
+{
+  "claim_bearing": false,
+  "counts": {
+    "commands": 1792,
+    "public_online_clause_observations": 11761,
+    "stored_usable_target_observations_by_resource": {
+      "disk_read_write_bytes_total": 3798,
+      "peak_cpu_cores": 3656,
+      "sampled_peak_rss_mb": 3799
+    },
+    "target_online_clause_observations": 3799,
+    "tasks": 100
+  },
+  "inputs": {
+    "latency_gate_result": "/home/chiyu/workspace/agent-sched-bench/analysis/results/tool-resource-clause-interactions-20260804/sqlglot100-nontrie-latency.json",
+    "latency_gate_status": "development_exposed_latency_go",
+    "public_clause_observations_after_repo_filter": 16680,
+    "public_clause_observations_before_repo_filter": 18224,
+    "public_excluded_repositories": [
+      "iterative__dvc",
+      "tobymao__sqlglot"
+    ],
+    "public_online_eligible_clause_observations": 11761,
+    "public_structure_recovery": "current parser validated against static_word_intent; earliest/latest ordered alignment must identify one static clause",
+    "public_structure_unknown": 0,
+    "public_telemetry": [
+      "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+      "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl"
+    ],
+    "target_run_dir": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803",
+    "target_task_order_source": "results.jsonl successful final attempts"
+  },
+  "objective": "command_resource_interaction_poset_comparison",
+  "protocol": {
+    "candidate": "latency-gated interaction_poset only",
+    "causal_update": "all task commands predict before task clauses settle",
+    "compound_composition": {
+      "cpu_rss": "pipeline sum then stage max",
+      "disk": "sum all clauses"
+    },
+    "evaluation_unit": "eligible_exec_command",
+    "exact_shortcut": "resource-usable repo-local exact hash; no pooling",
+    "pooling_alpha": 16.0,
+    "public_layer": "identical frozen cross-repository bin/global values",
+    "short_null_light_max_latency_ms_exclusive": 500.0
+  },
+  "resources": {
+    "disk_read_write_bytes_total": {
+      "candidate_minus_current_percentage_points": -0.3910614525139633,
+      "constant_light_accuracy": 0.9351955307262569,
+      "current": {
+        "accuracy": 0.988268156424581,
+        "available_only_accuracy": 0.988268156424581,
+        "composition_ambiguous": 1,
+        "composition_unavailable": 0,
+        "eligible_n": 1790,
+        "fn": 4,
+        "fp": 17,
+        "heavy_count": 116,
+        "heavy_rate": 0.06480446927374302,
+        "label_source_counts": {
+          "composition_ambiguous": 1,
+          "null_unavailable": 1,
+          "observed_composed_heavy": 116,
+          "observed_composed_light": 1674
+        },
+        "majority_class": "light",
+        "majority_class_accuracy": 0.9351955307262569,
+        "majority_light_accuracy": 0.9351955307262569,
+        "null_unavailable": 1,
+        "observed_heavy": 116,
+        "observed_light": 1674,
+        "prediction_available": 1790,
+        "prediction_unavailable": 0,
+        "provenance_counts": {
+          "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 10,
+          "public:global:raw-argv-prefix-v1:hard-first-nonempty-v1": 6,
+          "public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 13,
+          "repo+public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 329,
+          "repo:argv_prefix_depth_2:raw-argv-prefix-v1:hard-first-nonempty-v1": 12,
+          "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 101,
+          "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 104,
+          "repo:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 15,
+          "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 468,
+          "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 732
+        },
+        "short_null_imputed_light": 0,
+        "tn": 1657,
+        "tp": 112
+      },
+      "direction": "higher accuracy is better",
+      "interaction_poset": {
+        "accuracy": 0.9843575418994414,
+        "available_only_accuracy": 0.9843575418994414,
+        "composition_ambiguous": 1,
+        "composition_unavailable": 0,
+        "eligible_n": 1790,
+        "fn": 20,
+        "fp": 8,
+        "heavy_count": 116,
+        "heavy_rate": 0.06480446927374302,
+        "label_source_counts": {
+          "composition_ambiguous": 1,
+          "null_unavailable": 1,
+          "observed_composed_heavy": 116,
+          "observed_composed_light": 1674
+        },
+        "majority_class": "light",
+        "majority_class_accuracy": 0.9351955307262569,
+        "majority_light_accuracy": 0.9351955307262569,
+        "null_unavailable": 1,
+        "observed_heavy": 116,
+        "observed_light": 1674,
+        "prediction_available": 1790,
+        "prediction_unavailable": 0,
+        "provenance_counts": {
+          "public:public_only:generic-argv-v3-role-interaction-set-v1:exact-or-weighted-public-pooling-v1": 20,
+          "public:shell_execution_graph:generic-argv-v3-role-interaction-set-v1:exact-or-weighted-public-pooling-v1": 13,
+          "repo+public:interaction_poset:generic-argv-v3-role-interaction-set-v1:exact-or-weighted-public-pooling-v1": 228,
+          "repo+public:shell_execution_graph:generic-argv-v3-role-interaction-set-v1:exact-or-weighted-public-pooling-v1": 944,
+          "repo:exact_clause:generic-argv-v3-role-interaction-set-v1:exact-or-weighted-public-pooling-v1": 468,
+          "repo:shell_execution_graph:generic-argv-v3-role-interaction-set-v1:exact-or-weighted-public-pooling-v1": 117
+        },
+        "short_null_imputed_light": 0,
+        "tn": 1666,
+        "tp": 96
+      },
+      "majority": {
+        "accuracy": 0.9351955307262569,
+        "class": "light"
+      },
+      "prediction_changes": {
+        "carrier_changed": 25,
+        "carrier_harmful": 16,
+        "carrier_helpful": 9,
+        "carrier_neutral": 0,
+        "changed": 25,
+        "harmful": 16,
+        "helpful": 9,
+        "neutral": 0
+      },
+      "threshold": 104857600.0
+    },
+    "peak_cpu_cores": {
+      "candidate_minus_current_percentage_points": -0.09049773755656076,
+      "constant_light_accuracy": 0.8678733031674208,
+      "current": {
+        "accuracy": 0.8995475113122172,
+        "available_only_accuracy": 0.8995475113122172,
+        "composition_ambiguous": 522,
+        "composition_unavailable": 0,
+        "eligible_n": 1105,
+        "fn": 72,
+        "fp": 39,
+        "heavy_count": 146,
+        "heavy_rate": 0.1321266968325792,
+        "label_source_counts": {
+          "composition_ambiguous": 522,
+          "null_unavailable": 165,
+          "observed_composed_heavy": 146,
+          "observed_composed_light": 320,
+          "short_null_composed_light": 639
+        },
+        "majority_class": "light",
+        "majority_class_accuracy": 0.8678733031674208,
+        "majority_light_accuracy": 0.8678733031674208,
+        "null_unavailable": 165,
+        "observed_heavy": 146,
+        "observed_light": 320,
+        "prediction_available": 1105,
+        "prediction_unavailable": 0,
+        "provenance_counts": {
+          "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 9,
+          "public:global:raw-argv-prefix-v1:hard-first-nonempty-v1": 6,
+          "public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 7,
+          "repo+public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 124,
+          "repo:argv_prefix_depth_2:raw-argv-prefix-v1:hard-first-nonempty-v1": 9,
+          "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 86,
+          "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 102,
+          "repo:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 11,
+          "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 444,
+          "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 307
+        },
+        "short_null_imputed_light": 639,
+        "tn": 920,
+        "tp": 74
+      },
+      "direction": "higher accuracy is better",
+      "interaction_poset": {
+        "accuracy": 0.8986425339366516,
+        "available_only_accuracy": 0.8986425339366516,
+        "composition_ambiguous": 522,
+        "composition_unavailable": 0,
+        "eligible_n": 1105,
+        "fn": 74,
+        "fp": 38,
+        "heavy_count": 146,
+        "heavy_rate": 0.1321266968325792,
+        "label_source_counts": {
+          "composition_ambiguous": 522,
+          "null_unavailable": 165,
+          "observed_composed_heavy": 146,
+          "observed_composed_light": 320,
+          "short_null_composed_light": 639
+        },
+        "majority_class": "light",
+        "majority_class_accuracy": 0.8678733031674208,
+        "majority_light_accuracy": 0.8678733031674208,
+        "null_unavailable": 165,
+        "observed_heavy": 146,
+        "observed_light": 320,
+        "prediction_available": 1105,
+        "prediction_unavailable": 0,
+        "provenance_counts": {
+          "public:public_only:generic-argv-v3-role-interaction-set-v1:exact-or-weighted-public-pooling-v1": 17,
+          "public:shell_execution_graph:generic-argv-v3-role-interaction-set-v1:exact-or-weighted-public-pooling-v1": 7,
+          "repo+public:interaction_poset:generic-argv-v3-role-interaction-set-v1:exact-or-weighted-public-pooling-v1": 206,
+          "repo+public:shell_execution_graph:generic-argv-v3-role-interaction-set-v1:exact-or-weighted-public-pooling-v1": 321,
+          "repo:exact_clause:generic-argv-v3-role-interaction-set-v1:exact-or-weighted-public-pooling-v1": 444,
+          "repo:shell_execution_graph:generic-argv-v3-role-interaction-set-v1:exact-or-weighted-public-pooling-v1": 110
+        },
+        "short_null_imputed_light": 639,
+        "tn": 921,
+        "tp": 72
+      },
+      "majority": {
+        "accuracy": 0.8678733031674208,
+        "class": "light"
+      },
+      "prediction_changes": {
+        "carrier_changed": 17,
+        "carrier_harmful": 9,
+        "carrier_helpful": 8,
+        "carrier_neutral": 0,
+        "changed": 17,
+        "harmful": 9,
+        "helpful": 8,
+        "neutral": 0
+      },
+      "threshold": 2.0
+    },
+    "sampled_peak_rss_mb": {
+      "candidate_minus_current_percentage_points": 0.3265306122449019,
+      "constant_light_accuracy": 0.8840816326530612,
+      "current": {
+        "accuracy": 0.913469387755102,
+        "available_only_accuracy": 0.913469387755102,
+        "composition_ambiguous": 505,
+        "composition_unavailable": 0,
+        "eligible_n": 1225,
+        "fn": 70,
+        "fp": 36,
+        "heavy_count": 142,
+        "heavy_rate": 0.11591836734693878,
+        "label_source_counts": {
+          "composition_ambiguous": 505,
+          "null_unavailable": 62,
+          "observed_composed_heavy": 142,
+          "observed_composed_light": 661,
+          "short_null_composed_light": 422
+        },
+        "majority_class": "light",
+        "majority_class_accuracy": 0.8840816326530613,
+        "majority_light_accuracy": 0.8840816326530612,
+        "null_unavailable": 62,
+        "observed_heavy": 142,
+        "observed_light": 661,
+        "prediction_available": 1225,
+        "prediction_unavailable": 0,
+        "provenance_counts": {
+          "public:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 10,
+          "public:global:raw-argv-prefix-v1:hard-first-nonempty-v1": 6,
+          "public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 10,
+          "repo+public:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 137,
+          "repo:argv_prefix_depth_2:raw-argv-prefix-v1:hard-first-nonempty-v1": 12,
+          "repo:argv_prefix_depth_3:raw-argv-prefix-v1:hard-first-nonempty-v1": 102,
+          "repo:argv_prefix_depth_4:raw-argv-prefix-v1:hard-first-nonempty-v1": 104,
+          "repo:bin:raw-argv-prefix-v1:hard-first-nonempty-v1": 15,
+          "repo:exact_clause:raw-argv-prefix-v1:hard-first-nonempty-v1": 468,
+          "repo:shell_execution_graph:raw-argv-prefix-v1:empirical-shell-graph-v1": 361
+        },
+        "short_null_imputed_light": 422,
+        "tn": 1047,
+        "tp": 72
+      },
+      "direction": "higher accuracy is better",
+      "interaction_poset": {
+        "accuracy": 0.916734693877551,
+        "available_only_accuracy": 0.916734693877551,
+        "composition_ambiguous": 505,
+        "composition_unavailable": 0,
+        "eligible_n": 1225,
+        "fn": 73,
+        "fp": 29,
+        "heavy_count": 142,
+        "heavy_rate": 0.11591836734693878,
+        "label_source_counts": {
+          "composition_ambiguous": 505,
+          "null_unavailable": 62,
+          "observed_composed_heavy": 142,
+          "observed_composed_light": 661,
+          "short_null_composed_light": 422
+        },
+        "majority_class": "light",
+        "majority_class_accuracy": 0.8840816326530613,
+        "majority_light_accuracy": 0.8840816326530612,
+        "null_unavailable": 62,
+        "observed_heavy": 142,
+        "observed_light": 661,
+        "prediction_available": 1225,
+        "prediction_unavailable": 0,
+        "provenance_counts": {
+          "public:public_only:generic-argv-v3-role-interaction-set-v1:exact-or-weighted-public-pooling-v1": 20,
+          "public:shell_execution_graph:generic-argv-v3-role-interaction-set-v1:exact-or-weighted-public-pooling-v1": 10,
+          "repo+public:interaction_poset:generic-argv-v3-role-interaction-set-v1:exact-or-weighted-public-pooling-v1": 229,
+          "repo+public:shell_execution_graph:generic-argv-v3-role-interaction-set-v1:exact-or-weighted-public-pooling-v1": 381,
+          "repo:exact_clause:generic-argv-v3-role-interaction-set-v1:exact-or-weighted-public-pooling-v1": 468,
+          "repo:shell_execution_graph:generic-argv-v3-role-interaction-set-v1:exact-or-weighted-public-pooling-v1": 117
+        },
+        "short_null_imputed_light": 422,
+        "tn": 1054,
+        "tp": 69
+      },
+      "majority": {
+        "accuracy": 0.8840816326530613,
+        "class": "light"
+      },
+      "prediction_changes": {
+        "carrier_changed": 10,
+        "carrier_harmful": 3,
+        "carrier_helpful": 7,
+        "carrier_neutral": 0,
+        "changed": 10,
+        "harmful": 3,
+        "helpful": 7,
+        "neutral": 0
+      },
+      "threshold": 500.0
+    }
+  },
+  "row_identity": {
+    "identical_command_ids_labels_and_availability": true,
+    "unique_sample_ids": true
+  },
+  "status": "development_exposed_poset_resource_evaluation"
+}
