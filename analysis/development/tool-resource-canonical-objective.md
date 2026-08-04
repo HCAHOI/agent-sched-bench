@@ -1,487 +1,183 @@
-# Tool-Resource Prediction — Canonical Objective and Implementation Lock
+# Tool-Resource Prediction — Canonical Objective and Lock
 
-**Effective 2026-07-28.** This document is authoritative for current KB and
-predictor work. It replaces the earlier CPU/memory objective, the stale
-3500/5000 ms binary objective, boolean clause composition, and separate offline
-model paths. Historical artifacts remain evidence of what ran; they are not
-current implementation or evaluation contracts.
+**Effective:** 2026-08-04
+**Status:** development-only; no confirmation corpus has been evaluated
 
-## 1. Current objective
+This is the authoritative contract for tool-resource prediction. It records
+current truth, not the implementation history. Detailed experiment procedures
+live in `clause-interaction-kb-plan.md`; frozen result artifacts and git retain
+superseded protocols.
 
-Predict each eligible `exec` command's latency as one probability mass function
-over fixed ordered buckets, plus command CPU peak, sampled RSS, and Disk I/O as
-independent Heavy/Light classifications. Clauses are the predictor's internal
-evidence units, not evaluation rows.
+## 1. Prediction objective
 
-The human-authorized fixed boundaries are, in milliseconds:
+The evaluation unit is one eligible `exec` command. Clauses are internal
+evidence used to predict that command; they are never scored as separate rows.
 
-```text
-2000, 8000
-```
-
-The mutually exclusive buckets are:
+For latency, predict one normalized probability mass function over:
 
 ```text
-[0, 2000]
-(2000, 8000]
-(8000, +inf)
+[0, 2000] ms
+(2000, 8000] ms
+(8000, +inf) ms
 ```
 
-The predictor returns one normalized three-bucket PMF:
+The hard prediction is the highest-probability bucket; an exact tie selects the
+shorter bucket. The primary metric is exact three-class command accuracy.
+Compare it with one constant majority class computed over the identical
+evaluation commands. Report eligible count, label and prediction counts, the
+3x3 confusion matrix, majority accuracy, and deltas from majority and Current.
+
+Predict CPU peak, sampled RSS, and Disk I/O independently as Heavy or Light:
 
 ```text
-(P(short), P(middle), P(long))
+CPU Heavy  = peak_cpu_cores > 2.0
+RSS Heavy  = sampled_peak_rss_mb > 500 decimal MB
+Disk Heavy = read_bytes + write_bytes > 104857600 bytes
 ```
 
-The hard prediction is the highest-probability bucket. An exact probability
-tie selects the shorter bucket. The primary development score is exact
-three-class accuracy:
+For these resource targets only, an observation explicitly marked by policy as
+null with command latency below 500 ms is imputed Light. Other nulls are
+unavailable. Report eligible, Heavy/Light and unavailable counts, TP/TN/FP/FN,
+accuracy, majority accuracy, and constant-Light accuracy.
 
-```text
-three_class_accuracy = correct_bucket / eligible_examples
-```
+Old nine-bin latency accuracy, legacy 3500/5000 ms boundaries, balanced
+accuracy, Brier/NLL, bucket MAE, q-error, and hand-selected subsets cannot
+select a candidate.
 
-The comparator is the most frequent ground-truth bucket on the exact same
-evaluation rows. Reports include `eligible_examples`, per-class counts/rates,
-predicted class counts, the 3x3 label-by-prediction confusion matrix, majority
-class and accuracy, and deltas from majority and current. These are
-reconciliation diagnostics, not additional acceptance metrics.
+## 2. Causal and physical contract
 
-The old eight-boundary accuracies and nine-bin exact accuracy remain historical
-diagnostics and must not select a candidate. Do not use balanced accuracy,
-precision/recall, Brier/NLL, bucket MAE, q-error, legacy 3500/5000 ms metrics,
-or a hand-selected subset to choose the candidate.
-
-The Heavy thresholds are fixed and strict:
-
-```text
-peak_cpu_cores > 2.0 cores
-sampled_peak_rss_mb > 500 decimal MB
-disk_read_write_bytes_total > 104857600 bytes (100 MiB)
-```
-
-For these resource targets only, an explicitly policy-marked observation with a
-null value and `latency_ms < 500` is an imputed Light label. A null at or above
-500 ms remains unavailable. Reports must separate observed Heavy, observed
-Light, short-null-imputed Light, and null-unavailable counts. Primary resource
-diagnostics include eligible count, Heavy count/rate, TP/TN/FP/FN, accuracy,
-the most frequent command label, and the constant-Light baseline.
-
-## 2. One implementation for offline and online
-
-There is one predictor/KB algorithm. Offline replay and online serving differ
-only in their event source and metric sink.
-
-The canonical core exposes the equivalent of:
+Offline replay and online serving use the same predictor semantics:
 
 ```python
-predict(repo, command, parsed_clauses, ts_start) -> command predictions + provenance
+predict(repo, command, parsed_clauses, ts_start) -> predictions + provenance
 observe(completed_clause_observations) -> None
 ```
 
-Offline chronological replay calls the same `predict` and `observe` methods as
-`resource-agentd`. It must not reimplement lookup, canonicalization,
-arbitration, update, or bucket semantics. An observation becomes visible only
-to a query with `observation.ts_end < query.ts_start`; overlapping calls must be
-buffered accordingly, and backdated queries must be rejected.
-Causal observations become eligible only after successful trace finalization.
+- An observation is visible only when `observation.ts_end < query.ts_start`.
+- A task's observations enter the KB only after successful whole-task
+  finalization. The current task and failed or unfinalized tasks are invisible.
+- Frozen cross-repository evidence does not update during evaluation;
+  repository-local evidence updates causally between settled tasks.
+- Every arm uses identical command IDs, labels, availability, order, and
+  compound-command structure.
+- Telemetry marked invalid, ambiguous, lossy, or cleanup-invalid is withheld;
+  independently valid sibling calls may remain eligible.
+- The command and its output cannot reveal its own label or query-time state.
+  Hindsight execution modes are diagnostics only.
 
-A fitted public state is frozen for one evaluation/deployment version. Repo or
-workspace-local state updates causally. Raw eligible observations remain in the
-existing store for provenance; the serving state may use bucket counts as its
-sufficient statistics.
+Compound commands compose empirical clause values according to shell structure:
 
-## 3. Canonical current architecture
+- sequential stages: latency and Disk sum; CPU and RSS take the maximum;
+- concurrent pipelines: latency takes the maximum; CPU and RSS sum;
+- Disk sums across all clauses.
+
+Never compose bucket IDs or Heavy/Light labels with Boolean OR. Unsupported or
+ambiguous structures remain unavailable.
+
+## 3. Current architecture and research boundary
+
+`ClauseResourceKB` is the Current control. It uses raw exact argv, argv-prefix,
+and binary/global backoff with frozen public evidence and causal repo-local
+updates. The trie is not the proposed research contribution.
+
+The active research question is narrower:
+
+> Within many tasks from the same repository, can a deterministic semantic
+> work signature reuse evidence that raw argv matching misses?
+
+The active development corpus is the 100-task SQLGlot trace set. It was chosen
+because task relatedness within one repository is a controlled condition.
+SWE100/277 remain development-exposed historical diagnostics and may remain in
+Current's already-frozen public prior, but they must not select, tune, or test a
+semantic work-signature candidate. Other repositories and new collection are
+outside the current semantic experiment.
+
+All SQLGlot results are development-exposed. They may falsify mechanisms and
+guide the next fixed comparison, but cannot support a confirmation claim.
+
+The runtime boundary remains unchanged: `resource-agentd` owns parsing,
+prediction, state, persistence, and orchestration; `telemetryd` owns privileged
+collection and finalized observations. `src/tool_resource/` imports nothing
+from the rest of the repository. Offline trace adapters live in
+`src/tool_resource_eval/`. Runtime integration is not part of the current
+offline semantic experiment.
+
+## 4. Current decision tree
+
+### Phase A — pip representation: complete
+
+On the fixed 1,792 SQLGlot commands, Current scored 87.500% overall and
+81.513% on 119 pip commands. Canonical exact scored 87.388% overall and 79.832%
+on pip. Jaccard semantic matching scored 87.667% overall and 84.034% on pip.
+Against canonical exact, seven non-exact carriers changed: six helpfully and
+one harmfully, with positive net gains across six tasks and five signatures.
+Non-pip predictions were identical. The frozen Phase A gate therefore selected
+Jaccard semantic matching. State-aware and semantic-only predictions were
+identical and state did not contribute to selection.
+
+Authoritative artifacts:
+
+- `analysis/results/tool-resource-clause-interactions-20260804/pip-carrier-audit-latency.json`
+- `analysis/results/tool-resource-clause-interactions-20260804/pip-carrier-audit-latency-rows.jsonl`
+- `analysis/results/tool-resource-clause-interactions-20260804/semantic-work-signature.html`
+
+### Phase B — second tool in the same SQLGlot corpus: next
+
+The fixed second tool is pytest. Its semantic evidence may come only from
+causally settled earlier SQLGlot tasks. Current retains its unchanged frozen
+public prior; the candidate falls back to Current when no repo-local semantic
+evidence exists. No SWE semantic evidence is admitted.
+
+Before reading pytest labels, require all of:
+
+- at least 100 parsed pytest commands;
+- coverage across at least 20 SQLGlot tasks; and
+- at least 20 commands whose semantic signature has causal earlier-task
+  evidence but whose raw argv has no exact earlier-task match.
+
+Failure stops Phase B without changing tools or thresholds. If coverage passes,
+the latency candidate passes only when overall and pytest-subset accuracy both
+strictly exceed Current, helpful changes outnumber harmful ones, positive net
+gain spans at least two tasks and two semantic signatures, and every non-pytest
+PMF is bit-identical. Only a passing latency representation transfers unchanged
+to CPU, RSS, and Disk.
+
+State identifiability, controlled state intervention, and scheduler
+actionability remain downstream gates in `clause-interaction-kb-plan.md`. They
+cannot authorize new collection or scheduler implementation by themselves.
+
+## 5. Development-exposure record
+
+- The Phase A numbers above were visible before Phase B was corrected from a
+  cross-repository SWE test to a same-repository SQLGlot test.
+- At correction time, no SQLGlot pytest coverage count, pytest label, Phase B
+  prediction, or Phase B result artifact had been read or produced. The scope
+  correction therefore fixes the experimental condition; it does not respond
+  to a Phase B outcome.
+- Earlier SWE100/277 trie, generic-argv, resource, and concurrency diagnostics
+  are development-exposed negative evidence. They motivate controlling
+  repository relatedness but do not evaluate the SQLGlot semantic candidate.
+- The first SQLGlot command-level replay made with an older public aggregate
+  retained invalid downstream-pipeline evidence. It remains explicitly named
+  `*.pre-public-structure-fix.invalid`; only the corrected artifact is
+  reportable.
+- The 2000/8000 ms objective and resource thresholds were selected after older
+  SWE diagnostics were visible. All results under the current objective are
+  development-only.
+
+## 6. Non-negotiable task contract
 
 ```text
-externally parsed clauses
-        ↓
-one ClauseResourceKB / command predictor core
-        ├── frozen cross-repo public binary/global evidence
-        └── causal repo exact/prefix/binary evidence
-        ↓
-hard repo-first deepest-nonempty backoff
-        ↓
-latency bucket PMF or resource P(Heavy) + provenance
-```
-
-`resource-agentd` owns parsing/canonicalization, prediction, KB persistence,
-snapshot pinning, causal update, and telemetry orchestration. `telemetryd` owns
-privileged collection and finalized normalized observations. Clients never
-implement prediction logic.
-
-`analysis/development/tool-resource-service-architecture.md` remains in force
-for everything this section does not restate: the fixed privilege boundary
-(a runtime flag must never change which process is privileged), the one-way
-dependency that keeps the daemon import graph free of `trace_collect`, the
-bounded per-trace telemetry FIFO with `CloseTrace` as the settlement barrier,
-and fail-closed backpressure that withholds evidence without delaying or
-changing the workload. Read both documents before changing the runtime.
-
-`src/tool_resource/` is a self-contained directory that imports nothing from
-this repository, so it can be copied out and used on its own. The offline lane
-that reads this repository's trace formats lives outside it, in
-`src/tool_resource_eval/`.
-
-Compound commands compose empirical clause values, never bucket IDs. The parser
-groups clauses into sequential stages and concurrent pipelines. Per empirical
-draw, latency takes pipeline max then stage sum; CPU and RSS take pipeline sum
-then stage max; Disk I/O sums all clauses. Deterministic stratified draws retain
-each selected clause node's empirical marginal. Substitutions and unsupported
-structures remain explicitly unavailable.
-
-## 4. Evidence boundary
-
-Canonical telemetry validity remains call-granular. Downstream consumers use
-only calls marked eligible for KB ingestion. Withheld or missing observations
-are never negative labels or zero-valued targets, except for the explicit,
-per-observation short-null resource-label policy above.
-
-The locked SWE-100 and fresh-277 traces are development-exposed diagnostic
-inputs. They may be used in both fit/evaluation orientations to implement,
-replay, and compare this mechanism but cannot support a confirmation claim.
-No other benchmark is in scope for the current three-bucket development goal.
-
-**2026-07-27 development amendment:** `generic-argv-v1` results were visible
-before `generic-argv-v2-shape` was defined. V2 removes plaintext opaque values
-from cross-repo keys and preserves numeric order of magnitude. Both versions
-remain non-confirmatory diagnostics; the production public layer remains
-binary/global until a candidate and criterion are frozen.
-
-The local-vs-frozen-public counterfactual gate also failed: pooled local
-support `n <= 4` lost by `1.17 pp` in one exposed orientation and tied in the
-other. Do not implement fixed support-aware shrinkage from this evidence; no
-runtime arbitration change is selected.
-
-**2026-07-28 resource-class amendment:** the human selected the three thresholds
-above and the short-null label policy. The implementation reuses the exact
-latency KB hierarchy, strict trace-close visibility, and empirical first-hit
-node; no second model was added. The first two development-exposed SWE
-orientations show no stable gain over majority-Light (Disk improves only in
-one orientation). These results validate plumbing, not predictive skill or a
-confirmation claim.
-
-## 5. Implementation sequence
-
-### P0 — one executable core
-
-1. Keep the current `ClauseResourceKB` path as the canonical algorithm; avoid a
-   rename-only refactor.
-2. Make online `resource-agentd` and the offline latency evaluator call that
-   same core and semantics.
-3. Remove executable legacy predictor/evaluator/CLI paths and their dedicated
-   tests once current callers are audited. Preserve historical result artifacts.
-4. Add one golden test that feeds an identical timestamped event stream through
-   offline and online adapters and asserts identical PMFs, provenance, causal
-   visibility, and restored state.
-5. Correct two real runtime problems: public evidence must be genuinely
-   cross-repo rather than prefiltered to the active workspace, and the KB must
-   be constructed once per run/snapshot rather than rebuilt from all visible
-   observations for every query.
-
-Stop and review after P0. Do not begin a long SWE replay in P0.
-
-### P1 — frozen development baseline
-
-Run the canonical core on the development-exposed SWE fit/replay corpora with
-the exact `2000/8000` boundaries. Report three-class accuracy, the
-same-evaluation majority baseline, the 3x3 confusion matrix, class counts, and
-the required provenance. This is a diagnostic baseline, not confirmation.
-P1 scores each eligible command. Exact latency truth is the tool-call duration.
-CPU/RSS command truth is emitted only when retained clause aggregates prove the
-same side of the threshold under pipeline bounds; Disk truth is additive.
-Use manifest task order as a serialized virtual deployment: predict every call
-in one source trace before successful finalization releases its observations,
-preserve repository state across later traces, and use synthetic monotonic
-timestamps only to order sessions rather than represent historical concurrency.
-
-### P2 — representation and arbitration
-
-Keep the current exact/prefix/binary trie only as the control. Evaluate at least
-two candidate KB architectures that do not consult trie prefix or binary nodes:
-an interaction-poset frontier over typed feature sets and an episodic
-all-subset-kernel memory. Both may share an exact-clause hash shortcut and the
-same frozen public prior. Do not add ANN retrieval, a neural model, or
-target-specific similarity while latency is the only target.
-
-### Deferred
-
-- Bin-specific plugins are added only when frequency × residual loss × semantic
-  extractability justifies them. Plugins extract semantics; they never encode
-  resource predictions.
-- Neural/MLP predictors are not parallel production paths. If later evidence
-  justifies one, it replaces the core scoring mechanism and must still use the
-  same offline/online API and causal replay.
-- Delta compaction, decay, reindexing, and atomic snapshot swaps wait for
-  measured storage or latency pressure. Bucket counts do not require KLL or
-  t-digest sketches.
-
-## 6. Amendment record
-
-An open amendment is legitimate; an amendment described as pre-registration is
-not. Each entry records the date and what was visible when the criterion moved.
-
-### 2026-08-04 — semantic work-signature decision tree
-
-Visible before this amendment: every SQLGlot non-trie result and the completed
-pip semantic latency/resource transfer. Across 1,792 commands, Current latency
-was correct on 1,568 (87.500%) and both semantic-only and state-aware were
-correct on 1,571 (87.667%). On the 119-command pip subset, the corresponding
-counts were 97 (81.513%) and 100 (84.034%); five predictions changed, four
-helpfully and one harmfully. The paired task bootstrap interval for the overall
-delta crossed zero. CPU and RSS had no hard-prediction changes. Disk improved
-from 1,769/1,790 (98.827%) to 1,771/1,790 (98.939%); four pip predictions
-changed, three helpfully and one harmfully. Semantic-only and state-aware PMFs
-were identical for all targets. Fifteen commands used non-exact pip evidence.
-These are development-exposed observations, not confirmation.
-
-The earlier state-aware-primary stopping rule is openly amended because its
-failure does not distinguish simple order/shape normalization from partial
-package-set overlap. The next and only carrier audit adds a canonical-exact arm
-to the unchanged SQLGlot evaluator. Current, canonical exact, and Jaccard use
-identical rows, frozen public evidence, `alpha = 16`, task-final updates, and
-Current fallback. Canonical exact requires equality of normalized interpreter,
-invocation, flags, and the complete order-insensitive requirement set. State is
-report-only.
-
-Jaccard is selected only if it strictly exceeds canonical exact on both overall
-and pip accuracy, changed carriers are net helpful, and its net gain spans at
-least two tasks and two semantic signatures. Otherwise canonical exact is
-selected only if it satisfies the same criteria against Current. Otherwise the
-semantic-method route stops. No alpha, flag, support, or package-specific tuning
-is allowed.
-
-Only a selected pip representation may unlock the fixed second-tool test:
-exact semantic-signature matching for `pytest`, with a pre-label coverage gate
-of at least 100 parsed SWE277 pytest commands, 10 repositories, and 20
-non-exact commands with evidence. Its latency gate requires strict gains on the
-pytest subset and overall, net-helpful changes spanning at least two
-repositories, and bit-identical non-pytest PMFs. Resource transfer follows only
-after that gate and cannot change the representation.
-
-State collection is considered only if existing traces contain at least eight
-package sets with two execution modes across independent tasks, and a
-leave-one-task-out hindsight mode oracle nets at least ten hard-error fixes
-without concentration in one task or package set. The paired four-state pip
-intervention remains unapproved until a smoke and estimate are reported. Its
-frozen gate is at least 3/12 cross-state bucket transitions, at least five
-percentage points of leave-one-package-set-out accuracy gain, net-helpful
-changes, and probe p95 below 100 ms. Scheduler work remains deferred unless a
-named consumer would change action on at least 20 commands across at least 10
-tasks with explicit false/missed-action costs. CacheWise timeout is not a
-remaining-work proxy.
-
-### 2026-08-04 — handwritten pip semantics after non-trie failure
-
-Visible before this amendment: every SQLGlot non-trie latency and gated-resource
-result; the last-20 case studies; and a bounded inspection of pip-install rows.
-That inspection found 119 eligible commands containing an actual parsed pip
-install clause, including 40 compound commands. Current was correct on 97/119
-and interaction-poset on 91/119. The full tool outputs roughly separated into
-102 downloads, 18 failures, and one cache-only execution. Order-normalizing the
-observed pip arguments collapsed 35 raw clause forms to 27 semantic forms. All
-of these numbers are development-exposed and may motivate or diagnose the next
-mechanism, not confirm it.
-
-The next development question is whether a handwritten, deterministic pip
-semantic representation plus causally prior task-container state can recover
-errors that generic argv interaction matching cannot. The primary candidate is
-Current with only non-exact pip clauses replaced by a semantic episodic match;
-all non-pip commands remain bit-identical to Current. A fixed semantic-only arm
-is an ablation and cannot replace a failed state-aware primary. Matching uses
-the normalized interpreter and invocation form, order-insensitive behavior
-flags, and Jaccard overlap of normalized requested package names. Repo-local
-weighted evidence is pooled with frozen cross-repo semantic pip evidence at the
-already selected `alpha = 16`; if semantic evidence is absent, Current is used.
-No package name may encode a resource outcome.
-
-Runtime state is reset per task and contains only facts available before the
-query: whether pip is known absent or present for an interpreter and packages
-known installed by earlier successful commands. Earlier tool results may update
-this query context immediately, but their latency/resource observations remain
-withheld from learning until successful whole-task finalization. A left-hand
-`apt-get install ... python3-pip` under `&&` may establish that pip is present
-conditional on the right-hand clause executing. Execution-mode labels parsed
-from the current command's output are hindsight-only diagnostics and never
-features.
-
-Run one causal SQLGlot-100 latency comparison in manifest task order. The
-state-aware primary passes only if it strictly improves both overall accuracy
-and the fixed 97/119 Current pip accuracy, has more helpful than harmful changes
-through non-exact semantic evidence, and leaves every non-pip prediction
-unchanged. Report paired task-cluster bootstrap uncertainty, but do not tune or
-select on it. Only after that gate passes may the unchanged representation be
-transferred to CPU, RSS, and Disk. A failure stops the experiment: do not tune
-weights, flags, support thresholds, state backoff, or package-specific rules.
-This experiment is offline and development-only; agent-generated adapters,
-online daemon integration, dependency resolution, and new collection are
-deferred.
-
-### 2026-08-04 — two non-trie candidate architectures
-
-Visible before this amendment: the reportable SQLGlot 80/20 command baseline,
-the current trie implementation, and the written subset-matching proposal. No
-interaction-poset or subset-kernel prediction result had been run or read.
-
-The human rejected an incremental trie candidate because a trie-based method is
-not a defensible research contribution for the intended presentation. The trie
-therefore remains only a control. The SQLGlot development experiment must
-implement and compare at least two candidates that never consult its prefix or
-binary nodes: (1) an interaction-poset frontier over shared typed feature sets,
-and (2) an episodic memory using the closed-form all-subset kernel. A shared
-exact-clause hash shortcut and frozen public prior are allowed because neither
-is a trie lookup. Candidate selection remains command-level and causal.
-
-### 2026-08-04 — command-level evaluation and physical composition
-
-Visible before this amendment: the completed SQLGlot-100 trace corpus, earlier
-clause-level SWE diagnostics, and plumbing-only synthetic tests. No formal
-SQLGlot 80/20 command-level baseline number had been read.
-
-The human corrected the evaluation unit to the whole `exec` command: majority
-is one constant class over the identical held-out command labels, while clauses
-only provide finer-grained KB evidence. Compound prediction now uses the shell
-stage composition in §3. Command latency truth comes directly from
-`tool_calls.json`. Retained clause aggregates cannot reconstruct simultaneous
-CPU/RSS peaks exactly, so their command labels use strict lower/upper bounds and
-withhold ambiguous cases; Disk bytes are additive. The SQLGlot first-80/last-20
-result is development-exposed and cannot be described as confirmation. Matching
-online ingestion, downstream pipeline members inform command labels but do not
-enter KB evidence because their wall time includes upstream blocking.
-
-The first post-amendment run was read before discovering that the older public
-aggregate had omitted those structural fields; it therefore retained downstream
-pipeline evidence and is preserved with `.pre-public-structure-fix.invalid` in
-its filename. The corrected loader reconstructs structure by exact ordered
-alignment with each call's static parser output, excludes unsupported alignments,
-and then applies the online head-only evidence rule. Both runs are
-development-exposed; only the corrected artifact is reportable.
-
-### 2026-07-28 — three-bucket development objective
-
-Visible before this amendment: all earlier eight-boundary/nine-bin SWE
-diagnostics, `generic-argv-v1`, `generic-argv-v2-shape`, the failed
-`local_n <= 4` arbitration gate, and both SWE resource-class orientations.
-
-The human replaced the eight latency boundaries with `2000/8000` after deciding
-that three operational latency regimes—short, uncertain middle, and long—were
-sufficient. Exact three-class accuracy against the same-evaluation majority
-class is now the primary development decision metric. This is an openly
-development-exposed amendment, not a pre-registration or confirmation claim.
-CPU, sampled RSS, Disk I/O, short-null policy, evidence eligibility, causal
-visibility, and compound-command semantics are unchanged.
-
-### 2026-07-27 — concurrency-one diagnostic
-
-Concurrency one (`c1`) was authorized after the concurrency-two (`c2`) rung-20
-results were visible. It tests whether cross-trace concurrency caused unstable
-promotion; it is an openly development-exposed diagnostic, not a pre-registered
-confirmation. The `c1` replay reproduced the same missing-evidence pattern, so
-concurrency was rejected as the cause.
-
-### 2026-07-27 — call-scoped promotion
-
-Before this amendment, four development replays had shown stable call mapping
-(82 of 139 calls eligible) but unstable promoted-observation counts
-(82, 50, and 81 were observed), including traces with eligible calls and zero
-promotion. Inspection then identified a trace-level promotion filter that
-discarded every valid call when any call-level telemetry RPC made the trace
-status unavailable.
-
-Promotion is amended to retain individually eligible observations whenever the
-session collector-health, loss, and cleanup gates passed. Trace/run lifecycle
-validity remains reported separately; a failed call contributes no observation
-and no longer voids eligible sibling calls. This correction can raise measured
-yield, so results produced before and after it are not directly comparable.
-
-The first post-change replay exposed a second lifecycle defect that the new
-daemon logs made observable: the SQLite store contained all 82 eligible
-observations, but run manifests reported only 81. Resource runs were opened
-before the serial task queue started; one healthy closed trace and two not-yet-
-started tasks crossed the 1800-second run lease. The earlier TTL hypothesis had
-been rejected using trace-open times, which are not run-open times.
-
-Active run/session lifetime is therefore amended to follow the reuse-safe local
-client process identity obtained from the Unix socket, not elapsed RPC
-inactivity. Eligible observations become visible when trace finalization has
-established healthy collector, loss, and cleanup state; `CloseRun` reports the
-already-settled observations but does not control their visibility. TTL remains
-only for bounded retention of completed results and unacknowledged finalized
-observations. Collector loss and cleanup failure remain fail-closed.
-`promoted_observation_count` is the sum of store-confirmed promotion row counts;
-any mismatch between that count and the eligible observation IDs blocks
-settlement.
-
-`traces/terminal-bench/tb-dev10-resource-agentd-50x-20260726-r3` is a pre-fix,
-development-exposed baseline. The exact-cohort direct comparison for the
-call-scoped promotion correction is
-`traces/terminal-bench/tb-dev20-c1-ladder-20260727-r4`.
-
-### 2026-07-27 — command-scoped best-effort attribution
-
-The dev-20 r9 replay and targeted kernel, make-mips, Lean, and FMRI diagnostics
-were visible before this amendment. They showed complete failed `execve`
-attempts, uniquely identifying capped argv prefixes, and ambiguous runtime
-occurrences whose downstream clause observations were identical.
-
-Within one tool call's command only, attribution now admits three additional
-evidence forms:
-
-- complete failed attempts whose errno values are all `ENOENT`, or exact
-  source/replay shell lookup failures with direct status 127 or a zero status
-  proven to come from an in-command `|| true`, produce explicit zero
-  target-program latency, CPU, memory, and disk observations;
-- a collector-capped argv with no truncated captured word may match through its
-  complete captured prefix; and
-- equal-cardinality ambiguous candidates may be paired deterministically when
-  their downstream observation identity is identical, including the fields
-  that control KB eligibility.
-
-No evidence is matched across commands or tool calls. No tolerance for
-different downstream identities is defined by this amendment; adding one
-requires an explicit result-affecting threshold. These rules can raise yield,
-so pre/post attribution results are not directly comparable.
-
-### 2026-07-27 — objective replacement and lineage merge
-
-Visible before this amendment: the telemetry-lifecycle replay ladder through
-`tb-fmri-best-effort-attribution-20260727-r4`, and the separately developed KB
-and predictor work on `dev/tool-resource-kb-predictor`.
-
-Two consequences, both openly development-exposed:
-
-- **Objective replaced.** The previous right-open `[b_i, b_{i+1})` latency-bucket
-  contract is superseded by §1 of this document: left-open `(b_i, b_{i+1}]`
-  intervals matched to the scheduler question `T > b`, a normalized bucket PMF,
-  and independent CPU-peak / sampled-RSS / Disk-I/O Heavy-Light targets on the
-  fixed boundaries recorded there. Bucket-labelled results produced under the
-  right-open convention are not comparable to results produced after it, and
-  cannot be reinterpreted by relabelling.
-- **Lineage merged.** The telemetry-lifecycle branch and the KB/predictor branch
-  diverged at commit `c281d48` and were merged on 2026-07-27. Replay numbers
-  produced on either branch before the merge are not directly comparable to
-  numbers produced after it. The named cohorts above retain their meaning only
-  within their own pre-merge lineage.
-
-No claim-bearing evaluation had been read from either lineage when this
-amendment was written, and the Terminal-Bench confirmation attempts remain
-untouched.
-
-## 7. Task contract
-
-Every result-affecting KB/predictor task must preserve:
-
-```text
-Evaluation unit = one eligible exec command; clauses are internal KB evidence.
-Targets = command latency PMF plus CPU peak, sampled RSS, and Disk I/O Heavy/Light.
-Boundaries_ms = [2000, 8000].
-Latency truth = exact bucket in [0,2000], (2000,8000], or (8000,+inf).
-Latency prediction = argmax normalized PMF; exact ties select the shorter bucket.
-Primary latency score = exact three-class accuracy vs same-evaluation majority.
-Resource truth = CPU > 2 cores; RSS > 500 decimal MB; Disk read+write > 100 MiB.
-Short-null resource policy = Light only when explicitly marked and latency_ms < 500.
-Scores include n, positive rate, TP/TN/FP/FN, accuracy, majority, and constant-Light.
-Offline and online use one predictor implementation and identical causal updates.
-Compound composition follows shell stages; never OR or combine bucket IDs.
-No legacy predictor path or non-SWE benchmark access.
+Evaluation unit = eligible exec command; clauses are internal evidence.
+Latency buckets = [0,2000], (2000,8000], (8000,+inf) ms.
+Primary latency metric = exact three-class accuracy on identical rows.
+Resource thresholds = CPU >2 cores; RSS >500 MB; Disk >100 MiB.
+Short-null resource policy = Light only when explicitly marked and <500 ms.
+Causal visibility = observation end before query start, after task settlement.
+Compound commands = physical stage/pipeline composition, never Boolean OR.
+Current = unchanged raw exact/prefix/binary control.
+Active semantic development corpus = SQLGlot100 only.
+No result-dependent tuning, package/test-name outcome rules, or hindsight state.
+No new collection, runtime integration, or scheduler implementation without a
+separate approved protocol.
 ```

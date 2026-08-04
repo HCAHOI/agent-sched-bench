@@ -4,8 +4,8 @@
 
 **Status:** development-only decision tree
 
-**Scope:** pip carrier audit, one fixed second tool, state identifiability, and
-scheduler actionability
+**Scope:** same-repository semantic signatures, state identifiability, and
+scheduler actionability on SQLGlot100
 
 This plan extends `tool-resource-canonical-objective.md`. It does not change
 the fixed targets, thresholds, causal visibility, task-settlement barrier,
@@ -20,9 +20,9 @@ Proceed through the smallest decision tree that can answer that question:
 
 1. Use SQLGlot100 to distinguish simple pip normalization from package-set
    overlap.
-2. If the pip mechanism survives, test exactly one second tool, `pytest`, on
-   existing SWE100/277 traces.
-3. Independently ask whether causal state is identifiable in existing traces;
+2. If the pip mechanism survives, test exactly one second tool, `pytest`, in
+   the same SQLGlot100 causal task stream.
+3. Independently ask whether causal state is identifiable in SQLGlot100;
    request a controlled collection only if a meaningful oracle gap exists.
 4. Stop at a scheduler actionability gate unless a real consumer would change
    an action.
@@ -80,22 +80,26 @@ Add a minimal `PytestSignature` module, not a generic plugin framework:
   or `--` passthrough;
 - use exact semantic-signature matching only, with no new similarity parameter.
 
-Use SWE100 as frozen public evidence, excluding the target repository for each
-query. Replay SWE277 causally in manifest/task order. Before reading labels,
-require at least 100 parsed SWE277 pytest commands, 10 repositories, and 20
-non-exact commands with semantic evidence; otherwise stop.
+Replay SQLGlot100 causally in its existing manifest/task order. Current keeps
+its unchanged frozen public prior. The pytest candidate may use semantic
+evidence only from settled earlier SQLGlot tasks and falls back to Current when
+none exists. Before reading pytest labels, require at least 100 parsed pytest
+commands, coverage across at least 20 tasks, and 20 commands whose semantic
+signature has causal earlier-task evidence but whose raw argv has no exact
+earlier-task match; otherwise stop.
 
 Latency passes only if the pytest subset and overall accuracy are both strictly
-higher than Current, changed commands are net helpful, gains span at least two
-repositories, and every non-pytest PMF is bit-identical. Report paired
+higher than Current, changed commands are net helpful, positive net gains span
+at least two tasks and two semantic signatures, and every non-pytest PMF is
+bit-identical. Report paired
 task-cluster bootstrap uncertainty without tuning on it. Only after this gate
 passes, transfer the unchanged representation to CPU, RSS, and Disk without
 target-specific parser or weight changes.
 
 ## 4. Phase C — state identifiability
 
-This phase requires a representation selected by Phase A but is independent of
-Phase B. Use existing traces first. Measure:
+This phase requires the representation selected by Phase A but is independent
+of Phase B. Use SQLGlot100 only. Measure:
 
 - how many independent tasks repeat each semantic signature;
 - whether the same signature appears under different pre-query causal states;
@@ -116,9 +120,9 @@ This is the only allowed new collection. It is not pre-authorized: after a
 smoke and resource estimate, pause for explicit approval before the expected
 one-to-three-hour run.
 
-With seed 42, select 12 real successful package sets spanning sizes 1, 2, and
-3+, excluding local, VCS, and path installs. Execute each set twice in each of
-four isolated states, for 96 real executions total:
+With seed 42, select 12 real successful package sets from SQLGlot100 spanning
+sizes 1, 2, and 3+, excluding local, VCS, and path installs. Execute each set
+twice in each of four isolated states, for 96 real executions total:
 
 1. pip absent;
 2. pip present, empty cache, requested packages not installed;
@@ -173,6 +177,7 @@ remaining-work proxy, and its ranking is not a default consumer.
 - Commit each completed phase, including a negative gate result. Do not run an
   unrelated full suite.
 
-SQLGlot100, SWE100, and SWE277 remain development diagnostics. Fresh-repository
-confirmation is deferred until the actionability gate yields a minimum useful
-effect and a task-cluster power/precision analysis justifies consuming it.
+SQLGlot100 is development-exposed. SWE100/277 are not semantic-method evidence
+in this plan. Fresh-repository confirmation is deferred until the actionability
+gate yields a minimum useful effect and a task-cluster power/precision analysis
+justifies consuming it.
