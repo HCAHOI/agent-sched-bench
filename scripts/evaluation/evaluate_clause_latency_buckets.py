@@ -42,7 +42,12 @@ from tool_resource.runtime_kb import (  # noqa: E402
     ClauseHeavyLightPrediction,
     ClauseLatencyBucketPrediction,
     ClauseResourceKB,
+    _canonical_dynamic_value,
+    _structured_argv_parts,
 )
+
+INTERACTION_ALPHA = 16.0
+INTERACTION_FEATURE_VERSION = "generic-argv-v3-role-interaction-set-v1"
 
 
 @dataclass(frozen=True)
@@ -66,6 +71,135 @@ class ScoredRow:
     shrinkage_alpha: float | None
     unavailable_reason: str | None
     mapping_evidence: str
+
+
+@dataclass(frozen=True)
+class InteractionFeatureSet:
+    """Typed non-binary clause features partitioned by normalized binary."""
+
+    bin: str
+    features: frozenset[str]
+
+
+@dataclass(frozen=True)
+class _InteractionObservation:
+    observation_id: int
+    task_id: str
+    row: Row
+    feature_set: InteractionFeatureSet
+
+
+@dataclass(frozen=True)
+class _PosetMatch:
+    exact: bool
+    observations: tuple[_InteractionObservation, ...]
+    frontier: frozenset[frozenset[str]]
+
+
+def _interaction_feature_set(
+    bin_: str,
+    argv: Sequence[str],
+    stable_subcommands: frozenset[tuple[str, str]],
+) -> InteractionFeatureSet:
+    """Build the frozen typed set without raw dynamic argument values."""
+
+    subcommand, options, positionals = _structured_argv_parts(argv)
+    if subcommand is None:
+        subcommand_feature = "subcommand:<NONE>"
+    elif (bin_, subcommand) in stable_subcommands:
+        subcommand_feature = f"subcommand:{subcommand}"
+    else:
+        subcommand_feature = f"subcommand:{_canonical_dynamic_value(subcommand)}"
+    features = {subcommand_feature}
+    for option, count in Counter(options).items():
+        features.update(
+            f"option:{option}:occurrence:{occurrence}"
+            for occurrence in range(1, count + 1)
+        )
+    for slot, positional in enumerate(positionals):
+        features.add(
+            f"boundary:{slot}:--"
+            if positional == "boundary:--"
+            else f"positional:{slot}:{positional}"
+        )
+    return InteractionFeatureSet(bin=bin_, features=frozenset(features))
+
+
+def _maximal_intersections(
+    query: frozenset[str],
+    nodes: Sequence[frozenset[str]],
+) -> frozenset[frozenset[str]]:
+    """Return the query-induced maximal non-empty feature intersections."""
+
+    intersections = {query & node for node in nodes}
+    intersections.discard(frozenset())
+    return frozenset(
+        candidate
+        for candidate in intersections
+        if not any(candidate < other for other in intersections)
+    )
+
+
+class _InteractionPosetKB:
+    """Slow exact interaction-poset evaluator; it contains no trie index."""
+
+    def __init__(
+        self,
+        stable_subcommands: frozenset[tuple[str, str]] = frozenset(),
+    ) -> None:
+        self.stable_subcommands = stable_subcommands
+        self._next_observation_id = 0
+        self._exact: dict[
+            tuple[str, tuple[str, ...]], list[_InteractionObservation]
+        ] = defaultdict(list)
+        self._nodes: dict[
+            str, dict[frozenset[str], list[_InteractionObservation]]
+        ] = defaultdict(lambda: defaultdict(list))
+
+    def observe(self, rows: Sequence[Row]) -> None:
+        for row in rows:
+            observation = _InteractionObservation(
+                observation_id=self._next_observation_id,
+                task_id=row.task_id,
+                row=row,
+                feature_set=_interaction_feature_set(
+                    row.bin,
+                    row.argv,
+                    self.stable_subcommands,
+                ),
+            )
+            self._next_observation_id += 1
+            self._exact[(row.bin, row.argv[1:])].append(observation)
+            self._nodes[row.bin][observation.feature_set.features].append(observation)
+
+    def query(self, row: Row) -> _PosetMatch:
+        exact = tuple(self._exact.get((row.bin, row.argv[1:]), ()))
+        if exact:
+            return _PosetMatch(
+                exact=True,
+                observations=exact,
+                frontier=frozenset(),
+            )
+        query = _interaction_feature_set(
+            row.bin,
+            row.argv,
+            self.stable_subcommands,
+        ).features
+        nodes = self._nodes.get(row.bin, {})
+        frontier = _maximal_intersections(query, tuple(nodes))
+        selected = tuple(
+            observation
+            for node, observations in nodes.items()
+            if query & node in frontier
+            for observation in observations
+        )
+        if len({item.observation_id for item in selected}) != len(selected):
+            raise AssertionError("poset matched one observation more than once")
+        return _PosetMatch(
+            exact=False,
+            observations=selected,
+            frontier=frontier,
+        )
 
 
 def _validate_partition(

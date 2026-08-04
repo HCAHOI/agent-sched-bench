@@ -6,10 +6,13 @@ from pathlib import Path
 import pytest
 
 from scripts.evaluation.evaluate_clause_latency_buckets import (
+    _InteractionPosetKB,
     ScoredRow,
     _argmax_bucket,
     _bounded_node_oracle_candidates,
     _exact_bucket_metrics,
+    _interaction_feature_set,
+    _maximal_intersections,
     _parser,
     _select_shrinkage_alpha,
     _telemetry_metrics,
@@ -90,6 +93,77 @@ def test_node_oracle_excludes_raw_prefix_candidates() -> None:
     )
 
     assert _bounded_node_oracle_candidates((prefix, exact)) == (exact,)
+
+
+def test_interaction_poset_features_and_maximal_frontier() -> None:
+    stable = frozenset({("runner", "deploy")})
+    reordered_left = _interaction_feature_set(
+        "runner",
+        ("runner", "deploy", "--path=/tmp/a", "--count=10", "/tmp/x", "2"),
+        stable,
+    )
+    reordered_right = _interaction_feature_set(
+        "runner",
+        ("runner", "deploy", "--count=10", "--path=/tmp/a", "/tmp/x", "2"),
+        stable,
+    )
+    positional_reordered = _interaction_feature_set(
+        "runner",
+        ("runner", "deploy", "--count=10", "--path=/tmp/a", "2", "/tmp/x"),
+        stable,
+    )
+    repeated = _interaction_feature_set(
+        "runner",
+        ("runner", "deploy", "--tag=x", "--tag=y"),
+        stable,
+    )
+
+    assert reordered_left == reordered_right
+    assert reordered_left != positional_reordered
+    assert {
+        feature for feature in repeated.features if feature.startswith("option:--tag")
+    } == {
+        "option:--tag=<ARG>:occurrence:1",
+        "option:--tag=<ARG>:occurrence:2",
+    }
+    assert _maximal_intersections(
+        frozenset({"a", "b", "c"}),
+        (
+            frozenset({"a"}),
+            frozenset({"a", "c"}),
+            frozenset({"a", "b"}),
+            frozenset({"d"}),
+        ),
+    ) == frozenset({frozenset({"a", "c"}), frozenset({"a", "b"})})
+
+    def row(task: int, *options: str) -> Row:
+        return Row(
+            task_id=f"owner__repo-{task}",
+            repo="owner__repo",
+            manifest_index=task - 1,
+            bin="runner",
+            argv=("runner", "deploy", *options),
+            latency_ms=100.0,
+            peak_cpu_cores=None,
+            sampled_peak_rss_mb=None,
+            disk_read_write_bytes_total=None,
+        )
+
+    poset = _InteractionPosetKB(stable)
+    query = row(3, "--a=x", "--b=x", "--c=x")
+    assert poset.query(query).observations == ()
+    history = [
+        row(1, "--a=x"),
+        row(1, "--a=x", "--c=x"),
+        row(2, "--a=x", "--b=x"),
+    ]
+    poset.observe(history)
+
+    match = poset.query(query)
+    assert match.exact is False
+    assert [item.row for item in match.observations] == history[1:]
+    assert len({item.observation_id for item in match.observations}) == 2
+    assert poset.query(history[1]).observations[0].row == history[1]
 
 
 def test_cli_has_no_bucket_override() -> None:
