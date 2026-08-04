@@ -31,7 +31,7 @@ All existing SQLGlot, SWE, and Terminal-Bench traces are development-exposed.
 They may diagnose this mechanism because it does not learn cross-task semantic
 similarity. They cannot support a confirmation claim.
 
-## 2. Phase 0 — observability and decision window
+## 2. Phase 0 — observability and decision window (complete: pass)
 
 Use existing traces only. Do not fit a model or add telemetry first.
 
@@ -48,13 +48,24 @@ Continue only if existing valid traces contain:
 
 - at least 100 commands across at least 20 tasks with one complete observation
   interval and at least one equally long interval still remaining; and
-- at least 20 commands across at least 10 tasks where CPU or memory could
-  physically be changed after that decision.
+- at least 20 commands across at least 10 tasks with a recorded finite CPU
+  quota or memory limit and enough time after the decision. This is only a
+  trace-side opportunity screen; Phase 1 must verify a real update.
 
 If traces contain only final aggregates, stop and report the exact missing
 fields. Do not reconstruct a prefix from final totals.
 
-## 3. Phase 1 — hindsight actionability
+Observed on the selected successful SQLGlot100 traces: all 1,916 exec calls
+have the 0.5-second CPU/network timeline; 567 calls across all 100 tasks retain
+another 0.5 seconds after a causal sample and record a finite CPU quota. The
+separate task sampler provides a fully in-command CPU/RSS/Disk interval plus an
+equally long future interval for 306 calls across all 100 tasks. The coverage
+gate passes. RSS and Disk are sampled at about 2.016 seconds and are aligned by
+timestamp, not command-exclusive. Persisted eBPF clause observations are
+attached only after the exec completes, so they are not an early signal in the
+current interface.
+
+## 3. Phase 1 — hindsight actionability (current gate)
 
 Run only if Phase 0 passes. The named consumer is a task container whose cgroup
 CPU or memory limit can be kept, raised, or lowered while a command runs.
@@ -65,6 +76,10 @@ interval and measured p95 update latency, then repeat the Phase 0 coverage gate.
 Freeze the action set and costs before inspecting which actions would have
 helped. Then use future samples only as a hindsight upper bound; they are never
 predictor input.
+
+The first step is a bounded native Docker/cgroup update smoke. If CPU or memory
+cannot be changed safely while a representative command is running, stop before
+building the hindsight policy.
 
 Continue only if the hindsight policy changes an action for at least 20
 commands across at least 10 tasks and its benefit exceeds the observation and

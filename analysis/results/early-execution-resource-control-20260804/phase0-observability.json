@@ -1,0 +1,118 @@
+{
+  "status": "development_exposed_phase0_complete",
+  "question": "Do existing traces contain causal early-execution resource samples with enough command time remaining for a later control decision?",
+  "protocol": {
+    "command_unit": "one exec tool action",
+    "command_timeline_window": "a sample with dt_s >= 0.9 * declared 0.5 s interval, available at action start + offset_s + frozen 0.050 s pad, with at least another declared interval before action end",
+    "task_sampler_window": "two consecutive task-container samples wholly inside the exec action, followed by at least one median native sample interval before action end",
+    "selection": {
+      "sqlglot100": "the 100 trace_file paths selected by results.jsonl; all tasks successful",
+      "swe100": "the 100 trace_file paths selected by results.jsonl",
+      "swe277": "all 277 attempt trace files in the development-exposed root",
+      "tb_partial": "all 10 collected attempt trace files; this is not a completed TB100 corpus"
+    },
+    "coverage_gate": {
+      "commands": 100,
+      "tasks": 20,
+      "trace_side_action_opportunities": 20,
+      "trace_side_action_tasks": 10
+    },
+    "no_future_label_or_model_read": true
+  },
+  "signals": {
+    "command_resource_timeline": {
+      "sample_interval_s": 0.5,
+      "fields": [
+        "cpu_core_s",
+        "cpu_quota_cores",
+        "cpu_opportunity_core_s",
+        "net_rx_bytes",
+        "net_tx_bytes"
+      ],
+      "scope": "whole task-container cgroup during one exec tool action"
+    },
+    "task_container_sampler": {
+      "fields": [
+        "cpu_percent",
+        "mem_usage",
+        "disk_read_bytes",
+        "disk_write_bytes",
+        "context_switches"
+      ],
+      "scope": "task-container samples aligned to exec boundaries by epoch; not command-exclusive"
+    },
+    "ebpf_clause_observation": {
+      "early_signal_available_in_persisted_interface": false,
+      "reason": "the finalized resource_observation is attached to the tool action after exec completion"
+    }
+  },
+  "corpora": {
+    "sqlglot100": {
+      "root": "traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803",
+      "selected_trace_files": 100,
+      "exec_calls": 1916,
+      "command_timeline_calls": 1916,
+      "calls_with_at_least_two_command_samples": 674,
+      "causal_0_5s_windows": 567,
+      "causal_0_5s_window_tasks": 100,
+      "finite_cpu_quota_windows": 567,
+      "finite_cpu_quota_window_tasks": 100,
+      "task_sampler_interval_s_median": 2.015622556209564,
+      "causal_task_cpu_rss_disk_windows": 306,
+      "causal_task_cpu_rss_disk_window_tasks": 100
+    },
+    "swe100": {
+      "root": "traces/swe-rebench/qwen3.7-max/offline-gated-confirm-100-v2",
+      "selected_trace_files": 100,
+      "exec_calls": 3003,
+      "command_timeline_calls": 3003,
+      "calls_with_at_least_two_command_samples": 737,
+      "causal_0_5s_windows": 554,
+      "causal_0_5s_window_tasks": 93,
+      "finite_cpu_quota_windows": 554,
+      "finite_cpu_quota_window_tasks": 93,
+      "task_sampler_interval_s_median": 2.005126476287842,
+      "causal_task_cpu_rss_disk_windows": 205,
+      "causal_task_cpu_rss_disk_window_tasks": 77
+    },
+    "swe277": {
+      "root": "traces/swe-rebench/qwen3.7-max/fresh-seed42-skip150-n200",
+      "selected_trace_files": 277,
+      "exec_calls": 8976,
+      "command_timeline_calls": 8976,
+      "calls_with_at_least_two_command_samples": 2411,
+      "causal_0_5s_windows": 1752,
+      "causal_0_5s_window_tasks": 268,
+      "finite_cpu_quota_windows": 1752,
+      "finite_cpu_quota_window_tasks": 268,
+      "task_sampler_interval_s_median": 2.007714033126831,
+      "causal_task_cpu_rss_disk_windows": 658,
+      "causal_task_cpu_rss_disk_window_tasks": 221
+    },
+    "tb_partial": {
+      "root": "traces/terminal-bench/tb100-tworing-20260728",
+      "selected_trace_files": 10,
+      "exec_calls": 51,
+      "command_timeline_calls": 51,
+      "calls_with_at_least_two_command_samples": 20,
+      "causal_0_5s_windows": 18,
+      "causal_0_5s_window_tasks": 4,
+      "finite_cpu_quota_windows": 18,
+      "finite_cpu_quota_window_tasks": 4,
+      "task_sampler_interval_s_median": 2.009553551673889,
+      "causal_task_cpu_rss_disk_windows": 7,
+      "causal_task_cpu_rss_disk_window_tasks": 3
+    }
+  },
+  "gate": {
+    "coverage_pass": true,
+    "basis": "SQLGlot100 alone exceeds both command/task coverage thresholds for the 0.5 s timeline and the trace-side finite-quota screen",
+    "actuation_verified": false,
+    "next_decision": "measure one real native Docker/cgroup CPU and memory update before defining or fitting any action policy"
+  },
+  "prior_result_boundary": {
+    "artifact": "analysis/results/cachewise-progress-counter-20260731/result.json",
+    "finding": "the same CPU/network timeline harmed CacheWise remaining-time ranking",
+    "why_not_the_current_verdict": "that experiment selected among overlapping paused sessions; it did not evaluate whether a live cgroup update can improve the running command"
+  }
+}
