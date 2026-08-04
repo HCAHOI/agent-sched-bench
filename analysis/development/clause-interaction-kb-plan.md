@@ -187,6 +187,13 @@ the same frozen source with an empty causal history and compare against the
 existing non-agent full-test phase arm; neither diagnostic selects the
 candidate.
 
+Implementation amendment before any candidate PMF or final-20 score was read:
+the first frozen source used a regular expression, while the validator had
+incorrectly required the regex source text itself to occur in five tasks. Regex
+support is instead counted by applying that frozen expression to warm-up text;
+package/test tokens inside it remain forbidden. The exact source and both prompt
+hashes stay unchanged, and replay performs no additional model call.
+
 ## 6. Held-out replication
 
 Development passed and the implementation is frozen. After collection

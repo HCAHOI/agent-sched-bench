@@ -189,7 +189,9 @@ def extract(query):
     return None
 ''',
     ):
-        with pytest.raises(ValueError, match="package/test-specific"):
+        with pytest.raises(
+            ValueError, match="package/test-specific|lacks five-task support"
+        ):
             validate_source_semantics(
                 bypass_source,
                 queries,
@@ -198,6 +200,43 @@ def extract(query):
                 empty,
                 empty,
             )
+
+    regex_source = '''
+def extract(query):
+    if re.fullmatch(r"runner\\s+install\\s+\\w+", query["current_command"]):
+        return {"rule_id": "scope", "state": "match", "evidence_event_indices": []}
+    return None
+'''
+    validate_source_semantics(
+        regex_source,
+        queries,
+        task_by_sample,
+        empty,
+        empty,
+        empty,
+    )
+    specific_regex = regex_source.replace(r"\w+", "numpy")
+    with pytest.raises(
+        ValueError, match="regex (contains|depends on) package/test"
+    ):
+        validate_source_semantics(
+            specific_regex,
+            queries,
+            task_by_sample,
+            empty,
+            empty,
+            empty,
+        )
+    obfuscated_regex = regex_source.replace(r"\w+", r"num(py)")
+    with pytest.raises(ValueError, match="depends on package/test/file"):
+        validate_source_semantics(
+            obfuscated_regex,
+            queries,
+            task_by_sample,
+            empty,
+            empty,
+            empty,
+        )
 
 
 def test_token_usage_is_required() -> None:

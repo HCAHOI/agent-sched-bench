@@ -1,0 +1,57 @@
+{
+  "catalog_sha256": "32e3d1e4eef5dc16fce55f37828cbcd0b7aa3b13af30785377d545b308d8492f",
+  "codex_version": "codex-cli 0.146.0",
+  "cost": {
+    "combined_prompt_bytes": 541465,
+    "generation": {
+      "prompt_bytes": 134062,
+      "usage": {
+        "cached_input_tokens": 0,
+        "input_tokens": 54386,
+        "output_tokens": 1464
+      },
+      "wall_seconds": 28.833385531790555
+    },
+    "selection": {
+      "prompt_bytes": 407403,
+      "usage": {
+        "cached_input_tokens": 0,
+        "input_tokens": 158871,
+        "output_tokens": 613
+      },
+      "wall_seconds": 16.594717225059867
+    }
+  },
+  "generation": {
+    "abstain": false,
+    "explanation": "Detects a full test-suite retry after a prior collection failure was followed by a successful dependency installation.",
+    "source": "def extract(query):\n    command = query.get(\"current_command\")\n    if not isinstance(command, str) or not re.fullmatch(r\"\\s*(?:python3?\\s+-m\\s+pytest|pytest)(?:\\s+-[A-Za-z0-9_-]+)*\\s*\", command):\n        return None\n\n    collection_event = None\n    for event in query.get(\"prior_events\", []):\n        excerpt = event.get(\"result_excerpt\")\n        if isinstance(excerpt, str) and event.get(\"exit_code\") not in (0, None):\n            lowered = excerpt.lower()\n            if \"error collecting\" in lowered or \"errors during collection\" in lowered:\n                if collection_event is None or event.get(\"event_index\", -1) > collection_event.get(\"event_index\", -1):\n                    collection_event = event\n\n    if collection_event is None:\n        return None\n\n    install_event = None\n    for event in query.get(\"prior_events\", []):\n        event_command = event.get(\"command\")\n        if not isinstance(event_command, str) or event.get(\"exit_code\") != 0:\n            continue\n        if event.get(\"event_index\", -1) <= collection_event.get(\"event_index\", -1):\n            continue\n        if \"pip install\" in event_command or \"apt-get install\" in event_command:\n            if install_event is None or event.get(\"event_index\", -1) > install_event.get(\"event_index\", -1):\n                install_event = event\n\n    if install_event is None:\n        return None\n\n    return {\n        \"rule_id\": \"full_suite_retry_after_collection_remediation\",\n        \"state\": \"dependencies_remediated\",\n        \"evidence_event_indices\": [\n            collection_event[\"event_index\"],\n            install_event[\"event_index\"],\n        ],\n    }"
+  },
+  "model": "gpt-5.6-sol",
+  "prompt_sha256": {
+    "generation": "0704573ce2bf6e485f27c385192b95c11052db025c67061b72ceb03066cbcb5f",
+    "selection": "51d6f12b4fb771bff974b2a213ca912015df033ef3e5c6b871c4b1a5c5947706"
+  },
+  "reasoning_effort": "medium",
+  "schema": "offline-agent-causal-extractor-v1",
+  "selection": {
+    "hypothesis": "For repository-wide test commands, predict an early dependency-gated failure mode versus a genuine full-suite execution mode from causally earlier exit status/result excerpts and successful dependency-install commands. The early-failure mode has low latency/resources, while the same command after missing dependencies are installed reaches high latency, CPU, and RSS; Current repeatedly conflates these modes.",
+    "selected_sample_ids": [
+      "S00067",
+      "S00071",
+      "S00129",
+      "S00134",
+      "S00195",
+      "S00200",
+      "S00300",
+      "S00304",
+      "S00359",
+      "S00364",
+      "S00628",
+      "S00635"
+    ],
+    "why_agent_needed": "An agent must interpret bounded earlier results to determine whether prior full-suite attempts stopped on missing imports and whether subsequent installs succeeded; command structure alone cannot distinguish the two execution modes."
+  },
+  "service_tier": "fast",
+  "source_sha256": "7a49f375773607b66005fc5af6dea06f8697dab7d7f87502eae42dc1ab1ec09b"
+}

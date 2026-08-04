@@ -644,6 +644,54 @@ def _matching_literals(source: str) -> set[str]:
     }
 
 
+def _regex_literals(source: str) -> dict[str, set[str]]:
+    methods: dict[str, set[str]] = defaultdict(set)
+    for node in ast.walk(ast.parse(source)):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "re"
+            and node.func.attr in {"fullmatch", "match", "search"}
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            methods[node.args[0].value].add(node.func.attr)
+    return methods
+
+
+def _specific_command_tokens(command: str) -> set[str]:
+    parsed = parse_command_clauses(command)
+    if parsed.get("parse_failed"):
+        return set()
+    specific: set[str] = set()
+    for clause in parsed.get("clauses", ()):
+        argv = [str(value) for value in clause.get("argv", ())]
+        if not argv:
+            continue
+        generic_indices = {0}
+        generic_indices.update(
+            index for index, value in enumerate(argv) if value.startswith("-")
+        )
+        if "-m" in argv[:-1]:
+            module_index = argv.index("-m")
+            generic_indices.add(module_index + 1)
+        else:
+            subcommand = next(
+                (index for index in range(1, len(argv)) if not argv[index].startswith("-")),
+                None,
+            )
+            if subcommand is not None:
+                generic_indices.add(subcommand)
+        specific.update(
+            value
+            for index, value in enumerate(argv)
+            if index not in generic_indices and not value.startswith("-")
+        )
+    return specific
+
+
 def validate_source_semantics(
     source: str,
     training_queries: Mapping[str, Mapping[str, Any]],
@@ -655,11 +703,20 @@ def validate_source_semantics(
     """Reject unsupported literals and history-count proxies before scoring."""
 
     material_by_task: dict[str, str] = defaultdict(str)
+    texts_by_task: dict[str, list[tuple[str, bool]]] = defaultdict(list)
     generic_tokens: set[str] = set()
     positional_tokens: set[str] = set()
     for sample_id, query in training_queries.items():
         task_id = task_by_sample[sample_id]
         material_by_task[task_id] += "\n" + json.dumps(query, sort_keys=True).lower()
+        texts_by_task[task_id].append((str(query["current_command"]), True))
+        for event in query["prior_events"]:
+            texts_by_task[task_id].extend(
+                (
+                    (str(event["command"]), True),
+                    (str(event["result_excerpt"]), False),
+                )
+            )
         for clause in query["parsed_clauses"].get("clauses", ()):
             argv = [str(value).lower() for value in clause.get("argv", ())]
             if not argv:
@@ -668,15 +725,63 @@ def validate_source_semantics(
             module_index = argv.index("-m") if "-m" in argv[:-1] else None
             if module_index is not None:
                 generic_tokens.add(argv[module_index + 1])
-                if len(argv) > module_index + 2:
-                    generic_tokens.add(argv[module_index + 2])
             elif len(argv) > 1 and not argv[1].startswith("-"):
                 generic_tokens.add(argv[1])
             generic_tokens.update(value for value in argv if value.startswith("-"))
             positional_tokens.update(value for value in argv[1:] if not value.startswith("-"))
+    regex_literals = _regex_literals(source)
     for literal in _matching_literals(source):
         lowered = literal.lower()
-        support = sum(lowered in material for material in material_by_task.values())
+        if literal in regex_literals:
+            try:
+                compiled = re.compile(literal)
+            except re.error as error:
+                raise ValueError(f"generated regex is invalid: {literal!r}") from error
+            def matches(text: str) -> bool:
+                return any(
+                    getattr(compiled, method)(text) is not None
+                    for method in regex_literals[literal]
+                )
+
+            matched = [
+                (text, is_command)
+                for texts in texts_by_task.values()
+                for text, is_command in texts
+                if matches(text)
+            ]
+            support = sum(
+                any(matches(text) for text, _is_command in texts)
+                for texts in texts_by_task.values()
+            )
+            dependent_specific_tokens = sorted(
+                {
+                    token
+                    for text, is_command in matched
+                    if is_command
+                    for token in _specific_command_tokens(text)
+                    if token in text and not matches(text.replace(token, "__ARG__"))
+                }
+            )
+            if dependent_specific_tokens:
+                raise ValueError(
+                    "generated regex depends on package/test/file arguments: "
+                    f"{dependent_specific_tokens}"
+                )
+            regex_tokens = {
+                token.lower()
+                for token in re.findall(r"[A-Za-z0-9_.-]{2,}", literal)
+            }
+            specific = sorted(
+                regex_tokens & positional_tokens - generic_tokens
+            )
+            if specific:
+                raise ValueError(
+                    f"generated regex contains package/test-specific tokens: {specific}"
+                )
+        else:
+            support = sum(
+                lowered in material for material in material_by_task.values()
+            )
         if support < MINIMUM_SUPPORT_TASKS:
             raise ValueError(
                 f"generated matching literal lacks five-task support: {literal!r}"
@@ -937,8 +1042,13 @@ def _percentile(values: Sequence[int], fraction: float) -> float:
 
 
 def _run(args: argparse.Namespace) -> None:
-    if args.out_dir.exists():
+    replay = args.replay_frozen_artifact
+    if args.out_dir.exists() and not replay:
         raise FileExistsError("output directory already exists; use a fresh path")
+    if replay and not args.out_dir.exists():
+        raise FileNotFoundError("frozen artifact directory does not exist")
+    if replay and any((args.out_dir / name).exists() for name in ("result.json", "rows.jsonl")):
+        raise FileExistsError("frozen artifact was already scored")
     task_ids, clauses, commands = load_run_rows(args.run_dir)
     if len(task_ids) != 100:
         raise ValueError("offline extractor requires the frozen 100-task development run")
@@ -953,45 +1063,94 @@ def _run(args: argparse.Namespace) -> None:
     catalog, sample_private, _task_opaque = build_catalog(
         task_ids, commands, queries, current
     )
-    args.out_dir.mkdir(parents=True)
+    args.out_dir.mkdir(parents=True, exist_ok=replay)
     catalog_path = args.out_dir / "training-catalog.json"
-    catalog_path.write_text(json.dumps(catalog, indent=2, sort_keys=True) + "\n")
+    if replay:
+        if json.loads(catalog_path.read_text()) != catalog:
+            raise ValueError("replay catalog differs from the frozen artifact")
+    else:
+        catalog_path.write_text(json.dumps(catalog, indent=2, sort_keys=True) + "\n")
 
     selection_prompt = SELECTION_PROMPT + json.dumps(catalog, separators=(",", ":"))
     if len(selection_prompt.encode()) >= MAX_COMBINED_PROMPT_BYTES:
         raise ValueError("selection prompt alone exceeds the frozen cost ceiling")
-    with tempfile.TemporaryDirectory(prefix="offline-agent-") as temporary:
-        work = Path(temporary)
-        selection, selection_cost = _codex_call(
-            selection_prompt, SELECTION_SCHEMA, work, "selection"
-        )
-        for path in work.iterdir():
-            if path.is_file():
-                (args.out_dir / path.name).write_bytes(path.read_bytes())
+    if replay:
+        artifact = json.loads((args.out_dir / "agent-artifact.json").read_text())
+        if artifact.get("schema") != SCHEMA or artifact.get("model") != MODEL:
+            raise ValueError("frozen agent artifact has the wrong schema or model")
+        selection = artifact.get("selection")
         selected = _validate_selection(selection, catalog)
         evidence = _selected_evidence(selected, catalog, sample_private, queries)
         generation_prompt = GENERATION_PROMPT + json.dumps(
             evidence, separators=(",", ":")
         )
         combined_bytes = len(selection_prompt.encode()) + len(generation_prompt.encode())
-        if combined_bytes > MAX_COMBINED_PROMPT_BYTES:
-            raise ValueError(
-                f"combined prompts exceed frozen cost ceiling: {combined_bytes}"
+        generation = artifact.get("generation")
+        if not isinstance(generation, dict) or combined_bytes > MAX_COMBINED_PROMPT_BYTES:
+            raise ValueError("frozen generation or prompt cost is invalid")
+        replay_source = generation.get("source")
+        if not isinstance(replay_source, str):
+            raise ValueError("frozen generation source is invalid")
+        expected_hashes = {
+            "selection": hashlib.sha256(selection_prompt.encode()).hexdigest(),
+            "generation": hashlib.sha256(generation_prompt.encode()).hexdigest(),
+        }
+        if (
+            artifact.get("catalog_sha256") != hashlib.sha256(_json_bytes(catalog)).hexdigest()
+            or artifact.get("prompt_sha256") != expected_hashes
+            or artifact.get("source_sha256")
+            != (
+                None
+                if not replay_source.strip()
+                else hashlib.sha256(replay_source.encode()).hexdigest()
             )
-        if selected:
-            generation, generation_cost = _codex_call(
-                generation_prompt, GENERATION_SCHEMA, work, "generation"
+            or artifact.get("cost", {}).get("combined_prompt_bytes") != combined_bytes
+        ):
+            raise ValueError("frozen artifact hashes or cost differ from replay inputs")
+        stages = ("selection", "generation") if selected else ("selection",)
+        for stage in stages:
+            _validated_usage(
+                [{"usage": artifact.get("cost", {}).get(stage, {}).get("usage")}],
+                stage,
             )
-        else:
-            generation = {
-                "abstain": True,
-                "source": "",
-                "explanation": "selection agent abstained",
-            }
-            generation_cost = {"prompt_bytes": 0, "wall_seconds": 0.0, "usage": {}}
-        for path in work.iterdir():
-            if path.is_file():
-                (args.out_dir / path.name).write_bytes(path.read_bytes())
+        feature_path = args.out_dir / "generated_feature.py"
+        expected_feature = replay_source.rstrip().encode() + b"\n"
+        if replay_source.strip() and feature_path.read_bytes() != expected_feature:
+            raise ValueError("generated feature file differs from the frozen source")
+    else:
+        with tempfile.TemporaryDirectory(prefix="offline-agent-") as temporary:
+            work = Path(temporary)
+            selection, selection_cost = _codex_call(
+                selection_prompt, SELECTION_SCHEMA, work, "selection"
+            )
+            for path in work.iterdir():
+                if path.is_file():
+                    (args.out_dir / path.name).write_bytes(path.read_bytes())
+            selected = _validate_selection(selection, catalog)
+            evidence = _selected_evidence(selected, catalog, sample_private, queries)
+            generation_prompt = GENERATION_PROMPT + json.dumps(
+                evidence, separators=(",", ":")
+            )
+            combined_bytes = len(selection_prompt.encode()) + len(generation_prompt.encode())
+            if combined_bytes > MAX_COMBINED_PROMPT_BYTES:
+                raise ValueError(
+                    f"combined prompts exceed frozen cost ceiling: {combined_bytes}"
+                )
+            if selected:
+                generation, generation_cost = _codex_call(
+                    generation_prompt, GENERATION_SCHEMA, work, "generation"
+                )
+            else:
+                generation = {
+                    "abstain": True,
+                    "source": "",
+                    "explanation": "selection agent abstained",
+                }
+                generation_cost = {"prompt_bytes": 0, "wall_seconds": 0.0, "usage": {}}
+            for path in work.iterdir():
+                if path.is_file():
+                    (args.out_dir / path.name).write_bytes(path.read_bytes())
+        artifact = None
 
     if not isinstance(generation, dict):
         raise ValueError("generation differs from the frozen schema")
@@ -1005,33 +1164,34 @@ def _run(args: argparse.Namespace) -> None:
         or (not generation["abstain"] and not source.strip())
     ):
         raise ValueError("generation differs from the frozen schema")
-    artifact = {
-        "schema": SCHEMA,
-        "model": MODEL,
-        "service_tier": "fast",
-        "reasoning_effort": "medium",
-        "codex_version": subprocess.run(
-            ["codex", "--version"], check=True, capture_output=True, text=True
-        ).stdout.strip(),
-        "catalog_sha256": hashlib.sha256(_json_bytes(catalog)).hexdigest(),
-        "prompt_sha256": {
-            "selection": hashlib.sha256(selection_prompt.encode()).hexdigest(),
-            "generation": hashlib.sha256(generation_prompt.encode()).hexdigest(),
-        },
-        "source_sha256": (
-            None if not source.strip() else hashlib.sha256(source.encode()).hexdigest()
-        ),
-        "selection": selection,
-        "generation": generation,
-        "cost": {
-            "selection": selection_cost,
-            "generation": generation_cost,
-            "combined_prompt_bytes": combined_bytes,
-        },
-    }
-    (args.out_dir / "agent-artifact.json").write_text(
-        json.dumps(artifact, indent=2, sort_keys=True) + "\n"
-    )
+    if artifact is None:
+        artifact = {
+            "schema": SCHEMA,
+            "model": MODEL,
+            "service_tier": "fast",
+            "reasoning_effort": "medium",
+            "codex_version": subprocess.run(
+                ["codex", "--version"], check=True, capture_output=True, text=True
+            ).stdout.strip(),
+            "catalog_sha256": hashlib.sha256(_json_bytes(catalog)).hexdigest(),
+            "prompt_sha256": {
+                "selection": hashlib.sha256(selection_prompt.encode()).hexdigest(),
+                "generation": hashlib.sha256(generation_prompt.encode()).hexdigest(),
+            },
+            "source_sha256": (
+                None if not source.strip() else hashlib.sha256(source.encode()).hexdigest()
+            ),
+            "selection": selection,
+            "generation": generation,
+            "cost": {
+                "selection": selection_cost,
+                "generation": generation_cost,
+                "combined_prompt_bytes": combined_bytes,
+            },
+        }
+        (args.out_dir / "agent-artifact.json").write_text(
+            json.dumps(artifact, indent=2, sort_keys=True) + "\n"
+        )
     ordered_samples = [f"{row.task_id}:{row.call_index}" for row in commands]
     ordered_queries = [queries[sample_id] for sample_id in ordered_samples]
     if generation["abstain"]:
@@ -1198,6 +1358,7 @@ def main() -> None:
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--public-telemetry", type=Path, action="append", required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument("--replay-frozen-artifact", action="store_true")
     _run(parser.parse_args())
 
 

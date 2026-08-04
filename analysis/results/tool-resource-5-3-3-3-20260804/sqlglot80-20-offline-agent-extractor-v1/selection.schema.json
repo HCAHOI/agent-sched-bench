@@ -1,0 +1,1 @@
+{"additionalProperties": false, "properties": {"hypothesis": {"type": "string"}, "selected_sample_ids": {"items": {"type": "string"}, "maxItems": 12, "type": "array"}, "why_agent_needed": {"type": "string"}}, "required": ["hypothesis", "selected_sample_ids", "why_agent_needed"], "type": "object"}
