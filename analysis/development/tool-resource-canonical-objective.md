@@ -147,9 +147,20 @@ tasks but only one semantic signature, the single-file pytest shape, below the
 required two signatures. Phase B therefore stops without changing the parser,
 tool, thresholds, or gate, and does not transfer to CPU, RSS, or Disk.
 
-State identifiability, controlled state intervention, and scheduler
-actionability remain downstream gates in `clause-interaction-kb-plan.md`. They
-cannot authorize new collection or scheduler implementation by themselves.
+### Phase C — state identifiability: complete, no-go
+
+Among 26 pip package-set signatures, ten repeated across tasks, none appeared
+under two causal pre-query states, and only one appeared under multiple
+output-derived execution modes across tasks; the frozen requirement was eight.
+Semantic-only and the selected causal-state arm remained PMF-identical at
+100/119 correct. Even a hindsight execution-mode leave-one-task-out oracle fell
+to 98/119, with 11 helpful and 13 harmful changes. State therefore lacks both
+the required contrast and an oracle improvement ceiling. The controlled state
+collection is not prepared or requested.
+
+Scheduler actionability remains a downstream gate in
+`clause-interaction-kb-plan.md`; it cannot authorize scheduler implementation
+by itself.
 
 ## 5. Development-exposure record
 

@@ -103,7 +103,7 @@ hard changes. The gain spanned four tasks but only one positive-net semantic
 signature, so the frozen two-signature gate failed. Resource transfer and any
 replacement second tool are stopped.
 
-## 4. Phase C — state identifiability
+## 4. Phase C — state identifiability (complete, no-go)
 
 This phase requires the representation selected by Phase A but is independent
 of Phase B. Use SQLGlot100 only. Measure:
@@ -121,7 +121,14 @@ least ten hard-error fixes over semantic-only prediction, and the gain is not
 concentrated in one task or package set. Otherwise record that the existing
 workload has no identifiable state contrast and stop state modeling.
 
-## 5. Phase D — paired state intervention
+Observed: 26 package-set signatures included ten repeated across tasks, zero
+with multiple causal pre-query states, and one with multiple execution modes.
+The semantic-only and selected causal-state arms were identical at 100/119;
+the hindsight execution-mode leave-one-task-out oracle scored 98/119, with 11
+helpful and 13 harmful changes. The gate failed, so state modeling and the
+paired collection stop here.
+
+## 5. Phase D — paired state intervention (not reached)
 
 This is the only allowed new collection. It is not pre-authorized: after a
 smoke and resource estimate, pause for explicit approval before the expected

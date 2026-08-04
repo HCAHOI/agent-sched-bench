@@ -1,0 +1,108 @@
+{
+  "accuracy": {
+    "causal_state_selected_arm": {
+      "accuracy": 0.8403361344537815,
+      "correct": 100,
+      "pmfs_identical_to_semantic_only": true
+    },
+    "execution_mode_loto_oracle": {
+      "accuracy": 0.8235294117647058,
+      "correct": 98
+    },
+    "semantic_only": {
+      "accuracy": 0.8403361344537815,
+      "correct": 100
+    },
+    "state_key_loto_diagnostic": {
+      "accuracy": 0.7815126050420168,
+      "correct": 93
+    }
+  },
+  "changes_vs_semantic_only": {
+    "execution_mode_loto_oracle": {
+      "changed": 25,
+      "harmful": 13,
+      "helpful": 11,
+      "net_by_signature": {
+        "[[\"python\",\"python-module\",[\"--break-system-packages\"],[\"duckdb\",\"pytz\"]]]": -2,
+        "[[\"python\",\"python-module\",[],[\"duckdb\",\"pytz\"]]]": 1,
+        "[[\"python\",\"python-module\",[],[\"numpy\",\"pandas\"]]]": 1,
+        "[[\"python\",\"python-module\",[],[\"pytest\"]]]": 1,
+        "[[\"python3\",\"python-module\",[\"--break-system-packages\"],[\"duckdb\",\"pytz\"]]]": -6,
+        "[[\"python3\",\"python-module\",[\"--break-system-packages\"],[\"duckdb\"]]]": 0,
+        "[[\"python3\",\"python-module\",[\"--break-system-packages\"],[\"numpy\",\"pandas\"]]]": 1,
+        "[[\"python3\",\"python-module\",[\"--break-system-packages\"],[\"pandas\"]]]": 2
+      },
+      "net_by_task": {
+        "tobymao__sqlglot-3792": 1,
+        "tobymao__sqlglot-3798": -1,
+        "tobymao__sqlglot-3799": 1,
+        "tobymao__sqlglot-3839": 1,
+        "tobymao__sqlglot-3848": -1,
+        "tobymao__sqlglot-3885": -1,
+        "tobymao__sqlglot-3937": -1,
+        "tobymao__sqlglot-3971": -1,
+        "tobymao__sqlglot-4040": 1,
+        "tobymao__sqlglot-4051": 1,
+        "tobymao__sqlglot-4093": 1,
+        "tobymao__sqlglot-4110": -1,
+        "tobymao__sqlglot-4165": 1,
+        "tobymao__sqlglot-4197": 1,
+        "tobymao__sqlglot-4208": 1,
+        "tobymao__sqlglot-4218": -1,
+        "tobymao__sqlglot-4287": 1,
+        "tobymao__sqlglot-4293": -1,
+        "tobymao__sqlglot-4325": -1,
+        "tobymao__sqlglot-4415": 1,
+        "tobymao__sqlglot-4493": -1,
+        "tobymao__sqlglot-4516": -1,
+        "tobymao__sqlglot-4546": -1,
+        "tobymao__sqlglot-4987": -1
+      },
+      "net_helpful_minus_harmful": -2,
+      "neutral": 1,
+      "positive_net_signature_count": 5,
+      "positive_net_task_count": 11
+    },
+    "state_key_loto_diagnostic": {
+      "changed": 21,
+      "harmful": 13,
+      "helpful": 6,
+      "net_helpful_minus_harmful": -7,
+      "neutral": 2,
+      "positive_net_signature_count": 5,
+      "positive_net_task_count": 6
+    }
+  },
+  "claim_bearing": false,
+  "counts": {
+    "pip_commands": 119,
+    "semantic_signatures": 26,
+    "signatures_in_at_least_two_tasks": 10,
+    "signatures_with_cross_state_modal_bucket_transition": 0,
+    "signatures_with_multiple_causal_states": 0,
+    "signatures_with_multiple_execution_modes_across_tasks": 1
+  },
+  "gate": {
+    "pass": false,
+    "requires_multi_mode_package_sets_at_least": 8,
+    "requires_oracle_net_hard_error_fixes_at_least": 10,
+    "requires_positive_net_signatures_at_least": 2,
+    "requires_positive_net_tasks_at_least": 2
+  },
+  "inputs": {
+    "latency_result": "analysis/results/tool-resource-clause-interactions-20260804/pip-carrier-audit-latency.json",
+    "row_sidecar": "analysis/results/tool-resource-clause-interactions-20260804/pip-carrier-audit-latency-rows.jsonl",
+    "target_corpus": "SQLGlot100"
+  },
+  "objective": "pip_state_identifiability_on_sqlglot100",
+  "protocol": {
+    "causal_state_key": "pre-query pip availability plus remaining requested package names",
+    "evaluation_unit": "pip-containing eligible exec command",
+    "execution_mode": "current command output-derived mode; hindsight analysis only",
+    "hard_prediction": "other-task majority latency bucket; ties choose shorter",
+    "loto_evidence": "same semantic key and state or mode from other tasks only; semantic-only fallback",
+    "semantic_key": "interpreter plus invocation plus flags plus normalized package-name set for every pip clause"
+  },
+  "status": "development_exposed_state_identifiability_no_go"
+}
