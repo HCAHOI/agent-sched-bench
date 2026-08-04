@@ -65,26 +65,40 @@ timestamp, not command-exclusive. Persisted eBPF clause observations are
 attached only after the exec completes, so they are not an early signal in the
 current interface.
 
-## 3. Phase 1 — hindsight actionability (current gate)
+## 3. Phase 1 — hindsight actionability (mechanism pass; utility open)
 
-Run only if Phase 0 passes. The named consumer is a task container whose cgroup
-CPU or memory limit can be kept, raised, or lowered while a command runs.
+Run only if Phase 0 passes. The candidate action is CPU allocation among task
+containers sharing the measured eight-core host. A cgroup limit by itself is
+not a consumer: the comparison must name the shared CPU-budget policy whose
+decision and cost change.
 
 First measure the supported limits, update latency, and update cost on the real
-runtime. Freeze the final decision time as the greater of the native sample
-interval and measured p95 update latency, then repeat the Phase 0 coverage gate.
-Freeze the action set and costs before inspecting which actions would have
-helped. Then use future samples only as a hindsight upper bound; they are never
-predictor input.
+runtime. Sampling and updating are serial, so the earliest effective action is
+the sample endpoint plus the 50 ms availability pad plus measured p95 update
+latency. Repeat the Phase 0 coverage gate at that time. Freeze the CPU action
+set and costs before inspecting which actions would have helped. Then use
+future samples only as a hindsight upper bound; they are never predictor input.
 
-The first step is a bounded native Docker/cgroup update smoke. If CPU or memory
-cannot be changed safely while a representative command is running, stop before
-building the hindsight policy.
+The native smoke passed on the collection host. Twenty alternating CPU updates
+between one and two cores had p95 91.3 ms; twenty memory updates between 256 and
+384 MiB had p95 99.7 ms. The CPU-bound container remained live and was not OOM
+killed. After charging the CPU p95, 548 SQLGlot exec calls across all 100 tasks
+still retain one complete 0.5-second future interval, so coverage remains a
+pass. This establishes mechanism availability, not benefit.
+
+Memory control stops here. `memory.max` is a cap rather than a reservation, and
+the existing cgroup experiment shows that lowering it below current use can
+reclaim and then OOM-kill the workload. A future memory experiment would need a
+separate `memory.high` or reserving-admission protocol.
+
+The current replay consumes the CPU/network timeline only to preserve
+source-equivalent timeout progress; it does not implement a shared CPU-budget
+policy. Do not infer benefit from lower quota-time. First name and freeze a real
+consumer, baseline, and false/missed-action costs; otherwise Phase 1 stops.
 
 Continue only if the hindsight policy changes an action for at least 20
 commands across at least 10 tasks and its benefit exceeds the observation and
-resource-update costs. Report CPU and memory separately even if the final
-controller changes them together.
+resource-update costs. CPU is the only target in this route.
 
 ## 4. Phase 2 — early-prefix prediction
 

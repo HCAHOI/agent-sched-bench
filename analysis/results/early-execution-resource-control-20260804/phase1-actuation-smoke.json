@@ -1,0 +1,101 @@
+{
+  "status": "development_exposed_mechanism_smoke",
+  "question": "Can the actual Docker/cgroup-v2 runtime update CPU and memory limits while a representative command is running, and how long does an update take?",
+  "host": {
+    "docker_client": "29.6.1",
+    "docker_server": "29.6.1",
+    "cpus": 8,
+    "memory_bytes": 16759181312,
+    "cgroup_version": 2,
+    "cgroup_driver": "systemd"
+  },
+  "workload": {
+    "image": "python:3.13-slim-bookworm",
+    "command": "45-second CPU loop holding a 64 MiB bytearray",
+    "initial_cpu_cores": 1,
+    "initial_memory_bytes": 268435456,
+    "initial_memory_swap_bytes": 268435456
+  },
+  "protocol": {
+    "cpu_updates": "20 alternating docker update calls between 2 and 1 cores",
+    "memory_updates": "20 alternating docker update calls between 384 and 256 MiB with equal memory-swap",
+    "latency_clock": "host time.perf_counter_ns around each synchronous docker update",
+    "future_work_labels_read": false
+  },
+  "cpu_update_ms": {
+    "median": 69.107893,
+    "p95": 91.32007875000001,
+    "max": 94.920783,
+    "samples": [
+      94.920783,
+      67.652995,
+      66.050854,
+      80.117748,
+      57.616384,
+      60.852462,
+      61.275556,
+      55.554314,
+      76.472498,
+      79.78781,
+      91.130568,
+      85.703276,
+      70.562791,
+      62.90001,
+      90.768739,
+      55.02806,
+      67.247989,
+      77.164172,
+      78.833055,
+      56.135465
+    ]
+  },
+  "memory_update_ms": {
+    "median": 71.404329,
+    "p95": 99.6857278,
+    "max": 104.55987,
+    "samples": [
+      59.575642,
+      66.908918,
+      74.746875,
+      72.690454,
+      66.103297,
+      55.664296,
+      80.280682,
+      104.55987,
+      99.429194,
+      91.737006,
+      91.796059,
+      75.428112,
+      74.41148,
+      68.445174,
+      63.972399,
+      55.99274,
+      57.60153,
+      70.118204,
+      50.310541,
+      77.869477
+    ]
+  },
+  "postconditions": {
+    "container_running_after_updates": true,
+    "oom_killed": false,
+    "final_cpu_max": "100000 100000",
+    "final_memory_max_bytes": 268435456,
+    "temporary_container_removed": true
+  },
+  "decision": {
+    "mechanism_available": true,
+    "cpu_effective_action_time_s": 0.64132007875,
+    "memory_effective_action_time_s": 2.165308284009564,
+    "sqlglot100_post_actuation_cpu_windows": 548,
+    "sqlglot100_post_actuation_cpu_window_tasks": 100,
+    "memory_route": "STOP: memory.max is not a reservation and prior downward-resize evidence includes reclaim/OOM",
+    "cpu_route": "Do not build a predictor until a named shared eight-core consumer and action cost are frozen"
+  },
+  "evidence_boundary": {
+    "existing_timeout_replay": "src/trace_collect/openclaw_tools.py uses resource_timeline for source-equivalent timeout progress, not dynamic CPU allocation",
+    "memory_limit_evidence": "analysis/results/intra-tool-call-heterogeneity-20260729/CORRECTION.json",
+    "this_smoke_proves": "limit updates are physically available and under 0.1 s at p95 on this host",
+    "this_smoke_does_not_prove": "that changing a cap frees reserved resources, improves latency, or benefits a scheduler"
+  }
+}

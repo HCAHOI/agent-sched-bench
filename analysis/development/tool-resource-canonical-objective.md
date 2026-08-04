@@ -186,6 +186,10 @@ ceiling, not a remaining-work signal.
 - Earlier SWE100/277 trie, generic-argv, resource, and concurrency diagnostics
   are development-exposed negative evidence. They motivate controlling
   repository relatedness but do not evaluate the SQLGlot semantic candidate.
+- Before any early-execution future-work label was inspected, the decision-time
+  formula was corrected from `max(sample interval, update latency)` to their
+  serial sum plus the frozen 50 ms sample-availability pad. The live update
+  latencies were visible when this correction was recorded.
 - The first SQLGlot command-level replay made with an older public aggregate
   retained invalid downstream-pipeline evidence. It remains explicitly named
   `*.pre-public-structure-fix.invalid`; only the corrected artifact is
