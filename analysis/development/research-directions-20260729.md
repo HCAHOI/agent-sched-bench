@@ -380,6 +380,69 @@ to rescue this result. A future study of history depth or hierarchical pooling
 would be a new, openly post-result hypothesis and would require a separately
 frozen method plus independent tasks; it cannot be tuned on these 199 events.
 
+## Frozen SQLGlot factorial KV mechanism diagnostic
+
+Frozen 2026-08-04 after the SQLGlot48 natural-c2 and synthetic-c32 C100 results
+were visible, but before any KV-capacity simulation result on SQLGlot100 was
+computed. This is an openly post-result, development-only mechanism diagnostic.
+It asks how much of CacheWise's paper result remains when prefix-aware scheduling
+and C100 eviction act together on our same-repository traces. It cannot reproduce
+live vLLM throughput or session completion time.
+
+The paper compares two independent mechanisms: prefix-aware scheduling chooses
+the queued request needing the fewest additional resident blocks, while C100
+replaces LRU with whole-tool-argument TF-IDF/KMeans conditional-remaining-time
+eviction. At load 40, the paper reports a 1.85--2.66x session-time improvement
+from prefix scheduling; predictive eviction adds about 1.7--2x over prefix-aware
+baselines; the complete system reduces evicted blocks by 2--2.6x. Those paper
+numbers and the positive SQLGlot48 C100 result are visible motivation, not gates
+selected from the new simulation.
+
+Protocol:
+
+- Reuse the exact 24 fit tasks in
+  `configs/corpora/swe-sqlglot-48-gpt56-ebpf.json`; no evaluation task updates
+  C100. Evaluation candidates are the other 76 successful canonical traces in
+  the packaged SQLGlot100 `results.jsonl`.
+- For seeds 0--31, permute sorted evaluation task IDs with NumPy
+  `default_rng(seed)`, select the first 40, and launch their first requests at
+  time zero in that order. Preserve each selected trace's LLM service durations,
+  prompt/completion token counts, and post-LLM tool-gap durations. A session's
+  next request becomes eligible only after its recorded gap completes.
+- Model 16-token KV blocks and a fixed capacity of 800,000 tokens (50,000
+  blocks). This is a paper-scale approximation, not a measured vLLM block count:
+  Qwen2.5-Coder-32B BF16 has 64 layers, 8 KV heads, and head dimension 128, or
+  262,144 KV bytes/token; 800,000 tokens plus roughly 64 GB of weights consume
+  about 274 GB of the paper's combined 282 GB HBM, leaving about 8 GB for other
+  runtime state. Do not tune capacity after reading the result.
+- Reusable prefix is the complete-block overlap between the preceding sequence
+  and current prompt. Capacity eviction removes suffix blocks from one inactive
+  session at a time. A completed session releases its blocks. Recorded LLM
+  service time is fixed across arms; cache misses do not feed back into service
+  duration, so simulated latency is descriptive only.
+- Evaluate exactly four arms on identical sessions: `fcfs_lru`, `prefix_lru`,
+  `fcfs_c100`, and `prefix_c100`. FCFS uses initial/causal arrival order. Prefix
+  scheduling selects the queued request requiring the fewest additional blocks.
+  LRU evicts the least-recently accessed resident session. C100 reuses the
+  existing 5,000-term TF-IDF, KMeans `C=100`, conditional-survivor mean, and
+  tool/global fallback without retuning.
+- Primary metrics are evicted blocks and eviction-induced reusable-prefix miss
+  blocks. Report the mean paired effects of prefix alone (`prefix_lru -
+  fcfs_lru`), C100 alone (`fcfs_c100 - fcfs_lru`), incremental C100 under prefix
+  scheduling (`prefix_c100 - prefix_lru`), and the full baseline-to-combined
+  eviction ratio. Use a 10,000-draw paired seed bootstrap only to show
+  conditional schedule/cohort uncertainty.
+- Classify the result as paper-sized only if both mechanisms reduce mean evicted
+  blocks in their matching comparisons and `fcfs_lru / prefix_c100 >= 2.0`, the
+  paper's lower reported eviction reduction. A smaller effect is a measured gap,
+  not permission to change capacity, load, cluster count, split, or simulator.
+
+Any positive result justifies at most one separately approved live-GPU smoke.
+The simulator omits continuous batching, chunked prefill, transfer contention,
+cache-miss feedback, and exact vLLM block allocation. Therefore its latency
+output cannot be compared numerically with the paper's 2.7--3.5x end-to-end
+claim; the defensible comparison is block eviction under the frozen model.
+
 ## Corrections retained from the prior loop
 
 The earlier investigation self-corrected a transcription error (`1947` for
