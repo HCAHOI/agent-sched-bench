@@ -142,11 +142,13 @@ blind-state held-out primary in Section 6.
 
 The first 80 development tasks are exposed through a generic catalog. Every
 eligible command has opaque task and sample IDs, command text, parsed clauses,
-the four labels, and Current's four causal predictions and PMFs. The catalog
+the four labels, and Current's four causal hard predictions. PMFs are omitted
+because they do not change which hard residuals the discovery step can target
+and would dominate its context. The catalog
 builder contains no executable, option, package, test, or result-text allowlist.
-The first agent call sees the complete catalog and may select at most 24 samples
+The first agent call sees the complete catalog and may select at most 12 samples
 from at most 12 tasks for one hypothesis, or abstain. The second call sees only
-those selected rows plus their de-duplicated causal task prefixes: earlier
+those selected rows plus their causal task prefixes: earlier
 command text, exit status, and a first/last result excerpt bounded to 500 total
 characters per event. Both calls use Codex `gpt-5.6-sol`, requested fast tier,
 medium reasoning, no tools, and separate ephemeral contexts. Their combined
