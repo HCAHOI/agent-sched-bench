@@ -8,6 +8,7 @@ from tool_resource_eval.cachewise_kv_factorial import (
     Session,
     Turn,
     _choose_session,
+    _bootstrap_ratio,
     _make_room,
     _paper_sized,
     simulate,
@@ -183,3 +184,15 @@ def test_partial_completion_requires_a_physical_block(monkeypatch) -> None:
 def test_paper_sized_gate_requires_c100_alone_to_help() -> None:
     assert _paper_sized(-1.0, -1.0, -1.0, 2.0) is True
     assert _paper_sized(-1.0, 1.0, -1.0, 2.0) is False
+
+
+def test_ratio_bootstraps_paired_means_when_one_seed_has_zero_evictions(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(factorial, "BOOTSTRAP_DRAWS", 100)
+
+    result = _bootstrap_ratio([2.0, 4.0], [0.0, 2.0])
+
+    assert result["ratio_of_means"] == 3.0
+    assert result["zero_denominator_draws"] > 0
+    assert result["ci95_paired_seed_bootstrap"][1] is None

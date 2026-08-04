@@ -401,6 +401,39 @@ def _bootstrap(values: list[float]) -> dict[str, Any]:
     }
 
 
+def _bootstrap_ratio(
+    numerators: list[float], denominators: list[float]
+) -> dict[str, Any]:
+    numerator = np.asarray(numerators, dtype=float)
+    denominator = np.asarray(denominators, dtype=float)
+    rng = np.random.default_rng(0)
+    indices = rng.integers(0, len(numerator), (BOOTSTRAP_DRAWS, len(numerator)))
+    numerator_means = numerator[indices].mean(axis=1)
+    denominator_means = denominator[indices].mean(axis=1)
+    zero_draws = int(np.count_nonzero(denominator_means == 0))
+    ratios = np.divide(
+        numerator_means,
+        denominator_means,
+        out=np.full_like(numerator_means, np.inf),
+        where=denominator_means != 0,
+    )
+    low, high = np.quantile(ratios, [0.025, 0.975], method="nearest")
+    numerator_mean = float(numerator.mean())
+    denominator_mean = float(denominator.mean())
+    return {
+        "ratio_of_means": (
+            numerator_mean / denominator_mean if denominator_mean else None
+        ),
+        "ratio_is_infinite": denominator_mean == 0 and numerator_mean > 0,
+        "ci95_paired_seed_bootstrap": [
+            float(low) if math.isfinite(low) else None,
+            float(high) if math.isfinite(high) else None,
+        ],
+        "zero_denominator_draws": zero_draws,
+        "draws": BOOTSTRAP_DRAWS,
+    }
+
+
 def run(fit_root: Path, eval_root: Path, corpus_config: Path) -> dict[str, Any]:
     config = json.loads(corpus_config.read_text(encoding="utf-8"))
     fit_ids = list(config["fit"]["task_ids"])
@@ -475,14 +508,17 @@ def run(fit_root: Path, eval_root: Path, corpus_config: Path) -> dict[str, Any]:
     prefix = comparison("prefix_lru", "fcfs_lru")
     c100 = comparison("fcfs_c100", "fcfs_lru")
     c100_under_prefix = comparison("prefix_c100", "prefix_lru")
-    ratios = [
-        float(row["arms"]["fcfs_lru"]["evicted_blocks"])
-        / float(row["arms"]["prefix_c100"]["evicted_blocks"])
-        for row in schedule_rows
-    ]
+    ratio = _bootstrap_ratio(
+        [float(row["arms"]["fcfs_lru"]["evicted_blocks"]) for row in schedule_rows],
+        [
+            float(row["arms"]["prefix_c100"]["evicted_blocks"])
+            for row in schedule_rows
+        ],
+    )
     aggregate_ratio = (
-        means["fcfs_lru"]["evicted_blocks"]
-        / means["prefix_c100"]["evicted_blocks"]
+        math.inf
+        if ratio["ratio_is_infinite"]
+        else float(ratio["ratio_of_means"] or 0.0)
     )
     paper_sized = _paper_sized(
         prefix["mean"],
@@ -530,10 +566,17 @@ def run(fit_root: Path, eval_root: Path, corpus_config: Path) -> dict[str, Any]:
             "c100_alone": c100,
             "c100_incremental_under_prefix": c100_under_prefix,
             "full_baseline_to_combined_ratio": {
-                "ratio_of_mean_evicted_blocks": aggregate_ratio,
-                **_bootstrap(ratios),
+                "ratio_of_mean_evicted_blocks": ratio["ratio_of_means"],
+                "ratio_is_infinite": ratio["ratio_is_infinite"],
+                "ci95_paired_seed_bootstrap": ratio[
+                    "ci95_paired_seed_bootstrap"
+                ],
+                "zero_denominator_draws": ratio["zero_denominator_draws"],
+                "draws": ratio["draws"],
                 "paper_lower_bound": 2.0,
-                "gap_to_paper_lower_bound": max(0.0, 2.0 - aggregate_ratio),
+                "gap_to_paper_lower_bound": (
+                    0.0 if math.isinf(aggregate_ratio) else max(0.0, 2.0 - aggregate_ratio)
+                ),
             },
         },
         "paper_sized_effect": paper_sized,
