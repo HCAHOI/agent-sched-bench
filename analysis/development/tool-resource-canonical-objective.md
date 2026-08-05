@@ -236,12 +236,13 @@ canonical CPU is clause-owned eBPF lineage. Their buckets are not nested, so
 the cgroup prefix is not a valid lower bound and cannot be repaired by a
 threshold or favorable subset.
 
-The next frozen development component discards the cgroup value and retains
-only the causal survival event at the same decision time. It fits Disk PMFs on
-the 80 committed fit tasks by pre-execution Current Disk class, combines them
-with exact-command Disk evidence, and retains elapsed-time latency plus the
-semantic CPU/RSS arm. It can establish only a Disk component; CPU remains below
-the five-point target and final remains closed regardless of this result.
+The next frozen development component discarded the cgroup value and retained
+only the causal survival event at the same decision time. Combining this with
+exact-command Disk evidence improved Disk by 3.175 points: 56 helpful and 24
+harmful changes, with severe underprediction falling to zero. It nevertheless
+missed the frozen five-point gate. The same arm retained elapsed-time latency at
++5.843 points, semantic CPU at +4.167, and semantic RSS at +6.250. This closes
+survival calibration without opening final.
 
 Physical Disk prediction requires evidence about pre-command cache
 residency or equivalent environment state. The controlled file-footprint by

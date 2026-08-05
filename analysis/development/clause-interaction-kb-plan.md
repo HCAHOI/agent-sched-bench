@@ -14,8 +14,9 @@ Adding pip package-set overlap also returned component NO-GO: RSS passed the
 five-point gate, but latency and CPU did not. The next frozen component test
 added a parameter-free early-execution lower-bound correction and returned
 NO-GO: elapsed time was valid and useful, but cgroup CPU was not a lower bound
-for the canonical clause-owned CPU target. The next frozen component isolates
-survival-conditioned Disk calibration. Final remains closed.
+for the canonical clause-owned CPU target. Survival-conditioned Disk calibration
+then improved Disk by 3.175 points, below its frozen five-point gate. Final
+remains closed.
 
 This record extends `tool-resource-canonical-objective.md`, which remains the
 authority for targets, bucket boundaries, causal visibility, eligible command
@@ -961,3 +962,34 @@ CPU is intentionally not claimed: Section 9 remains at +4.167 points. Even a
 GO leaves CPU unresolved and cannot open final. A miss closes this exact
 survival calibration without adding command families, thresholds, or timing
 choices. The replay uses retained traces and is expected below ten seconds.
+
+### 11.4 Result and decision
+
+The frozen replay returned component NO-GO on the same 1,044 validation rows:
+
+| Target | Current | Candidate | Delta |
+|---|---:|---:|---:|
+| Latency | 74.904% | 80.747% | +5.843 pp |
+| CPU | 82.887% | 87.054% | +4.167 pp |
+| RSS | 80.978% | 87.228% | +6.250 pp |
+| Disk | 82.044% | 85.218% | +3.175 pp |
+
+At the frozen decision time, 416 validation commands were still running. The
+Disk calibration changed 84 hard predictions: 56 helpful, 24 harmful, and four
+neutral, with helpful changes across 32 tasks. Severe Disk underprediction fell
+from 0.099% to zero, but the gain missed the five-point gate. The elapsed lower
+bound changed 23 latency predictions without a final-label violation. CPU and
+RSS were byte-identical to the Section 9 semantic arm.
+
+Observed: survival separates some physical I/O modes without a command-family
+rule, but one bit of execution state is insufficient. Inference: further static
+KB structure or survival thresholds are not the missing signal. Disk now needs
+a pre-command physical state such as file/page-cache residency; CPU needs an
+early prefix measured in the same clause-owned eBPF scope as its final label.
+Neither signal exists in the retained SQLGlot traces, so this component closes
+without opening final.
+
+Artifacts:
+
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-survival-disk-v1/result.json`
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-survival-disk-v1/rows.jsonl`
