@@ -257,8 +257,11 @@ unchanged from survival.
 Physical Disk prediction requires evidence about pre-command cache
 residency or equivalent environment state. The controlled file-footprint by
 page-residency mechanism test on 12 already-exposed development tasks remains
-frozen in the same record. No completed candidate authorizes runtime integration,
-the long residency run, global cache eviction, or final-partition access.
+frozen in the same record. The same runs will retain the already-computed
+clause-owned 500 ms CPU profile and test a same-scope early CPU lower bound;
+this replaces the invalid cgroup-wide prefix without adding another execution.
+No completed candidate authorizes runtime integration, the long physical-state
+run, global cache eviction, or final-partition access.
 
 The fixed full-command targets in Section 1 remain the static-predictor
 baseline. Their first causal 80-task warm-up / 20-task test replay contains 349

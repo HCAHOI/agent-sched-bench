@@ -1053,3 +1053,35 @@ Artifacts:
 
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-component-composition-v1/result.json`
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-component-composition-v1/rows.jsonl`
+
+## 13. Frozen instrumentation for the physical-state experiment
+
+The retained traces cannot answer the remaining questions: normalized clause
+artifacts omit the eBPF CPU window profile, and no command-specific page-cache
+residency was measured. A fit-only four-fold diagnostic also closes a cheaper
+calibration substitute. Reweighting Current PMFs by the survival likelihood
+changed CPU by -3.543 points and Disk by +0.846 points; using exact-command PMFs
+as the base changed CPU by -2.514 and Disk by the same +0.846 points.
+
+Before any new execution, retain the already-computed clause-owned CPU profile
+in normalized telemetry. Each row is one canonical 500 ms aligned window and
+contains its start/end offset from the merged clause start, observed span,
+summed owned-lineage CPU nanoseconds, and quota-clipped cores. This is derived
+from the same profile that produces the final canonical CPU label. It adds no
+probe, KB field, prediction, or runtime query and must not change existing
+aggregate observations.
+
+In the Section 5.4 twelve-task cold/warm experiment, simulate an early CPU
+decision at the first profile row with at least 400 ms observed span, plus the
+same 0.050 s availability pad and 0.09132007875 s actuation p95. Raise the
+Section 12 CPU class only to the maximum profile class whose window ended by
+that decision. This mechanism check passes only if at least ten tasks have a
+valid prefix, no prefix class exceeds its final canonical class, and it makes
+at least three helpful CPU changes across three tasks with at most one harmful
+change. The task selection and Disk gates remain exactly Section 5.4.
+
+Passing the CPU or Disk mechanism gate is not a five-point accuracy result and
+does not open final. The full 12-task run remains unauthorized, requires 72
+container starts, is estimated at 1--3 hours and up to roughly 60 GB, and must
+wait for the active PennyLane collection. The instrumentation can be implemented
+and smoke-tested without starting a task container.
