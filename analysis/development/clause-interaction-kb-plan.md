@@ -3,11 +3,10 @@
 **Effective:** 2026-08-05
 
 **Status:** the offline-agent and deterministic task-phase directions are
-closed. The 50-task validation partition is development-exposed; the 50-task
-final partition remains unread and unauthorized. The next development step is
-a parameter-free, causal within-task telemetry overlay for latency, CPU, and
-RSS. Disk has a separately frozen cache-state mechanism test that is not
-authorized to run.
+closed. The parameter-free causal within-task telemetry overlay also returned
+NO-GO. The 50-task validation partition is development-exposed; the 50-task
+final partition remains unread and unauthorized. Disk has a separately frozen
+cache-state mechanism test that is not authorized to run.
 
 This record extends `tool-resource-canonical-objective.md`, which remains the
 authority for targets, bucket boundaries, causal visibility, eligible command
@@ -292,6 +291,34 @@ development test tasks:
 A miss stops this exact overlay without adding a support threshold, changing
 the hierarchy, or selecting a subset. The result remains development-only and
 cannot open the final 50 tasks.
+
+The fixed replay returned NO-GO on 349 commands:
+
+| Target | Current | Overlay | Delta |
+|---|---:|---:|---:|
+| Latency | 77.937% | 78.797% | +0.860 pp |
+| CPU | 90.476% | 90.952% | +0.476 pp |
+| RSS | 91.561% | 91.983% | +0.422 pp |
+| Disk | 81.375% | 81.375% | bit-identical |
+
+Across latency, CPU, and RSS, 11 changed target predictions were helpful and
+six harmful, with helpful changes in five tasks. All three
+severe-underprediction rates increased. The dominant failure was not a missing
+support threshold: exact-command observations themselves alternated between
+resource modes. In `tobymao__sqlglot-4519`, one `python3 -m pytest` call was
+correctly lowered from the highest latency/CPU/RSS buckets, but that low
+observation then lowered the next identical command, whose truth returned to
+the highest buckets. The overlay therefore lagged a changing execution state
+by one command.
+
+This closes direct last-observation persistence. A later method must condition
+on the requested work and recent state jointly; it cannot merely publish
+current-task telemetry into the existing hierarchy.
+
+Artifacts:
+
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot80-20-causal-call-overlay-v1/result.json`
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot80-20-causal-call-overlay-v1/rows.jsonl`
 
 ### 5.4 Frozen Disk mechanism test: file footprint x residency
 

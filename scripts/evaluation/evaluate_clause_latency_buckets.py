@@ -78,6 +78,7 @@ PIP_SEMANTIC_FEATURE_VERSION = "pip-install-semantic-jaccard-v1"
 PIP_CANONICAL_FEATURE_VERSION = "pip-install-canonical-exact-v1"
 PYTEST_SEMANTIC_FEATURE_VERSION = "pytest-work-shape-exact-v1"
 FULL_TEST_PHASE_FEATURE_VERSION = "full-test-third-or-later-v1"
+CAUSAL_CALL_OVERLAY_VERSION = "causal-call-overlay-v1"
 FULL_TEST_AGENT_STATE_VERSION = "full-test-agent-state-v1"
 FULL_TEST_AGENT_MODEL = "gpt-5.6-sol"
 FULL_TEST_AGENT_STATES = frozenset(
@@ -2808,6 +2809,252 @@ def evaluate_prequential_commands(
         },
     }
     return result, sidecar
+
+
+def evaluate_causal_call_overlay(
+    public_rows: Sequence[Row],
+    task_ids: Sequence[str],
+    clause_rows: Sequence[Row],
+    command_rows: Sequence[CommandRow],
+    provenance: Mapping[str, Any],
+    *,
+    warmup_task_count: int,
+    expected_split: tuple[int, int] = (100, 80),
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Score an ephemeral KB that observes earlier calls in the same task."""
+
+    if (len(task_ids), warmup_task_count) != expected_split:
+        raise ValueError(
+            "causal call overlay split differs from the frozen protocol: "
+            f"{(len(task_ids), warmup_task_count)} != {expected_split}"
+        )
+    baseline, baseline_rows = evaluate_prequential_commands(
+        public_rows,
+        task_ids,
+        clause_rows,
+        command_rows,
+        provenance,
+        warmup_task_count=warmup_task_count,
+    )
+    commands_by_task: dict[str, list[CommandRow]] = defaultdict(list)
+    clauses_by_task: dict[str, list[Row]] = defaultdict(list)
+    for row in command_rows:
+        commands_by_task[row.task_id].append(row)
+    for row in clause_rows:
+        clauses_by_task[row.task_id].append(row)
+
+    public_evidence = [
+        row
+        for row in public_rows
+        if row.structure_known and row.pipeline_position <= 0
+    ]
+    overlay = ClauseResourceKB.fit_public(
+        row.observation(0.0, 1.0) for row in public_evidence
+    )
+    for ordinal, task_id in enumerate(task_ids[:warmup_task_count]):
+        query_ts = float(ordinal * 2 + 3)
+        for row in clauses_by_task[task_id]:
+            overlay.observe_completed_clause(row.observation(query_ts, query_ts + 0.5))
+
+    baseline_by_sample = {str(row["sample_id"]): row for row in baseline_rows}
+    if len(baseline_by_sample) != len(baseline_rows):
+        raise AssertionError("causal call overlay baseline has duplicate command rows")
+    targets = ("latency", "peak_cpu_cores", "sampled_peak_rss_mb")
+    disk = "disk_read_write_bytes_total"
+    rows: list[dict[str, Any]] = []
+    clock = float(warmup_task_count * 2 + 3)
+
+    for task_id in task_ids[warmup_task_count:]:
+        for call_offset, command in enumerate(commands_by_task[task_id]):
+            sample_id = f"{task_id}:{command.call_index}"
+            base = baseline_by_sample.get(sample_id)
+            if base is None:
+                raise AssertionError("causal call overlay differs from baseline rows")
+            latency = overlay.predict_command_latency_bucket(
+                command.repo,
+                command.command,
+                clock,
+                CANONICAL_LATENCY_BUCKETS,
+            ).prediction
+            resources = overlay.predict_command_resource_buckets(
+                command.repo,
+                command.command,
+                clock,
+            ).classifications
+
+            current = dict(base["current_dynamic"])
+            current_pmfs = dict(current.pop("probability_by_bucket"))
+            candidate = dict(current)
+            candidate_pmfs = dict(current_pmfs)
+            overlay_predictions: dict[str, Any] = {
+                "latency": None if latency is None else _argmax_probabilities(latency.probability_by_bucket),
+                **{
+                    target: None if resources[target] is None else resources[target].label
+                    for target in CANONICAL_RESOURCE_BUCKET_EDGES
+                },
+            }
+            overlay_pmfs: dict[str, Any] = {
+                "latency": None if latency is None else list(latency.probability_by_bucket),
+                **{
+                    target: (
+                        None
+                        if resources[target] is None
+                        else list(resources[target].probability_by_bucket)
+                    )
+                    for target in CANONICAL_RESOURCE_BUCKET_EDGES
+                },
+            }
+            if call_offset == 0 and (
+                overlay_predictions != current or overlay_pmfs != current_pmfs
+            ):
+                raise AssertionError(
+                    f"{task_id}: overlay and Current differ before task-local evidence"
+                )
+            for target in targets:
+                if (overlay_predictions[target] is None) != (current[target] is None):
+                    raise AssertionError("overlay changed prediction availability")
+                candidate[target] = overlay_predictions[target]
+                candidate_pmfs[target] = overlay_pmfs[target]
+
+            evidence = {
+                "latency": (
+                    None
+                    if latency is None
+                    else {
+                        "scope": latency.scope,
+                        "key_kind": latency.key_kind,
+                        "evidence_count": latency.evidence_count,
+                    }
+                ),
+                **{
+                    target: (
+                        None
+                        if resources[target] is None
+                        else {
+                            "scope": resources[target].scope,
+                            "key_kind": resources[target].key_kind,
+                            "evidence_count": resources[target].evidence_count,
+                        }
+                    )
+                    for target in targets[1:]
+                },
+            }
+            rows.append(
+                {
+                    **base,
+                    "call_id": command.call_id,
+                    "labels": {
+                        "latency": base["latency_label"],
+                        **base["resource_labels"],
+                    },
+                    "current_dynamic": current,
+                    "current_probability_by_bucket": current_pmfs,
+                    "candidate": candidate,
+                    "candidate_probability_by_bucket": candidate_pmfs,
+                    "overlay_evidence": evidence,
+                }
+            )
+            for clause in command.clauses:
+                if clause.pipeline_position <= 0:
+                    overlay.observe_completed_clause(
+                        clause.observation(clock, clock + 0.5)
+                    )
+            clock += 2.0
+
+    if set(baseline_by_sample) != {row["sample_id"] for row in rows}:
+        raise AssertionError("causal call overlay omitted baseline rows")
+    all_targets = (*targets, disk)
+    metrics = {target: _sidecar_hard_metrics(rows, target) for target in all_targets}
+    changes = {target: _phase_changes(rows, target) for target in all_targets}
+    current_metrics = {
+        "latency": baseline["latency"]["current_dynamic"],
+        **{
+            target: baseline["resources"][target]["current_dynamic"]
+            for target in CANONICAL_RESOURCE_BUCKET_EDGES
+        },
+    }
+    deltas = {
+        target: _accuracy_delta(
+            metrics[target]["exact_class_accuracy" if target == "latency" else "accuracy"],
+            current_metrics[target]["exact_class_accuracy" if target == "latency" else "accuracy"],
+        )
+        for target in all_targets
+    }
+    helpful = sum(changes[target]["helpful"] for target in targets)
+    harmful = sum(changes[target]["harmful"] for target in targets)
+    helpful_tasks = {
+        task_id
+        for target in targets
+        for task_id in changes[target]["helpful_task_ids"]
+    }
+    severe_ok = all(
+        metrics[target]["severe_underprediction_rate"] is not None
+        and current_metrics[target]["severe_underprediction_rate"] is not None
+        and metrics[target]["severe_underprediction_rate"]
+        <= current_metrics[target]["severe_underprediction_rate"]
+        for target in targets
+    )
+    disk_identical = all(
+        row["candidate"][disk] == row["current_dynamic"][disk]
+        and row["candidate_probability_by_bucket"][disk]
+        == row["current_probability_by_bucket"][disk]
+        for row in rows
+    )
+    go = (
+        all(deltas[target] is not None and deltas[target] >= 5.0 for target in targets)
+        and severe_ok
+        and helpful > harmful
+        and len(helpful_tasks) >= 5
+        and disk_identical
+    )
+    return {
+        "status": (
+            "development_exposed_causal_call_overlay_go"
+            if go
+            else "development_exposed_causal_call_overlay_no_go"
+        ),
+        "claim_bearing": False,
+        "objective": "causal_within_task_completed_call_overlay",
+        "inputs": dict(provenance),
+        "protocol": {
+            "feature": CAUSAL_CALL_OVERLAY_VERSION,
+            "warmup_task_count": warmup_task_count,
+            "test_task_count": len(task_ids) - warmup_task_count,
+            "candidate_targets": list(targets),
+            "disk_policy": "bit_identical_current",
+            "cross_task_state": "identical to Current",
+            "task_local_visibility": "eligible clauses from earlier completed commands only",
+            "training": "none",
+            "runtime_semantics": "accuracy ceiling; synchronous FinishCall not implemented",
+        },
+        "targets": {
+            target: {
+                "current": current_metrics[target],
+                "candidate": metrics[target],
+                "delta_percentage_points": deltas[target],
+                "changes": changes[target],
+            }
+            for target in all_targets
+        },
+        "gate": {
+            "go": go,
+            "minimum_gain_percentage_points_each": 5.0,
+            "latency_cpu_rss_meet_gain": all(
+                deltas[target] is not None and deltas[target] >= 5.0
+                for target in targets
+            ),
+            "no_severe_underprediction_regression": severe_ok,
+            "helpful": helpful,
+            "harmful": harmful,
+            "helpful_tasks": len(helpful_tasks),
+            "minimum_helpful_tasks": 5,
+            "disk_bit_identical": disk_identical,
+        },
+        "row_identity": {
+            "identical_command_ids_and_labels": True,
+            "test_commands": len(rows),
+        },
+    }, rows
 
 
 def _is_full_test_suite(command: str) -> bool:

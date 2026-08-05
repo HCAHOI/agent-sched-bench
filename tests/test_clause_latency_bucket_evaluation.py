@@ -36,6 +36,7 @@ from scripts.evaluation.evaluate_clause_latency_buckets import (
     _validate_partition,
     build_full_test_state_packets,
     evaluate_clause_telemetry,
+    evaluate_causal_call_overlay,
     evaluate_full_test_agent_state,
     evaluate_interaction_commands,
     evaluate_full_test_phase,
@@ -368,6 +369,90 @@ def test_command_prequential_baseline_updates_only_between_tasks() -> None:
         assert metric["constant_low_accuracy"] == 0.0
         assert metric["current_dynamic"]["accuracy"] == 1 / 3
         assert metric["frozen_at_80"]["accuracy"] == 0.0
+
+
+def test_causal_call_overlay_uses_only_earlier_calls_and_preserves_disk() -> None:
+    mib = 1024.0 * 1024.0
+
+    def row(task: int, high: bool) -> Row:
+        return Row(
+            task_id=f"target__repo-{task}",
+            repo="target__repo",
+            manifest_index=task - 1,
+            bin="x",
+            argv=("x",),
+            latency_ms=9_000.0 if high else 100.0,
+            peak_cpu_cores=6.0 if high else 1.0,
+            sampled_peak_rss_mb=3_000.0 if high else 100.0,
+            disk_read_write_bytes_total=(200.0 if high else 1.0) * mib,
+        )
+
+    clauses = [
+        row(1, False),
+        row(2, True),
+        row(2, True),
+        row(2, True),
+        row(3, True),
+    ]
+    commands = [
+        CommandRow(
+            task_id=clause.task_id,
+            repo=clause.repo,
+            manifest_index=clause.manifest_index,
+            call_index=call_index,
+            call_id=f"call-{index}",
+            command="x",
+            duration_ms=clause.latency_ms,
+            clauses=(clause,),
+        )
+        for index, (call_index, clause) in enumerate(
+            zip((0, 0, 1, 2, 0), clauses, strict=True)
+        )
+    ]
+    public = [replace(clauses[0], task_id="public__repo-1", repo="public__repo")]
+
+    result, rows = evaluate_causal_call_overlay(
+        public,
+        ["target__repo-1", "target__repo-2", "target__repo-3"],
+        clauses,
+        commands,
+        {"fixture": True},
+        warmup_task_count=1,
+        expected_split=(3, 1),
+    )
+
+    assert rows[0]["candidate"] == rows[0]["current_dynamic"]
+    assert rows[1]["candidate"] == rows[1]["current_dynamic"]
+    assert rows[2]["candidate"]["latency"] == 3
+    assert rows[2]["current_dynamic"]["latency"] == 0
+    assert rows[3]["candidate"] == rows[3]["current_dynamic"]
+    assert all(
+        item["candidate"]["disk_read_write_bytes_total"]
+        == item["current_dynamic"]["disk_read_write_bytes_total"]
+        for item in rows
+    )
+    assert [item["sample_id"] for item in rows] == [
+        "target__repo-2:0",
+        "target__repo-2:1",
+        "target__repo-2:2",
+        "target__repo-3:0",
+    ]
+    assert all(item["labels"]["latency"] == 3 for item in rows)
+    assert result["row_identity"] == {
+        "identical_command_ids_and_labels": True,
+        "test_commands": 4,
+    }
+    assert result["gate"] == {
+        "go": False,
+        "minimum_gain_percentage_points_each": 5.0,
+        "latency_cpu_rss_meet_gain": True,
+        "no_severe_underprediction_regression": True,
+        "helpful": 3,
+        "harmful": 0,
+        "helpful_tasks": 1,
+        "minimum_helpful_tasks": 5,
+        "disk_bit_identical": True,
+    }
 
 
 def test_full_test_suite_detection_is_narrow() -> None:

@@ -14,6 +14,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 
 from scripts.evaluation.evaluate_clause_latency_buckets import (  # noqa: E402
     PipExecEvent,
+    evaluate_causal_call_overlay,
     evaluate_full_test_agent_state,
     evaluate_full_test_phase,
     evaluate_interaction_commands,
@@ -130,6 +131,11 @@ def main() -> None:
         help="score the task-local third-or-later full-test correction",
     )
     parser.add_argument(
+        "--causal-call-overlay",
+        action="store_true",
+        help="score the frozen within-task completed-call telemetry overlay",
+    )
+    parser.add_argument(
         "--full-test-agent-states",
         type=Path,
         help="score frozen blind agent states over the full-test-phase arm",
@@ -176,6 +182,7 @@ def main() -> None:
             args.pip_resources_after_latency,
             args.pytest_semantics,
             args.full_test_phase,
+            args.causal_call_overlay,
             args.full_test_agent_states,
         )
     )
@@ -238,6 +245,15 @@ def main() -> None:
             clauses,
             commands,
             _load_exec_events(args.run_dir, task_ids),
+            provenance,
+            warmup_task_count=args.warmup_tasks,
+        )
+    elif args.causal_call_overlay:
+        result, rows = evaluate_causal_call_overlay(
+            public,
+            task_ids,
+            clauses,
+            commands,
             provenance,
             warmup_task_count=args.warmup_tasks,
         )

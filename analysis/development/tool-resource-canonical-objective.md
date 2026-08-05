@@ -162,15 +162,17 @@ structured command features, and causal task-local history, but it retained no
 executable evaluator or machine-readable artifact. It is therefore a lead, not
 evidence for a method or a final-test authorization.
 
-The next development experiment is the parameter-free
-`causal-call-overlay-v1`: an otherwise identical Current KB may temporarily
-observe valid clauses from earlier completed commands in the same task. It
-changes only latency, CPU, and RSS; Disk remains bit-identical to Current. This
-isolates the value of recent measured work without an agent, learned model, new
-representation, or threshold. The exact replay and gate are frozen in
-`clause-interaction-kb-plan.md`.
+The parameter-free `causal-call-overlay-v1` then tested whether an otherwise
+identical Current KB should temporarily observe valid clauses from earlier
+completed commands in the same task. On the exposed 80/20 replay it improved
+latency, CPU, and RSS by only 0.860, 0.476, and 0.422 percentage points. Their
+severe-underprediction rates all increased; Disk was bit-identical by design.
+The frozen gate returned NO-GO. Repeated command load can alternate within a
+task, so treating the last measured mode as persistent creates a one-command
+lag rather than a stable state estimate. The exact result and changed-case
+diagnosis are in `clause-interaction-kb-plan.md`.
 
-Physical Disk prediction separately requires evidence about pre-command cache
+Physical Disk prediction requires evidence about pre-command cache
 residency or equivalent environment state. The controlled file-footprint by
 page-residency mechanism test on 12 already-exposed development tasks remains
 frozen in the same record. Neither experiment authorizes runtime integration,
