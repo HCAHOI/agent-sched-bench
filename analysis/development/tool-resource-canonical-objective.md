@@ -156,19 +156,25 @@ to `None` and made incomplete primary metrics fail closed. The concise amendment
 record in `clause-interaction-kb-plan.md` states what was visible before each
 unchanged retry.
 
-Post-validation diagnostics use development-exposed data only. A fixed 25-task
-fit / 25-task test split combining Current PMFs, structured command work units,
-and causal task-local completed-command history improved latency, CPU, and RSS
-by 6.334, 8.978, and 12.849 points, but Disk by 0.000. One fixed default Random
-Forest check improved Disk by 1.587 points, still below the five-point target.
-This supports an ephemeral task-local calibrator for the first three targets,
-not a static Disk claim. Physical Disk prediction now requires evidence about
-pre-command cache residency or equivalent environment state; another command
-representation, KB structure, or agent is not authorized. The next step is a
-controlled file-footprint by page-residency mechanism test on 12 already-exposed
-development tasks. Its task IDs, interventions, bounds, costs, and gate are
-frozen in `clause-interaction-kb-plan.md`. It does not authorize execution,
-global cache eviction, or final-partition access.
+Post-validation diagnostics use development-exposed data only. One interactive
+25-task fit / 25-task test diagnostic reported gains from combining Current,
+structured command features, and causal task-local history, but it retained no
+executable evaluator or machine-readable artifact. It is therefore a lead, not
+evidence for a method or a final-test authorization.
+
+The next development experiment is the parameter-free
+`causal-call-overlay-v1`: an otherwise identical Current KB may temporarily
+observe valid clauses from earlier completed commands in the same task. It
+changes only latency, CPU, and RSS; Disk remains bit-identical to Current. This
+isolates the value of recent measured work without an agent, learned model, new
+representation, or threshold. The exact replay and gate are frozen in
+`clause-interaction-kb-plan.md`.
+
+Physical Disk prediction separately requires evidence about pre-command cache
+residency or equivalent environment state. The controlled file-footprint by
+page-residency mechanism test on 12 already-exposed development tasks remains
+frozen in the same record. Neither experiment authorizes runtime integration,
+the long residency run, global cache eviction, or final-partition access.
 
 The fixed full-command targets in Section 1 remain the static-predictor
 baseline. Their first causal 80-task warm-up / 20-task test replay contains 349

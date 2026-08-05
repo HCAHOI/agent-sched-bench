@@ -4,9 +4,10 @@
 
 **Status:** the offline-agent and deterministic task-phase directions are
 closed. The 50-task validation partition is development-exposed; the 50-task
-final partition remains unread and unauthorized. Existing pre-command traces
-support a task-local calibrator for latency, CPU, and RSS, but not Disk. The
-next step is cache-state probe feasibility, not an authorized collection.
+final partition remains unread and unauthorized. The next development step is
+a parameter-free, causal within-task telemetry overlay for latency, CPU, and
+RSS. Disk has a separately frozen cache-state mechanism test that is not
+authorized to run.
 
 This record extends `tool-resource-canonical-objective.md`, which remains the
 authority for targets, bucket boundaries, causal visibility, eligible command
@@ -207,20 +208,12 @@ count plus tool family harmed the exposed 80/20 replay by 1.719, 0.952, 1.266,
 and 3.152 points for latency, CPU, RSS, and Disk. Workset size alone is not the
 missing mechanism.
 
-A fixed 25-task fit / 25-task test diagnostic on the now-exposed validation
-partition used Current PMFs, deterministic pip/pytest work atoms, generic
-executable/subcommand/flag and compound-action features, and fixed L2 logistic
-regression. Adding only structured command features improved latency, CPU, and
-RSS by 3.839, 7.121, and 11.173 points but harmed Disk by 0.794. Adding causal
-task-local prior exact/semantic/tool buckets raised those changes to 6.334,
-8.978, 12.849, and 0.000 points. A single default Random Forest check raised
-Disk by only 1.587 points. No parameter or threshold sweep was run.
-
-This is development-exposed diagnostic evidence, not a confirmation result.
-It supports a simple architecture for the first three targets: Current is the
-global prior, while an ephemeral task-local calibrator consumes only completed
-earlier commands and is never published into the cross-task KB. It does not
-support a static Disk claim.
+An interactive 25-task fit / 25-task test diagnostic on the now-exposed
+validation partition suggested that Current plus structured command features
+and causal task-local history could improve latency, CPU, and RSS. No
+executable evaluator or machine-readable artifact was retained, so those
+numbers cannot select a method or authorize final access. They motivate only a
+simpler, reproducible test of whether completed-call telemetry carries signal.
 
 ### 5.2 Why Disk is different
 
@@ -255,7 +248,52 @@ The container cgroup mount is read-only on this Linux 5.15 host and exposes no
 `memory.reclaim`; global cache eviction remains forbidden. Per-file
 `POSIX_FADV_DONTNEED` is available.
 
-### 5.3 Frozen next mechanism test: file footprint x residency
+### 5.3 Frozen development test: causal completed-call overlay
+
+`causal-call-overlay-v1` changes no parser, representation, threshold, or
+cross-task KB state. It has no fit phase, learned parameters, or agent call.
+
+Use the original, fully exposed 100-task SQLGlot run and its existing ordered
+80-task warm-up / 20-task test split. After warm-up, Current and the candidate
+start from byte-identical KB snapshots. Within each test task, score eligible
+commands in retained call order with strictly increasing synthetic query times:
+
+- Current remains unchanged and sees the task only after whole-task settlement;
+- after scoring a command, the candidate alone receives that command's eligible
+  clauses with an end time strictly before the next command query;
+- the candidate may use those clauses only for latency, CPU, and RSS predictions
+  of later commands in the same task;
+- Disk is copied bit-for-bit from Current; and
+- after task settlement, both arms must contain identical cross-task evidence
+  before the next task begins.
+
+Both arms use the existing raw exact/argv-prefix/bin hierarchy and physical
+compound-command composition. The candidate never sees the current command's
+telemetry, output, duration, or label. It records the selected scope and support
+for every changed target. Eligible command IDs, labels, availability, order,
+and Current predictions must match the committed baseline exactly.
+
+The retained traces are successful, final-valid sessions. This replay is thus
+an accuracy ceiling for a deployable ephemeral overlay: online use would also
+have to wait for the previous `FinishCall`, keep the observation outside the
+persistent KB, and discard the task-local state if session finalization later
+fails. No runtime change is authorized by this test.
+
+Continue to a runtime cost/validity audit only if all are true on the fixed 20
+development test tasks:
+
+1. latency, CPU, and RSS exact accuracy each improve by at least 5.0 percentage
+   points over Current;
+2. their severe-underprediction rates do not increase;
+3. across those targets, helpful changed predictions exceed harmful ones and
+   helpful changes cover at least five tasks; and
+4. Disk rows and PMFs are bit-identical to Current.
+
+A miss stops this exact overlay without adding a support threshold, changing
+the hierarchy, or selecting a subset. The result remains development-only and
+cannot open the final 50 tasks.
+
+### 5.4 Frozen Disk mechanism test: file footprint x residency
 
 This is a controlled development experiment on already-exposed task IDs. It
 does not consume the final partition and cannot establish task generalization.
