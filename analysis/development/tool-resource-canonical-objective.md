@@ -405,6 +405,12 @@ ceiling, not a remaining-work signal.
   and filesystem metadata had been inspected. The final partition cannot be
   opened unless the frozen method passes validation, and validation cannot
   change the source, fit, contrast, or gate.
+- Before typed-catalog generation, a label-free implementation preflight showed
+  that accidentally inheriting the prior raw-prompt first-twelve-task cap left
+  zero complete configurations, whereas the recorded feasibility count of eight
+  used all qualifying development episodes. Section 11 was openly amended to
+  use all development episodes because its prompt contains only aggregate
+  templates and counts. No resource label or reserved artifact was read.
 
 ## 6. Non-negotiable task contract
 

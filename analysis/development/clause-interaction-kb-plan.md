@@ -802,8 +802,9 @@ candidate. The new causal question is:
 > host, can one label-free offline agent select a more useful family, work-scope,
 > and blocker-to-remediation configuration than a support-only selector?
 
-The development-only feasibility audit found eight retained complete
-configurations across two families after the fixed per-family cap below.
+The development-only feasibility audit over all qualifying development
+episodes found eight retained complete configurations across two families after
+the fixed per-family cap below.
 `pytest` supplied high-support but apparently diagnostic-command relations,
 while `unittest` supplied variants of the same missing-module/install relation;
 the latter had causal edges in seven tasks over two identifiers. This
@@ -813,9 +814,12 @@ or fresh verdict.
 ### 11.1 Deterministic finite catalog
 
 Use only Section 10's 100 development tasks and exact candidate episode/order,
-family ranking, first-twelve-task, event, string, and prompt privacy bounds.
-No duration, telemetry, resource label, Current prediction, validation/final
-ID, or reserved file enters catalog construction or the agent prompt.
+family ranking, event, string, and privacy bounds. Catalog support uses every
+qualifying development episode; it does not inherit Section 10's first-twelve-
+task cap, which bounded raw examples in that earlier prompt. This prompt exposes
+only aggregate templates and counts. No duration, telemetry, resource label,
+Current prediction, validation/final ID, or reserved file enters catalog
+construction or the agent prompt.
 
 Tokenize command or result text with the fixed ASCII expression
 `[A-Za-z][A-Za-z0-9_-]{0,63}`. Normalize a token by case-folding, replacing
