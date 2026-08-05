@@ -273,11 +273,15 @@ def load_rows(path: Path) -> list[Row]:
     return rows
 
 
-def load_run_rows(run_dir: Path) -> tuple[list[str], list[Row], list[CommandRow]]:
+def load_run_rows(
+    run_dir: Path,
+    *,
+    results_path: Path | None = None,
+) -> tuple[list[str], list[Row], list[CommandRow]]:
     """Load only successful final attempts referenced by a collector run."""
 
     run_dir = run_dir.resolve()
-    results_path = run_dir / "results.jsonl"
+    results_path = run_dir / "results.jsonl" if results_path is None else results_path
     task_ids: list[str] = []
     rows: list[Row] = []
     commands: list[CommandRow] = []

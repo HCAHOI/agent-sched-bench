@@ -33,12 +33,15 @@ from tool_resource_eval.labels import repo_of  # noqa: E402
 def _load_exec_events(
     run_dir: Path,
     expected_task_ids: list[str],
+    *,
+    results_path: Path | None = None,
 ) -> dict[str, list[PipExecEvent]]:
     """Read raw exec commands and outputs from the accepted final attempts."""
 
     run_dir = run_dir.resolve()
     events: dict[str, list[PipExecEvent]] = {}
-    with (run_dir / "results.jsonl").open(encoding="utf-8") as handle:
+    selected_results = run_dir / "results.jsonl" if results_path is None else results_path
+    with selected_results.open(encoding="utf-8") as handle:
         for record in map(json.loads, handle):
             task_id = record.get("instance_id")
             attempt_value = record.get("attempt_dir")
