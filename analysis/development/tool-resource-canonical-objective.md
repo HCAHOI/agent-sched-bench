@@ -244,6 +244,12 @@ missed the frozen five-point gate. The same arm retained elapsed-time latency at
 +5.843 points, semantic CPU at +4.167, and semantic RSS at +6.250. This closes
 survival calibration without opening final.
 
+The next frozen development-only check composes existing predictions without
+refitting: third-or-later full-suite phase may raise semantic latency/CPU/RSS,
+elapsed time may further raise latency, and survival supplies Disk. This tests
+component complementarity only; it cannot repair a Disk miss by changing the
+survival rule or open final from the already-exposed validation partition.
+
 Physical Disk prediction requires evidence about pre-command cache
 residency or equivalent environment state. The controlled file-footprint by
 page-residency mechanism test on 12 already-exposed development tasks remains

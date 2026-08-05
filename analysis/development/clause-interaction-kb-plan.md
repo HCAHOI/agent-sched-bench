@@ -993,3 +993,34 @@ Artifacts:
 
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-survival-disk-v1/result.json`
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-survival-disk-v1/rows.jsonl`
+
+## 12. Frozen composition test: phase plus semantic plus survival
+
+### 12.1 Question and fixed arbitration
+
+This adaptive development test asks whether the independently frozen useful
+components cover different rows. It adds no parser, feature, fit, threshold, or
+update. The input artifacts and all component outcomes are already exposed;
+only the composed predictions have not been scored.
+
+For latency, CPU, and RSS, start with the Section 9 semantic prediction. On a
+row recognized by the unchanged `full-test-third-or-later-v1` detector, take
+the higher class of that prediction and the frozen phase prediction. For
+latency, then take the higher class of that result and the Section 10 elapsed
+lower bound. For Disk, copy the Section 11 survival candidate unchanged. Ties
+retain the semantic/survival PMF. There is no target-specific arbitration,
+refit, validation update, or access to output or final telemetry.
+
+The only ablation is the unchanged Section 11 candidate. The composer consumes
+the committed Section 4 phase and Section 11 survival row artifacts and must
+verify identical sample IDs, labels, Current PMFs, and order before scoring.
+
+### 12.2 Gate
+
+The composition is development GO only if all four targets improve by at least
+5.0 percentage points over Current, no severe-underprediction rate increases,
+helpful changes exceed harmful changes for every target, helpful changes span
+at least ten tasks overall, and row identity holds. A miss changes none of the
+constituent methods and cannot authorize final. A pass still requires a fresh
+confirmation protocol because validation is development-exposed. Expected
+runtime is below one second and uses no agent, container, or new trace read.
