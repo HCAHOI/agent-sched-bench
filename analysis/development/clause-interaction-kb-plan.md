@@ -5,8 +5,10 @@
 **Status:** the offline-agent and deterministic task-phase directions are
 closed. The parameter-free causal within-task telemetry overlay also returned
 NO-GO. The 50-task validation partition is development-exposed; the 50-task
-final partition remains unread and unauthorized. Disk has a separately frozen
-cache-state mechanism test that is not authorized to run.
+final partition remains unread and unauthorized. The next frozen development
+candidate is a generic linear residual calibrator for latency, CPU, and RSS.
+Disk has a separately frozen cache-state mechanism test that is not authorized
+to run.
 
 This record extends `tool-resource-canonical-objective.md`, which remains the
 authority for targets, bucket boundaries, causal visibility, eligible command
@@ -385,3 +387,81 @@ Do not use global `drop_caches`, reinterpret physical Disk as logical bytes,
 tune on the exposed 25/25 diagnostic, or open the final partition. Mid-execution
 forecasting remains closed unless a new consumer can still act after the
 observation time.
+
+## 6. Frozen development test: command-conditioned residual calibration
+
+### 6.1 Question and evidence split
+
+`command-history-residual-v1` tests whether recent state is useful only when
+interpreted together with the requested work. It is a supervised linear
+calibrator, not a new KB, parser, agent, or tool-specific rule.
+
+Fit on the original SQLGlot100 in retained task order: the first 20 tasks form
+only the causal Current warm-up, and commands from the remaining 80 tasks form
+the training rows. Evaluate exactly once on the 50 already-exposed validation
+task IDs in `sqlglot-relational-task-split.json`. Current for validation is
+frozen after all 100 development tasks, as in the committed task-phase
+validation result. Do not fit, select, early-stop, or update on validation. The
+50 final-test task IDs remain unread and cannot be opened by a validation miss.
+
+Validation outcomes were exposed by the earlier task-phase evaluation, so this
+is still development evidence. The new candidate's source, weights,
+predictions, and score have not existed when this protocol is committed.
+
+### 6.2 Frozen inference features
+
+For each target independently, use only:
+
+1. that target's Current PMF;
+2. generic static command structure: command byte length, clause and argument
+   counts, shell loop/pipeline/substitution flags, executable basenames, option
+   names, positional-slot counts, and control-edge kinds; and
+3. target labels from eligible commands already completed in the same task:
+   total history, same executable-set history, and same exact-command history,
+   represented by count, class histogram, and last class.
+
+Raw positional literals, repository/task IDs, output text, exit status, current
+telemetry, and future calls are excluded. Exact command bytes may be used only
+to join a query to its own earlier history; they are never model features.
+Categorical features use signed BLAKE2b hashing into 256 fixed dimensions.
+Numeric counts use `log1p` and are capped at 10; class histograms are normalized
+shares plus `log1p` support. Feature extraction is identical for fit and
+validation and resets at each task boundary.
+
+### 6.3 Frozen model and prediction
+
+Fit one affine residual per target for latency, CPU, and RSS:
+
+```text
+candidate PMF = softmax(log(max(Current PMF, 1e-6)) + W x + b)
+```
+
+Use the already-declared CPU PyTorch dependency in float64. Initialize `W` and
+`b` to zero and optimize unweighted cross-entropy plus
+`1e-4 * mean(W**2)` with deterministic CPU LBFGS: learning rate 1,
+`max_iter=200`, `history_size=20`, `tolerance_grad=1e-7`,
+`tolerance_change=1e-9`, and strong-Wolfe line search. Seed is 0. There is no
+class weighting, hyperparameter search, calibration threshold, early stopping,
+or model selection. Rows with an unavailable target label are omitted only for
+that target. Current prediction availability must be preserved.
+
+Hard predictions use the canonical lower-index argmax. Disk hard predictions
+and PMFs are copied bit-for-bit from Current. Record the frozen weights, feature
+schema, training counts, command rows, per-target confusion matrices, changes,
+and wall-clock fit/prediction cost.
+
+### 6.4 Gate
+
+Validation is GO only if all are true:
+
+1. latency, CPU, and RSS exact accuracy each improve by at least 5.0 percentage
+   points over the identical Current rows;
+2. no target's severe-underprediction rate increases;
+3. helpful changed predictions exceed harmful changes and helpful changes cover
+   at least ten validation tasks; and
+4. Disk hard predictions and PMFs are bit-identical to Current.
+
+Only GO authorizes a separately committed final-test invocation with the exact
+same source and frozen weights. NO-GO closes this linear residual candidate;
+do not change the hash width, feature list, regularization, optimizer, fit split,
+or gate after seeing validation.

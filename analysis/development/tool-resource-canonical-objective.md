@@ -172,10 +172,18 @@ task, so treating the last measured mode as persistent creates a one-command
 lag rather than a stable state estimate. The exact result and changed-case
 diagnosis are in `clause-interaction-kb-plan.md`.
 
+The next frozen development candidate is a generic command-conditioned linear
+residual calibrator. Current supplies the base PMF; the calibrator sees only
+generic parsed command structure and labels of earlier completed commands in
+the same task. It is fit on the exposed original SQLGlot tasks and evaluated
+once on the already-exposed validation tasks, with no adaptation there. It
+targets latency, CPU, and RSS while leaving Disk bit-identical. Its feature
+schema, optimizer, split, and gate are fixed in `clause-interaction-kb-plan.md`.
+
 Physical Disk prediction requires evidence about pre-command cache
 residency or equivalent environment state. The controlled file-footprint by
 page-residency mechanism test on 12 already-exposed development tasks remains
-frozen in the same record. Neither experiment authorizes runtime integration,
+frozen in the same record. Neither candidate authorizes runtime integration,
 the long residency run, global cache eviction, or final-partition access.
 
 The fixed full-command targets in Section 1 remain the static-predictor
