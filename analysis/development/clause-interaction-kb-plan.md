@@ -355,9 +355,14 @@ tobymao__sqlglot-4696  tobymao__sqlglot-4393
 For each task, replay only the causal prefix before the selected command and
 commit that filesystem state as a temporary prepared image. Run the selected
 command once under `strace -f -e trace=%file`; this discovery run is not scored.
-Normalize existing regular-file paths in first-access order, excluding
-`/proc`, `/sys`, and `/dev`, and stop at 4,096 paths or 512 MiB total file size.
-No path name, resource label, or result-dependent rule is added.
+Use `strace -yy` and retain only successful `open`/`openat`/`openat2` returned
+file-descriptor paths plus successful absolute `execve` paths. These are
+resolved kernel paths; metadata-only checks and failed path searches do not
+enter the template. Normalize existing non-empty regular-file paths in
+first-access order, excluding `/proc`, `/sys`, and `/dev`, and stop at 4,096
+paths or before exceeding 512 MiB total file size. Reject paths containing a
+tab, newline, carriage return, or non-canonical traversal. No path name,
+resource label, or result-dependent rule is added.
 
 Starting from the same prepared image, run each condition twice in a fresh
 container:
@@ -366,6 +371,12 @@ container:
   resident-page fraction with `mincore`;
 - **warm:** sequentially read every template file, then measure the same
   resident-page fraction.
+
+Both interventions and `mincore` run in the same small statically linked probe
+copied into the condition container. This avoids a Python interpreter or
+dynamic loader faulting the target's own runtime pages after the cold
+intervention. Record the probe source, compiler command and version, binary
+size, and binary digest; charge compilation/copy time separately.
 
 Execute the original command unchanged after the probe and collect the existing
 eBPF physical read/write bytes. Condition order is counterbalanced by seed 42;
