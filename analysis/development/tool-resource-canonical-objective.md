@@ -223,6 +223,14 @@ while Disk remained bit-identical. Pip overlap itself changed only four latency
 hard decisions and no CPU/RSS hard decisions. This closes the exact semantic
 hierarchy without opening final.
 
+The next frozen component keeps that hierarchy and tests an early-execution
+physical lower bound. At the unchanged Phase-1 decision time, elapsed time and
+the first complete 0.5-second CPU interval may only raise a prediction that is
+below the already observed bucket. RSS remains semantic-only and Disk remains
+Current. The component must put latency, CPU, and RSS each at least five points
+above Current, introduce no lower-bound/final-label inconsistency, and cannot
+open final without an independent Disk mechanism.
+
 Physical Disk prediction requires evidence about pre-command cache
 residency or equivalent environment state. The controlled file-footprint by
 page-residency mechanism test on 12 already-exposed development tasks remains

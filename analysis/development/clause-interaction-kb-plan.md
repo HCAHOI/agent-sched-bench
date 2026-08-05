@@ -11,7 +11,9 @@ a separately frozen cache-state mechanism test that is not authorized to run.
 The pytest target-overlap test also returned NO-GO; it isolated a strong
 CPU/RSS mechanism but not a Disk mechanism. Final remains closed.
 Adding pip package-set overlap also returned component NO-GO: RSS passed the
-five-point gate, but latency and CPU did not. Final remains closed.
+five-point gate, but latency and CPU did not. The next frozen component test
+adds a parameter-free early-execution lower-bound correction. Final remains
+closed.
 
 This record extends `tool-resource-canonical-objective.md`, which remains the
 authority for targets, bucket boundaries, causal visibility, eligible command
@@ -794,3 +796,65 @@ Artifacts:
 
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-semantic-work-units-v1/result.json`
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-semantic-work-units-v1/rows.jsonl`
+
+## 10. Frozen component test: early physical lower bounds
+
+### 10.1 Question and pre-outcome coverage
+
+The remaining latency/CPU errors often alternate across identical commands, so
+another history key cannot establish the current execution mode. This phase
+asks a narrower causal question: after the first complete telemetry interval,
+can facts that the current execution has already established safely correct an
+underprediction?
+
+Use the existing validation traces and the frozen Section 9 hierarchy as the
+pre-decision arm. A label-free scan found valid 0.5-second action timelines for
+all 1,044 rows. At the existing Phase-1 effective decision time, 416 commands
+were still running; 225 first-window CPU rates exceeded two cores and 53
+exceeded four cores. No resource label or early-arm prediction was read in that
+scan.
+
+### 10.2 Frozen candidate
+
+For each command, take the first timeline sample whose `dt_s >= 0.5`. The
+effective decision offset is its endpoint plus the already measured 0.050 s
+availability pad and 0.09132007875 s actuation p95. Apply the candidate only if
+the command has not finished by that offset. Online, this is the absence of a
+finish event; replay may use `ts_end` only to reproduce that availability.
+
+Define two observed lower-bound buckets:
+
+- latency: the bucket containing the effective elapsed time;
+- CPU: the bucket containing `min(cpu_core_s / dt_s, cpu_quota_cores)` for the
+  first complete sample.
+
+Starting from `semantic-work-units-v1`, change a target only when its current
+hard prediction is unavailable or below the observed lower-bound bucket. Zero
+PMF mass below the lower bound and renormalize; if no mass remains, use a point
+mass at the lower-bound bucket. Leave the prediction unchanged when it is
+already at or above the bound. RSS remains the Section 9 prediction. Disk hard
+prediction and PMF remain bit-identical to Current.
+
+This arm has no learned parameter, tool parser, command family, outcome, future
+sample, final peak, or final duration. Record the Section 9 arm as the ablation
+on identical rows. A replay validity check requires every applied latency/CPU
+lower bound to be no higher than its final measured bucket; a violation means
+the retained timeline and canonical target do not have compatible physical
+scope and invalidates the arm rather than permitting a repair.
+
+### 10.3 Component gate
+
+The component is GO only if:
+
+1. latency, CPU, and RSS each improve by at least 5.0 percentage points over
+   Current;
+2. none of their severe-underprediction rates increases;
+3. helpful changed predictions exceed harmful changes and cover at least ten
+   validation tasks;
+4. no applied lower bound exceeds the final target bucket; and
+5. Disk hard predictions and PMFs are bit-identical to Current.
+
+A miss closes this exact early-bound arm without changing the decision time,
+window, projection, or target routing. A pass retains a latency/CPU/RSS
+component only; it cannot open final until a separately frozen Disk mechanism
+passes. The replay uses retained traces and is expected below ten seconds.
