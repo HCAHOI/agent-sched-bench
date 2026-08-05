@@ -1,0 +1,1 @@
+{"additionalProperties": false, "properties": {"abstain": {"type": "boolean"}, "explanation": {"type": "string"}, "source": {"type": "string"}}, "required": ["abstain", "source", "explanation"], "type": "object"}

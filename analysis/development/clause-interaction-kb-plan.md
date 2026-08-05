@@ -376,6 +376,17 @@ ties lexicographically by `(rule_id, sorted state names)`. The primary target is
 the first of latency, CPU, RSS, and Disk whose fitted hard modes differ for that
 pair. Record the selected pair and target in the frozen artifact.
 
+The one frozen generation attempt failed this structural gate before any fresh
+task result was read. The agent proposed a generic test-suite scope plus named
+missing-command/module blockers and install arguments, but its source assigned
+matching literals to local variables and therefore violated the precommitted
+auditable-source restriction. The validator rejected it before execution, PMF
+fit, or primary-contrast selection. The call used 59,872 input tokens and 3,047
+output tokens; no second prompt, repair, or candidate is allowed. This is a
+development structural NO-GO for the relational arm. Validation and final-test
+commands, outputs, labels, and telemetry remain unconsumed, so Sections 7.4 and
+8 retain the frozen protocol but are not executed for this candidate.
+
 ### 7.4 Fresh evaluation and frozen gate
 
 The original 100 tasks are the fixed fit corpus. Validation and final test are

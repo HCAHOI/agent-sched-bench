@@ -147,7 +147,7 @@ support tasks contained both a short retry and a later real full-suite execution
 under the same signature. The method therefore stops without regeneration and
 consumed no adjacent task output.
 
-A preregistered relational extension now tests the narrower failure mechanism
+A preregistered relational extension tested the narrower failure mechanism
 without regenerating or rescoring that 80/20 run. One offline, tool-free agent
 call receives only the prior arm's selected label-free development prefixes and
 emits a frozen pure extractor. Its stateless functions enumerate scope,
@@ -161,6 +161,16 @@ resource PMFs remain the ordinary evaluator's job. There
 is no runtime agent, iterative repair, critic model, graph framework, or new
 dependency. The exact structural, coverage, cost, and fresh-data gates are
 frozen in `clause-interaction-kb-plan.md`.
+
+That relational candidate is a structural development NO-GO. Its only allowed
+agent call emitted a generic test-suite/blocker/install parser, but the source
+assigned matching literals to local variables and failed the frozen auditable-
+source validator before execution, PMF fit, or primary-contrast selection. The
+call used 59,872 input and 3,047 output tokens. It was not repaired or
+regenerated. This result says the single generated candidate did not satisfy
+the frozen representation contract; it is not evidence that blocker-remediation
+relations lack predictive value. No adjacent validation or final-test command,
+output, resource label, or telemetry was consumed.
 
 SQLGlot is not excluded from this experiment. The original 100 SQLGlot tasks
 are development-only fit evidence; the additional 100 requested tasks were

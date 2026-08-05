@@ -1,0 +1,29 @@
+{
+  "agent_calls": 1,
+  "claim_bearing": false,
+  "codex_version": "codex-cli 0.146.0",
+  "cost": {
+    "prompt_bytes": 143122,
+    "usage": {
+      "cached_input_tokens": 0,
+      "input_tokens": 59872,
+      "output_tokens": 3047,
+      "reasoning_output_tokens": 2292
+    },
+    "wall_seconds": null,
+    "wall_seconds_note": "The frozen runner raised before persisting its in-memory timer."
+  },
+  "generation_response": "generation.response.json",
+  "generation_response_sha256": "064b3f6360e0fe88bd9e36a18b4c50ad8bc4a1d624b854db5404a7f408d514d0",
+  "model": "gpt-5.6-sol",
+  "prompt_sha256": "668ed91c8ef8b0a0d816379d194e6918f3582b1a8678785dc892fef8f93e3fc3",
+  "reasoning_effort": "medium",
+  "schema": "offline-agent-relational-state-v1",
+  "service_tier": "fast",
+  "source_sha256": "b1b6b1c18f92b2b477f71e16a46401bb049024f66891e52b2c7180a48cad7af1",
+  "split_manifest_sha256": "63f9abf42d456cc479b3768f7abeb8dc3213b9a5efab5c001d70d5beda355504",
+  "status": "development_structural_no_go_invalid_source",
+  "structural_error": "generated source assigns a matching literal indirectly",
+  "validation_consumed": false,
+  "final_test_consumed": false
+}
