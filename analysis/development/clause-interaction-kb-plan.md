@@ -460,3 +460,158 @@ until the transition above is satisfied.
   task outside that role, any development/reserved overlap, validation before a
   frozen artifact, final test without a passing immutable validation result, or
   fit/source hashes that differ between stages.
+
+## 9. Declarative relational arm
+
+**Frozen before generation or reserved-outcome access: 2026-08-05.** This is a
+new arm, not a repair, reinterpretation, or continuation of the rejected Python
+candidate in Section 7. Its question is unchanged:
+
+> Can blocker identity, exact remediation, and verified or incomplete closure
+> separate resource modes that command text and an unstructured “install
+> happened” feature merge?
+
+### 9.1 One-shot agent contract and cost
+
+There is exactly one new tool-free Codex `gpt-5.6-sol` call at requested fast
+tier and medium reasoning. It receives the same twelve label-free development
+examples and causal prefixes used by Section 7, with exact runtime parsed-clause
+objects. It receives no labels, Current predictions, durations, telemetry,
+reserved task IDs, or reserved files. The serialized prompt is at most 200,000
+UTF-8 bytes. An abstention, invalid specification, failed support check, or
+failed structural gate is a complete NO-GO: no prompt repair, schema change,
+second generation, or hand translation is allowed.
+
+The response is one strict JSON object with exactly these fields:
+
+```text
+abstain: boolean
+rule_id: string
+scope_patterns: array[string]
+blocker_patterns: array[string]
+remediation_patterns: array[string]
+explanation: string
+```
+
+On abstention, `rule_id` and all arrays are empty. Otherwise `rule_id` matches
+`[a-z][a-z0-9_-]{0,39}`; there are 1--4 scope patterns of at most 256 ASCII
+characters and 1--6 blocker plus 1--6 remediation patterns of at most 512 ASCII
+characters each. The agent cannot emit code, flags, buckets, states, weights,
+thresholds, relations, or per-query decisions.
+
+### 9.2 Bounded regex and span semantics
+
+The host compiles every pattern with fixed ASCII and case-insensitive flags.
+Scope patterns have no capture groups and are full-matched against the
+whitespace-collapsed current command. The host additionally requires one
+successfully parsed, non-pipeline, non-loop, non-substitution clause.
+Blocker/remediation patterns each have exactly one named capture `id`, no other
+group, and are applied with `finditer` to one failed-verifier result excerpt or
+one successful command respectively.
+
+The allowed regex grammar contains only ASCII literals, character classes and
+ranges, standard character categories, string/word anchors, and bounded repeats
+whose upper bound is at most 128. Alternation, wildcard dot, lookaround,
+backreferences, conditional groups, inline flags, unbounded repeats, nested
+repeats, and every group except `(?P<id>...)` are rejected. Across all
+variable-width repeats in one pattern, the product of possible repeat counts
+may not exceed 1,024; this rejects bounded-repeat backtracking explosions before
+execution. Inputs are bounded
+to 8,192 command characters, the existing 500-character result excerpt, and 256
+prior events. Each pattern may emit at most 16 spans per input. Each query may
+contain at most 64 blocker nodes and 64 remediation edges. Development overflow
+is structural NO-GO; fresh overflow produces explicit per-query Current
+fallback and is reported.
+
+Anchors are allowed only at the two outer pattern boundaries; `\B` and anchors
+inside a capture or repeat are rejected. A case-insensitive character class
+whose choices all encode one literal is also rejected. These restrictions stop
+zero-width and case-class spellings from hiding fixed literals.
+
+Every captured span is passed through Section 7's exact host validator:
+2--80 normalized characters, no path separators, no overlap, and no duplicate
+normalized identifier within an input. A pattern must match at least five
+development tasks. Every blocker/remediation pattern must capture at least two
+distinct normalized identifiers across those tasks. Scope and remediation
+patterns are rejected when their match depends on a task-specific positional
+argument after mechanical argument masking. Decoded fixed regex literals from
+all three pattern classes are also checked against development positional
+arguments and opaque IDs, so escaped spellings do not bypass the check.
+
+### 9.3 Host graph, fit, and ablations
+
+The deterministic graph and ordered states are exactly Section 7.2: blocker
+mentions arise only from prior failed exact-command verifiers, remediation
+mentions only from prior successful commands, and an edge requires exact
+normalized identifier equality. The host alone derives `newly_surfaced`,
+`partial_remediation`, `closure_verified`, `closure_candidate`, or `blocked`.
+Prediction-time agent calls are zero.
+
+Replay the frozen specification over all 100 development tasks and fit three
+independent arms with the same five-distinct-task target support:
+
+1. **relational:** PMF per `(rule_id, state, target)`;
+2. **collapsed-state:** on the identical non-null relation carrier, PMF per
+   `(rule_id, target)`; and
+3. **scope-only:** on every command matching scope regardless of history, PMF
+   per `(rule_id, target)`.
+
+Current is unchanged and remains the fallback. The structural gate requires a
+same-rule pair of relational states, each supported by five development tasks,
+with different hard PMF modes for at least one target; all graph and bound
+checks; empty/blank-history neutrality; and host extraction p95 no greater than
+5 ms. Primary-pair selection and target ordering are exactly Section 7.3. All
+three PMF tables, the primary pair, exact JSON bytes, prompt/transcript, split
+hash, the byte identities of the prior twelve-example artifact and catalog,
+public-input identities, and a fingerprint over task IDs plus full clause and
+command rows are frozen before reserved scoring. The artifact also records the
+clean committed host-code revision and result-affecting paths; later evaluation
+rejects any committed or working-tree change under those paths.
+The prior-example and public-telemetry paths and hashes are committed in the
+split manifest before the call, rather than chosen by the generation command.
+The split manifest, this protocol, and the canonical objective must all be
+unchanged files in the same commit as the reviewed host before the call starts.
+Structural GO artifacts and their transcript/graph sidecars must themselves be
+reviewed, committed, and unchanged before validation can load them.
+
+### 9.4 Fresh SQLGlot protocol and gate
+
+The task IDs and permissions remain exactly Section 6's committed manifest.
+Validation and final test use the identical source-free specification, graph
+code, PMFs, Current evidence, coverage rule, command rows, labels, and fallback.
+No reserved task updates any arm. The label-free coverage gate remains at least
+20 relational commands in five tasks, with each frozen primary state appearing
+in five commands across three tasks. Coverage failure leaves that partition's
+labels unscored.
+
+Validation authorizes final test only if, relative to frozen Current:
+
+- exact accuracy is no lower for latency, CPU, RSS, or Disk;
+- severe underprediction is no higher for any target and lower for at least two;
+- target-level helpful changes outnumber harmful changes and helpful changes
+  cover at least three validation tasks;
+- relational exact accuracy is no lower than both collapsed-state and
+  scope-only for every target; and
+- on the frozen primary target and primary state pair, relational has strictly
+  more correct predictions than each ablation.
+
+Final test uses the identical independent gate. Overall GO requires both
+validation and final GO. Validation NO-GO or coverage failure stops without
+opening final. A validation GO must be independently reviewed and committed
+unchanged; final authorization verifies the committed file bytes, `gate.go`,
+coverage, scored-label flag, row identity, artifact hash, and split hash. If the
+committed validation row sidecar does not match its recorded hash, authorization
+also fails. If the
+collector has no top-level completion artifact, evaluation waits: partial task
+directories and attempt counts are metadata, not evidence.
+
+### 9.5 Required checks
+
+Focused tests cover JSON cardinality and abstention consistency; every forbidden
+regex construct; capture count/name; repeat and input bounds; literal and
+cross-task support; exact spans; relation overflow; all five states; scope-only
+and collapsed carriers; fit-only PMFs; Current identity; split disjointness; and
+validation-to-final input/hash authorization. An independent bounded review of
+the protocol and implementation is required before the single generation.
+Unchanged reviewed code may then produce development and fresh results; a final
+bounded review checks artifacts, gates, and data access before result commit.

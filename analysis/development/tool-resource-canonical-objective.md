@@ -172,6 +172,18 @@ the frozen representation contract; it is not evidence that blocker-remediation
 relations lack predictive value. No adjacent validation or final-test command,
 output, resource label, or telemetry was consumed.
 
+A separately preregistered declarative relational arm is now active. It does
+not weaken, repair, or regenerate the rejected Python candidate. Its one offline
+agent call may emit only a bounded JSON specification containing a rule ID and
+scope, blocker, and remediation regular expressions. The host validates an
+ambiguity-bounded regex subset, extracts exact spans, constructs relations, derives
+states, and fits resource PMFs; prediction-time agent cost remains zero. The
+four frozen comparisons are Current, scope-only, collapsed-state, and full
+relational state. Exact schema, bounds, one-call budget, SQLGlot task permissions,
+and validation/final gates are in Section 9 of
+`clause-interaction-kb-plan.md`. No reserved outcome is authorized before the
+implementation and protocol pass independent review and are committed.
+
 SQLGlot is not excluded from this experiment. The original 100 SQLGlot tasks
 are development-only fit evidence; the additional 100 requested tasks were
 split by task ID, independent of completion state, into 50 validation and 50

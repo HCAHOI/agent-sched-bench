@@ -103,6 +103,21 @@
     "tobymao__sqlglot-4987",
     "tobymao__sqlglot-5015"
   ],
+  "declarative_prior_dir": "analysis/results/tool-resource-5-3-3-3-20260804/sqlglot80-20-offline-agent-extractor-v1",
+  "declarative_prior_files": {
+    "agent-artifact.json": "268bd210ee092b74425cc7c9ecc602889bb9a46199546996d249ca4f38284dc2",
+    "training-catalog.json": "6b6c9cac06561e542278baa6ca2de47cca2c223042b0af2b46da00325079c06c"
+  },
+  "declarative_public_telemetry": [
+    {
+      "path": "traces/swe-rebench/qwen3.7-max/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+      "sha256": "1441c0113752b1508341a83b303cc0f059d3455cd78debd0a584fa051e93318e"
+    },
+    {
+      "path": "traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl",
+      "sha256": "f4dc3e360d6f24c0c2436da956a9d1adf448defaa0a41034bb9373d2f8e6ee7c"
+    }
+  ],
   "development_run": "traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803",
   "final_test": [
     "tobymao__sqlglot-3045",
