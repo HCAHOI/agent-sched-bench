@@ -10,8 +10,8 @@ calibrator and causal full-command outcome memory also returned NO-GO. Disk has
 a separately frozen cache-state mechanism test that is not authorized to run.
 The pytest target-overlap test also returned NO-GO; it isolated a strong
 CPU/RSS mechanism but not a Disk mechanism. Final remains closed.
-The next frozen component test adds pip package-set overlap for latency, CPU,
-and RSS while requiring Disk to remain bit-identical to Current.
+Adding pip package-set overlap also returned component NO-GO: RSS passed the
+five-point gate, but latency and CPU did not. Final remains closed.
 
 This record extends `tool-resource-canonical-objective.md`, which remains the
 authority for targets, bucket boundaries, causal visibility, eligible command
@@ -761,3 +761,36 @@ overlap, weighting, or target routing. A pass only authorizes retaining the
 component while a separately preregistered physical Disk mechanism is tested.
 Final remains closed in both cases. Expected runtime is below ten seconds with
 no container, dependency, filesystem probe, or agent call.
+
+### 9.4 Result and decision
+
+The frozen replay returned component NO-GO:
+
+| Target | Current | Pytest-only ablation | Semantic work units | Primary delta |
+|---|---:|---:|---:|---:|
+| Latency | 74.904% | 78.736% | 78.927% | +4.023 pp |
+| CPU | 82.887% | 87.054% | 87.054% | +4.167 pp |
+| RSS | 80.978% | 87.228% | 87.228% | +6.250 pp |
+| Disk | 82.044% | 82.044% | 82.044% | +0.000 pp |
+
+Across the three changed targets, the primary made 154 helpful and 38 harmful
+changes over 40 helpful tasks; severe underprediction did not regress. Disk
+hard predictions and PMFs were bit-identical to Current. Scoring and causal
+updates took 0.602 seconds for 1,044 validation rows.
+
+Observed: 20 pip rows had positive causal package overlap. Relative to the
+pytest-only ablation, pip changed four latency decisions (three helpful, one
+harmful) and no CPU or RSS hard decisions. All 20 CPU labels were Low; 17 of 20
+RSS labels were Low, so Current already selected the same dominant classes.
+The package overlap added only +0.192 latency points and no CPU/RSS points.
+
+Inference: semantic package identity is not the missing signal for this gate.
+The remaining errors require either a broader source of requested-work evidence
+or inference-time physical/environment state; tuning the exposed pip arm would
+not answer either question. This exact hierarchy is closed and does not
+authorize final access.
+
+Artifacts:
+
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-semantic-work-units-v1/result.json`
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-semantic-work-units-v1/rows.jsonl`

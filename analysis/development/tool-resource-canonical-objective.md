@@ -214,12 +214,14 @@ accuracy fell by 14.58 points. This is evidence for semantic requested-work
 units for latency/CPU/RSS and against using them as a proxy for physical I/O
 state. Final remains closed.
 
-Because the four canonical targets are independent, the next frozen component
-test does not ask semantic work units to proxy physical I/O. It combines exact
+Because the four canonical targets are independent, the next component test did
+not ask semantic work units to proxy physical I/O. It combined exact
 complete-command outcomes, pytest target overlap, and pip package-name overlap
-for latency/CPU/RSS, while requiring Disk to be bit-identical to Current. Its
-five-point gate applies to all three changed targets. Even a pass would require
-a separate physical Disk-state mechanism before any final-test access.
+for latency/CPU/RSS while copying Disk from Current. It returned NO-GO:
+latency, CPU, and RSS improved by 4.023, 4.167, and 6.250 points respectively,
+while Disk remained bit-identical. Pip overlap itself changed only four latency
+hard decisions and no CPU/RSS hard decisions. This closes the exact semantic
+hierarchy without opening final.
 
 Physical Disk prediction requires evidence about pre-command cache
 residency or equivalent environment state. The controlled file-footprint by
