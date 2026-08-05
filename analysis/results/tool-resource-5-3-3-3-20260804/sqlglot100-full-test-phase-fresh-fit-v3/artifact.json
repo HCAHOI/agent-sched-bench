@@ -1,0 +1,100 @@
+{
+  "arbitration": "monotone_upward_override",
+  "claim_bearing": false,
+  "development_fit_sha256": "51c996702c42fa274af7165897187ef6ee855352a0e1b325763edaabcdb14457",
+  "development_run": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803",
+  "development_task_ids_sha256": "2f8d76a7ae6eb88c1078feb1fd685db6c9cb8968d590df343d54fe5f3c46bd7b",
+  "disk_policy": "bit_identical_current",
+  "feature": "full-test-third-or-later-v1",
+  "final_test_consumed": false,
+  "fit_support": {
+    "phase_commands": 44,
+    "phase_commands_per_task": {
+      "0": 66,
+      "1": 26,
+      "2": 6,
+      "3": 2
+    },
+    "phase_tasks": 34,
+    "targets": {
+      "latency": {
+        "eligible_commands": 44,
+        "hard_bucket": 4,
+        "label_counts": {
+          "0": 3,
+          "4": 41
+        },
+        "task_support": 34
+      },
+      "peak_cpu_cores": {
+        "eligible_commands": 44,
+        "hard_bucket": 2,
+        "label_counts": {
+          "0": 3,
+          "2": 41
+        },
+        "task_support": 34
+      },
+      "sampled_peak_rss_mb": {
+        "eligible_commands": 44,
+        "hard_bucket": 2,
+        "label_counts": {
+          "0": 3,
+          "2": 41
+        },
+        "task_support": 34
+      }
+    }
+  },
+  "host_identity": {
+    "commit": "3b0fabc74c63f3db7ce7b6aed75e2790c15a1560",
+    "paths": [
+      "scripts/evaluation",
+      "src",
+      "pyproject.toml",
+      "uv.lock"
+    ]
+  },
+  "minimum_fit_tasks": 5,
+  "minimum_fresh_tasks": 3,
+  "phase_definition": "third_or_later_recognized_full_suite",
+  "pmfs": {
+    "latency": [
+      0.06818181818181818,
+      0.0,
+      0.0,
+      0.0,
+      0.9318181818181818
+    ],
+    "peak_cpu_cores": [
+      0.06818181818181818,
+      0.0,
+      0.9318181818181818
+    ],
+    "sampled_peak_rss_mb": [
+      0.06818181818181818,
+      0.0,
+      0.9318181818181818
+    ]
+  },
+  "preregistration_commit": "3b0fabc74c63f3db7ce7b6aed75e2790c15a1560",
+  "public_inputs": [
+    {
+      "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+      "sha256": "1441c0113752b1508341a83b303cc0f059d3455cd78debd0a584fa051e93318e"
+    },
+    {
+      "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl",
+      "sha256": "f4dc3e360d6f24c0c2436da956a9d1adf448defaa0a41034bb9373d2f8e6ee7c"
+    }
+  ],
+  "schema": "full-test-phase-fresh-fit-v1",
+  "split_manifest_sha256": "75a1b25bbfeaf503da2f87a9e4f2795a94e8423a094538d8c18af58db78001fc",
+  "status": "development_structural_go",
+  "targets": [
+    "latency",
+    "peak_cpu_cores",
+    "sampled_peak_rss_mb"
+  ],
+  "validation_consumed": false
+}
