@@ -1,0 +1,94 @@
+{
+  "claim_bearing": false,
+  "codex_version": "codex-cli 0.146.0",
+  "cost": {
+    "prompt_bytes": 75959,
+    "usage": {
+      "cached_input_tokens": 0,
+      "input_tokens": 32742,
+      "output_tokens": 1812
+    },
+    "wall_seconds": 45.00220560701564
+  },
+  "development_evidence_sha256": "48956c2c5f716313a143ba61978ef8acc30e13c92038db64d7e9ea0af2a4a930",
+  "development_task_ids_sha256": "2f8d76a7ae6eb88c1078feb1fd685db6c9cb8968d590df343d54fe5f3c46bd7b",
+  "final_test_consumed": false,
+  "generation": {
+    "abstain": false,
+    "blocker_patterns": [
+      "No module named '(?P<id>[A-Za-z][A-Za-z0-9_-]{0,63})'"
+    ],
+    "explanation": "Pytest verification commands recur as two meaningful scopes: targeted test-file probes and broad suite execution. Missing Python modules are repeatedly remediated through system-package or pip installation commands.",
+    "family_id": "pytest",
+    "remediation_patterns": [
+      "apt-get install -y python3-(?P<id>[A-Za-z][A-Za-z0-9_-]{0,63})",
+      "pip install --break-system-packages (?P<id>[A-Za-z][A-Za-z0-9_-]{0,63})"
+    ],
+    "scopes": [
+      {
+        "patterns": [
+          "\\A[A-Za-z0-9_/-]{1,128} -m pytest [A-Za-z0-9_/-]{1,128}\\.py[ A-Za-z0-9_:\\-]{0,128}\\z"
+        ],
+        "scope_id": "targeted"
+      },
+      {
+        "patterns": [
+          "\\A[A-Za-z0-9_/-]{1,128} -m pytest[ \\-q]{0,3}\\z"
+        ],
+        "scope_id": "suite"
+      }
+    ]
+  },
+  "generation_files": [
+    {
+      "name": "generation.events.jsonl",
+      "sha256": "d2f7ccd8bb0929014c740184f5058ff501088f4fca4efd052f11aad3f822617b"
+    },
+    {
+      "name": "generation.prompt.txt",
+      "sha256": "82777e58e6f184789875276d969e2a619e5c495e3ad0d837ad5d60816cc7bfc4"
+    },
+    {
+      "name": "generation.response.json",
+      "sha256": "86ad797ce7a22df6dc77606c2d6d13d3944ae68b9056dfd78282e02abee8cb73"
+    },
+    {
+      "name": "generation.schema.json",
+      "sha256": "645b39c7d1081e9db48d816f41e2caafe614b0b53d144d941b35d47f733ebb16"
+    },
+    {
+      "name": "generation.stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "host_identity": {
+    "commit": "cabf1ee129d235980a9c2577817986816abcf832",
+    "paths": [
+      "scripts/evaluation",
+      "src",
+      "pyproject.toml",
+      "uv.lock"
+    ]
+  },
+  "model": "gpt-5.6-sol",
+  "preregistration_commit": "cabf1ee129d235980a9c2577817986816abcf832",
+  "prompt_sha256": "82777e58e6f184789875276d969e2a619e5c495e3ad0d837ad5d60816cc7bfc4",
+  "public_inputs": [
+    {
+      "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+      "sha256": "1441c0113752b1508341a83b303cc0f059d3455cd78debd0a584fa051e93318e"
+    },
+    {
+      "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl",
+      "sha256": "f4dc3e360d6f24c0c2436da956a9d1adf448defaa0a41034bb9373d2f8e6ee7c"
+    }
+  ],
+  "reasoning_effort": "medium",
+  "schema": "offline-agent-declarative-family-state-v1",
+  "service_tier": "fast",
+  "spec_sha256": "86ad797ce7a22df6dc77606c2d6d13d3944ae68b9056dfd78282e02abee8cb73",
+  "split_manifest_sha256": "75a1b25bbfeaf503da2f87a9e4f2795a94e8423a094538d8c18af58db78001fc",
+  "status": "development_structural_no_go_invalid_spec",
+  "structural_error": "scope regex does not compile",
+  "validation_consumed": false
+}

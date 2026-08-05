@@ -1,0 +1,26 @@
+{
+  "abstain": false,
+  "blocker_patterns": [
+    "No module named '(?P<id>[A-Za-z][A-Za-z0-9_-]{0,63})'"
+  ],
+  "explanation": "Pytest verification commands recur as two meaningful scopes: targeted test-file probes and broad suite execution. Missing Python modules are repeatedly remediated through system-package or pip installation commands.",
+  "family_id": "pytest",
+  "remediation_patterns": [
+    "apt-get install -y python3-(?P<id>[A-Za-z][A-Za-z0-9_-]{0,63})",
+    "pip install --break-system-packages (?P<id>[A-Za-z][A-Za-z0-9_-]{0,63})"
+  ],
+  "scopes": [
+    {
+      "patterns": [
+        "\\A[A-Za-z0-9_/-]{1,128} -m pytest [A-Za-z0-9_/-]{1,128}\\.py[ A-Za-z0-9_:\\-]{0,128}\\z"
+      ],
+      "scope_id": "targeted"
+    },
+    {
+      "patterns": [
+        "\\A[A-Za-z0-9_/-]{1,128} -m pytest[ \\-q]{0,3}\\z"
+      ],
+      "scope_id": "suite"
+    }
+  ]
+}

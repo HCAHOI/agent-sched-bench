@@ -2,12 +2,12 @@
 
 **Effective:** 2026-08-04
 
-**Status:** family-and-scope relational protocol frozen before generation;
+**Status:** family-and-scope relational candidate ended at its structural gate;
 same-repo validation/final task partitions remain scientifically unread
 
 This plan extends `tool-resource-canonical-objective.md`. The earlier semantic
-KB and early-execution routes are complete negative results. The active question
-is narrower:
+KB and early-execution routes are complete negative results. The final question
+was narrower:
 
 > Can a label-free offline agent define reusable command families, current work
 > scope, and dependency state that improve causal command-resource prediction?
@@ -780,3 +780,13 @@ in one development artifact. Protocol and implementation receive bounded
 independent review before generation. A structural GO artifact is reviewed and
 committed before any validation access; a validation GO is reviewed and
 committed before final access.
+
+The single allowed call completed in 45.002 seconds using 32,742 input and
+1,812 output tokens (zero cached input tokens). It returned a `pytest` family
+with targeted and suite scopes plus missing-module/install relations, but both
+scope patterns used the Python-incompatible `\z` anchor. The committed Python
+3.12 host rejected the response with `scope regex does not compile` before
+support checks, graph replay, PMF fitting, or contrast selection. This is the
+frozen structural NO-GO for this candidate: no repair or retry is allowed, and
+validation/final remain unread. The independently checked artifact is
+`analysis/results/tool-resource-5-3-3-3-20260804/sqlglot100-declarative-family-state-v1`.

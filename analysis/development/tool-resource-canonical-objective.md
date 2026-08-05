@@ -185,17 +185,18 @@ repair is allowed. Exact protocol and artifacts remain in Section 9 of
 `clause-interaction-kb-plan.md` and
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot100-declarative-relational-v1`.
 
-A new family-and-scope relational arm is preregistered but has not generated a
-candidate. A label-free development oracle found that exact-command verifier
-identity produced no verified-closure state, while generic direct/module
-invocation families exposed verified closure in 33 tasks. Because that oracle
-is permissive and false-positive prone, it is only representation evidence.
-The new arm gives one offline agent a bounded compressed event-chain inventory
-and permits one strict JSON family with multiple current-work scopes plus
-blocker/remediation patterns. The host constructs all relations and states,
-fits ordinary PMFs, and runs family-only and scope-only ablations; prediction-
-time agent cost remains zero. Its complete frozen contract is Section 10 of
-`clause-interaction-kb-plan.md`. Validation and final remain unread.
+The family-and-scope relational arm also ended at its frozen structural gate.
+Its one offline call received the bounded event-chain inventory and returned a
+strict JSON `pytest` family with targeted and suite scopes plus missing-module
+and install relations. Both scope regexes used `\z`, which does not compile in
+the committed Python 3.12 host, so the response was rejected before support
+checks, graph replay, PMF fitting, or contrast selection. The call used 32,742
+input and 1,812 output tokens in 45.002 seconds; no repair or retry is allowed.
+This is evidence against this single generated candidate, not against the
+family/scope/state hypothesis. Prediction-time agent cost would have been zero,
+and validation/final remain unread. The independently reviewed contract and
+artifact are Section 10 of `clause-interaction-kb-plan.md` and
+`analysis/results/tool-resource-5-3-3-3-20260804/sqlglot100-declarative-family-state-v1`.
 
 SQLGlot is not excluded from this experiment. The original 100 SQLGlot tasks
 are development-only fit evidence; the additional 100 requested tasks were
