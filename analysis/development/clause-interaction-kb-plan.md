@@ -1093,3 +1093,11 @@ actions (145.5632 seconds in the source traces) across the twelve tasks. All
 prefix actions use supported tools and none requires a source runtime artifact.
 The twelve base images are absent locally, so the storage and pull estimate
 above remains operative.
+
+`scripts/evaluation/prepare_physical_state_task.py` is the reviewed preparation
+entrypoint. It accepts only a task ID from the canonical manifest and requires
+explicit `--execute`; each invocation prepares one image and one provenance
+artifact. Before committing the image it rejects non-mutating tools, malformed
+or path-traversing arguments, replay failure metadata, changed command exit
+codes, and changed edit/write outcomes. Its dry-run and all 171 frozen prefix
+actions have been validated without starting a container.
