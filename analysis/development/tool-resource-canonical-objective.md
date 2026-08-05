@@ -195,6 +195,15 @@ question is whether inference-time workspace/environment measurements explain
 that shift; task ID, timestamp, version, or image identity alone are not valid
 predictive shortcuts.
 
+Before paying for workspace probes, the next frozen development test checks a
+smaller unit mismatch. Current memorizes clause outcomes but not the aggregate
+outcome of a complete command. `command-outcome-memory-v1` causally stores
+settled full-command class histograms under exact bytes and the already-defined
+name-free `command_shape`, with Current as fallback. It is evaluated only on the
+exposed validation tasks, has no agent or container cost, and must improve all
+four targets by five points to continue. Its protocol and hindsight motivation
+are fixed in `clause-interaction-kb-plan.md`; final remains closed.
+
 Physical Disk prediction requires evidence about pre-command cache
 residency or equivalent environment state. The controlled file-footprint by
 page-residency mechanism test on 12 already-exposed development tasks remains

@@ -6,8 +6,9 @@
 closed. The parameter-free causal within-task telemetry overlay also returned
 NO-GO. The 50-task validation partition is development-exposed; the 50-task
 final partition remains unread and unauthorized. The generic linear residual
-calibrator also returned NO-GO. Disk has a separately frozen cache-state
-mechanism test that is not authorized to run.
+calibrator also returned NO-GO. The next frozen development test is a causal
+full-command outcome memory; it does not open final. Disk has a separately
+frozen cache-state mechanism test that is not authorized to run.
 
 This record extends `tool-resource-canonical-objective.md`, which remains the
 authority for targets, bucket boundaries, causal visibility, eligible command
@@ -512,3 +513,64 @@ Artifacts:
 
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot20-80-current-fit-v1`
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-command-history-residual-v1`
+
+## 7. Frozen development test: causal full-command outcome memory
+
+### 7.1 Question and exposed motivation
+
+Current stores exact and prefix evidence for individual clauses, then composes
+their empirical values into a command prediction. It does not retain the final
+latency/CPU/RSS/Disk class of the complete command. This test asks whether that
+unit mismatch loses repeatable command-level interactions.
+
+An explicitly hindsight diagnostic on the exposed validation rows motivated
+the test but is not evidence for it. Among rows whose exact command appeared in
+another validation task, leave-one-task-out exact-command modes exceeded
+Current by 14.076, 7.764, 12.389, and 5.521 percentage points for latency, CPU,
+RSS, and Disk. Those gains apply only to the covered subsets and use tasks that
+may occur later in deployment order. A name-free parsed command-shape oracle
+changed full validation accuracy by +4.023, +3.869, +5.842, and +1.687 points.
+These diagnostics make a causal replay worth seconds; they do not authorize a
+final claim.
+
+### 7.2 Frozen candidate and ablations
+
+Use the committed 80 fit-task command rows as initial evidence and score the 50
+development-exposed validation tasks in retained order. All commands in one
+task are predicted before any label from that task becomes visible. At task
+settlement, eligible complete-command labels enter two empirical memories for
+each target:
+
+1. exact command bytes; and
+2. the existing `command_shape` representation: parsed executable basenames,
+   option names, positional-slot and shell-structure counts, with no positional
+   literals, task ID, output, or telemetry.
+
+The primary `command-outcome-memory-v1` hierarchy uses exact-command evidence,
+then command-shape evidence, then the row's unchanged Current PMF. Any nonempty
+empirical evidence is used; there is no support threshold, smoothing,
+shrinkage, or learned parameter. The empirical class histogram is the PMF and
+the lower-index class wins a tie. Record exact-only and shape-only ablations
+under the same causal settlement rule. Evaluation rows, labels, availability,
+and order must be identical across arms.
+
+This is an evaluation-only mechanism test. It does not change
+`ClauseResourceKB`, telemetry promotion, or runtime storage. It may use aggregate
+labels already retained by the evaluator only after the entire source task has
+settled successfully.
+
+### 7.3 Gate
+
+The primary arm is GO only if all are true:
+
+1. exact accuracy improves by at least 5.0 percentage points for each of
+   latency, CPU, RSS, and Disk;
+2. no target's severe-underprediction rate increases;
+3. helpful changes exceed harmful changes and helpful changes cover at least
+   ten validation tasks; and
+4. the two ablations use byte-identical row IDs, labels, and Current PMFs.
+
+A miss closes causal full-command outcome memory without a support threshold,
+different key, target-specific arbitration, or replay reorder. It cannot open
+the final 50 tasks. Runtime and result generation are expected to take under
+ten seconds and require no container or agent call.
