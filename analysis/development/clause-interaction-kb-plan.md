@@ -12,8 +12,9 @@ The pytest target-overlap test also returned NO-GO; it isolated a strong
 CPU/RSS mechanism but not a Disk mechanism. Final remains closed.
 Adding pip package-set overlap also returned component NO-GO: RSS passed the
 five-point gate, but latency and CPU did not. The next frozen component test
-adds a parameter-free early-execution lower-bound correction. Final remains
-closed.
+added a parameter-free early-execution lower-bound correction and returned
+NO-GO: elapsed time was valid and useful, but cgroup CPU was not a lower bound
+for the canonical clause-owned CPU target. Final remains closed.
 
 This record extends `tool-resource-canonical-objective.md`, which remains the
 authority for targets, bucket boundaries, causal visibility, eligible command
@@ -858,3 +859,40 @@ A miss closes this exact early-bound arm without changing the decision time,
 window, projection, or target routing. A pass retains a latency/CPU/RSS
 component only; it cannot open final until a separately frozen Disk mechanism
 passes. The replay uses retained traces and is expected below ten seconds.
+
+### 10.4 Result and decision
+
+The frozen replay returned component NO-GO:
+
+| Target | Current | Semantic-only ablation | Early bounds | Primary delta |
+|---|---:|---:|---:|---:|
+| Latency | 74.904% | 78.927% | 80.747% | +5.843 pp |
+| CPU | 82.887% | 87.054% | 78.423% | -4.464 pp |
+| RSS | 80.978% | 87.228% | 87.228% | +6.250 pp |
+| Disk | 82.044% | 82.044% | 82.044% | +0.000 pp |
+
+Of 416 commands still running at the decision time, the arm changed 23 latency
+and 177 CPU projections. The elapsed-time correction passed its physical check
+and moved latency beyond the five-point target. CPU failed the physical check:
+96 first-window cgroup buckets exceeded the final clause-owned eBPF bucket,
+across 40 tasks. Sixty-nine were Medium-prefix versus Low truth, 24 High-prefix
+versus Low truth, and three High-prefix versus Medium truth. CPU accuracy fell
+despite a lower severe-underprediction rate. Disk remained bit-identical.
+
+Observed: the violations span Python, pytest, pip, apt, and compound commands;
+they are not one parser or one task. The action timeline measures all CPU in the
+tool container cgroup, while the canonical label measures only the current
+clause's owned exec lineage on aligned windows. The former is therefore a
+different scope, not a conservative prefix of the latter.
+
+Inference: elapsed wall time is a usable early lower bound, but the retained
+cgroup timeline cannot stand in for canonical CPU. This exact arm is closed;
+thresholding or selecting only the favorable commands after this result would
+hide the scope error. A future early CPU method requires prefix counters from
+the same canonical eBPF lineage. No such prefix profile is retained in these
+traces, so this result does not authorize final access.
+
+Artifacts:
+
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-early-physical-bounds-v1/result.json`
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-early-physical-bounds-v1/rows.jsonl`

@@ -229,7 +229,12 @@ the first complete 0.5-second CPU interval may only raise a prediction that is
 below the already observed bucket. RSS remains semantic-only and Disk remains
 Current. The component must put latency, CPU, and RSS each at least five points
 above Current, introduce no lower-bound/final-label inconsistency, and cannot
-open final without an independent Disk mechanism.
+open final without an independent Disk mechanism. It returned NO-GO. Latency
+reached +5.843 points and RSS remained +6.250, but CPU fell by 4.464 points and
+produced 96 physical-scope violations. The action timeline is cgroup-wide;
+canonical CPU is clause-owned eBPF lineage. Their buckets are not nested, so
+the cgroup prefix is not a valid lower bound and cannot be repaired by a
+threshold or favorable subset.
 
 Physical Disk prediction requires evidence about pre-command cache
 residency or equivalent environment state. The controlled file-footprint by
