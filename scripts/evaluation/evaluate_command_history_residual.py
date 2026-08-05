@@ -11,19 +11,24 @@ import json
 import math
 from pathlib import Path
 import subprocess
+import sys
 import time
 from typing import Any, Mapping, Sequence
 
 import torch
 from torch.nn import functional as F
 
-from scripts.evaluation.evaluate_clause_latency_buckets import (
+_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_ROOT / "src"))
+sys.path.insert(0, str(_ROOT))
+
+from scripts.evaluation.evaluate_clause_latency_buckets import (  # noqa: E402
     _accuracy_delta,
     _phase_changes,
     _sidecar_hard_metrics,
 )
-from tool_resource.clause_parser import parse_command_clauses
-from tool_resource.runtime_kb import (
+from tool_resource.clause_parser import parse_command_clauses  # noqa: E402
+from tool_resource.runtime_kb import (  # noqa: E402
     CANONICAL_RESOURCE_BUCKET_EDGES,
     RESOURCE_BUCKET_LABELS,
     _structured_argv_parts,
@@ -36,7 +41,6 @@ BUCKETS = {"latency": 5, **{target: 3 for target in CANONICAL_RESOURCE_BUCKET_ED
 HASH_DIM = 256
 PMF_FLOOR = 1e-6
 L2 = 1e-4
-_ROOT = Path(__file__).resolve().parents[2]
 SPLIT_MANIFEST = _ROOT / "analysis/development/sqlglot-relational-task-split.json"
 FROZEN_FIT_ROWS = (
     _ROOT
