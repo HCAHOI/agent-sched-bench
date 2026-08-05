@@ -36,9 +36,11 @@ from harness.container_image_prep import normalize_image_reference  # noqa: E402
 
 TASKS_PATH = _ROOT / "data/swe-rebench/tasks.json"
 PREPARED_SCHEMA = "sqlglot-physical-state-prepared-task-v1"
+DISCOVERY_SCHEMA = "sqlglot-physical-state-discovery-v1"
 PROTOCOL_SCHEMA = "sqlglot-physical-state-conditions-v1"
 ORDER_SEED = 42
 TEMPLATE_CONTAINER_PATH = "/tmp/physical-state-template.tsv"
+FILTER_SOURCE_RELATIVE = "scripts/evaluation/build_physical_state_template.py"
 
 
 def condition_schedule(task_ids: Sequence[str]) -> list[dict[str, Any]]:
@@ -115,9 +117,110 @@ def _read_inputs(
     prepared_path = prepared_dir / f"{task_id}.json"
     template_path = template_dir / f"{task_id}.json"
     probe_input_path = template_dir / f"{task_id}.tsv"
-    prepared = json.loads(prepared_path.read_text(encoding="utf-8"))
+    discovery_path = template_dir / f"{task_id}.discovery.json"
+    raw_path = template_dir / f"{task_id}.open-paths.json"
+    strace_path = template_dir / f"{task_id}.strace"
+    prepared, prepared_digest = read_prepared_artifact_with_digest(
+        task, prepared_path
+    )
     template = json.loads(template_path.read_text(encoding="utf-8"))
     probe_input = probe_input_path.read_text(encoding="utf-8")
+
+    files = template.get("files")
+    expected_probe_input = ""
+    if isinstance(files, list):
+        expected_probe_input = "".join(
+            f"{row['size_bytes']}\t{row['path']}\n"
+            for row in files
+            if isinstance(row, Mapping)
+        )
+    paths = (
+        [row.get("path") if isinstance(row, Mapping) else None for row in files]
+        if isinstance(files, list)
+        else []
+    )
+    if (
+        template.get("schema") != TEMPLATE_SCHEMA
+        or template.get("limits")
+        != {"max_paths": MAX_PATHS, "max_bytes": MAX_BYTES}
+        or not isinstance(files, list)
+        or not files
+        or len(files) > MAX_PATHS
+        or template.get("file_count") != len(files)
+        or template.get("total_bytes")
+        != sum(int(row["size_bytes"]) for row in files)
+        or int(template.get("total_bytes")) > MAX_BYTES
+        or any(
+            not isinstance(row, Mapping)
+            or not isinstance(row.get("path"), str)
+            or not row["path"].startswith("/")
+            or any(char in row["path"] for char in "\t\r\n")
+            or isinstance(row.get("size_bytes"), bool)
+            or not isinstance(row.get("size_bytes"), int)
+            or row["size_bytes"] <= 0
+            for row in files
+        )
+        or any(_normalized_path(path) != path for path in paths)
+        or len(paths) != len(set(paths))
+        or probe_input != expected_probe_input
+    ):
+        raise ValueError(f"template artifact contract changed for {task_id}")
+
+    discovery = json.loads(discovery_path.read_text(encoding="utf-8"))
+    discovery_outputs = discovery.get("outputs")
+    clean_filter = discovery.get("pre_target_filter")
+    if (
+        discovery.get("schema") != DISCOVERY_SCHEMA
+        or discovery.get("task_id") != task_id
+        or discovery.get("prepared_artifact_sha256") != prepared_digest
+        or discovery.get("prepared_image_id") != prepared["prepared_image_id"]
+        or discovery.get("target_action_id") != task["target_action_id"]
+        or discovery.get("target_tool_args") != task["target_tool_args"]
+        or discovery.get("source_target_exit_code") != 0
+        or not isinstance(discovery.get("discovery"), Mapping)
+        or discovery["discovery"].get("target_exit_code") != 0
+        or not isinstance(clean_filter, Mapping)
+        or clean_filter.get("network_mode") != "none"
+        or clean_filter.get("file_count") != template["file_count"]
+        or clean_filter.get("total_bytes") != template["total_bytes"]
+        or clean_filter.get("filter_source") != FILTER_SOURCE_RELATIVE
+        or clean_filter.get("filter_source_sha256")
+        != _sha256(_ROOT / FILTER_SOURCE_RELATIVE)
+        or not isinstance(discovery_outputs, Mapping)
+        or discovery_outputs.get("strace_sha256") != _sha256(strace_path)
+        or discovery_outputs.get("raw_sha256") != _sha256(raw_path)
+        or discovery_outputs.get("template_sha256") != _sha256(template_path)
+        or discovery_outputs.get("probe_input_sha256")
+        != _sha256(probe_input_path)
+    ):
+        raise ValueError(f"discovery artifact contract changed for {task_id}")
+
+    return {
+        "prepared_path": prepared_path,
+        "prepared": prepared,
+        "prepared_digest": prepared_digest,
+        "template_path": template_path,
+        "probe_input_path": probe_input_path,
+        "discovery_path": discovery_path,
+        "probe_input": probe_input,
+        "target": _read_target(task),
+    }
+
+
+def read_prepared_artifact(
+    task: Mapping[str, Any], prepared_path: Path
+) -> dict[str, Any]:
+    """Read and validate one immutable prepared-image artifact."""
+    return read_prepared_artifact_with_digest(task, prepared_path)[0]
+
+
+def read_prepared_artifact_with_digest(
+    task: Mapping[str, Any], prepared_path: Path
+) -> tuple[dict[str, Any], str]:
+    """Validate one prepared artifact and hash the exact parsed bytes."""
+    task_id = str(task["task_id"])
+    prepared_bytes = prepared_path.read_bytes()
+    prepared = json.loads(prepared_bytes)
 
     probe = prepared.get("probe")
     hash_pattern = re.compile(r"^[0-9a-f]{64}$")
@@ -163,55 +266,7 @@ def _read_inputs(
         )
     ):
         raise ValueError(f"prepared artifact contract changed for {task_id}")
-
-    files = template.get("files")
-    expected_probe_input = ""
-    if isinstance(files, list):
-        expected_probe_input = "".join(
-            f"{row['size_bytes']}\t{row['path']}\n"
-            for row in files
-            if isinstance(row, Mapping)
-        )
-    paths = (
-        [row.get("path") if isinstance(row, Mapping) else None for row in files]
-        if isinstance(files, list)
-        else []
-    )
-    if (
-        template.get("schema") != TEMPLATE_SCHEMA
-        or template.get("limits")
-        != {"max_paths": MAX_PATHS, "max_bytes": MAX_BYTES}
-        or not isinstance(files, list)
-        or not files
-        or len(files) > MAX_PATHS
-        or template.get("file_count") != len(files)
-        or template.get("total_bytes")
-        != sum(int(row["size_bytes"]) for row in files)
-        or int(template.get("total_bytes")) > MAX_BYTES
-        or any(
-            not isinstance(row, Mapping)
-            or not isinstance(row.get("path"), str)
-            or not row["path"].startswith("/")
-            or any(char in row["path"] for char in "\t\r\n")
-            or isinstance(row.get("size_bytes"), bool)
-            or not isinstance(row.get("size_bytes"), int)
-            or row["size_bytes"] <= 0
-            for row in files
-        )
-        or any(_normalized_path(path) != path for path in paths)
-        or len(paths) != len(set(paths))
-        or probe_input != expected_probe_input
-    ):
-        raise ValueError(f"template artifact contract changed for {task_id}")
-
-    return {
-        "prepared_path": prepared_path,
-        "prepared": prepared,
-        "template_path": template_path,
-        "probe_input_path": probe_input_path,
-        "probe_input": probe_input,
-        "target": _read_target(task),
-    }
+    return prepared, hashlib.sha256(prepared_bytes).hexdigest()
 
 
 def _action(
@@ -351,13 +406,17 @@ def build_conditions(
                 "label": label,
                 "trace": str(trace_path),
                 "prepared_artifact": str(task_inputs["prepared_path"].resolve()),
-                "prepared_artifact_sha256": _sha256(task_inputs["prepared_path"]),
+                "prepared_artifact_sha256": task_inputs["prepared_digest"],
                 "prepared_image": task_inputs["prepared"]["prepared_image"],
                 "prepared_image_id": task_inputs["prepared"]["prepared_image_id"],
                 "template_artifact": str(task_inputs["template_path"].resolve()),
                 "template_artifact_sha256": _sha256(task_inputs["template_path"]),
                 "probe_input": str(task_inputs["probe_input_path"].resolve()),
                 "probe_input_sha256": _sha256(task_inputs["probe_input_path"]),
+                "discovery_artifact": str(task_inputs["discovery_path"].resolve()),
+                "discovery_artifact_sha256": _sha256(
+                    task_inputs["discovery_path"]
+                ),
                 "target_action_id": task_inputs["target"]["action_id"],
             }
         )

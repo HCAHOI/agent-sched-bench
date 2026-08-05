@@ -17,6 +17,9 @@ def _inputs(tmp_path, monkeypatch):
     probe_source.parent.mkdir(parents=True)
     probe_source.write_text("int main(void) { return 0; }\n", encoding="utf-8")
     probe_source_hash = hashlib.sha256(probe_source.read_bytes()).hexdigest()
+    filter_source = repo / conditions.FILTER_SOURCE_RELATIVE
+    filter_source.write_text("# frozen filter\n", encoding="utf-8")
+    filter_source_hash = hashlib.sha256(filter_source.read_bytes()).hexdigest()
     prepared_dir = tmp_path / "prepared"
     template_dir = tmp_path / "templates"
     prepared_dir.mkdir()
@@ -129,6 +132,7 @@ def _inputs(tmp_path, monkeypatch):
     )
     manifest_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     for task in manifest_tasks:
+        task_id = task["task_id"]
         prepared_path = prepared_dir / f"{task['task_id']}.json"
         prepared = json.loads(prepared_path.read_text(encoding="utf-8"))
         prepared["manifest_sha256"] = manifest_hash
@@ -136,6 +140,44 @@ def _inputs(tmp_path, monkeypatch):
             (repo / task["source_trace"]).read_bytes()
         ).hexdigest()
         prepared_path.write_text(json.dumps(prepared), encoding="utf-8")
+        strace_path = template_dir / f"{task_id}.strace"
+        raw_path = template_dir / f"{task_id}.open-paths.json"
+        template_path = template_dir / f"{task_id}.json"
+        probe_input_path = template_dir / f"{task_id}.tsv"
+        strace_path.write_text("strace\n", encoding="utf-8")
+        raw_path.write_text("{}\n", encoding="utf-8")
+        discovery = {
+            "schema": conditions.DISCOVERY_SCHEMA,
+            "task_id": task_id,
+            "prepared_artifact_sha256": hashlib.sha256(
+                prepared_path.read_bytes()
+            ).hexdigest(),
+            "prepared_image_id": prepared["prepared_image_id"],
+            "target_action_id": task["target_action_id"],
+            "target_tool_args": task["target_tool_args"],
+            "source_target_exit_code": 0,
+            "discovery": {"target_exit_code": 0},
+            "pre_target_filter": {
+                "network_mode": "none",
+                "file_count": 1,
+                "total_bytes": 3,
+                "filter_source": conditions.FILTER_SOURCE_RELATIVE,
+                "filter_source_sha256": filter_source_hash,
+            },
+            "outputs": {
+                "strace_sha256": hashlib.sha256(strace_path.read_bytes()).hexdigest(),
+                "raw_sha256": hashlib.sha256(raw_path.read_bytes()).hexdigest(),
+                "template_sha256": hashlib.sha256(
+                    template_path.read_bytes()
+                ).hexdigest(),
+                "probe_input_sha256": hashlib.sha256(
+                    probe_input_path.read_bytes()
+                ).hexdigest(),
+            },
+        }
+        (template_dir / f"{task_id}.discovery.json").write_text(
+            json.dumps(discovery), encoding="utf-8"
+        )
     tasks_path = repo / "tasks.json"
     tasks_path.write_text(json.dumps(tasks), encoding="utf-8")
     monkeypatch.setattr(conditions, "_ROOT", repo)
@@ -241,6 +283,12 @@ def test_rejects_target_timing_drift(tmp_path, monkeypatch) -> None:
     prepared = json.loads(prepared_path.read_text(encoding="utf-8"))
     prepared["source_trace_sha256"] = hashlib.sha256(trace.read_bytes()).hexdigest()
     prepared_path.write_text(json.dumps(prepared), encoding="utf-8")
+    discovery_path = template_dir / "task-00.discovery.json"
+    discovery = json.loads(discovery_path.read_text(encoding="utf-8"))
+    discovery["prepared_artifact_sha256"] = hashlib.sha256(
+        prepared_path.read_bytes()
+    ).hexdigest()
+    discovery_path.write_text(json.dumps(discovery), encoding="utf-8")
 
     with pytest.raises(ValueError, match="target contract changed"):
         conditions.build_conditions(prepared_dir, template_dir, tmp_path / "out")

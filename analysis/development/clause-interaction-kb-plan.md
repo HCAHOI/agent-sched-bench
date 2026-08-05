@@ -359,10 +359,13 @@ Use `strace -yy` and retain only successful `open`/`openat`/`openat2` returned
 file-descriptor paths plus successful absolute `execve` paths. These are
 resolved kernel paths; metadata-only checks and failed path searches do not
 enter the template. Normalize existing non-empty regular-file paths in
-first-access order, excluding `/proc`, `/sys`, and `/dev`, and stop at 4,096
-paths or before exceeding 512 MiB total file size. Reject paths containing a
-tab, newline, carriage return, or non-canonical traversal. No path name,
-resource label, or result-dependent rule is added.
+first-access order in a second fresh container from the same prepared image,
+excluding `/proc`, `/sys`, and `/dev`, and stop at 4,096 paths or before
+exceeding 512 MiB total file size. The fresh container is required because the
+discovery pytest may create `.pyc`, cache, or result files that did not exist at
+probe time. Reject paths containing a tab, newline, carriage return, or
+non-canonical traversal. No path name, resource label, or result-dependent rule
+is added.
 
 Starting from the same prepared image, run each condition twice in a fresh
 container:
@@ -401,11 +404,11 @@ The predeclared gate is:
 
 Passing only authorizes design of a state-aware predictor; it is not itself a
 five-point accuracy result. A failure stops page-residency work without adding
-paths, changing bounds, or choosing another task sample. Preparation plus 60
-target executions requires 72 container starts and 12 prepared images; it is
-estimated at 1--3 hours and up to roughly 60 GB before shared-layer
-deduplication. This run is not authorized yet and must wait until the
-independent PennyLane collection is finished.
+paths, changing bounds, or choosing another task sample. Preparation, 60 target
+executions, and 12 clean-image filters require 84 container starts and 12
+prepared images; it is estimated at 1--3 hours and up to roughly 60 GB before
+shared-layer deduplication. This run is not authorized yet and must wait until
+the independent PennyLane collection is finished.
 
 Do not use global `drop_caches`, reinterpret physical Disk as logical bytes,
 tune on the exposed 25/25 diagnostic, or open the final partition. Mid-execution
@@ -1097,7 +1100,7 @@ at least three helpful CPU changes across three tasks with at most one harmful
 change. The task selection and Disk gates remain exactly Section 5.4.
 
 Passing the CPU or Disk mechanism gate is not a five-point accuracy result and
-does not open final. The full 12-task run remains unauthorized, requires 72
+does not open final. The full 12-task run remains unauthorized, requires 84
 container starts, is estimated at 1--3 hours and up to roughly 60 GB, and must
 wait for the active PennyLane collection. The instrumentation can be implemented
 and smoke-tested without starting a task container.
@@ -1121,6 +1124,14 @@ the static residency probe with the frozen compiler flags and installs it at
 `/opt/agent-sched-bench/physical-state-probe`, outside `/testbed`; its source
 and binary digests, compiler identity, size, and compile/copy costs enter the
 prepared-task artifact.
+
+`scripts/evaluation/discover_physical_state_files.py` is the one-task discovery
+entrypoint. It requires explicit `--execute`, runs the frozen target under the
+fixed strace options in the immutable prepared image ID, and then filters the
+resolved paths in a separate networkless container from that same ID before the
+target has run. The second container excludes files created by discovery. It
+records strace/filter versions, digests, timings, exits, bounds, and the two
+container roles; its completion artifact is written last.
 
 `scripts/evaluation/build_physical_state_conditions.py` is the reviewed input
 builder for the four measured runs per task. It requires all twelve prepared
