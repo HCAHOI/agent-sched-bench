@@ -144,13 +144,17 @@ method passes its validation gate. IDs, process status, file counts, and
 collection completion metadata may be inspected before then; commands, outputs,
 labels, telemetry, and derived scores may not.
 
-## 4. Proposed next experiment: replicate deterministic task phase
+## 4. Frozen next experiment: replicate deterministic task phase
 
 This is the shortest experiment that can change the next decision. It tests
 whether the one positive development mechanism repeats on new tasks from the
 same repository. It does not test a new KB or a learned semantic model.
 
-### 4.1 Fixed candidate
+The protocol below was frozen on 2026-08-05 before reading any command,
+output, label, or telemetry from either reserved role. The additional run's
+completion metadata may have been inspected, but neither role has been scored.
+
+### 4.1 Fixed candidate and development fit
 
 Reuse `full-test-third-or-later-v1` unchanged:
 
@@ -167,14 +171,23 @@ This is deliberately tool-aware and narrow. A same-repository success would
 establish repeatability of the phase mechanism, not generality across tools or
 repositories.
 
+The development-only fit contains 44 third-or-later commands across 34 tasks.
+Their latency labels are `{0: 3, 4: 41}`, CPU labels are `{0: 3, 2: 41}`, RSS
+labels are `{0: 3, 2: 41}`, and Disk labels are `{0: 25, 1: 19}`. Thus the
+frozen hard prediction is the highest bucket for latency, CPU, and RSS. Disk is
+not fit or overridden. These counts are fit evidence, not a fresh result.
+
 ### 4.2 Smallest valid protocol
 
-Before any reserved command or outcome is read, commit the evaluator, exact
-development-fit fingerprint, coverage rule, and validation/final authorization.
-The proposed label-free validation coverage rule is: third-or-later recognized
-full-suite commands must occur in at least three validation tasks, the minimum
-number that could satisfy the task-level gain gate. Otherwise stop without
-scoring labels.
+Before any reserved command or outcome is read, commit the evaluator and this
+record. Then create and separately commit one development-fit artifact binding
+the exact development fingerprint, public inputs, host commit, split manifest,
+PMFs, coverage rule, and validation/final authorization. Validation cannot run
+against an uncommitted artifact. The label-free validation coverage rule is:
+among completed tasks with accepted workload output and valid telemetry,
+third-or-later recognized full-suite commands must occur in at least three
+validation tasks, the minimum number that could satisfy the task-level gain
+gate. Otherwise stop without scoring labels.
 
 On identical eligible command rows, validation passes only if:
 
@@ -184,12 +197,12 @@ On identical eligible command rows, validation passes only if:
 - helpful changes span at least three validation tasks.
 
 Only validation GO authorizes the byte-identical final evaluation. Final uses
-the same independent gate. No detector, phase boundary, target, PMF, or gate may
-change after validation access.
-
-This protocol is a proposal, not launch authorization. Implementation should
-reuse the existing evaluator and add only fit-100/fresh-role orchestration plus
-the authorization binding.
+the same independent gate. The validation result and row sidecar must be
+committed unchanged before final can run. No detector, phase boundary, target,
+PMF, public evidence, Current snapshot, eligibility rule, or gate may change
+after validation access. The fresh evaluator reuses the existing command
+evaluator and freezes Current after the 100 development tasks; it performs no
+within-role learning.
 
 ## 5. Other angles, in priority order
 

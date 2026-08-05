@@ -110,8 +110,11 @@ changed from 77.937% to 79.083%, CPU from 90.476% to 93.333%, RSS from 91.561%
 to 94.093%, and Disk remained 81.375% with bit-identical PMFs. Severe
 underpredictions fell from 4 to 0 for latency and from 7 to 1 for both CPU and
 RSS. All 16 changed target predictions were helpful across five tasks; none
-were harmful. This is the proposed next fresh replication, not a generalization
-claim.
+were harmful. This is the now-frozen next fresh replication, not a
+generalization claim. Its detector, development PMFs, coverage rule, validation
+gate, and final authorization were fixed before reserved command or outcome
+access; exact permissions and execution order are recorded in
+`clause-interaction-kb-plan.md`.
 
 The offline-agent direction is complete and closed. It progressed from a
 per-query blind classifier to a frozen Python feature, exact relational spans,
@@ -134,9 +137,9 @@ resource outcomes. Exact costs, intermediate failures, and artifacts are in
 Taken together, the agent direction is closed. The final finite-choice arm
 removed arbitrary code, regex, and parser generation yet still found no
 resource-separating relation/scope contrast. More prompts, critics, DSLs, or
-agent adapters are not authorized. The next proposed experiment is instead an
-unchanged fresh replication of the deterministic third-or-later full-test phase
-feature that passed the exposed development continuation rule.
+agent adapters are not authorized. The next experiment is the frozen unchanged
+replication of the deterministic third-or-later full-test phase feature that
+passed the exposed development continuation rule.
 
 The original 100 SQLGlot tasks are development-only fit evidence; the
 additional 100 requested tasks were
