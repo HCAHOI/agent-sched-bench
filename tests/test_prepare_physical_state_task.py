@@ -188,6 +188,23 @@ def test_prepare_records_result_affecting_provenance(tmp_path, monkeypatch) -> N
         "target_command": "pytest",
     }
     monkeypatch.setattr(subject, "_manifest_task", lambda _task_id: (task, []))
+    probe = tmp_path / "probe"
+    probe.write_bytes(b"probe")
+    monkeypatch.setattr(
+        subject,
+        "_build_probe",
+        lambda _directory: (
+            probe,
+            {
+                "source_sha256": "source-hash",
+                "binary_sha256": "binary-hash",
+                "container_path": subject.PROBE_CONTAINER_PATH,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        subject, "_install_probe", lambda *_args, **_kwargs: {"copy_ms": 7.0}
+    )
     image_ids = iter((None, "sha256:source"))
     monkeypatch.setattr(
         subject,
@@ -244,4 +261,6 @@ def test_prepare_records_result_affecting_provenance(tmp_path, monkeypatch) -> N
     assert artifact["prepared_image_id"] == "sha256:prepared"
     assert artifact["command_timeout_s"] == 123
     assert artifact["apt_mirror"]["configured"] == "true"
+    assert artifact["probe"]["binary_sha256"] == "binary-hash"
+    assert artifact["probe"]["copy_ms"] == 7.0
     assert out.exists()

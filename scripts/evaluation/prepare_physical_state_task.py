@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 import posixpath
 import re
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import time
 from typing import Any, Mapping, Sequence
 
@@ -39,6 +41,17 @@ MANIFEST_SCHEMA = "sqlglot-physical-state-manifest-v1"
 MANIFEST_PATH = _ROOT / "analysis/development/sqlglot-physical-state-manifest.json"
 PREPARED_IMAGE_REPOSITORY = "agent-sched-bench/sqlglot-physical-state"
 REPLAY_TOOLS = frozenset({"exec", "write_file", "edit_file"})
+PROBE_SOURCE = _ROOT / "scripts/evaluation/physical_state_probe.c"
+PROBE_CONTAINER_PATH = "/opt/agent-sched-bench/physical-state-probe"
+PROBE_COMPILE_FLAGS = (
+    "-O2",
+    "-std=c11",
+    "-D_POSIX_C_SOURCE=200809L",
+    "-static",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+)
 _TOOL_ARG_KEYS = {
     "exec": frozenset({"command", "timeout", "working_dir"}),
     "write_file": frozenset({"path", "content"}),
@@ -207,6 +220,74 @@ def _inspect_image_id(image: str, executable: str, *, required: bool) -> str | N
     return None
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _build_probe(directory: Path) -> tuple[Path, dict[str, Any]]:
+    compiler = Path("/usr/bin/cc")
+    binary = directory / "physical-state-probe"
+    version = subprocess.run(
+        [str(compiler), "--version"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    ).stdout
+    command = [
+        str(compiler),
+        *PROBE_COMPILE_FLAGS,
+        str(PROBE_SOURCE),
+        "-o",
+        str(binary),
+    ]
+    started = time.monotonic()
+    subprocess.run(command, capture_output=True, text=True, check=True, timeout=120)
+    compile_ms = (time.monotonic() - started) * 1000
+    return binary, {
+        "source": str(PROBE_SOURCE.relative_to(_ROOT)),
+        "source_sha256": _sha256(PROBE_SOURCE),
+        "compiler": str(compiler),
+        "compiler_version": version.strip(),
+        "compile_flags": list(PROBE_COMPILE_FLAGS),
+        "compile_ms": compile_ms,
+        "binary_size_bytes": binary.stat().st_size,
+        "binary_sha256": _sha256(binary),
+        "container_path": PROBE_CONTAINER_PATH,
+    }
+
+
+def _install_probe(
+    binary: Path, container_id: str, executable: str
+) -> dict[str, float]:
+    started = time.monotonic()
+    commands = (
+        [
+            executable,
+            "exec",
+            container_id,
+            "mkdir",
+            "-p",
+            str(Path(PROBE_CONTAINER_PATH).parent),
+        ],
+        [executable, "cp", str(binary), f"{container_id}:{PROBE_CONTAINER_PATH}"],
+        [executable, "exec", container_id, "chmod", "0555", PROBE_CONTAINER_PATH],
+    )
+    for command in commands:
+        subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=120,
+        )
+    return {"copy_ms": (time.monotonic() - started) * 1000}
+
+
 async def _cleanup(
     agent: ContainerAgent | None, container_id: str, executable: str
 ) -> None:
@@ -238,16 +319,28 @@ async def prepare_task(
     if out.exists():
         raise FileExistsError(f"output already exists: {out}")
     task, actions = _manifest_task(task_id)
+    probe_temp = TemporaryDirectory(prefix="physical-state-probe-")
+    try:
+        probe_binary, probe_provenance = await asyncio.to_thread(
+            _build_probe, Path(probe_temp.name)
+        )
+    except BaseException:
+        probe_temp.cleanup()
+        raise
     source_image = normalize_image_reference(str(task["image"]))
     prepared_image = _prepared_image(task_id)
     if _inspect_image_id(prepared_image, container_executable, required=False):
         raise FileExistsError(f"prepared image already exists: {prepared_image}")
 
-    await asyncio.to_thread(
-        ensure_source_image,
-        source_image,
-        container_executable=container_executable,
-    )
+    try:
+        await asyncio.to_thread(
+            ensure_source_image,
+            source_image,
+            container_executable=container_executable,
+        )
+    except BaseException:
+        probe_temp.cleanup()
+        raise
     source_image_id = _inspect_image_id(
         source_image, container_executable, required=True
     )
@@ -280,6 +373,14 @@ async def prepare_task(
             actions,
             command_timeout_s=command_timeout_s,
         )
+        probe_provenance.update(
+            await asyncio.to_thread(
+                _install_probe,
+                probe_binary,
+                container_id,
+                container_executable,
+            )
+        )
         await agent.stop()
         agent = None
         commit = await asyncio.to_thread(
@@ -309,13 +410,17 @@ async def prepare_task(
             "command_timeout_s": command_timeout_s,
             "apt_mirror": apt_mirror,
             "replayed_tools": sorted(REPLAY_TOOLS),
+            "probe": probe_provenance,
             "source_trace": task["source_trace"],
             "target_action_id": task["target_action_id"],
             "target_command": task["target_command"],
             "prefix_actions": rows,
         }
     finally:
-        await _cleanup(agent, container_id, container_executable)
+        try:
+            await _cleanup(agent, container_id, container_executable)
+        finally:
+            probe_temp.cleanup()
     if artifact is None:
         raise AssertionError("preparation completed without an artifact")
     out.parent.mkdir(parents=True, exist_ok=True)
