@@ -1,0 +1,14 @@
+{
+  "abstain": false,
+  "blocker_patterns": [
+    "No module named (?P<id>[A-Za-z][A-Za-z0-9_-]{0,63})"
+  ],
+  "explanation": "A Python test command is blocked when its interpreter reports a missing module and is remediated by successfully installing the corresponding python3 module package.",
+  "remediation_patterns": [
+    "python3-(?P<id>[A-Za-z][A-Za-z0-9_-]{0,63})"
+  ],
+  "rule_id": "python_test_missing_module_package",
+  "scope_patterns": [
+    "^[a-z0-9 -]{0,16}pytest[ a-z0-9-]{0,16}$"
+  ]
+}

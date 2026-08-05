@@ -471,6 +471,16 @@ candidate in Section 7. Its question is unchanged:
 > separate resource modes that command text and an unstructured “install
 > happened” feature merge?
 
+**Outcome: structural NO-GO.** The single allowed call produced one generic
+Python-test rule: scope on short `pytest` commands, extract `No module named
+<id>` blockers, and treat successful `python3-<id>` commands as remediation.
+Independent development replay found blocker matches in 15 tasks but only one
+distinct captured identifier, `pytest`, below the frozen minimum of two. The
+candidate therefore failed before graph replay, PMF fit, primary-pair selection,
+or reserved coverage/scoring. The call used 143,623 prompt bytes, 56,982 input
+tokens, 1,664 output tokens, and 30.812 seconds. It was not repaired or retried;
+validation and final remain unopened.
+
 ### 9.1 One-shot agent contract and cost
 
 There is exactly one new tool-free Codex `gpt-5.6-sol` call at requested fast

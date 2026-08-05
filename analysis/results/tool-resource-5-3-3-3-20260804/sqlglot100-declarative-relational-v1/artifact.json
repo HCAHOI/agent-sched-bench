@@ -1,0 +1,106 @@
+{
+  "claim_bearing": false,
+  "codex_version": "codex-cli 0.146.0",
+  "cost": {
+    "prompt_bytes": 143623,
+    "usage": {
+      "cached_input_tokens": 0,
+      "input_tokens": 56982,
+      "output_tokens": 1664
+    },
+    "wall_seconds": 30.81214342499152
+  },
+  "development_evidence_sha256": "09b5101fe5eb7acace14994457edef2a0c3baeb518ad2ef541865de30c724c06",
+  "development_fit_sha256": "51c996702c42fa274af7165897187ef6ee855352a0e1b325763edaabcdb14457",
+  "development_selected_sample_ids": [
+    "S00067",
+    "S00071",
+    "S00129",
+    "S00134",
+    "S00195",
+    "S00200",
+    "S00300",
+    "S00304",
+    "S00359",
+    "S00364",
+    "S00628",
+    "S00635"
+  ],
+  "final_test_consumed": false,
+  "generation": {
+    "abstain": false,
+    "blocker_patterns": [
+      "No module named (?P<id>[A-Za-z][A-Za-z0-9_-]{0,63})"
+    ],
+    "explanation": "A Python test command is blocked when its interpreter reports a missing module and is remediated by successfully installing the corresponding python3 module package.",
+    "remediation_patterns": [
+      "python3-(?P<id>[A-Za-z][A-Za-z0-9_-]{0,63})"
+    ],
+    "rule_id": "python_test_missing_module_package",
+    "scope_patterns": [
+      "^[a-z0-9 -]{0,16}pytest[ a-z0-9-]{0,16}$"
+    ]
+  },
+  "generation_files": [
+    {
+      "name": "generation.events.jsonl",
+      "sha256": "5bf5b22fbb25596f26753a5d362ad14949c5282edf6390efbe57d11eb89ead3a"
+    },
+    {
+      "name": "generation.prompt.txt",
+      "sha256": "dda523b921aae3c07eb8719870756318122ed37d83fd2e3bafcb35a85483b5d7"
+    },
+    {
+      "name": "generation.response.json",
+      "sha256": "6b73161120def8278b8e0ada2c35746ff7c96e88dd2dbf7de979297cafb4b54a"
+    },
+    {
+      "name": "generation.schema.json",
+      "sha256": "2d775e6de87ab6d907a4f610e8592873b8b67f4f05494abe98a6f58face1946e"
+    },
+    {
+      "name": "generation.stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "host_identity": {
+    "commit": "bd9d8e6630cda10def030566449373f299004255",
+    "paths": [
+      "scripts/evaluation",
+      "src",
+      "pyproject.toml",
+      "uv.lock"
+    ]
+  },
+  "model": "gpt-5.6-sol",
+  "preregistration_commit": "bd9d8e6630cda10def030566449373f299004255",
+  "prior_inputs": [
+    {
+      "path": "/home/chiyu/workspace/agent-sched-bench/analysis/results/tool-resource-5-3-3-3-20260804/sqlglot80-20-offline-agent-extractor-v1/agent-artifact.json",
+      "sha256": "268bd210ee092b74425cc7c9ecc602889bb9a46199546996d249ca4f38284dc2"
+    },
+    {
+      "path": "/home/chiyu/workspace/agent-sched-bench/analysis/results/tool-resource-5-3-3-3-20260804/sqlglot80-20-offline-agent-extractor-v1/training-catalog.json",
+      "sha256": "6b6c9cac06561e542278baa6ca2de47cca2c223042b0af2b46da00325079c06c"
+    }
+  ],
+  "prompt_sha256": "dda523b921aae3c07eb8719870756318122ed37d83fd2e3bafcb35a85483b5d7",
+  "public_inputs": [
+    {
+      "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+      "sha256": "1441c0113752b1508341a83b303cc0f059d3455cd78debd0a584fa051e93318e"
+    },
+    {
+      "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl",
+      "sha256": "f4dc3e360d6f24c0c2436da956a9d1adf448defaa0a41034bb9373d2f8e6ee7c"
+    }
+  ],
+  "reasoning_effort": "medium",
+  "schema": "offline-agent-declarative-relational-v1",
+  "service_tier": "fast",
+  "spec_sha256": "6b73161120def8278b8e0ada2c35746ff7c96e88dd2dbf7de979297cafb4b54a",
+  "split_manifest_sha256": "75a1b25bbfeaf503da2f87a9e4f2795a94e8423a094538d8c18af58db78001fc",
+  "status": "development_structural_no_go_invalid_spec",
+  "structural_error": "blocker pattern captures fewer than two identifiers",
+  "validation_consumed": false
+}
