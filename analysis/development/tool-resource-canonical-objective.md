@@ -104,8 +104,8 @@ action set. It used each command's own timestamped execution prefix rather than
 cross-task similarity, but its hindsight action-space upper bound did not pass
 the frozen utility gate.
 
-The active development arm is a blind task-local state replay layered on the
-reviewed full-test phase correction. For this named arm only, a fixed agent may
+The blind task-local state replay is a frozen development predecessor layered on
+the reviewed full-test phase correction. For this named arm only, a fixed agent may
 read earlier completed command text, exit status, and bounded result excerpts
 from the current task, but never timing, telemetry, labels, the current result,
 or future calls. Every query uses a separate tool-free model context, preventing
@@ -123,18 +123,18 @@ Latency accuracy changed from 77.937% to 79.083%, CPU from 90.476% to 93.333%,
 RSS from 91.561% to 94.093%, and Disk remained 81.375% with bit-identical PMFs.
 Severe underpredictions fell from 4 to 0 for latency and from 7 to 1 for both
 CPU and RSS. All 16 changed target predictions were helpful across five tasks;
-none were harmful. This does not establish generalization. The unread adjacent
-SQLGlot100 collection is the frozen task-held-out replication.
+none were harmful. This does not establish generalization. At that time the
+unread adjacent SQLGlot100 collection was assigned as one task-held-out
+replication; Section 3's current 50/50 amendment supersedes that access plan.
 
-A separate development-only amendment tests a lower-cost agent boundary: two
+A separate completed development-only amendment tested a lower-cost agent boundary: two
 bounded, tool-free calls inspect only the first 80 exposed tasks and emit one
 frozen causal feature function. The function runs locally on future commands,
 emits a signature rather than a bucket, and leaves PMF fitting and unsupported
 fallback to the ordinary evaluator. It may discover its own scope, but the
 framework names no tool or hand-selected residual family. The fixed input,
 output, cost, support, and continuation rules are in
-`clause-interaction-kb-plan.md`. This arm does not replace or tune the unread
-blind-state held-out primary.
+`clause-interaction-kb-plan.md`. This arm consumed no adjacent task output.
 
 That lower-cost arm is now complete and is a development no-go. Its single
 agent-generated causal signature covered 31 warm-up commands in 15 tasks and
@@ -144,8 +144,8 @@ slightly for latency, CPU, and RSS, but the ten target changes split evenly into
 five helpful and five harmful and helpful changes covered only two tasks. The
 mechanism collapsed partial and complete dependency remediation: 14/15 warm-up
 support tasks contained both a short retry and a later real full-suite execution
-under the same signature. The method therefore stops without regeneration;
-the frozen blind-state held-out primary remains unchanged.
+under the same signature. The method therefore stops without regeneration and
+consumed no adjacent task output.
 
 A preregistered relational extension now tests the narrower failure mechanism
 without regenerating or rescoring that 80/20 run. One offline, tool-free agent
@@ -160,8 +160,17 @@ collapsed-state ablation isolates whether the relations add value; empirical
 resource PMFs remain the ordinary evaluator's job. There
 is no runtime agent, iterative repair, critic model, graph framework, or new
 dependency. The exact structural, coverage, cost, and fresh-data gates are
-frozen in `clause-interaction-kb-plan.md`; the existing blind-state held-out
-primary is unchanged.
+frozen in `clause-interaction-kb-plan.md`.
+
+SQLGlot is not excluded from this experiment. The original 100 SQLGlot tasks
+are development-only fit evidence; the additional 100 requested tasks were
+split by task ID, independent of completion state, into 50 validation and 50
+final-test tasks before any reserved output or label was read. Validation may
+only gate whether the byte-identical method consumes final test; it cannot tune
+the method or its PMFs. The earlier all-100 blind-state held-out wording is
+superseded before outcome access. Exact IDs and stage permissions live only in
+`analysis/development/sqlglot-relational-task-split.json` and
+`clause-interaction-kb-plan.md`.
 
 The fixed full-command targets in Section 1 remain the static-predictor
 baseline. Their first causal 80-task warm-up / 20-task test replay contains 349
@@ -323,12 +332,12 @@ ceiling, not a remaining-work signal.
   from that collection had been read.
 - Agent-guided residual opportunity counts were visible before the blind
   causal-state schema and gate were frozen. The resulting 80/20 replay is also
-  post-hoc development evidence. It cannot change the frozen held-out primary,
-  whose collection remained scientifically unread at this amendment.
+  post-hoc development evidence. The adjacent collection remained
+  scientifically unread at this amendment.
 - The offline generated-extractor protocol was frozen after the post-hoc blind
   state result was visible but before its catalog, agent selection, generated
-  source, or 20-task score existed. It is development-only and cannot replace
-  the already frozen held-out primary.
+  source, or 20-task score existed. It is development-only and consumed no
+  adjacent task output.
 - The first generated source and both prompts were frozen before candidate PMFs
   or final-20 scores were read. Its first replay stopped before scoring because
   regex source text was mistakenly treated as a required literal training
@@ -343,6 +352,13 @@ ceiling, not a remaining-work signal.
   evaluation result from it was read. The new arm is therefore an explicit
   development amendment evaluated only on the already-running task-disjoint
   collection, not a reanalysis of the exposed 80/20 split.
+- On 2026-08-05, before implementation or reserved-outcome access, the
+  all-adjacent-task evaluation scope was amended to preserve a final same-repo
+  reserve: the 100 requested task IDs were assigned 50/50 to validation and
+  final test using seed 20260805 without using completion status. Only process
+  and filesystem metadata had been inspected. The final partition cannot be
+  opened unless the frozen method passes validation, and validation cannot
+  change the source, fit, contrast, or gate.
 
 ## 6. Non-negotiable task contract
 

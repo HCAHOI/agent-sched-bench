@@ -2,8 +2,9 @@
 
 **Effective:** 2026-08-04
 
-**Status:** relational closure protocol frozen before implementation; adjacent
-SQLGlot collection running and scientifically unread
+**Status:** relational closure protocol frozen before implementation; same-repo
+validation/final task partitions fixed while the adjacent collection remains
+scientifically unread
 
 This plan extends `tool-resource-canonical-objective.md`. The earlier semantic
 KB and early-execution routes are complete negative results. The active question
@@ -83,10 +84,10 @@ controls span nine tasks. These are opportunity counts, not repaired
 predictions. No candidate replay or accuracy gain is claimed.
 
 This pass establishes that attempt count is only a proxy for environment state,
-but it does not yet define an executable predictor. Before any follow-up, freeze
-a small generic result-category schema, record the amendment allowing earlier
-completed exit status and result categories, and perform a blind causal replay.
-Do not use this discovery to tune the frozen held-out primary.
+but it does not yet define an executable predictor. Before the follow-up, a
+small generic result-category schema and the amendment allowing earlier
+completed exit status and result categories were frozen. The adjacent task
+outputs were not used in this discovery.
 
 Artifact:
 
@@ -132,13 +133,13 @@ for any; target-level helpful changes outnumber harmful changes; and helpful
 changes cover at least three test tasks. Identical eligible rows and the stated
 PMF-identity checks are validity conditions. These criteria were frozen after
 the discovery counts were visible, so any result remains post-hoc development
-evidence and cannot alter the frozen held-out primary.
+evidence.
 
 ## 5. Offline-generated causal extractor
 
-This development-only arm tests whether an agent is useful as a batch feature
-program generator rather than a per-command predictor. It does not alter the
-blind-state held-out primary in Section 6.
+This development-only arm tested whether an agent is useful as a batch feature
+program generator rather than a per-command predictor. It consumed no adjacent
+task output.
 
 The first 80 development tasks are exposed through a generic catalog. Every
 eligible command has opaque task and sample IDs, command text, parsed clauses,
@@ -220,30 +221,49 @@ collection blocker to the exact remediation or otherwise distinguish partial
 from complete remediation. This run must not be regenerated on the exposed
 split.
 
-## 6. Frozen blind-state held-out replication
+## 6. Same-repository evidence isolation
 
-Development passed and the implementation is frozen. After collection
-completion, fit state on all 100 existing SQLGlot tasks and evaluate every
-evidence-valid task from the unread collection:
+SQLGlot is deliberately both the fit and evaluation repository because it is
+currently the only repository with enough independent tasks. Repository
+membership is not excluded. Leakage is controlled only by disjoint task IDs and
+stage permissions recorded in the authoritative manifest:
 
-`traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804`
+`analysis/development/sqlglot-relational-task-split.json`
 
-Current and the candidate receive the same original 100 tasks as prior evidence.
-The candidate's phase PMFs and Current's repository KB are frozen for the primary
-replication; within-new-collection updates are secondary only. Report all failed
-or telemetry-invalid collection tasks rather than silently excluding them.
+The manifest was generated without reading reserved task output, labels, or
+telemetry: lexicographically sort the 100 requested adjacent task IDs, shuffle
+with Python `random.Random(20260805)`, assign the first 50 to validation and the
+remaining 50 to final test. Completion status did not affect assignment. The
+three disjoint roles are:
 
-The held-out gate is fixed before any result from that collection is read:
+- `development` — the original 100 SQLGlot tasks. Their commands, outputs,
+  resource labels, and previous evaluation results are fully exposed. They may
+  generate the source, fit PMFs, and select the single primary state contrast,
+  but they cannot support a validation or generalization claim.
+- `validation` — 50 additional task IDs. Before source, evaluator, tests,
+  structural gate, and primary contrast are reviewed and committed, only IDs,
+  process status, file existence/counts, and collection-completion metadata may
+  be read. Then this partition may be scored once with the frozen artifact. It
+  may decide whether to consume final test, but cannot change prompt, source,
+  parser semantics, state reducer, PMFs, support, coverage, targets, or gates.
+- `final_test` — the other 50 additional task IDs. Until validation passes, the
+  same metadata-only rule applies. A validation no-go leaves all final command
+  output, labels, telemetry, and scores unread. A validation go authorizes one
+  unchanged final evaluation; no refit on validation tasks is allowed.
 
-- Disk predictions are bit-identical;
-- latency, CPU, and RSS exact accuracy are each no lower than Current;
-- severe underprediction is lower for at least two of those targets and no
-  higher for any;
-- changed predictions are net helpful; and
-- helpful changes cover at least three tasks.
+Current and every candidate use the same frozen public evidence and all 100
+development tasks as settled same-repository prior. Neither arm updates within
+validation or final test in the primary comparison. Any public, development,
+validation, and final task-ID overlap is a hard validity failure. Report every
+requested reserved task as accepted, failed, unfinished, or telemetry-invalid;
+never silently exclude it.
 
-This is a task-held-out same-repository replication, not a temporal deployment
-claim: the new tasks precede the development tasks by creation time.
+The earlier plan to use all 100 adjacent tasks as one blind-state held-out
+primary is superseded before any adjacent outcome was read. The blind classifier
+remains a development method, not a claim-bearing use of final test. This is a
+task-held-out same-repository experiment, not temporal or cross-repository
+generalization: the adjacent tasks precede the development tasks by creation
+time.
 
 ## 7. Relational closure arm
 
@@ -358,20 +378,19 @@ pair. Record the selected pair and target in the frozen artifact.
 
 ### 7.4 Fresh evaluation and frozen gate
 
-The only evaluation corpus is every evidence-valid task in the adjacent,
-task-disjoint SQLGlot collection named in Section 6. The original 100 tasks are
-the fixed fit corpus. Current and the relational candidate receive the same
-public evidence and all 100 original tasks as settled repository-local prior;
-neither updates within the fresh collection in the primary comparison. A
-within-fresh causal-update replay is descriptive secondary evidence only.
+The original 100 tasks are the fixed fit corpus. Validation and final test are
+the exact same-repository task-ID partitions in Section 6. The fitted source,
+PMFs, collapsed-state ablation, primary contrast, and Current repository KB stay
+byte-identical across both evaluations. No within-reserved update is part of
+this experiment.
 
-Before labels are read, require label-free carrier coverage of at least 20
-commands across five fresh tasks. Each state in the frozen primary contrast
-must appear on at least five commands from three fresh tasks. Failure is a
-coverage no-go and labels remain unscored. If coverage passes, the candidate
-replaces frozen Current independently for any target with a usable state PMF;
-every unsupported command-target falls back to bit-identical Current. Report
-every command and every failed, unfinished, or telemetry-invalid task.
+On each reserved partition separately, before labels are read, require
+label-free carrier coverage of at least 20 commands across five tasks. Each
+state in the frozen primary contrast must appear on at least five commands from
+three tasks. Failure is a coverage no-go and labels for that partition remain
+unscored. If coverage passes, the candidate replaces frozen Current
+independently for any target with a usable development state PMF; every
+unsupported command-target falls back to bit-identical Current.
 
 Fit a mandatory collapsed-state ablation from the identical development
 outputs, replacing `(rule_id, state)` with `rule_id` while preserving the same
@@ -379,8 +398,8 @@ carrier, commands, evidence, support threshold, targets, and fallback. This is
 the direct control for “the new extractor found a better carrier, but the
 relations did no work.”
 
-The relational arm is a GO only if, relative to frozen Current on identical
-eligible command rows and labels:
+Validation continues to final test only if, relative to frozen Current on
+identical eligible command rows and labels, all of these gates pass:
 
 - exact accuracy is no lower for latency, CPU, RSS, or Disk;
 - severe underprediction is no higher for any target and lower for at least
@@ -393,11 +412,12 @@ eligible command rows and labels:
   primary state pair, the relational arm has strictly more correct predictions
   than the collapsed-state ablation.
 
-Also report accuracy and changes by relational state and by same-rule state
-pair, but no subset can select the method. This arm is a preregistered secondary
-use of the same unread corpus; it does not alter the Section 6 blind-state
-primary. Once either outcome is read, the corpus is development-exposed for all
-later methods.
+The final-test GO gate is identical and independent. The overall method is GO
+only if both validation and final test pass; a final coverage failure is a
+no-go. Report accuracy and changes by relational state and by the frozen
+same-rule state pair, but no subset can select the method. Once validation is
+read, those 50 tasks are development-exposed; the final 50 remain untouched
+until the transition above is satisfied.
 
 ## 8. Implementation and checks
 
@@ -425,3 +445,7 @@ later methods.
   fit-only PMFs, frozen Current identity, and fresh task disjointness.
   Independent review checks leakage and gate implementation before any
   adjacent-collection output or label is opened.
+- The evaluator accepts the split manifest and one explicit role. It rejects a
+  task outside that role, any development/reserved overlap, validation before a
+  frozen artifact, final test without a passing immutable validation result, or
+  fit/source hashes that differ between stages.
