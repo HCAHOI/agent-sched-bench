@@ -13,6 +13,7 @@ _NAME = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
 _LOCAL_EDITABLE = re.compile(r"^\.(?:\[([A-Za-z0-9._,-]+)\])?$")
 _EXIT_CODE = re.compile(r"^Exit code: (-?\d+)$")
 _NAME_SEPARATORS = re.compile(r"[-_.]+")
+_PYTHON_EXECUTABLE = re.compile(r"^python(?:\d+(?:\.\d+)*)?$")
 
 
 @dataclass(frozen=True)
@@ -60,7 +61,11 @@ def parse_pip_install(argv: Sequence[str]) -> PipInstallSignature | None:
     if not words:
         return None
     executable = PurePosixPath(words[0]).name.lower()
-    if len(words) >= 4 and words[1:4] == ("-m", "pip", "install"):
+    if (
+        len(words) >= 4
+        and _PYTHON_EXECUTABLE.fullmatch(executable)
+        and words[1:4] == ("-m", "pip", "install")
+    ):
         invocation = "python-module"
         start = 4
     elif len(words) >= 2 and executable in {"pip", "pip3"} and words[1] == "install":

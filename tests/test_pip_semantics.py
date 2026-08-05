@@ -35,6 +35,8 @@ def test_pip_signature_and_causal_task_state() -> None:
     assert parse_pip_install(("pip", "install", "-e", ".[dev]")) is not None
     assert parse_pip_install(("pip", "install", "-r", "requirements.txt")) is None
     assert parse_pip_install(("pytest", "-q")) is None
+    assert parse_pip_install(("pytest", "-m", "pip", "install", "numpy")) is None
+    assert parse_pip_install(("bash", "-m", "pip", "install", "numpy")) is None
 
     public_row = Row(
         "public__repo-1",
