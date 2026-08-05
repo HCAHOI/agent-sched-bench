@@ -205,13 +205,14 @@ final remains closed. This narrows the next question to inference-time evidence
 about previously unseen requested work and physical environment state, rather
 than another coarser command key.
 
-The next frozen development test uses an intermediate work unit rather than a
-coarser generic key: Jaccard overlap between explicit pytest file/node targets,
-partitioned by the existing non-target pytest modifiers. It follows exact
-complete-command evidence and otherwise falls back to Current. A pre-outcome,
-label-free scan found 52 non-exact validation commands with causal target
-overlap. The all-four-target five-point gate is fixed in the research record;
-final remains closed.
+The separately frozen pytest target-overlap test used an intermediate work unit
+rather than a coarser generic key: Jaccard overlap between explicit test
+file/node targets. It improved latency, CPU, and RSS by 3.831, 4.167, and 6.250
+points, but Disk by only 1.091 points, so the all-target gate returned NO-GO.
+On the overlap carrier alone, compute/memory gains were large while Disk
+accuracy fell by 14.58 points. This is evidence for semantic requested-work
+units for latency/CPU/RSS and against using them as a proxy for physical I/O
+state. Final remains closed.
 
 Physical Disk prediction requires evidence about pre-command cache
 residency or equivalent environment state. The controlled file-footprint by

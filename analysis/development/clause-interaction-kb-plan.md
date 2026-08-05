@@ -8,8 +8,8 @@ NO-GO. The 50-task validation partition is development-exposed; the 50-task
 final partition remains unread and unauthorized. The generic linear residual
 calibrator and causal full-command outcome memory also returned NO-GO. Disk has
 a separately frozen cache-state mechanism test that is not authorized to run.
-The next frozen development test shares complete-command evidence across
-overlapping pytest target sets; it does not open final.
+The pytest target-overlap test also returned NO-GO; it isolated a strong
+CPU/RSS mechanism but not a Disk mechanism. Final remains closed.
 
 This record extends `tool-resource-canonical-objective.md`, which remains the
 authority for targets, bucket boundaries, causal visibility, eligible command
@@ -675,3 +675,31 @@ The target-overlap arm is GO only if all are true:
 A miss closes target-overlap without changing unit expansion, similarity,
 partitions, or arbitration. It cannot open final. Runtime is expected below ten
 seconds with no container, filesystem probe, dependency, or agent call.
+
+The frozen replay returned NO-GO:
+
+| Target | Current | Collapsed signature | Target overlap | Primary delta |
+|---|---:|---:|---:|---:|
+| Latency | 74.904% | 78.448% | 78.736% | +3.831 pp |
+| CPU | 82.887% | 86.012% | 87.054% | +4.167 pp |
+| RSS | 80.978% | 85.462% | 87.228% | +6.250 pp |
+| Disk | 82.044% | 83.135% | 83.135% | +1.091 pp |
+
+The primary arm made 188 helpful and 63 harmful changes across 44 helpful
+tasks, with no severe-underprediction regression. Runtime was 1.082 seconds.
+The overlap carrier itself covered only 52 latency/RSS and 48 CPU/Disk rows,
+but there it improved Current by 15.38, 29.17, and 34.62 points for latency,
+CPU, and RSS. On the same Disk carrier it reduced accuracy by 14.58 points.
+
+Observed: explicit pytest work units separate compute and memory load far more
+cleanly than the name-free signature, but target identity does not identify
+physical I/O state. Inference: semantic work-unit adapters may form the
+CPU/RSS/latency half of a predictor, while Disk needs a separate state signal.
+This exact pytest arm is closed by the all-target gate and cannot be repaired or
+selectively enabled after seeing this result. A new combined method, if any,
+must be separately frozen and must leave this NO-GO intact.
+
+Artifacts:
+
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-pytest-target-overlap-v1/result.json`
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-pytest-target-overlap-v1/rows.jsonl`
