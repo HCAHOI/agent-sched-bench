@@ -5,10 +5,9 @@
 **Status:** the offline-agent and deterministic task-phase directions are
 closed. The parameter-free causal within-task telemetry overlay also returned
 NO-GO. The 50-task validation partition is development-exposed; the 50-task
-final partition remains unread and unauthorized. The next frozen development
-candidate is a generic linear residual calibrator for latency, CPU, and RSS.
-Disk has a separately frozen cache-state mechanism test that is not authorized
-to run.
+final partition remains unread and unauthorized. The generic linear residual
+calibrator also returned NO-GO. Disk has a separately frozen cache-state
+mechanism test that is not authorized to run.
 
 This record extends `tool-resource-canonical-objective.md`, which remains the
 authority for targets, bucket boundaries, causal visibility, eligible command
@@ -477,3 +476,39 @@ candidate unable to pass by construction. This protocol was therefore openly
 amended to the uniform-base and fail-closed-correct-count rule above. The row,
 its label, and Current unavailability were already exposed by the task-phase
 NO-GO; no residual weight, prediction, or target score was visible.
+
+The frozen validation returned NO-GO on 1,044 command rows:
+
+| Target | Current | Residual | Delta |
+|---|---:|---:|---:|
+| Latency | 74.904% | 73.372% | -1.533 pp |
+| CPU | 82.887% | 83.036% | +0.149 pp |
+| RSS | 80.978% | 82.065% | +1.087 pp |
+| Disk | 82.044% | 82.044% | bit-identical |
+
+Fit plus tensor prediction took 4.990 seconds on CPU. Across latency, CPU, and
+RSS, 192 changes were helpful and 201 harmful. Severe-underprediction rates did
+not regress, but none of the three targets approached the five-point gate.
+Latency alone changed 288 rows and had 102 helpful versus 118 harmful changes;
+the model traded exact modes for fewer severe underpredictions.
+
+The label support and task metadata explain why model capacity is not the next
+knob. Fit contains only 4 CPU-Medium and 5 RSS-Medium commands, versus 28 and 87
+in validation. Joining the committed task IDs to the cached
+`nebius/SWE-rebench` input metadata shows that all 80 fit tasks were created
+from 2024-08-28 through 2025-04-25, while all 50 validation tasks span
+2023-09-27 through 2024-07-15. The cohorts have zero date overlap and use
+different repository versions and environment-setup commits.
+
+Observed: a nominal classifier fit on the later workspace generation cannot
+recover middle buckets that barely exist in its labels. Inference: the split is
+backward temporal extrapolation, so command and history features omit a real
+deployment variable: the checked-out workspace and environment generation.
+Do not add timestamp, task ID, version, image ID, class weights, or an ordinal
+loss to rescue this result. The next method must first show that physical,
+inference-time workspace measurements carry the missing signal.
+
+Artifacts:
+
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot20-80-current-fit-v1`
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-command-history-residual-v1`

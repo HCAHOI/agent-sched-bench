@@ -177,18 +177,28 @@ task, so treating the last measured mode as persistent creates a one-command
 lag rather than a stable state estimate. The exact result and changed-case
 diagnosis are in `clause-interaction-kb-plan.md`.
 
-The next frozen development candidate is a generic command-conditioned linear
-residual calibrator. Current supplies the base PMF; the calibrator sees only
-generic parsed command structure and labels of earlier completed commands in
-the same task. It is fit on the exposed original SQLGlot tasks and evaluated
-once on the already-exposed validation tasks, with no adaptation there. It
-targets latency, CPU, and RSS while leaving Disk bit-identical. Its feature
-schema, optimizer, split, and gate are fixed in `clause-interaction-kb-plan.md`.
+The generic `command-history-residual-v1` candidate then combined Current with
+parsed command structure and causal task history. On the exposed validation
+tasks it changed latency by -1.533 points, CPU by +0.149, RSS by +1.087, and
+left Disk bit-identical. Its frozen five-point gate returned NO-GO. It reduced
+severe underprediction but overrode too many correct Current modes: 192 changed
+target predictions were helpful and 201 harmful.
+
+This validation also exposed a cohort problem that a stronger classifier cannot
+repair. Every 80-task fit item is newer than every 50-task validation item:
+their creation ranges are 2024-08-28--2025-04-25 and
+2023-09-27--2024-07-15, respectively, with different repository versions and
+environment setup commits. CPU/RSS Medium support shifts from 4/5 fit commands
+to 28/87 validation commands. This is backward temporal extrapolation across
+workspace generations, not an IID same-repository split. The next research
+question is whether inference-time workspace/environment measurements explain
+that shift; task ID, timestamp, version, or image identity alone are not valid
+predictive shortcuts.
 
 Physical Disk prediction requires evidence about pre-command cache
 residency or equivalent environment state. The controlled file-footprint by
 page-residency mechanism test on 12 already-exposed development tasks remains
-frozen in the same record. Neither candidate authorizes runtime integration,
+frozen in the same record. No completed candidate authorizes runtime integration,
 the long residency run, global cache eviction, or final-partition access.
 
 The fixed full-command targets in Section 1 remain the static-predictor
