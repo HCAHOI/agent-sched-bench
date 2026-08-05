@@ -1085,3 +1085,11 @@ does not open final. The full 12-task run remains unauthorized, requires 72
 container starts, is estimated at 1--3 hours and up to roughly 60 GB, and must
 wait for the active PennyLane collection. The instrumentation can be implemented
 and smoke-tested without starting a task container.
+
+The label-free replay manifest is frozen at
+`analysis/development/sqlglot-physical-state-manifest.json`. It reproduced the
+81 eligible tasks and seed-42 selection above, and retained 171 mutating prefix
+actions (145.5632 seconds in the source traces) across the twelve tasks. All
+prefix actions use supported tools and none requires a source runtime artifact.
+The twelve base images are absent locally, so the storage and pull estimate
+above remains operative.

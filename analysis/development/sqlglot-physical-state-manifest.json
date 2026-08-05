@@ -1,0 +1,432 @@
+{
+  "inputs": {
+    "tasks": "data/swe-rebench/tasks.json",
+    "trace_root": "traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803"
+  },
+  "prefix_replay": {
+    "ignored_nonmutating_tools": [
+      "list_dir",
+      "message",
+      "read_file",
+      "sessions_yield",
+      "spawn",
+      "web_fetch",
+      "web_search"
+    ],
+    "replayed_tools": [
+      "edit_file",
+      "exec",
+      "write_file"
+    ],
+    "source_runtime_artifacts_allowed": false,
+    "unknown_tools_fail_closed": true
+  },
+  "schema": "sqlglot-physical-state-manifest-v1",
+  "selection": {
+    "criterion": "first successful single-clause frozen-PytestSignature command",
+    "eligible_tasks": 81,
+    "resource_labels_read": false,
+    "seed": 42,
+    "selected_tasks": 12
+  },
+  "tasks": [
+    {
+      "image": "swerebench/sweb.eval.x86_64.tobymao_1776_sqlglot-4459",
+      "prefix_replay_action_ids": [
+        "tool_1_call_8A5EPWsxGsuBZ9PuZ5KBeyVj",
+        "tool_3_call_u2Z7JBEfiU3B4hFqx3lwzGaF",
+        "tool_4_call_LnlwquSOfKDF4mIVo8g9EXkA",
+        "tool_6_call_qJGDVWoHvxtbhCYRaXUHev78",
+        "tool_7_call_Ngt8pvpH9DTzj85uApLK8bxz",
+        "tool_8_call_1v4xv0rXh3k0oi58ZOidxMVp",
+        "tool_9_call_4hhN4O8CvsZPVuPFLIqXPhL8",
+        "tool_10_call_watHPynbuQhTefQBXFkaKF47",
+        "tool_11_call_U9IlbqNDcL28s9PUtgrIDCys",
+        "tool_12_call_eMWIOoPr0cn0fTGSATnrfoyi"
+      ],
+      "prefix_replay_source_duration_ms": 10217.1,
+      "prefix_tool_actions": 13,
+      "prefix_tool_counts": {
+        "edit_file": 2,
+        "exec": 8,
+        "list_dir": 1,
+        "read_file": 2
+      },
+      "source_trace": "traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4459/attempt_1/trace.jsonl",
+      "target_action_id": "tool_13_call_k5UgFZEzV02uV5ZxKY3DFnfq",
+      "target_command": "SQLGLOTRS_TOKENIZER=0 /opt/conda/envs/testbed/bin/pytest",
+      "target_source_duration_ms": 134794.8,
+      "target_trace_line": 89,
+      "task_id": "tobymao__sqlglot-4459"
+    },
+    {
+      "image": "swerebench/sweb.eval.x86_64.tobymao_1776_sqlglot-4004",
+      "prefix_replay_action_ids": [
+        "tool_1_call_cOlmrpQhoskLULPxTnvgpM3S",
+        "tool_4_call_hwpUEnl5XYmWpOalmp4XbD9p",
+        "tool_7_call_lh2zKRmFDpqBuiFO0g5bCgnb",
+        "tool_8_call_aDKvpSFV33U6jAbF6T6MVwlX",
+        "tool_10_call_dWu7sUFjVNDsTv43sjvZvK80",
+        "tool_11_call_xRgJ2ZPSgY1XVJ4e8HyIg0jS",
+        "tool_12_call_k3RbA7a66NTJsCOdDcfmCfY6",
+        "tool_15_call_l7geyhw9F6YugLFFN26uA8fF",
+        "tool_16_call_aMcFgqDbTWCpZBRs5lSOthpj",
+        "tool_17_call_46vr20VmLhGalTmGplV1kHro",
+        "tool_19_call_jasrEPkdNPwX9ZuJfj7E0spl",
+        "tool_20_call_fehL4vUnSIQnrgGbXjErWJ6P",
+        "tool_21_call_Ng1nfNqtkKvNy6H0tCNvt0hS"
+      ],
+      "prefix_replay_source_duration_ms": 34402.5,
+      "prefix_tool_actions": 22,
+      "prefix_tool_counts": {
+        "edit_file": 3,
+        "exec": 10,
+        "list_dir": 1,
+        "read_file": 8
+      },
+      "source_trace": "traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4004/attempt_1/trace.jsonl",
+      "target_action_id": "tool_22_call_8OSSTtRwj4ti05IHu9OHDDGQ",
+      "target_command": "python3 -m pytest tests/test_optimizer.py::TestOptimizer::test_substring_type_annotation",
+      "target_source_duration_ms": 2387.2,
+      "target_trace_line": 143,
+      "task_id": "tobymao__sqlglot-4004"
+    },
+    {
+      "image": "swerebench/sweb.eval.x86_64.tobymao_1776_sqlglot-4390",
+      "prefix_replay_action_ids": [
+        "tool_1_call_fDwSHC6XzqnonVfHjIEwaon0",
+        "tool_4_call_G61J2fa0QtnmDjQI81v0ezt4",
+        "tool_8_call_8b1dNZzcuT78mWhsYQOxhWi9",
+        "tool_10_call_kwfGOnITkrZk4It5bVu5JzVH",
+        "tool_11_call_6SYClMWRjOLbWTYIgmlga8nt",
+        "tool_12_call_Nhs0KLVFZMUaABxrgUbS2iHE",
+        "tool_17_call_wS3uRSCvLzWvprOARkYeh9Ce",
+        "tool_18_call_E9U7KUn30CPwu42Fo0r1f9tM",
+        "tool_21_call_q3qAGj9ojbAj2OqSRXgyPJ5u",
+        "tool_22_call_OLzUgle77Yiy58i7KItj5NVY",
+        "tool_24_call_GbeUHH93p1oO7qELPu2yB0Ez",
+        "tool_25_call_tIla567M9WVSvfPt4lAuzxZp"
+      ],
+      "prefix_replay_source_duration_ms": 11791.6,
+      "prefix_tool_actions": 26,
+      "prefix_tool_counts": {
+        "edit_file": 2,
+        "exec": 10,
+        "list_dir": 1,
+        "read_file": 13
+      },
+      "source_trace": "traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4390/attempt_1/trace.jsonl",
+      "target_action_id": "tool_26_call_DzmhkDgPLMrK0hu4GDNGHBIO",
+      "target_command": "python3 -m pytest tests/test_parser.py::TestParser::test_alter_table_drop_column",
+      "target_source_duration_ms": 981.6,
+      "target_trace_line": 167,
+      "task_id": "tobymao__sqlglot-4390"
+    },
+    {
+      "image": "swerebench/sweb.eval.x86_64.tobymao_1776_sqlglot-4430",
+      "prefix_replay_action_ids": [
+        "tool_1_call_xcmhdZaBTWWBdnJvmYIfUEwr",
+        "tool_2_call_1ZnpkFg07q0rB5sd4YCqG1yH",
+        "tool_3_call_k2HPVVmhNkbkK5BuFO4zxtAH",
+        "tool_4_call_DlDqgA0qlxI7diTf0nmXStnq",
+        "tool_5_call_eTguNfycV1vMXfIdMueXlZb5",
+        "tool_6_call_ukZRTgkrholHe4haeGRYsgJ0",
+        "tool_7_call_4P9lBYUFaMjPpIjecxQ82mVq",
+        "tool_8_call_G6gScPqUK58c9M0vJTYf2zqC",
+        "tool_9_call_VSEL2KfGmqmdNYZmMZ3IZihq",
+        "tool_10_call_kK9FvCERQQKhRi917FCPA60b",
+        "tool_11_call_ZTwZ7C0VXmzetO3csJnO1AQX",
+        "tool_12_call_992beVxjGFWjBwvaBxZ0pejF",
+        "tool_13_call_i6MQQSpmKhRu8pSC0UmCt28U",
+        "tool_14_call_JWAnHdJtVhhwFoPZmNAze88f",
+        "tool_15_call_bUUkxL2uyMc8Cc52tUJWuuKE",
+        "tool_16_call_QxvC7QdTjlZFcLBFHDm8FNZd",
+        "tool_17_call_qFxAM87dImgZKybsblKuCrcM",
+        "tool_18_call_qRJMgSgZzUfc990uEmtT7kpv",
+        "tool_19_call_gb4IeQXA2QNK1ZEK7JvS1pS0",
+        "tool_20_call_Jn69Jdk5TGYs6ltbmw71GYaN",
+        "tool_21_call_XzvdFKnvQ9EGZj7uTQsoL43W",
+        "tool_22_call_nfLbg9vCTQLbL9QntiFPVl1Z",
+        "tool_23_call_H8BGCvZC260hv6DvYI3alwoU"
+      ],
+      "prefix_replay_source_duration_ms": 15347.4,
+      "prefix_tool_actions": 24,
+      "prefix_tool_counts": {
+        "edit_file": 6,
+        "exec": 17,
+        "list_dir": 1
+      },
+      "source_trace": "traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4430/attempt_1/trace.jsonl",
+      "target_action_id": "tool_24_call_fUrUAOuyIE5lyGMsKHyD2WJg",
+      "target_command": "SQLGLOTRS_TOKENIZER=0 pytest -q tests/dialects/test_bigquery.py",
+      "target_source_duration_ms": 1153.4,
+      "target_trace_line": 155,
+      "task_id": "tobymao__sqlglot-4430"
+    },
+    {
+      "image": "swerebench/sweb.eval.x86_64.tobymao_1776_sqlglot-4165",
+      "prefix_replay_action_ids": [
+        "tool_1_call_dHLCAn1vl5TwOBPmk8XsrZrh",
+        "tool_2_call_sa5ieezwp0z8lwFo5Hkw528u",
+        "tool_10_call_xVSswJtUrsO8rQuAptXF4pNc",
+        "tool_13_call_xWmOZhbsw4eC73X9DNMu5jjy",
+        "tool_15_call_R63JVUovd1z1KhMyAPROwPK6",
+        "tool_17_call_RoCGlV2YeSSjeSW3NU9Fhd2C",
+        "tool_18_call_qaGBcQda79OcXWO1HPYCdHo4",
+        "tool_19_call_rVx5wymfklktxwlJx2B49uvH",
+        "tool_20_call_7ozJKLeHOqQOO3G9zC5Mdz5B",
+        "tool_21_call_i9gvUVb0S4BaicyGcSGFtSuk",
+        "tool_22_call_T9k1nMSkhdEDkjzNFnu4aYAk",
+        "tool_23_call_AMIUkAIW7D7LQlbSeF3AUHHY",
+        "tool_24_call_6fF8qfbCrq6uKtReoABOaYlJ",
+        "tool_25_call_CTACiDHJsrcCqdPiAgRklT7r",
+        "tool_26_call_OQQfmC0TCPe9ETnslEjL7sjb",
+        "tool_27_call_dLviOppF5fwzpqcsEJ1vxvRA",
+        "tool_28_call_F3CD8kF9u5SqOEiwaZTvRTtH",
+        "tool_29_call_vNf2ktNeTZuKbDSWEYgQlGxf",
+        "tool_30_call_9Ygw2eU5JLR2KyWz7rcVaODr",
+        "tool_31_call_DXPJAtEkuKg1649IPETQcwTW"
+      ],
+      "prefix_replay_source_duration_ms": 9908.300000000001,
+      "prefix_tool_actions": 32,
+      "prefix_tool_counts": {
+        "edit_file": 11,
+        "exec": 9,
+        "list_dir": 1,
+        "read_file": 11
+      },
+      "source_trace": "traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4165/attempt_1/trace.jsonl",
+      "target_action_id": "tool_32_call_zZ4ndlBzDgfrsDFuaYrgf9M0",
+      "target_command": "python3 -m pytest -q tests/dialects/test_postgres.py",
+      "target_source_duration_ms": 1238.9,
+      "target_trace_line": 203,
+      "task_id": "tobymao__sqlglot-4165"
+    },
+    {
+      "image": "swerebench/sweb.eval.x86_64.tobymao_1776_sqlglot-3975",
+      "prefix_replay_action_ids": [
+        "tool_1_call_iDaVbelQgsoJbspVnpHB3VDi",
+        "tool_8_call_imvASK19JqWiUO2HuZjqTA8R",
+        "tool_11_call_EMlbzIvjgSqq8P7a8ZM97Ypq",
+        "tool_14_call_C4W28jj1MonX9d7iaJBDHbGE",
+        "tool_19_call_6BhUxQlHFZVC2q7m6lCGLG62",
+        "tool_20_call_Wos4eXQSyn5yFXwrMQoTrOg2",
+        "tool_21_call_P6IHN2Xf8OAC6gNaQfcMlQUZ",
+        "tool_22_call_MjRDFMgiT37D2TuCBgS49Ef0",
+        "tool_23_call_hiFb2d9oMh4CzvajK7Fok6tM",
+        "tool_24_call_5EskKsDaZzFAgdBAiObRrkkb",
+        "tool_25_call_IRgfmFx6IrBbKDan0uZRXgQT",
+        "tool_26_call_dEUJDdKM2Px8HAeiHz3aKn95",
+        "tool_28_call_JQx9QqwkS6qOkzzau3eWQ3BV",
+        "tool_29_call_kmAF4e2FeGqbcBkAVYt6QW9r",
+        "tool_30_call_osH4Cg1HRxXETyfnRuvsa8xK",
+        "tool_31_call_K8RjW793G0Ktawpmlv6Z84w1",
+        "tool_32_call_5syKjrlZORSQQAXl6FN2OzXG",
+        "tool_33_call_yHu5r9jsQXgAC26zUJAy8Emh",
+        "tool_34_call_f1Pp90x6E1ySIHfTv0L7XF9n"
+      ],
+      "prefix_replay_source_duration_ms": 13044.2,
+      "prefix_tool_actions": 35,
+      "prefix_tool_counts": {
+        "edit_file": 7,
+        "exec": 12,
+        "list_dir": 1,
+        "read_file": 15
+      },
+      "source_trace": "traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3975/attempt_1/trace.jsonl",
+      "target_action_id": "tool_35_call_E7G3kChuwIDDZDw8nDZFoRG0",
+      "target_command": "pytest -q tests/dialects/test_snowflake.py",
+      "target_source_duration_ms": 1346.9,
+      "target_trace_line": 221,
+      "task_id": "tobymao__sqlglot-3975"
+    },
+    {
+      "image": "swerebench/sweb.eval.x86_64.tobymao_1776_sqlglot-4438",
+      "prefix_replay_action_ids": [
+        "tool_1_call_LRmPQ2IpEJo6WrVpOHnAn0c6",
+        "tool_7_call_nKjouZKHkiUIJDA2MnwL4J0w",
+        "tool_10_call_eKdjZH2NlLUtSU7uzRoGX3Ui",
+        "tool_11_call_R9IIlRzYLU10uhLd15z9h9mo",
+        "tool_12_call_QQl6zh6Pct1oDIBYa3MmWRWQ",
+        "tool_13_call_Ig2WmSiSoSkE3BS7TAVq26jy",
+        "tool_14_call_VUALdJArdN1XScOonCdwrGUm",
+        "tool_15_call_6CFcDEHAEo7psfr5TVF9Vrax",
+        "tool_16_call_lPJicRiZnT0dfOT2gAalhgUZ",
+        "tool_20_call_DTX9Z1KpLzFdyKLq529lLKzm",
+        "tool_21_call_NZqrZICwafjecT4WtNqgcBta",
+        "tool_22_call_33MyNtNEiK7ew1wck5BF1X2F",
+        "tool_24_call_IxEqKQhhdehJhD72eowcMzeb",
+        "tool_25_call_dD0WbozdzsWL0Uu5ZfV9V48j",
+        "tool_26_call_e25od1Ii3yStjvd6cq4yQTUe",
+        "tool_27_call_DAJNwRqxnEBkUNybHIKnJq82",
+        "tool_28_call_8cRKAJxuzyXhp3cVf1QqhzYi"
+      ],
+      "prefix_replay_source_duration_ms": 11263.6,
+      "prefix_tool_actions": 29,
+      "prefix_tool_counts": {
+        "edit_file": 4,
+        "exec": 13,
+        "list_dir": 1,
+        "read_file": 11
+      },
+      "source_trace": "traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4438/attempt_1/trace.jsonl",
+      "target_action_id": "tool_29_call_sWGxVDSoIi6XboauCZ2LrrFi",
+      "target_command": "python3 -m pytest tests/dialects/test_tsql.py -q",
+      "target_source_duration_ms": 1007.0,
+      "target_trace_line": 185,
+      "task_id": "tobymao__sqlglot-4438"
+    },
+    {
+      "image": "swerebench/sweb.eval.x86_64.tobymao_1776_sqlglot-3891",
+      "prefix_replay_action_ids": [
+        "tool_1_call_4bIBGAt7veZ2hnqCF3ubQkzE",
+        "tool_2_call_19IZIU2atnXsUIfM8QAnho1e",
+        "tool_3_call_fcYP9PezzkhDHfACHo96PFvY",
+        "tool_4_call_AhdHoe8te6GO00YkQE0Flyek",
+        "tool_7_call_J0JCU4O1S4Sfnctez2TfZNTj",
+        "tool_8_call_DfKpUnRw9Q5lTWNj7p5hZtKk",
+        "tool_9_call_v1LJCDbQy4uhuGNpQVLgacXM",
+        "tool_11_call_AhQ1d4IRpCpPidWJVolwjjai",
+        "tool_12_call_7rTUCw41lKTWPHLsf4nOLDAY",
+        "tool_13_call_tAxReazl0FqgGqsNTRPHtO6t",
+        "tool_14_call_vaL0WDUUxQpgobYcbsODDorr",
+        "tool_15_call_YIC0ER77hr9Y6oKgA0c2oFpm",
+        "tool_16_call_t9HnGHEXtpe82M5xWEBN3z9K"
+      ],
+      "prefix_replay_source_duration_ms": 9316.4,
+      "prefix_tool_actions": 17,
+      "prefix_tool_counts": {
+        "edit_file": 3,
+        "exec": 10,
+        "list_dir": 1,
+        "read_file": 3
+      },
+      "source_trace": "traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3891/attempt_1/trace.jsonl",
+      "target_action_id": "tool_17_call_22O4XXDCdLYmCevHhBlWPCLy",
+      "target_command": "python3 -m pytest tests/dialects/test_snowflake.py",
+      "target_source_duration_ms": 1765.8,
+      "target_trace_line": 113,
+      "task_id": "tobymao__sqlglot-3891"
+    },
+    {
+      "image": "swerebench/sweb.eval.x86_64.tobymao_1776_sqlglot-4519",
+      "prefix_replay_action_ids": [
+        "tool_1_call_LWio8luQMrlAS00YSdDMFK9s",
+        "tool_7_call_IPSSooEEKbtfUOA3CBQTf40R",
+        "tool_10_call_h3qNxMt6ZKO6Pqx9wnXuf2NK",
+        "tool_11_call_THHjJo9RaW98x3hhieHbWDs0",
+        "tool_14_call_ugwSWsqPTlAw12heG7t8Zpqq",
+        "tool_16_call_UAGNTdN9Fv0PQyshuLvqlGRZ",
+        "tool_17_call_CcHsfUSAkD1VDaFF8KGns1v1",
+        "tool_18_call_pyeXBz58Z2KjJMqC2cKS4BTR",
+        "tool_21_call_a3nPAaclZp5ReA3gG2mHdlNT",
+        "tool_22_call_ohXoDoKSforX3jhCijihqF61",
+        "tool_24_call_nd1b9RaTGC1o2TIl2NPHNEEd",
+        "tool_25_call_8XaXRXND4w2b4aCmbefebaUt",
+        "tool_26_call_0b1Sg16oMyJMEQPTJ2Lo8NWz"
+      ],
+      "prefix_replay_source_duration_ms": 11444.400000000001,
+      "prefix_tool_actions": 27,
+      "prefix_tool_counts": {
+        "edit_file": 2,
+        "exec": 11,
+        "list_dir": 1,
+        "read_file": 13
+      },
+      "source_trace": "traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4519/attempt_1/trace.jsonl",
+      "target_action_id": "tool_27_call_mBV9n8MLKBIISSyWmKrSbHdo",
+      "target_command": "python3 -m pytest tests/dialects/test_postgres.py",
+      "target_source_duration_ms": 1155.1,
+      "target_trace_line": 173,
+      "task_id": "tobymao__sqlglot-4519"
+    },
+    {
+      "image": "swerebench/sweb.eval.x86_64.tobymao_1776_sqlglot-4148",
+      "prefix_replay_action_ids": [
+        "tool_1_call_hrKlNWrKlNzMPlokMeu0qa1v",
+        "tool_6_call_Yq6erB2CRYPkyRoJ9ljptHmC",
+        "tool_9_call_3Jhkh7adDWzxhLXt9HLM2RRd",
+        "tool_10_call_7sNxsiZsTG84XjlpJaRWtUDD",
+        "tool_11_call_f9iHRhvQQaPqKs00jwBKsgNg",
+        "tool_12_call_pD6KNJLC4fSj8JLgb6Xe5V85",
+        "tool_13_call_WM8VZ5YhDR0ppZgjKjRx6nQL",
+        "tool_14_call_nS43mHIOg29GQwM2jUKUE0ri",
+        "tool_15_call_0KKZGkBNo2F4zarAprTxMjaF",
+        "tool_16_call_manxdTuHx4s9ZC3yJKiSz8V9",
+        "tool_17_call_JtUBc6QgXYHkZ5U6TvnNOJ0f"
+      ],
+      "prefix_replay_source_duration_ms": 4885.099999999999,
+      "prefix_tool_actions": 18,
+      "prefix_tool_counts": {
+        "edit_file": 3,
+        "exec": 8,
+        "list_dir": 1,
+        "read_file": 6
+      },
+      "source_trace": "traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4148/attempt_1/trace.jsonl",
+      "target_action_id": "tool_18_call_1cmWywm1IrMpswXT8V992z2D",
+      "target_command": "/opt/conda/envs/testbed/bin/python -m pytest tests/dialects/test_bigquery.py",
+      "target_source_duration_ms": 1493.6,
+      "target_trace_line": 119,
+      "task_id": "tobymao__sqlglot-4148"
+    },
+    {
+      "image": "swerebench/sweb.eval.x86_64.tobymao_1776_sqlglot-4696",
+      "prefix_replay_action_ids": [
+        "tool_1_call_6P9IQB2Ato3aGfg9NqVisvQs",
+        "tool_7_call_BQwBjs1vOvnQiGvhKQ6Ox7F6",
+        "tool_8_call_vPRyBS5Ev0Olu70h19imVsGs",
+        "tool_9_call_8TC9uFN3yNl8W63ckENNgkU5",
+        "tool_10_call_U3kXt90eJGHQQ4CZV6QcgdKH",
+        "tool_11_call_QVN8zpl1vhm73ik1bGYdegFf",
+        "tool_12_call_akbcv0taKhamlO10s3mdUHaS",
+        "tool_14_call_RENz9NV9E12THT64zx2UfvgY",
+        "tool_15_call_JZ4TyS5nSm0yTqU8DIhIvqIP",
+        "tool_16_call_5dKrxrD9GaDvm8Cw4qd2zW6q"
+      ],
+      "prefix_replay_source_duration_ms": 4123.900000000001,
+      "prefix_tool_actions": 17,
+      "prefix_tool_counts": {
+        "edit_file": 2,
+        "exec": 8,
+        "list_dir": 1,
+        "read_file": 6
+      },
+      "source_trace": "traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4696/attempt_1/trace.jsonl",
+      "target_action_id": "tool_17_call_T0K539u4N7AGVhYHQ00ReE0B",
+      "target_command": "/opt/conda/bin/python -m pytest tests/dialects/test_snowflake.py",
+      "target_source_duration_ms": 2583.7,
+      "target_trace_line": 113,
+      "task_id": "tobymao__sqlglot-4696"
+    },
+    {
+      "image": "swerebench/sweb.eval.x86_64.tobymao_1776_sqlglot-4393",
+      "prefix_replay_action_ids": [
+        "tool_1_call_JFhqkVQqyQqzPDpm3bclEStQ",
+        "tool_4_call_2uuIn3mvAdkT7lY3MCA6VOMq",
+        "tool_7_call_oXlYTKi96nI4AtX6uiAICNnF",
+        "tool_9_call_Ki6dV7bA7JOPFUFXShMvYjPE",
+        "tool_11_call_Gt7cBRxpx3BpEFxzG0e9XnJe",
+        "tool_12_call_Fp7GeAI3JNuNByldspxhdZYC",
+        "tool_15_call_CffAM0pDrYTRZqCMlPunSIsg",
+        "tool_16_call_N3TKK2aC747VBHKw1bkwng98",
+        "tool_17_call_6mF7rkGZpNdzfEADCYVQN762",
+        "tool_18_call_eDHTJFHB8iw6LT73b21M6afq"
+      ],
+      "prefix_replay_source_duration_ms": 9818.7,
+      "prefix_tool_actions": 19,
+      "prefix_tool_counts": {
+        "edit_file": 2,
+        "exec": 8,
+        "list_dir": 1,
+        "read_file": 8
+      },
+      "source_trace": "traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4393/attempt_1/trace.jsonl",
+      "target_action_id": "tool_19_call_eqTtdOBPq7I33mAo6rvu19t7",
+      "target_command": "pytest tests/dialects/test_snowflake.py",
+      "target_source_duration_ms": 1829.1,
+      "target_trace_line": 125,
+      "task_id": "tobymao__sqlglot-4393"
+    }
+  ]
+}
