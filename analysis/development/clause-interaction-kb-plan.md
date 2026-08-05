@@ -10,6 +10,8 @@ calibrator and causal full-command outcome memory also returned NO-GO. Disk has
 a separately frozen cache-state mechanism test that is not authorized to run.
 The pytest target-overlap test also returned NO-GO; it isolated a strong
 CPU/RSS mechanism but not a Disk mechanism. Final remains closed.
+The next frozen component test adds pip package-set overlap for latency, CPU,
+and RSS while requiring Disk to remain bit-identical to Current.
 
 This record extends `tool-resource-canonical-objective.md`, which remains the
 authority for targets, bucket boundaries, causal visibility, eligible command
@@ -703,3 +705,59 @@ Artifacts:
 
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-pytest-target-overlap-v1/result.json`
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-pytest-target-overlap-v1/rows.jsonl`
+
+## 9. Frozen component test: semantic requested-work units
+
+### 9.1 Scope and pre-outcome coverage
+
+The canonical targets are independent. Section 8 showed that explicit pytest
+targets predict latency/CPU/RSS but anti-predict physical Disk on their carrier.
+This phase therefore tests only the requested-work component: latency, CPU, and
+RSS may change, while Disk hard predictions and PMFs must remain bit-identical
+to Current. Passing would not complete the four-target objective or open final;
+it would retain one half of a later combined predictor.
+
+Keep the exact-complete-command and pytest-target hierarchy from Section 8 and
+add the only other existing semantic work parser, `parse_pip_install`. A
+label-free causal scan found 62 accepted single-clause pip commands in
+validation, 23 without exact complete-command evidence, and 20 of those with a
+positive package-name overlap to earlier fit or settled validation tasks.
+
+### 9.2 Frozen candidate
+
+For latency, CPU, and RSS, `semantic-work-units-v1` uses:
+
+1. exact complete-command outcome evidence;
+2. pytest target-unit Jaccard from Section 8;
+3. pip canonical-package-name Jaccard; then
+4. unchanged Current.
+
+The pytest and pip parsers are fail-closed and apply only to single-clause
+commands, so their work-unit arms cannot conflict. Pip observations match only
+the same interpreter basename, direct versus module invocation, and frozen
+flags. Versions do not become units: each canonical package name appears once,
+and every positive-overlap historical complete-command label is weighted by
+package-set Jaccard. Normalize weighted class totals to a PMF and use the lower
+class on ties. There is no state inference, similarity threshold, alpha,
+package-specific rule, or target-specific tuning among latency/CPU/RSS.
+
+All validation commands in one task predict before that task's aggregate labels
+enter exact or semantic memory. Record the Section 8 exact-plus-pytest arm as an
+ablation on identical rows. Copy Disk directly from Current for both arms.
+
+### 9.3 Component gate
+
+This component is GO only if all are true:
+
+1. latency, CPU, and RSS exact accuracy each improve by at least 5.0 percentage
+   points over Current;
+2. none of their severe-underprediction rates increases;
+3. helpful changed predictions exceed harmful changes across those targets and
+   helpful changes cover at least ten validation tasks; and
+4. Disk hard predictions and PMFs are bit-identical to Current for every row.
+
+A miss closes this exact work-unit combination without modifying either parser,
+overlap, weighting, or target routing. A pass only authorizes retaining the
+component while a separately preregistered physical Disk mechanism is tested.
+Final remains closed in both cases. Expected runtime is below ten seconds with
+no container, dependency, filesystem probe, or agent call.
