@@ -2,7 +2,7 @@
 
 **Effective:** 2026-08-04
 
-**Status:** family-and-scope relational candidate ended at its structural gate;
+**Status:** typed-catalog selection arm is being frozen before generation;
 same-repo validation/final task partitions remain scientifically unread
 
 This plan extends `tool-resource-canonical-objective.md`. The earlier semantic
@@ -790,3 +790,160 @@ support checks, graph replay, PMF fitting, or contrast selection. This is the
 frozen structural NO-GO for this candidate: no repair or retry is allowed, and
 validation/final remain unread. The independently checked artifact is
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot100-declarative-family-state-v1`.
+
+## 11. Typed-catalog agent-selection arm
+
+**Frozen before its generation or any reserved-outcome access: 2026-08-05.**
+This is a separate development amendment informed by the three structural
+agent failures above. It does not repair, reinterpret, or rerun any rejected
+candidate. The new causal question is:
+
+> When every executable representation is constructed and validated by the
+> host, can one label-free offline agent select a more useful family, work-scope,
+> and blocker-to-remediation configuration than a support-only selector?
+
+The development-only feasibility audit found eight retained complete
+configurations across two families after the fixed per-family cap below.
+`pytest` supplied high-support but apparently diagnostic-command relations,
+while `unittest` supplied variants of the same missing-module/install relation;
+the latter had causal edges in seven tasks over two identifiers. This
+observation may motivate the selection task but cannot set a prediction score
+or fresh verdict.
+
+### 11.1 Deterministic finite catalog
+
+Use only Section 10's 100 development tasks and exact candidate episode/order,
+family ranking, first-twelve-task, event, string, and prompt privacy bounds.
+No duration, telemetry, resource label, Current prediction, validation/final
+ID, or reserved file enters catalog construction or the agent prompt.
+
+Tokenize command or result text with the fixed ASCII expression
+`[A-Za-z][A-Za-z0-9_-]{0,63}`. Normalize a token by case-folding, replacing
+runs outside `[0-9a-z]` with one hyphen, and stripping outer hyphens. For every
+token position `i`, enumerate each context width `w` in `1..min(3, i)` using the
+exact normalized tokens at `[i-w:i]`. A template's canonical identity is
+`(capture_mode, context_tokens)`. Duplicate occurrences of that tuple in one
+event contribute only one `(task, event, identifier)` occurrence; task and
+identifier support are sets across all occurrences. Templates are deduplicated
+by exact canonical identity before pairing. Capture modes are:
+
+- blocker templates capture the whole next token in a failed family-verifier
+  result excerpt;
+- remediation templates enumerate the whole next token and, when applicable,
+  its suffix. The suffix is the final non-empty component after splitting the
+  **normalized** whole token on hyphens; its source span is the corresponding
+  final alphanumeric run after the last `-` or `_` in the original token.
+
+Whole or suffix identifiers shorter than two normalized characters are not
+emitted. Blockers enumerate only `whole`; remediations enumerate `whole` and
+every eligible `suffix` at every capture position and context width.
+
+There is no generated regex, literal, code, span, or parser. Matching returns
+the original token or suffix span, so the unchanged host state machine can join
+only exact normalized identifiers. A blocker and remediation template each
+must occur in at least five development tasks and expose at least two distinct
+identifiers. Their pair is retained only when a blocker precedes a successful
+remediation with the same identifier in at least five tasks and for at least
+two identifiers.
+
+For a simple one-clause family command, remove the invocation prefix through
+argv[2] exactly when `len(argv) >= 3`, `argv[1] == "-m"`, and normalized
+`argv[2]` equals the family invocation key; otherwise remove argv[0]. This is
+the Section 10 predicate and does not require a literal `python` executable.
+Ignore remaining tokens beginning with `-`. Classify each positional as `nodeid` when it contains
+`::`, otherwise `python-file` when it case-insensitively ends in `.py`, otherwise
+`path` when it contains `/`, `dotted` when it contains `.`, and `word` otherwise.
+No positionals yields `no-target`; one yields its kind; multiple yield `multi-`
+plus the sorted distinct kinds joined by `+`. A scope shape must occur in five
+episode tasks. For each family retain at most four scopes by descending task
+support then lexicographic shape; a family needs at least two.
+
+Scope retention occurs before blocker/remediation support is computed. The
+typed runtime family requires both
+`invocation_key(command) == configuration.invocation_key` and membership of
+the command's scope shape in the retained scope set. This conjunction applies
+identically during catalog recomputation and replay. Only such a failed verifier
+may emit a blocker or contribute a causal edge; later successful commands remain
+eligible for remediation matching regardless of their invocation. Recompute
+blocker, remediation, causal task, and causal identifier support under this
+complete configuration before applying the thresholds and ranks below.
+
+Each exact `(blocker_template, remediation_template)` pair is deduplicated; its
+causal task and identifier supports are sets. Combined with that family's fixed
+scope set, it forms one configuration. Let a template sort key be
+`(capture_mode, context_tokens)` and let configuration rank be
+`(-causal_task_count, -identifier_count, -minimum_scope_task_count,
+-sum_of_scope_task_counts, invocation_key, blocker_sort_key,
+remediation_sort_key)`. Within a family retain its first four configurations by
+this rank. Merge those rows, sort by the identical full rank, retain at most
+sixteen, and assign `C000...` in order. Exact duplicate configuration tuples are
+removed before either rank. `C000` is the frozen support-only baseline. Fewer
+than two configurations is a pre-generation structural NO-GO.
+
+The prompt exposes only each configuration ID, invocation key, scope shapes and
+support counts, blocker/remediation capture modes and preceding-token contexts,
+causal task/identifier counts, and the selection contract. It contains no raw
+examples or captured identifiers. The serialized prompt is limited to 50,000
+UTF-8 bytes.
+
+### 11.2 One finite-choice agent call
+
+There is exactly one tool-free Codex `gpt-5.6-sol` call at requested fast tier
+and medium reasoning. Its strict response contains exactly:
+
+```text
+abstain: boolean
+configuration_id: enum["", "C000", ...]
+explanation: string of 1--1,000 characters
+```
+
+Abstention requires an empty ID; otherwise the ID must name one catalog entry.
+The agent is asked to prefer a real blocker, an environment-changing
+remediation, and semantically distinct work scopes, and to reject diagnostic
+commands that merely observe state. It cannot emit or modify a tool name,
+literal, parser, pattern, scope, relation, state, threshold, weight, feature,
+bucket, prediction, or code. Selection of `C000` is a complete development
+NO-GO for agent contribution. There is no critic, repair, retry, or sweep.
+Prediction-time agent cost is zero.
+
+### 11.3 Host replay and development gate
+
+The selected catalog entry is immutable. Its scope matcher, token-span
+extractors, family-level verifier rule, exact identifier edges, five ordered
+dependency states, query bounds, graph bounds, and 5 ms p95 runtime limit use
+Sections 10.2--10.3 unchanged. Empty history must return no state and every
+bound check must pass.
+
+Fit the selected agent configuration's family-only, scope-only, and full PMFs
+on one identical non-null relation carrier. Separately fit the full `C000`
+support-only configuration. All use the same 100 development tasks, five-task
+target support, labels, Current fallback, command order, and no update. Before
+reserved access, the agent configuration must differ from `C000` and expose
+both Section 10.3 primary contrasts with the same deterministic selection rule.
+Failure stops without another call.
+
+### 11.4 Fresh evaluation and decision gate
+
+The committed 50-task validation and 50-task final partitions, Current/public
+evidence, telemetry acceptance, no-update rule, task accounting, and
+validation-to-final authorization remain Sections 6 and 10.4. Before labels,
+both the agent and `C000` carriers require 20 commands across five tasks; the
+agent configuration must additionally satisfy both frozen contrast-cell
+coverage requirements from Section 10.4. Any bound fallback or coverage failure
+leaves labels unread.
+
+Validation and final each independently require every Section 10.4 full-arm,
+family-only, scope-only, Current, severe-underprediction, helpful/harmful, and
+paired-contrast gate. In addition, agent-full accuracy must be no lower than
+support-only-full for every target, its severe-underprediction rate must be no
+higher than support-only for every target, and changes relative to support-only
+must be more helpful than harmful with helpful changes spanning at least three
+tasks. Identical hard predictions cannot pass. Validation GO alone authorizes
+the byte-identical method to open final; overall GO requires both partitions.
+
+The catalog, prompt/schema/response, selected and support-only IDs, all four PMF
+sets, primary contrasts, fit/input/split hashes, committed host revision, and
+generation cost are frozen in one artifact. Protocol and implementation receive
+bounded independent review before generation. A structural GO artifact is
+reviewed and committed before validation; validation GO and its rows are
+reviewed and committed before final.

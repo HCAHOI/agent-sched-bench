@@ -198,6 +198,16 @@ and validation/final remain unread. The independently reviewed contract and
 artifact are Section 10 of `clause-interaction-kb-plan.md` and
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot100-declarative-family-state-v1`.
 
+A separate typed-catalog selection arm is now preregistered and has not called
+an agent. The host alone mines a finite catalog of executable family, work-scope,
+and causal token-template configurations from label-free development episodes;
+the agent can return only one catalog ID. `C000` is a deterministic support-only
+selector, so fresh evaluation can distinguish agent selection from catalog
+construction. No generated regex, code, parser, literal, threshold, state, or
+prediction is permitted, and prediction-time agent cost remains zero. The
+complete construction, cost, structural, ablation, and fresh gates are Section
+11 of `clause-interaction-kb-plan.md`; validation and final remain unread.
+
 SQLGlot is not excluded from this experiment. The original 100 SQLGlot tasks
 are development-only fit evidence; the additional 100 requested tasks were
 split by task ID, independent of completion state, into 50 validation and 50
