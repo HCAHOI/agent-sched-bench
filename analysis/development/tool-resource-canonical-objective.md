@@ -2,7 +2,8 @@
 
 **Effective:** 2026-08-04; amended to 5/3/3/3 classes after the earlier
 3/2/2/2-class SQLGlot results were visible
-**Status:** development-only; no confirmation corpus has been evaluated
+**Status:** development-only; the reserved 50-task validation partition was
+evaluated and returned NO-GO; the 50-task final partition remains unread
 
 This is the authoritative contract for tool-resource prediction. It records
 current truth, not the implementation history. Detailed experiment procedures
@@ -105,16 +106,15 @@ cross-task similarity, but its hindsight action-space upper bound did not pass
 the frozen utility gate.
 
 The deterministic `full-test-third-or-later-v1` feature passed its reviewed,
-post-hoc development continuation rule. Relative to Current, latency accuracy
-changed from 77.937% to 79.083%, CPU from 90.476% to 93.333%, RSS from 91.561%
-to 94.093%, and Disk remained 81.375% with bit-identical PMFs. Severe
-underpredictions fell from 4 to 0 for latency and from 7 to 1 for both CPU and
-RSS. All 16 changed target predictions were helpful across five tasks; none
-were harmful. This is the now-frozen next fresh replication, not a
-generalization claim. Its detector, development PMFs, coverage rule, validation
-gate, and final authorization were fixed before reserved command or outcome
-access; exact permissions and execution order are recorded in
-`clause-interaction-kb-plan.md`.
+post-hoc development continuation rule. On the exposed 80/20 replay it improved
+latency, CPU, and RSS by 1.146, 2.857, and 2.532 percentage points, with Disk
+bit-identical. Its detector, development PMFs, coverage rule, validation gate,
+and final authorization were then fixed before reserved access. On the 50-task
+validation partition it improved available-only latency by 0.192 points, CPU
+by 0.893 points, and RSS by 0.679 points, with Disk bit-identical. One unavailable
+latency prediction made the complete primary metric undefined, so the frozen
+fail-closed gate returned NO-GO. The available-only gain is also far below the
+five-point research target. The final partition therefore remains closed.
 
 The offline-agent direction is complete and closed. It progressed from a
 per-query blind classifier to a frozen Python feature, exact relational spans,
@@ -137,30 +137,36 @@ resource outcomes. Exact costs, intermediate failures, and artifacts are in
 Taken together, the agent direction is closed. The final finite-choice arm
 removed arbitrary code, regex, and parser generation yet still found no
 resource-separating relation/scope contrast. More prompts, critics, DSLs, or
-agent adapters are not authorized. The next experiment is the frozen unchanged
-replication of the deterministic third-or-later full-test phase feature that
-passed the exposed development continuation rule.
+agent adapters are not authorized.
 
-The original 100 SQLGlot tasks are development-only fit evidence; the
-additional 100 requested tasks were
-split by task ID, independent of completion state, into 50 validation and 50
-final-test tasks before any reserved output or label was read. Validation may
-only gate whether one newly preregistered byte-identical method consumes final
-test; it cannot tune that method or its PMFs. No agent arm opened either
-partition. The earlier all-100 blind-state held-out wording is superseded before
-outcome access. Exact IDs and stage permissions live only in
+The original 100 SQLGlot tasks are development-only fit evidence. The
+additional 100 tasks were split by task ID, independent of completion state,
+into 50 validation and 50 final-test tasks before any reserved output or label
+was read. No agent arm opened either partition. The frozen task-phase method
+consumed validation and returned NO-GO, making validation development-exposed;
+it did not authorize final. Exact IDs and stage permissions live only in
 `analysis/development/sqlglot-relational-task-split.json` and the current
 research record.
 
-The first deterministic-phase validation invocation reached scoring but
-produced no metric or result artifact: unavailable Current resource predictions
-were represented by omitted keys and caused `KeyError: peak_cpu_cores`. The
-2026-08-05 amendment in `clause-interaction-kb-plan.md` records the first
-plumbing repair and exactly what was visible before the unchanged retry.
-The first retry likewise produced no result: the shared gate attempted to
-compare incomplete accuracies as numbers. The second amendment records the
-fail-closed interpretation; an unavailable primary metric cannot satisfy the
-frozen no-regression gate.
+Two pre-result validation invocations failed in plumbing without producing a
+result artifact: omitted unavailable Current keys first raised
+`KeyError: peak_cpu_cores`, then explicit null metrics reached an invalid
+numeric comparison. The reviewed repairs canonicalized unavailable predictions
+to `None` and made incomplete primary metrics fail closed. The concise amendment
+record in `clause-interaction-kb-plan.md` states what was visible before each
+unchanged retry.
+
+Post-validation diagnostics use development-exposed data only. A fixed 25-task
+fit / 25-task test split combining Current PMFs, structured command work units,
+and causal task-local completed-command history improved latency, CPU, and RSS
+by 6.334, 8.978, and 12.849 points, but Disk by 0.000. One fixed default Random
+Forest check improved Disk by 1.587 points, still below the five-point target.
+This supports an ephemeral task-local calibrator for the first three targets,
+not a static Disk claim. Physical Disk prediction now requires evidence about
+pre-command cache residency or equivalent environment state; another command
+representation, KB structure, or agent is not authorized. The next step is a
+read-only probe-feasibility and cost audit. It does not authorize collection,
+global cache eviction, or final-partition access.
 
 The fixed full-command targets in Section 1 remain the static-predictor
 baseline. Their first causal 80-task warm-up / 20-task test replay contains 349

@@ -2,10 +2,11 @@
 
 **Effective:** 2026-08-05
 
-**Status:** the offline-agent direction is closed. The additional SQLGlot
-validation and final partitions remain scientifically unread. The next proposed
-experiment is a fresh replication of the already-fixed deterministic full-test
-phase feature; this document does not authorize reserved-outcome access.
+**Status:** the offline-agent and deterministic task-phase directions are
+closed. The 50-task validation partition is development-exposed; the 50-task
+final partition remains unread and unauthorized. Existing pre-command traces
+support a task-local calibrator for latency, CPU, and RSS, but not Disk. The
+next step is cache-state probe feasibility, not an authorized collection.
 
 This record extends `tool-resource-canonical-objective.md`, which remains the
 authority for targets, bucket boundaries, causal visibility, eligible command
@@ -138,25 +139,19 @@ final tasks by the committed manifest:
 
 `analysis/development/sqlglot-relational-task-split.json`
 
-No agent arm opened either partition. Validation may be consumed by one newly
-preregistered non-agent method. Final remains unavailable unless that exact
-method passes its validation gate. IDs, process status, file counts, and
-collection completion metadata may be inspected before then; commands, outputs,
-labels, telemetry, and derived scores may not.
+No agent arm opened either partition. The frozen task-phase method consumed
+validation and returned NO-GO. Validation is now development evidence. Final
+remains unavailable because the exact method did not pass its gate; no final
+command, output, label, telemetry, or derived score has been inspected.
 
-## 4. Frozen next experiment: replicate deterministic task phase
+## 4. Deterministic task-phase replication — closed
 
-This is the shortest experiment that can change the next decision. It tests
-whether the one positive development mechanism repeats on new tasks from the
-same repository. It does not test a new KB or a learned semantic model.
+The method, PMFs, coverage rule, validation gate, and final authorization were
+frozen before reserved access. Validation had 41 raw third-or-later commands
+across 24 tasks, well above the three-task coverage gate, and scored 1,044
+identical command rows from 50 evidence-valid tasks.
 
-The protocol below was frozen on 2026-08-05 before reading any command,
-output, label, or telemetry from either reserved role. The additional run's
-completion metadata may have been inspected, but neither role has been scored.
-
-### 4.1 Fixed candidate and development fit
-
-Reuse `full-test-third-or-later-v1` unchanged:
+The evaluated `full-test-third-or-later-v1` candidate was unchanged:
 
 - the existing `parse_pytest` definition of an unselected full suite and exact
   `make test` are the only recognized commands;
@@ -171,80 +166,83 @@ This is deliberately tool-aware and narrow. A same-repository success would
 establish repeatability of the phase mechanism, not generality across tools or
 repositories.
 
-The development-only fit contains 44 third-or-later commands across 34 tasks.
+The development fit contains 44 third-or-later commands across 34 tasks.
 Their latency labels are `{0: 3, 4: 41}`, CPU labels are `{0: 3, 2: 41}`, RSS
 labels are `{0: 3, 2: 41}`, and Disk labels are `{0: 25, 1: 19}`. Thus the
 frozen hard prediction is the highest bucket for latency, CPU, and RSS. Disk is
 not fit or overridden. These counts are fit evidence, not a fresh result.
 
-### 4.2 Smallest valid protocol
+Validation produced 17 helpful and four harmful target changes across seven
+helpful tasks. CPU improved from 82.887% to 83.780% (+0.893 pp), RSS from
+80.978% to 81.658% (+0.679 pp), and Disk remained bit-identical at 82.044%.
+Available-only latency improved from 74.976% to 75.168% (+0.192 pp), but one of
+1,044 latency rows was unavailable for both Current and candidate. Complete
+latency accuracy was therefore undefined. Under the frozen fail-closed
+no-regression gate, validation was NO-GO. Even the available-only diagnostic is
+far below the five-point research target, so changing the availability policy
+would not rescue the mechanism. Final stays closed.
 
-Before any reserved command or outcome is read, commit the evaluator and this
-record. Then create and separately commit one development-fit artifact binding
-the exact development fingerprint, public inputs, host commit, split manifest,
-PMFs, coverage rule, and validation/final authorization. Validation cannot run
-against an uncommitted artifact. The label-free validation coverage rule is:
-among completed tasks with accepted workload output and valid telemetry,
-third-or-later recognized full-suite commands must occur in at least three
-validation tasks, the minimum number that could satisfy the task-level gain
-gate. Otherwise stop without scoring labels.
+Artifacts:
 
-On identical eligible command rows, validation passes only if:
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot100-full-test-phase-fresh-fit-v3/artifact.json`
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-full-test-phase-validation-v1`
 
-- exact accuracy is no lower than Current for latency, CPU, RSS, or Disk;
-- severe underprediction is no higher for any target;
-- helpful target changes outnumber harmful changes; and
-- helpful changes span at least three validation tasks.
+Two pre-result amendments preserved the frozen method and gate. The first
+validation invocation exposed only `KeyError: peak_cpu_cores`; the wrapper was
+changed to represent omitted unavailable Current predictions explicitly as
+`None`. The unchanged retry exposed only a `None >= None` scoring exception;
+the shared gate was changed to fail closed when either arm lacks a complete
+primary metric. Neither invocation produced a result artifact or exposed a
+validation score, row, label, or method comparison. Each repair was reviewed
+and bound to a new development-fit artifact before the next invocation.
 
-Only validation GO authorizes the byte-identical final evaluation. Final uses
-the same independent gate. The validation result and row sidecar must be
-committed unchanged before final can run. No detector, phase boundary, target,
-PMF, public evidence, Current snapshot, eligibility rule, or gate may change
-after validation access. The fresh evaluator reuses the existing command
-evaluator and freezes Current after the 100 development tasks; it performs no
-within-role learning.
+## 5. Post-validation signal audit and next direction
 
-Amendment, 2026-08-05: the first validation invocation passed coverage and
-loaded the frozen scoring path, then crashed before producing any metric or
-result artifact because Current omits resource keys when its prediction is
-unavailable while the shared scorer requires explicit `None`. The only visible
-information was `KeyError: peak_cpu_cores`; no validation score, row, label, or
-method comparison was inspected. The wrapper now canonicalizes omitted Current
-resource predictions and PMFs to `None`. This does not change any available
-prediction, fit PMF, detector, override, row eligibility, or gate. Because the
-host commit changes, the repaired evaluator requires a new dev-only fit
-artifact and independent review before retrying the unchanged validation role.
+### 5.1 What existing traces can support
 
-Second amendment, 2026-08-05: the unchanged retry again produced no result
-artifact or metric. After explicit unavailable keys reached the shared scorer,
-both Current and candidate had incomplete exact accuracy for at least one
-target, and the scorer crashed on `None >= None`. The only newly visible
-information was this exception. The shared gate now treats any incomplete
-Current or candidate primary accuracy or severe-underprediction metric as
-fail-closed NO-GO instead of comparing nulls. Numeric comparisons are unchanged.
-This is the specified interpretation of “no lower/no higher”: unavailable
-metrics cannot demonstrate either condition. A newly committed dev-only fit
-artifact is again required before the unchanged validation retry.
+All 1,792 development commands align exactly with the preceding OpenClaw tool
+history. Ninety-five of 100 tasks used `edit_file`; 167 of 172 full-suite calls
+had a known touched-path set. The signal exists, but cumulative touched-file
+count plus tool family harmed the exposed 80/20 replay by 1.719, 0.952, 1.266,
+and 3.152 points for latency, CPU, RSS, and Disk. Workset size alone is not the
+missing mechanism.
 
-## 5. Other angles, in priority order
+A fixed 25-task fit / 25-task test diagnostic on the now-exposed validation
+partition used Current PMFs, deterministic pip/pytest work atoms, generic
+executable/subcommand/flag and compound-action features, and fixed L2 logistic
+regression. Adding only structured command features improved latency, CPU, and
+RSS by 3.839, 7.121, and 11.173 points but harmed Disk by 0.794. Adding causal
+task-local prior exact/semantic/tool buckets raised those changes to 6.334,
+8.978, 12.849, and 0.000 points. A single default Random Forest check raised
+Disk by only 1.587 points. No parameter or threshold sweep was run.
 
-1. **Pre-command workspace workset.** The strongest genuinely new hypothesis is
-   that actual work depends on changed-file volume/type, selected-test count,
-   dependency/cache inventory, and build/test graph impact. First audit whether
-   development traces contain a complete causal snapshot; do not infer these
-   features from future command output. If the snapshot is absent, quantify the
-   exact fields and probe cost before requesting new collection.
-2. **Mid-execution forecasting.** Early counters may predict the final bucket,
-   but the existing EAR CPU-reservation consumer already has a 5.686% hindsight
-   ceiling. Reopen only for a different named consumer whose action can still
-   change after the observation point.
-3. **Generic supervised history model.** Old cross-repository tabular results
-   were mixed and used superseded targets. Do not train another broad model
-   until either task phase replicates or workspace features show a measurable
-   information gain; otherwise it obscures the mechanism and spends the final
-   reserve on model selection.
+This is development-exposed diagnostic evidence, not a confirmation result.
+It supports a simple architecture for the first three targets: Current is the
+global prior, while an ephemeral task-local calibrator consumes only completed
+earlier commands and is never published into the cross-task KB. It does not
+support a static Disk claim.
 
-Do not spend the untouched SQLGlot partitions to compare these ideas in
-parallel. Run the deterministic phase replication first because it is already
-fixed, cheap, and falsifiable; a validation NO-GO ends that branch before any
-second method is designed against those outcomes.
+### 5.2 Why Disk is different
+
+Within-task raw-exact reuse changed Disk with ten helpful and ten harmful cases;
+command identity, structured work units, edit history, and prior resource
+buckets do not determine physical I/O. The retained interface has no
+pre-command page-cache residency, installed-package inventory, or requested
+wheel-cache inventory. Final eBPF Disk bytes exist only after execution.
+
+The next experiment must therefore test state, not another command
+representation:
+
+1. identify a safe bounded pre-command cache-residency probe and measure its
+   latency without evicting global host caches;
+2. select real repeated SQLGlot commands before outcomes and define paired
+   naturally cold/warm or isolated-cache interventions;
+3. freeze state, target, split, probe-cost accounting, and a five-point Disk
+   gate before collection; and
+4. request approval with wall-time and host-impact estimates if the real run is
+   expected to exceed 30 minutes.
+
+Do not use global `drop_caches`, reinterpret physical Disk as logical bytes,
+tune on the exposed 25/25 diagnostic, or open the final partition. Mid-execution
+forecasting remains closed unless a new consumer can still act after the
+observation time.
