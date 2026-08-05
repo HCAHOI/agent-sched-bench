@@ -180,6 +180,7 @@ def build_manifest(
         command = _exec_command(target)
         if command is None:
             raise AssertionError("selected target is not an exec command")
+        target_tool_args = json.loads(target["data"]["tool_args"])
         manifest_tasks.append(
             {
                 "task_id": task_id,
@@ -188,6 +189,7 @@ def build_manifest(
                 "target_action_id": target["action_id"],
                 "target_trace_line": target["line_number"],
                 "target_command": command,
+                "target_tool_args": target_tool_args,
                 "target_source_duration_ms": target["data"].get("duration_ms"),
                 "prefix_tool_actions": len(prefix),
                 "prefix_replay_action_ids": [action["action_id"] for action in replay],

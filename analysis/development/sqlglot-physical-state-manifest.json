@@ -56,6 +56,11 @@
       "target_action_id": "tool_13_call_k5UgFZEzV02uV5ZxKY3DFnfq",
       "target_command": "SQLGLOTRS_TOKENIZER=0 /opt/conda/envs/testbed/bin/pytest",
       "target_source_duration_ms": 134794.8,
+      "target_tool_args": {
+        "command": "SQLGLOTRS_TOKENIZER=0 /opt/conda/envs/testbed/bin/pytest",
+        "timeout": 600,
+        "working_dir": "/testbed"
+      },
       "target_trace_line": 89,
       "task_id": "tobymao__sqlglot-4459"
     },
@@ -88,6 +93,11 @@
       "target_action_id": "tool_22_call_8OSSTtRwj4ti05IHu9OHDDGQ",
       "target_command": "python3 -m pytest tests/test_optimizer.py::TestOptimizer::test_substring_type_annotation",
       "target_source_duration_ms": 2387.2,
+      "target_tool_args": {
+        "command": "python3 -m pytest tests/test_optimizer.py::TestOptimizer::test_substring_type_annotation",
+        "timeout": 300,
+        "working_dir": "/testbed"
+      },
       "target_trace_line": 143,
       "task_id": "tobymao__sqlglot-4004"
     },
@@ -119,6 +129,11 @@
       "target_action_id": "tool_26_call_DzmhkDgPLMrK0hu4GDNGHBIO",
       "target_command": "python3 -m pytest tests/test_parser.py::TestParser::test_alter_table_drop_column",
       "target_source_duration_ms": 981.6,
+      "target_tool_args": {
+        "command": "python3 -m pytest tests/test_parser.py::TestParser::test_alter_table_drop_column",
+        "timeout": 300,
+        "working_dir": "/testbed"
+      },
       "target_trace_line": 167,
       "task_id": "tobymao__sqlglot-4390"
     },
@@ -160,6 +175,11 @@
       "target_action_id": "tool_24_call_fUrUAOuyIE5lyGMsKHyD2WJg",
       "target_command": "SQLGLOTRS_TOKENIZER=0 pytest -q tests/dialects/test_bigquery.py",
       "target_source_duration_ms": 1153.4,
+      "target_tool_args": {
+        "command": "SQLGLOTRS_TOKENIZER=0 pytest -q tests/dialects/test_bigquery.py",
+        "timeout": 600,
+        "working_dir": "/testbed"
+      },
       "target_trace_line": 155,
       "task_id": "tobymao__sqlglot-4430"
     },
@@ -199,6 +219,11 @@
       "target_action_id": "tool_32_call_zZ4ndlBzDgfrsDFuaYrgf9M0",
       "target_command": "python3 -m pytest -q tests/dialects/test_postgres.py",
       "target_source_duration_ms": 1238.9,
+      "target_tool_args": {
+        "command": "python3 -m pytest -q tests/dialects/test_postgres.py",
+        "timeout": 600,
+        "working_dir": "/testbed"
+      },
       "target_trace_line": 203,
       "task_id": "tobymao__sqlglot-4165"
     },
@@ -237,6 +262,11 @@
       "target_action_id": "tool_35_call_E7G3kChuwIDDZDw8nDZFoRG0",
       "target_command": "pytest -q tests/dialects/test_snowflake.py",
       "target_source_duration_ms": 1346.9,
+      "target_tool_args": {
+        "command": "pytest -q tests/dialects/test_snowflake.py",
+        "timeout": 600,
+        "working_dir": "/testbed"
+      },
       "target_trace_line": 221,
       "task_id": "tobymao__sqlglot-3975"
     },
@@ -273,6 +303,11 @@
       "target_action_id": "tool_29_call_sWGxVDSoIi6XboauCZ2LrrFi",
       "target_command": "python3 -m pytest tests/dialects/test_tsql.py -q",
       "target_source_duration_ms": 1007.0,
+      "target_tool_args": {
+        "command": "python3 -m pytest tests/dialects/test_tsql.py -q",
+        "timeout": 600,
+        "working_dir": "/testbed"
+      },
       "target_trace_line": 185,
       "task_id": "tobymao__sqlglot-4438"
     },
@@ -305,6 +340,11 @@
       "target_action_id": "tool_17_call_22O4XXDCdLYmCevHhBlWPCLy",
       "target_command": "python3 -m pytest tests/dialects/test_snowflake.py",
       "target_source_duration_ms": 1765.8,
+      "target_tool_args": {
+        "command": "python3 -m pytest tests/dialects/test_snowflake.py",
+        "timeout": 600,
+        "working_dir": "/testbed"
+      },
       "target_trace_line": 113,
       "task_id": "tobymao__sqlglot-3891"
     },
@@ -337,6 +377,11 @@
       "target_action_id": "tool_27_call_mBV9n8MLKBIISSyWmKrSbHdo",
       "target_command": "python3 -m pytest tests/dialects/test_postgres.py",
       "target_source_duration_ms": 1155.1,
+      "target_tool_args": {
+        "command": "python3 -m pytest tests/dialects/test_postgres.py",
+        "timeout": 600,
+        "working_dir": "/testbed"
+      },
       "target_trace_line": 173,
       "task_id": "tobymao__sqlglot-4519"
     },
@@ -367,6 +412,11 @@
       "target_action_id": "tool_18_call_1cmWywm1IrMpswXT8V992z2D",
       "target_command": "/opt/conda/envs/testbed/bin/python -m pytest tests/dialects/test_bigquery.py",
       "target_source_duration_ms": 1493.6,
+      "target_tool_args": {
+        "command": "/opt/conda/envs/testbed/bin/python -m pytest tests/dialects/test_bigquery.py",
+        "timeout": 600,
+        "working_dir": "/testbed"
+      },
       "target_trace_line": 119,
       "task_id": "tobymao__sqlglot-4148"
     },
@@ -396,6 +446,11 @@
       "target_action_id": "tool_17_call_T0K539u4N7AGVhYHQ00ReE0B",
       "target_command": "/opt/conda/bin/python -m pytest tests/dialects/test_snowflake.py",
       "target_source_duration_ms": 2583.7,
+      "target_tool_args": {
+        "command": "/opt/conda/bin/python -m pytest tests/dialects/test_snowflake.py",
+        "timeout": 600,
+        "working_dir": "/testbed"
+      },
       "target_trace_line": 113,
       "task_id": "tobymao__sqlglot-4696"
     },
@@ -425,6 +480,11 @@
       "target_action_id": "tool_19_call_eqTtdOBPq7I33mAo6rvu19t7",
       "target_command": "pytest tests/dialects/test_snowflake.py",
       "target_source_duration_ms": 1829.1,
+      "target_tool_args": {
+        "command": "pytest tests/dialects/test_snowflake.py",
+        "timeout": 600,
+        "working_dir": "/testbed"
+      },
       "target_trace_line": 125,
       "task_id": "tobymao__sqlglot-4393"
     }

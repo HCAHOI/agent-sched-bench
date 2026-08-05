@@ -59,9 +59,12 @@ _TOOL_ARG_KEYS = {
 }
 
 
-def _manifest_task(task_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _manifest_task(
+    task_id: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, str]]:
     manifest_path = MANIFEST_PATH
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_bytes = manifest_path.read_bytes()
+    manifest = json.loads(manifest_bytes)
     if manifest.get("schema") != MANIFEST_SCHEMA:
         raise ValueError("physical-state manifest schema changed")
     matches = [
@@ -81,7 +84,8 @@ def _manifest_task(task_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if not source_trace.is_relative_to(_ROOT):
         raise ValueError("source trace escapes the repository")
     actions = []
-    for line in source_trace.read_text(encoding="utf-8").splitlines():
+    source_trace_bytes = source_trace.read_bytes()
+    for line in source_trace_bytes.decode("utf-8").splitlines():
         row = json.loads(line)
         if row.get("action_id") in wanted_set:
             actions.append(row)
@@ -90,7 +94,10 @@ def _manifest_task(task_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         raise ValueError(
             f"source prefix for {task_id} differs from the frozen manifest"
         )
-    return task, actions
+    return task, actions, {
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "source_trace_sha256": hashlib.sha256(source_trace_bytes).hexdigest(),
+    }
 
 
 async def replay_prefix(
@@ -318,7 +325,7 @@ async def prepare_task(
 ) -> dict[str, Any]:
     if out.exists():
         raise FileExistsError(f"output already exists: {out}")
-    task, actions = _manifest_task(task_id)
+    task, actions, input_digests = _manifest_task(task_id)
     probe_temp = TemporaryDirectory(prefix="physical-state-probe-")
     try:
         probe_binary, probe_provenance = await asyncio.to_thread(
@@ -399,6 +406,7 @@ async def prepare_task(
         artifact = {
             "schema": "sqlglot-physical-state-prepared-task-v1",
             "manifest": str(MANIFEST_PATH.relative_to(_ROOT)),
+            "manifest_sha256": input_digests["manifest_sha256"],
             "manifest_schema": MANIFEST_SCHEMA,
             "task_id": task_id,
             "source_image": source_image,
@@ -412,6 +420,7 @@ async def prepare_task(
             "replayed_tools": sorted(REPLAY_TOOLS),
             "probe": probe_provenance,
             "source_trace": task["source_trace"],
+            "source_trace_sha256": input_digests["source_trace_sha256"],
             "target_action_id": task["target_action_id"],
             "target_command": task["target_command"],
             "prefix_actions": rows,
@@ -438,7 +447,7 @@ def main() -> None:
     parser.add_argument("--command-timeout", type=float, default=600.0)
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
-    task, actions = _manifest_task(args.task_id)
+    task, actions, _input_digests = _manifest_task(args.task_id)
     if not args.execute:
         print(
             json.dumps(

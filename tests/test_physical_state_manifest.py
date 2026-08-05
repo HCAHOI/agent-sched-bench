@@ -70,3 +70,6 @@ def test_manifest_freezes_seeded_label_free_prefix(tmp_path) -> None:
     assert [row["task_id"] for row in manifest["tasks"]] == ["task-b", "task-a"]
     assert manifest["tasks"][0]["prefix_replay_action_ids"] == ["task-b-prefix"]
     assert manifest["tasks"][0]["target_action_id"] == "task-b-target"
+    assert manifest["tasks"][0]["target_tool_args"] == {
+        "command": "python -m pytest tests/test_x.py"
+    }

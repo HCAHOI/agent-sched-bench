@@ -384,6 +384,11 @@ concurrency is one because page cache is host-global. Charge discovery,
 preparation, intervention, probe, image storage, and command time separately.
 Delete temporary images only after the result artifact is committed.
 
+The exact within-task order is frozen before execution. Repetition 1 is
+cold--warm for tasks 4459, 4430, 4519, 4696, and 4393, and warm--cold for the
+other seven selected tasks; repetition 2 reverses repetition 1. Tasks remain in
+the manifest order above and all four runs of one task form one block.
+
 The predeclared gate is:
 
 1. at least 10/12 tasks have a bounded discovery template, matching command exit
@@ -1116,3 +1121,14 @@ the static residency probe with the frozen compiler flags and installs it at
 `/opt/agent-sched-bench/physical-state-probe`, outside `/testbed`; its source
 and binary digests, compiler identity, size, and compile/copy costs enter the
 prepared-task artifact.
+
+`scripts/evaluation/build_physical_state_conditions.py` is the reviewed input
+builder for the four measured runs per task. It requires all twelve prepared
+artifacts and bounded discovery templates, validates their identities and
+digests, and emits 48 three-action traces: write the template, run the static
+cold/warm probe, then execute the exact frozen target command. It deliberately
+drops the source resource observation and timeline. The emitted protocol fixes
+one worker, one active container, source-speed timing, and no built-in
+PMU/container sampling; the separately supplied canonical
+tool-resource profile remains the only eBPF measurement path. Temporary images
+are retained through result commit rather than removed by simulator cleanup.

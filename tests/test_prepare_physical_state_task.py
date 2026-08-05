@@ -180,6 +180,11 @@ def test_cleanup_stops_container_after_agent_stop_failure(monkeypatch) -> None:
 
 
 def test_prepare_records_result_affecting_provenance(tmp_path, monkeypatch) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text('{"schema":"test"}\n', encoding="utf-8")
+    (tmp_path / "trace.jsonl").write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(subject, "_ROOT", tmp_path)
+    monkeypatch.setattr(subject, "MANIFEST_PATH", manifest_path)
     task = {
         "task_id": "task-a",
         "image": "source:tag",
@@ -187,7 +192,18 @@ def test_prepare_records_result_affecting_provenance(tmp_path, monkeypatch) -> N
         "target_action_id": "target",
         "target_command": "pytest",
     }
-    monkeypatch.setattr(subject, "_manifest_task", lambda _task_id: (task, []))
+    monkeypatch.setattr(
+        subject,
+        "_manifest_task",
+        lambda _task_id: (
+            task,
+            [],
+            {
+                "manifest_sha256": "frozen-manifest",
+                "source_trace_sha256": "frozen-trace",
+            },
+        ),
+    )
     probe = tmp_path / "probe"
     probe.write_bytes(b"probe")
     monkeypatch.setattr(
@@ -257,6 +273,8 @@ def test_prepare_records_result_affecting_provenance(tmp_path, monkeypatch) -> N
     )
 
     assert artifact["manifest"] == str(subject.MANIFEST_PATH.relative_to(subject._ROOT))
+    assert artifact["manifest_sha256"] == "frozen-manifest"
+    assert artifact["source_trace_sha256"] == "frozen-trace"
     assert artifact["source_image_id"] == "sha256:source"
     assert artifact["prepared_image_id"] == "sha256:prepared"
     assert artifact["command_timeout_s"] == 123
