@@ -22,6 +22,7 @@ from scripts.evaluation.evaluate_full_test_phase_fresh import (
     fit_phase_pmfs,
     phase_coverage,
 )
+from scripts.evaluation.evaluate_offline_agent_extractor import _score_candidate
 
 
 def _task(
@@ -193,6 +194,40 @@ def test_final_authorization_and_disk_gate_fail_closed() -> None:
         0.0,
     ]
     assert not _result_gate({"gate": {"go": True}}, [row])["go"]
+
+    targets = (
+        "latency",
+        "peak_cpu_cores",
+        "sampled_peak_rss_mb",
+        "disk_read_write_bytes_total",
+    )
+    unavailable = {
+        "task_id": "task",
+        "labels": {target: 0 for target in targets},
+        "candidate": {target: None for target in targets},
+        "current_dynamic": {target: None for target in targets},
+    }
+    baseline = {
+        "latency": {
+            "current_dynamic": {
+                "exact_class_accuracy": None,
+                "severe_underprediction_rate": None,
+            }
+        },
+        "resources": {
+            target: {
+                "current_dynamic": {
+                    "accuracy": None,
+                    "severe_underprediction_rate": None,
+                }
+            }
+            for target in targets[1:]
+        },
+    }
+    score = _score_candidate(baseline, [unavailable])
+    assert not score["gate"]["go"]
+    assert not score["gate"]["no_accuracy_regression"]
+    assert not score["gate"]["no_severe_underprediction_regression"]
 
 
 def test_validation_coverage_no_go_does_not_load_role_labels(

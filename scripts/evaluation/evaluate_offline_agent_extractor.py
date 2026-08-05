@@ -231,7 +231,9 @@ def build_queries(
             if row is None:
                 continue
             if row.command != event.command:
-                raise ValueError(f"{row.call_id}: eligible command lacks matching raw event")
+                raise ValueError(
+                    f"{row.call_id}: eligible command lacks matching raw event"
+                )
             prior_events = []
             for prior_index, prior in enumerate(events[:event_index]):
                 if (
@@ -465,7 +467,10 @@ def _validated_usage(events: Sequence[Mapping[str, Any]], stem: str) -> dict[str
         for key in ("input_tokens", "cached_input_tokens", "output_tokens")
     ):
         raise ValueError(f"{stem}: token usage is incomplete")
-    return {key: int(usage[key]) for key in ("input_tokens", "cached_input_tokens", "output_tokens")}
+    return {
+        key: int(usage[key])
+        for key in ("input_tokens", "cached_input_tokens", "output_tokens")
+    }
 
 
 def _validate_selection(
@@ -564,7 +569,9 @@ def validate_source(source: str, forbidden_ids: Sequence[str] = ()) -> None:
     )
     for node in ast.walk(tree):
         if isinstance(node, forbidden_nodes):
-            raise ValueError(f"generated source contains forbidden {type(node).__name__}")
+            raise ValueError(
+                f"generated source contains forbidden {type(node).__name__}"
+            )
         if isinstance(node, ast.Name) and node.id in _FORBIDDEN_NAMES:
             raise ValueError(f"generated source uses forbidden name {node.id}")
         if isinstance(node, ast.Attribute) and node.attr.startswith("_"):
@@ -583,10 +590,11 @@ def validate_source(source: str, forbidden_ids: Sequence[str] = ()) -> None:
                 and descendant.value not in _INTERFACE_STRINGS
                 for descendant in ast.walk(value)
             ):
-                raise ValueError("generated source assigns a matching literal indirectly")
+                raise ValueError(
+                    "generated source assigns a matching literal indirectly"
+                )
         if isinstance(node, (ast.BinOp, ast.JoinedStr)) and any(
-            isinstance(descendant, ast.Constant)
-            and isinstance(descendant.value, str)
+            isinstance(descendant, ast.Constant) and isinstance(descendant.value, str)
             for descendant in ast.walk(node)
         ):
             raise ValueError("generated source constructs a string dynamically")
@@ -596,7 +604,10 @@ def _matching_literals(source: str) -> set[str]:
     tree = ast.parse(source)
     output_values: set[int] = set()
     docstrings: set[int] = set()
-    for owner in (tree, *(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef))):
+    for owner in (
+        tree,
+        *(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)),
+    ):
         if (
             owner.body
             and isinstance(owner.body[0], ast.Expr)
@@ -613,7 +624,10 @@ def _matching_literals(source: str) -> set[str]:
 
     def collect_returns(node: ast.AST) -> None:
         for child in ast.iter_child_nodes(node):
-            if isinstance(child, (ast.FunctionDef, ast.Lambda)) and child is not extract:
+            if (
+                isinstance(child, (ast.FunctionDef, ast.Lambda))
+                and child is not extract
+            ):
                 continue
             if isinstance(child, ast.Return):
                 direct_returns.append(child)
@@ -679,7 +693,11 @@ def _specific_command_tokens(command: str) -> set[str]:
             generic_indices.add(module_index + 1)
         else:
             subcommand = next(
-                (index for index in range(1, len(argv)) if not argv[index].startswith("-")),
+                (
+                    index
+                    for index in range(1, len(argv))
+                    if not argv[index].startswith("-")
+                ),
                 None,
             )
             if subcommand is not None:
@@ -728,7 +746,9 @@ def validate_source_semantics(
             elif len(argv) > 1 and not argv[1].startswith("-"):
                 generic_tokens.add(argv[1])
             generic_tokens.update(value for value in argv if value.startswith("-"))
-            positional_tokens.update(value for value in argv[1:] if not value.startswith("-"))
+            positional_tokens.update(
+                value for value in argv[1:] if not value.startswith("-")
+            )
     regex_literals = _regex_literals(source)
     for literal in _matching_literals(source):
         lowered = literal.lower()
@@ -737,6 +757,7 @@ def validate_source_semantics(
                 compiled = re.compile(literal)
             except re.error as error:
                 raise ValueError(f"generated regex is invalid: {literal!r}") from error
+
             def matches(text: str) -> bool:
                 return any(
                     getattr(compiled, method)(text) is not None
@@ -768,20 +789,15 @@ def validate_source_semantics(
                     f"{dependent_specific_tokens}"
                 )
             regex_tokens = {
-                token.lower()
-                for token in re.findall(r"[A-Za-z0-9_.-]{2,}", literal)
+                token.lower() for token in re.findall(r"[A-Za-z0-9_.-]{2,}", literal)
             }
-            specific = sorted(
-                regex_tokens & positional_tokens - generic_tokens
-            )
+            specific = sorted(regex_tokens & positional_tokens - generic_tokens)
             if specific:
                 raise ValueError(
                     f"generated regex contains package/test-specific tokens: {specific}"
                 )
         else:
-            support = sum(
-                lowered in material for material in material_by_task.values()
-            )
+            support = sum(lowered in material for material in material_by_task.values())
         if support < MINIMUM_SUPPORT_TASKS:
             raise ValueError(
                 f"generated matching literal lacks five-task support: {literal!r}"
@@ -801,7 +817,9 @@ def validate_source_semantics(
         if _signature(actual_value) == _signature(empty_value):
             continue
         if actual_value is not None and not actual_value["evidence_event_indices"]:
-            raise ValueError("history-dependent signature lacks cited semantic evidence")
+            raise ValueError(
+                "history-dependent signature lacks cited semantic evidence"
+            )
         if _signature(actual_value) == _signature(neutral_value):
             raise ValueError("generated source infers state from history count alone")
 
@@ -909,11 +927,15 @@ def _fit_pmfs(
     for key, target_counts in sorted(counts.items()):
         signature, target = key
         tasks = support[key]
-        bucket_count = CANONICAL_LATENCY_BUCKETS.bucket_count if target == "latency" else 3
+        bucket_count = (
+            CANONICAL_LATENCY_BUCKETS.bucket_count if target == "latency" else 3
+        )
         usable = len(tasks) >= MINIMUM_SUPPORT_TASKS
         if usable:
             total = sum(target_counts.values())
-            pmfs[key] = tuple(target_counts[index] / total for index in range(bucket_count))
+            pmfs[key] = tuple(
+                target_counts[index] / total for index in range(bucket_count)
+            )
         report[f"{signature[0]}::{signature[1]}::{target}"] = {
             "distinct_tasks": len(tasks),
             "label_counts": dict(sorted(target_counts.items())),
@@ -984,8 +1006,13 @@ def _assert_current_alignment(
                 for target in CANONICAL_RESOURCE_BUCKET_EDGES
             },
         }
-        if hard != expected["hard"] or actual["probability_by_bucket"] != expected["pmf"]:
-            raise AssertionError("catalog Current predictions differ from evaluator Current")
+        if (
+            hard != expected["hard"]
+            or actual["probability_by_bucket"] != expected["pmf"]
+        ):
+            raise AssertionError(
+                "catalog Current predictions differ from evaluator Current"
+            )
 
 
 def _score_candidate(
@@ -1005,27 +1032,32 @@ def _score_candidate(
         },
     }
     accuracy_ok = all(
-        metrics[target]["exact_class_accuracy" if target == "latency" else "accuracy"]
-        >= reference[target]["exact_class_accuracy" if target == "latency" else "accuracy"]
+        metrics[target][key] is not None
+        and reference[target][key] is not None
+        and metrics[target][key] >= reference[target][key]
         for target in TARGETS
+        for key in ("exact_class_accuracy" if target == "latency" else "accuracy",)
     )
     severe_ok = all(
-        metrics[target]["severe_underprediction_rate"]
+        metrics[target]["severe_underprediction_rate"] is not None
+        and reference[target]["severe_underprediction_rate"] is not None
+        and metrics[target]["severe_underprediction_rate"]
         <= reference[target]["severe_underprediction_rate"]
         for target in TARGETS
     )
     helpful = sum(change["helpful"] for change in changes.values())
     harmful = sum(change["harmful"] for change in changes.values())
     helpful_tasks = {
-        task_id
-        for change in changes.values()
-        for task_id in change["helpful_task_ids"]
+        task_id for change in changes.values() for task_id in change["helpful_task_ids"]
     }
     return {
         "metrics": metrics,
         "changes": changes,
         "gate": {
-            "go": accuracy_ok and severe_ok and helpful > harmful and len(helpful_tasks) >= 3,
+            "go": accuracy_ok
+            and severe_ok
+            and helpful > harmful
+            and len(helpful_tasks) >= 3,
             "no_accuracy_regression": accuracy_ok,
             "no_severe_underprediction_regression": severe_ok,
             "helpful": helpful,
@@ -1047,11 +1079,15 @@ def _run(args: argparse.Namespace) -> None:
         raise FileExistsError("output directory already exists; use a fresh path")
     if replay and not args.out_dir.exists():
         raise FileNotFoundError("frozen artifact directory does not exist")
-    if replay and any((args.out_dir / name).exists() for name in ("result.json", "rows.jsonl")):
+    if replay and any(
+        (args.out_dir / name).exists() for name in ("result.json", "rows.jsonl")
+    ):
         raise FileExistsError("frozen artifact was already scored")
     task_ids, clauses, commands = load_run_rows(args.run_dir)
     if len(task_ids) != 100:
-        raise ValueError("offline extractor requires the frozen 100-task development run")
+        raise ValueError(
+            "offline extractor requires the frozen 100-task development run"
+        )
     excluded = {repo_of(task_id) for task_id in task_ids}
     public = [row for path in args.public_telemetry for row in load_rows(path)]
     public = [row for row in public if row.repo not in excluded]
@@ -1084,9 +1120,14 @@ def _run(args: argparse.Namespace) -> None:
         generation_prompt = GENERATION_PROMPT + json.dumps(
             evidence, separators=(",", ":")
         )
-        combined_bytes = len(selection_prompt.encode()) + len(generation_prompt.encode())
+        combined_bytes = len(selection_prompt.encode()) + len(
+            generation_prompt.encode()
+        )
         generation = artifact.get("generation")
-        if not isinstance(generation, dict) or combined_bytes > MAX_COMBINED_PROMPT_BYTES:
+        if (
+            not isinstance(generation, dict)
+            or combined_bytes > MAX_COMBINED_PROMPT_BYTES
+        ):
             raise ValueError("frozen generation or prompt cost is invalid")
         replay_source = generation.get("source")
         if not isinstance(replay_source, str):
@@ -1096,7 +1137,8 @@ def _run(args: argparse.Namespace) -> None:
             "generation": hashlib.sha256(generation_prompt.encode()).hexdigest(),
         }
         if (
-            artifact.get("catalog_sha256") != hashlib.sha256(_json_bytes(catalog)).hexdigest()
+            artifact.get("catalog_sha256")
+            != hashlib.sha256(_json_bytes(catalog)).hexdigest()
             or artifact.get("prompt_sha256") != expected_hashes
             or artifact.get("source_sha256")
             != (
@@ -1131,7 +1173,9 @@ def _run(args: argparse.Namespace) -> None:
             generation_prompt = GENERATION_PROMPT + json.dumps(
                 evidence, separators=(",", ":")
             )
-            combined_bytes = len(selection_prompt.encode()) + len(generation_prompt.encode())
+            combined_bytes = len(selection_prompt.encode()) + len(
+                generation_prompt.encode()
+            )
             if combined_bytes > MAX_COMBINED_PROMPT_BYTES:
                 raise ValueError(
                     f"combined prompts exceed frozen cost ceiling: {combined_bytes}"
@@ -1179,7 +1223,9 @@ def _run(args: argparse.Namespace) -> None:
                 "generation": hashlib.sha256(generation_prompt.encode()).hexdigest(),
             },
             "source_sha256": (
-                None if not source.strip() else hashlib.sha256(source.encode()).hexdigest()
+                None
+                if not source.strip()
+                else hashlib.sha256(source.encode()).hexdigest()
             ),
             "selection": selection,
             "generation": generation,
@@ -1312,8 +1358,12 @@ def _run(args: argparse.Namespace) -> None:
         "support": support,
         "extractor_runtime": {
             "queries": len(durations),
-            "p50_ms": None if not durations else statistics.median(durations) / 1_000_000,
-            "p95_ms": None if not durations else _percentile(durations, 0.95) / 1_000_000,
+            "p50_ms": None
+            if not durations
+            else statistics.median(durations) / 1_000_000,
+            "p95_ms": None
+            if not durations
+            else _percentile(durations, 0.95) / 1_000_000,
         },
         "baseline": {
             "latency": baseline["latency"]["current_dynamic"],

@@ -215,6 +215,17 @@ prediction, fit PMF, detector, override, row eligibility, or gate. Because the
 host commit changes, the repaired evaluator requires a new dev-only fit
 artifact and independent review before retrying the unchanged validation role.
 
+Second amendment, 2026-08-05: the unchanged retry again produced no result
+artifact or metric. After explicit unavailable keys reached the shared scorer,
+both Current and candidate had incomplete exact accuracy for at least one
+target, and the scorer crashed on `None >= None`. The only newly visible
+information was this exception. The shared gate now treats any incomplete
+Current or candidate primary accuracy or severe-underprediction metric as
+fail-closed NO-GO instead of comparing nulls. Numeric comparisons are unchanged.
+This is the specified interpretation of “no lower/no higher”: unavailable
+metrics cannot demonstrate either condition. A newly committed dev-only fit
+artifact is again required before the unchanged validation retry.
+
 ## 5. Other angles, in priority order
 
 1. **Pre-command workspace workset.** The strongest genuinely new hypothesis is

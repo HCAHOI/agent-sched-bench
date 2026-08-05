@@ -155,8 +155,12 @@ research record.
 The first deterministic-phase validation invocation reached scoring but
 produced no metric or result artifact: unavailable Current resource predictions
 were represented by omitted keys and caused `KeyError: peak_cpu_cores`. The
-2026-08-05 amendment in `clause-interaction-kb-plan.md` records the sole
+2026-08-05 amendment in `clause-interaction-kb-plan.md` records the first
 plumbing repair and exactly what was visible before the unchanged retry.
+The first retry likewise produced no result: the shared gate attempted to
+compare incomplete accuracies as numbers. The second amendment records the
+fail-closed interpretation; an unavailable primary metric cannot satisfy the
+frozen no-regression gate.
 
 The fixed full-command targets in Section 1 remain the static-predictor
 baseline. Their first causal 80-task warm-up / 20-task test replay contains 349
