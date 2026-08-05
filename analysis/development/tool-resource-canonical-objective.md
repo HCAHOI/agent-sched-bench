@@ -104,121 +104,50 @@ action set. It used each command's own timestamped execution prefix rather than
 cross-task similarity, but its hindsight action-space upper bound did not pass
 the frozen utility gate.
 
-The blind task-local state replay is a frozen development predecessor layered on
-the reviewed full-test phase correction. For this named arm only, a fixed agent may
-read earlier completed command text, exit status, and bounded result excerpts
-from the current task, but never timing, telemetry, labels, the current result,
-or future calls. Every query uses a separate tool-free model context, preventing
-cross-query leakage. It assigns a frozen environment state; the ordinary
-evaluator fits state-conditioned PMFs from the first 80 tasks and scores the
-final 20.
-This is an explicit amendment to the rule that the current task was entirely
-invisible. Resource observations still settle only after whole-task
-finalization, and the agent never receives them. The exact schema, support rule,
-and gate live in `clause-interaction-kb-plan.md`. No runtime integration is
-authorized.
+The deterministic `full-test-third-or-later-v1` feature passed its reviewed,
+post-hoc development continuation rule. Relative to Current, latency accuracy
+changed from 77.937% to 79.083%, CPU from 90.476% to 93.333%, RSS from 91.561%
+to 94.093%, and Disk remained 81.375% with bit-identical PMFs. Severe
+underpredictions fell from 4 to 0 for latency and from 7 to 1 for both CPU and
+RSS. All 16 changed target predictions were helpful across five tasks; none
+were harmful. This is the proposed next fresh replication, not a generalization
+claim.
 
-The reviewed post-hoc 80/20 replay passed its development continuation rule.
-Latency accuracy changed from 77.937% to 79.083%, CPU from 90.476% to 93.333%,
-RSS from 91.561% to 94.093%, and Disk remained 81.375% with bit-identical PMFs.
-Severe underpredictions fell from 4 to 0 for latency and from 7 to 1 for both
-CPU and RSS. All 16 changed target predictions were helpful across five tasks;
-none were harmful. This does not establish generalization. At that time the
-unread adjacent SQLGlot100 collection was assigned as one task-held-out
-replication; Section 3's current 50/50 amendment supersedes that access plan.
+The offline-agent direction is complete and closed. It progressed from a
+per-query blind classifier to a frozen Python feature, exact relational spans,
+schema-bounded regex, family/scope extraction, and finally selection from a
+fully host-built typed catalog. The frozen Python feature left all four exact
+accuracies unchanged, with five helpful and five harmful target changes and
+helpful changes in only two tasks. Intermediate relational candidates failed
+their preregistered structural validators without repair or retry.
 
-A separate completed development-only amendment tested a lower-cost agent boundary: two
-bounded, tool-free calls inspect only the first 80 exposed tasks and emit one
-frozen causal feature function. The function runs locally on future commands,
-emits a signature rather than a bucket, and leaves PMF fitting and unsupported
-fallback to the ordinary evaluator. It may discover its own scope, but the
-framework names no tool or hand-selected residual family. The fixed input,
-output, cost, support, and continuation rules are in
-`clause-interaction-kb-plan.md`. This arm consumed no adjacent task output.
+The final typed-catalog arm removed arbitrary code, regex, and parser
+generation. The agent selected the semantically credible `unittest`
+missing-module to successful-install relation rather than support-only `C000`,
+and local extraction passed its runtime gate. Nevertheless, supported
+`blocked` and `closure_candidate` states had identical hard PMF modes for all
+four targets, and the second scope lacked task support. This is evidence that
+the blocker/remediation story can be semantically correct without separating
+resource outcomes. Exact costs, intermediate failures, and artifacts are in
+`clause-interaction-kb-plan.md`.
 
-That lower-cost arm is now complete and is a development no-go. Its single
-agent-generated causal signature covered 31 warm-up commands in 15 tasks and
-six test commands in three tasks. Exact accuracy stayed unchanged at 77.937%
-latency, 90.476% CPU, 91.561% RSS, and 81.375% Disk. Severe underprediction fell
-slightly for latency, CPU, and RSS, but the ten target changes split evenly into
-five helpful and five harmful and helpful changes covered only two tasks. The
-mechanism collapsed partial and complete dependency remediation: 14/15 warm-up
-support tasks contained both a short retry and a later real full-suite execution
-under the same signature. The method therefore stops without regeneration and
-consumed no adjacent task output.
+Taken together, the agent direction is closed. The final finite-choice arm
+removed arbitrary code, regex, and parser generation yet still found no
+resource-separating relation/scope contrast. More prompts, critics, DSLs, or
+agent adapters are not authorized. The next proposed experiment is instead an
+unchanged fresh replication of the deterministic third-or-later full-test phase
+feature that passed the exposed development continuation rule.
 
-A preregistered relational extension tested the narrower failure mechanism
-without regenerating or rescoring that 80/20 run. One offline, tool-free agent
-call receives only the prior arm's selected label-free development prefixes and
-emits a frozen pure extractor. Its stateless functions enumerate scope,
-blocker-result spans, and remediation-command spans one string at a time; the
-host, not the agent, scans every causal event, constructs exact-token edges, and
-uniquely derives blocked, partial remediation, closure candidate, verified
-closure, and newly surfaced blocker states. A deterministic verifier enforces
-causal graph/state invariants, and a mandatory same-carrier
-collapsed-state ablation isolates whether the relations add value; empirical
-resource PMFs remain the ordinary evaluator's job. There
-is no runtime agent, iterative repair, critic model, graph framework, or new
-dependency. The exact structural, coverage, cost, and fresh-data gates are
-frozen in `clause-interaction-kb-plan.md`.
-
-That relational candidate is a structural development NO-GO. Its only allowed
-agent call emitted a generic test-suite/blocker/install parser, but the source
-assigned matching literals to local variables and failed the frozen auditable-
-source validator before execution, PMF fit, or primary-contrast selection. The
-call used 59,872 input and 3,047 output tokens. It was not repaired or
-regenerated. This result says the single generated candidate did not satisfy
-the frozen representation contract; it is not evidence that blocker-remediation
-relations lack predictive value. No adjacent validation or final-test command,
-output, resource label, or telemetry was consumed.
-
-The separately preregistered declarative relational arm is also a structural
-NO-GO. It did not weaken, repair, or regenerate the rejected Python candidate.
-Its one offline call returned a bounded JSON rule for short `pytest` commands,
-`No module named <id>` blockers, and `python3-<id>` remediation. The blocker
-pattern appeared in 15 development tasks but captured only one distinct
-identifier, `pytest`, below the frozen minimum of two. The arm therefore stopped
-before graph replay, PMF fit, primary-pair selection, or reserved scoring. The
-call used 56,982 input and 1,664 output tokens; prediction-time agent cost would
-have been zero. No validation or final outcome was opened, and no retry or rule
-repair is allowed. Exact protocol and artifacts remain in Section 9 of
-`clause-interaction-kb-plan.md` and
-`analysis/results/tool-resource-5-3-3-3-20260804/sqlglot100-declarative-relational-v1`.
-
-The family-and-scope relational arm also ended at its frozen structural gate.
-Its one offline call received the bounded event-chain inventory and returned a
-strict JSON `pytest` family with targeted and suite scopes plus missing-module
-and install relations. Both scope regexes used `\z`, which does not compile in
-the committed Python 3.12 host, so the response was rejected before support
-checks, graph replay, PMF fitting, or contrast selection. The call used 32,742
-input and 1,812 output tokens in 45.002 seconds; no repair or retry is allowed.
-This is evidence against this single generated candidate, not against the
-family/scope/state hypothesis. Prediction-time agent cost would have been zero,
-and validation/final remain unread. The independently reviewed contract and
-artifact are Section 10 of `clause-interaction-kb-plan.md` and
-`analysis/results/tool-resource-5-3-3-3-20260804/sqlglot100-declarative-family-state-v1`.
-
-The separately preregistered typed-catalog selection arm is complete. The host
-mined eight executable configurations from label-free development episodes, and
-the one permitted finite-choice agent call selected `C006`: a credible
-`unittest` missing-module to successful-install relation rather than the
-support-only `C000`. The selected runtime passed its 5 ms limit, but development
-produced no supported hard-PMF relation/scope contrasts: `blocked` and
-`closure_candidate` had identical hard modes for all four targets, while the
-second scope had only one task per observed state. This is a structural NO-GO,
-so no repair, retry, validation, or final access is allowed. Exact construction,
-cost, supports, and the reviewed artifact are Section 11 of
-`clause-interaction-kb-plan.md`; prediction-time agent cost remains zero.
-
-SQLGlot is not excluded from this experiment. The original 100 SQLGlot tasks
-are development-only fit evidence; the additional 100 requested tasks were
+The original 100 SQLGlot tasks are development-only fit evidence; the
+additional 100 requested tasks were
 split by task ID, independent of completion state, into 50 validation and 50
 final-test tasks before any reserved output or label was read. Validation may
-only gate whether the byte-identical method consumes final test; it cannot tune
-the method or its PMFs. The earlier all-100 blind-state held-out wording is
-superseded before outcome access. Exact IDs and stage permissions live only in
-`analysis/development/sqlglot-relational-task-split.json` and
-`clause-interaction-kb-plan.md`.
+only gate whether one newly preregistered byte-identical method consumes final
+test; it cannot tune that method or its PMFs. No agent arm opened either
+partition. The earlier all-100 blind-state held-out wording is superseded before
+outcome access. Exact IDs and stage permissions live only in
+`analysis/development/sqlglot-relational-task-split.json` and the current
+research record.
 
 The fixed full-command targets in Section 1 remain the static-predictor
 baseline. Their first causal 80-task warm-up / 20-task test replay contains 349
@@ -410,9 +339,10 @@ ceiling, not a remaining-work signal.
 - Before typed-catalog generation, a label-free implementation preflight showed
   that accidentally inheriting the prior raw-prompt first-twelve-task cap left
   zero complete configurations, whereas the recorded feasibility count of eight
-  used all qualifying development episodes. Section 11 was openly amended to
-  use all development episodes because its prompt contains only aggregate
-  templates and counts. No resource label or reserved artifact was read.
+  used all qualifying development episodes. The typed-catalog protocol was
+  openly amended to use all development episodes because its prompt contained
+  only aggregate templates and counts. No resource label or reserved artifact
+  was read.
 
 ## 6. Non-negotiable task contract
 
