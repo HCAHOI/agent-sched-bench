@@ -2,16 +2,15 @@
 
 **Effective:** 2026-08-04
 
-**Status:** relational closure protocol frozen before implementation; same-repo
-validation/final task partitions fixed while the adjacent collection remains
-scientifically unread
+**Status:** family-and-scope relational protocol frozen before generation;
+same-repo validation/final task partitions remain scientifically unread
 
 This plan extends `tool-resource-canonical-objective.md`. The earlier semantic
 KB and early-execution routes are complete negative results. The active question
 is narrower:
 
-> Can command history inside the current task distinguish a full test suite that
-> will really execute from the same command failing quickly during setup?
+> Can a label-free offline agent define reusable command families, current work
+> scope, and dependency state that improve causal command-resource prediction?
 
 ## 1. Evidence and hypothesis
 
@@ -625,3 +624,153 @@ validation-to-final input/hash authorization. An independent bounded review of
 the protocol and implementation is required before the single generation.
 Unchanged reviewed code may then produce development and fresh results; a final
 bounded review checks artifacts, gates, and data access before result commit.
+
+## 10. Family-and-scope relational arm
+
+**Frozen before generation or reserved-outcome access: 2026-08-05.** This is a
+new development arm, not a repair, retry, or reinterpretation of Sections 7 or
+9. Their artifacts and NO-GO verdicts stay unchanged. Validation and final-test
+commands, outputs, labels, and telemetry remain unread.
+
+The visible label-free diagnostic motivating this amendment used a deliberately
+permissive lexical oracle, not a candidate method. With exact-command verifiers
+it produced 146 non-null states over 59 development tasks, including no
+`closure_verified` state. Replacing only verifier equality with a generic
+direct/module invocation family produced 308 states over 92 tasks, including
+35 `closure_verified` commands in 33 tasks. This is an optimistic upper bound
+with false-positive relations; it may justify the representation but cannot set
+patterns, PMFs, thresholds, or a success verdict.
+
+The causal question is:
+
+> Does retaining both the current command's work scope and family-level
+> blocker/remediation closure separate a short verification run from later real
+> work without a prediction-time model call?
+
+### 10.1 Label-free evidence and single agent call
+
+The host constructs evidence only from the 100 development task IDs in the
+committed split. It reads raw command text, exit status, bounded result excerpts,
+and parsed clauses; it does not read durations, telemetry, resource labels,
+Current predictions, reserved task IDs, or reserved files.
+
+For evidence compression, a simple one-clause command has an invocation key:
+use argv[2] when argv has at least three entries and argv[1] is exactly `-m`;
+otherwise use `argv[0].rsplit("/", 1)[-1]`. Normalize that value by case-folding,
+replacing every maximal run outside `[0-9a-z]` with one hyphen, and stripping
+outer hyphens; an empty result is not a key. A key is a candidate when at least
+five tasks contain a failed invocation followed by a later invocation with that
+key. Retain at most four candidates by descending qualifying-task count, then
+lexicographic key. For each candidate retain the first twelve qualifying tasks
+in the committed development order. An episode starts at the first failed
+candidate invocation that has a later verifier and ends at the last candidate
+invocation; it contains every candidate invocation and every successful
+intervening command, preserving order.
+
+The exact string trim uses marker `\n<omitted>\n`. A string at or below its limit
+is unchanged; otherwise its head has `floor((limit - marker_length) / 2)`
+characters and its tail fills the remaining characters after the marker.
+Commands use limit 800 and failed-verifier excerpts use limit 500. An episode
+with more than 48 selected events keeps exactly the first and last 24; shorter
+episodes keep every selected event. Candidate and task aliases are assigned in
+the retained order as `F000...` and `T000...`; original task and sample IDs are
+absent. The serialized prompt must not exceed 180,000 UTF-8 bytes; overflow or
+fewer than two candidate keys is a pre-generation structural NO-GO.
+
+There is exactly one tool-free Codex `gpt-5.6-sol` call at requested fast tier
+and medium reasoning. There is no critic, repair, retry, or candidate sweep.
+The agent receives the compressed evidence and contract and returns one strict
+JSON object. Prediction-time agent cost is zero.
+
+### 10.2 Declarative schema and bounds
+
+The response contains exactly:
+
+```text
+abstain: boolean
+family_id: string
+scopes: array[{scope_id: string, patterns: array[string]}]
+blocker_patterns: array[string]
+remediation_patterns: array[string]
+explanation: string
+```
+
+On abstention all strings and arrays except `explanation` are empty. Otherwise
+IDs match `[a-z][a-z0-9_-]{0,39}`; `explanation` is 1--1,000 characters; there
+are 2--4 distinct scopes, each with 1--4 command patterns of 1--256 ASCII
+characters, and at most eight scope patterns in total. There are 1--6 blocker
+and 1--6 remediation patterns of 1--512 ASCII characters. Fixed flags, allowed
+regex grammar, repeat ambiguity, span validation, input limits, graph limits,
+and 5 ms p95 runtime limit are exactly Section 9.2.
+
+Every command pattern is full-matched and must support five development tasks.
+Every blocker/remediation pattern must support five tasks and capture at least
+two distinct identifiers. A command may match at most one scope. Decoded fixed
+literals remain subject to opaque-ID and development-specific positional-token
+checks, but generic argument shape and count are allowed because they define
+work scope. The agent cannot emit buckets, states, relations, weights,
+thresholds, tool names outside its patterns, or per-query decisions.
+
+### 10.3 Deterministic host semantics and development gate
+
+The union of scope patterns defines one command family. The current command
+must match exactly one `scope_id`. Any earlier command matching any scope in the
+same family is a verifier; this is the only change from exact-command equality.
+Blocker spans come only from failed family verifiers. Remediation spans come
+only from successful prior commands, and an edge still requires exact
+normalized identifier equality. A successful family verifier after the last
+matching remediation may establish closure. The host alone derives the five
+ordered states in Section 7.2. The query result and all future events remain
+invisible.
+
+Fit development PMFs with the unchanged five-task target support for three arms
+on the identical non-null full-relation carrier; commands without a relation
+state fall back to byte-identical Current in every arm:
+
+1. **family-only:** collapse scope and state to `(family_id, target)`;
+2. **scope-only:** collapse state to `(family_id, scope_id, target)`; and
+3. **full:** `(family_id, scope_id, dependency_state, target)`.
+
+Before any reserved outcome access, the candidate must expose both contrasts:
+
+- one **relation contrast**: under the same scope, two dependency states each
+  occur in five tasks and have different hard PMF modes for at least one target;
+- one **scope contrast**: under the same dependency state, two scopes each
+  occur in five tasks and have different hard PMF modes for at least one target.
+
+For each contrast maximize the smaller task support, then combined support,
+then lexicographic `(family_id, fixed dimension, sorted varying dimension)`;
+select its first differing target in latency, CPU, RSS, Disk order. Freeze both
+primary contrasts. Every graph/bound check must pass, empty history must return
+no state, and extraction p95 must not exceed 5 ms. Failure is a complete
+development structural NO-GO with no regeneration.
+
+### 10.4 Fresh evaluation and decision gate
+
+The split, Current evidence, fit corpus, no-update rule, task accounting, and
+validation-to-final authorization remain Section 6. Validation coverage requires
+20 full-arm commands in five tasks; each primary relation state under its fixed
+scope and each primary scope under its fixed dependency state must appear in
+five commands across three tasks. Coverage is checked without labels; failure
+leaves labels unscored.
+
+Validation authorizes final only when full, relative to Current, has no lower
+exact accuracy for any target, no higher severe underprediction for any target
+and lower severe underprediction for at least two, more helpful than harmful
+target changes covering three tasks, no lower accuracy than family-only or
+scope-only for any target, and both of these paired requirements:
+
+- full is strictly more correct than scope-only on the frozen relation contrast
+  and its primary target; and
+- scope-only is strictly more correct than family-only on the frozen scope
+  contrast and its primary target.
+
+Final uses the identical independent gate; overall GO requires both partitions
+to pass.
+
+The prompt, schema, response, spec, compressed evidence, PMFs, primary contrast,
+split and input hashes, committed host revision, and generation cost are frozen
+in one development artifact. Protocol and implementation receive bounded
+independent review before generation. A structural GO artifact is reviewed and
+committed before any validation access; a validation GO is reviewed and
+committed before final access.

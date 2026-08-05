@@ -185,6 +185,18 @@ repair is allowed. Exact protocol and artifacts remain in Section 9 of
 `clause-interaction-kb-plan.md` and
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot100-declarative-relational-v1`.
 
+A new family-and-scope relational arm is preregistered but has not generated a
+candidate. A label-free development oracle found that exact-command verifier
+identity produced no verified-closure state, while generic direct/module
+invocation families exposed verified closure in 33 tasks. Because that oracle
+is permissive and false-positive prone, it is only representation evidence.
+The new arm gives one offline agent a bounded compressed event-chain inventory
+and permits one strict JSON family with multiple current-work scopes plus
+blocker/remediation patterns. The host constructs all relations and states,
+fits ordinary PMFs, and runs family-only and scope-only ablations; prediction-
+time agent cost remains zero. Its complete frozen contract is Section 10 of
+`clause-interaction-kb-plan.md`. Validation and final remain unread.
+
 SQLGlot is not excluded from this experiment. The original 100 SQLGlot tasks
 are development-only fit evidence; the additional 100 requested tasks were
 split by task ID, independent of completion state, into 50 validation and 50
