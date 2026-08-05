@@ -147,6 +147,22 @@ support tasks contained both a short retry and a later real full-suite execution
 under the same signature. The method therefore stops without regeneration;
 the frozen blind-state held-out primary remains unchanged.
 
+A preregistered relational extension now tests the narrower failure mechanism
+without regenerating or rescoring that 80/20 run. One offline, tool-free agent
+call receives only the prior arm's selected label-free development prefixes and
+emits a frozen pure extractor. Its stateless functions enumerate scope,
+blocker-result spans, and remediation-command spans one string at a time; the
+host, not the agent, scans every causal event, constructs exact-token edges, and
+uniquely derives blocked, partial remediation, closure candidate, verified
+closure, and newly surfaced blocker states. A deterministic verifier enforces
+causal graph/state invariants, and a mandatory same-carrier
+collapsed-state ablation isolates whether the relations add value; empirical
+resource PMFs remain the ordinary evaluator's job. There
+is no runtime agent, iterative repair, critic model, graph framework, or new
+dependency. The exact structural, coverage, cost, and fresh-data gates are
+frozen in `clause-interaction-kb-plan.md`; the existing blind-state held-out
+primary is unchanged.
+
 The fixed full-command targets in Section 1 remain the static-predictor
 baseline. Their first causal 80-task warm-up / 20-task test replay contains 349
 test commands. It is development-exposed, not confirmation evidence:
@@ -320,6 +336,13 @@ ceiling, not a remaining-work signal.
   matches of the exact frozen regex while rejecting package/test/file argument
   dependence; the same source and prompt hashes were then replayed with no
   additional model call. The resulting no-go numbers above are the first score.
+- The relational closure protocol was frozen after that no-go and its bimodal
+  mechanism diagnosis were visible. Before the freeze, only process state,
+  file names/counts, task-ID disjointness, and timestamps of the adjacent
+  SQLGlot collection were inspected; no command output, resource label, or
+  evaluation result from it was read. The new arm is therefore an explicit
+  development amendment evaluated only on the already-running task-disjoint
+  collection, not a reanalysis of the exposed 80/20 split.
 
 ## 6. Non-negotiable task contract
 

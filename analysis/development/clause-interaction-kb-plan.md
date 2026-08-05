@@ -1,9 +1,9 @@
-# Task-Local Full-Test Phase Research Plan
+# Task-Local Resource-State Research Plan
 
 **Effective:** 2026-08-04
 
-**Status:** blind causal-state replay frozen before implementation; held-out
-SQLGlot collection running and unread
+**Status:** relational closure protocol frozen before implementation; adjacent
+SQLGlot collection running and scientifically unread
 
 This plan extends `tool-resource-canonical-objective.md`. The earlier semantic
 KB and early-execution routes are complete negative results. The active question
@@ -220,7 +220,7 @@ collection blocker to the exact remediation or otherwise distinguish partial
 from complete remediation. This run must not be regenerated on the exposed
 split.
 
-## 6. Held-out replication
+## 6. Frozen blind-state held-out replication
 
 Development passed and the implementation is frozen. After collection
 completion, fit state on all 100 existing SQLGlot tasks and evaluate every
@@ -245,7 +245,161 @@ The held-out gate is fixed before any result from that collection is read:
 This is a task-held-out same-repository replication, not a temporal deployment
 claim: the new tasks precede the development tasks by creation time.
 
-## 7. Implementation and checks
+## 7. Relational closure arm
+
+The offline-generated extractor's no-go is evidence against the state
+`an install succeeded`, not against offline agent-generated features. That state
+merged a short retry with a later real suite execution. The next experiment
+tests one causal hypothesis only:
+
+> Does retaining which blocker a successful action addresses, and whether a
+> later verifier confirms or refutes closure, separate those execution modes?
+
+### 7.1 Design preflight
+
+Provenance and object-centric event-log standards represent typed events,
+objects, and qualified relations; planning formalisms represent actions through
+preconditions and effects. Agent workflow libraries add graph execution, while
+ReAct, Reflexion, Self-Refine, and CRITIC add iterative model feedback. The
+needed experiment is smaller than any of those systems: an ordered in-memory
+event graph plus a deterministic state reducer is sufficient. No graph library,
+workflow runtime, online agent loop, or LLM critic is added. A critic would have
+no independent fresh signal before the command finishes; static source and
+graph invariants provide cheaper external verification.
+
+The agent remains useful only as an offline compiler for semantic extraction.
+There is exactly one tool-free Codex `gpt-5.6-sol` call at requested fast tier
+and medium reasoning. It receives the previous arm's already-selected twelve
+development examples and their causal prefixes, with labels and Current
+predictions removed. It also receives the relational output contract below. It
+does not receive any adjacent-collection data. The serialized prompt is capped
+at 200,000 UTF-8 bytes. An abstention, invalid source, or failed structural gate
+is a no-go; there is no prompt repair, regeneration, or second candidate.
+
+### 7.2 Frozen event graph and states
+
+The generated source does not emit a query graph or state. It defines exactly
+three stateless pure functions:
+
+- `scope(current_command, parsed_clauses) -> rule_id | None`;
+- `blocker_spans(result_excerpt) -> list[[start, end]]`; and
+- `remediation_spans(command) -> list[[start, end]]`.
+
+Each span refers to the single input string supplied to that function. The host
+calls `blocker_spans` on every causally earlier failed event whose
+whitespace-collapsed command equals the current command, and calls
+`remediation_spans` on every causally earlier successful event. The parser sees
+one string at a time, not the task prefix, so it cannot omit a blocker based on
+which later remediation happens to match. A failed verifier with no returned
+blocker span contributes no state.
+
+The host case-folds each cited span, trims surrounding punctuation, and
+collapses each run of non-alphanumeric characters to one hyphen. A remediation
+edge exists only when its normalized successful-command span exactly equals an
+earlier normalized blocker span. This exact-token relation is conservative:
+aliases are missed rather than guessed. The host rejects empty or path-like
+identifiers, overlapping or out-of-range spans, duplicate occurrences, and
+non-causal events. It enumerates every span returned by the frozen parser; the
+agent cannot choose graph nodes or edges per query.
+
+A verifier is any prior event whose command equals the current command after
+collapsing whitespace. This prevents an unrelated successful command from
+certifying closure; equivalent-but-differently-spelled invocations are
+conservatively missed.
+
+The host derives one state with the following ordered, mutually exclusive
+rules:
+
+1. `newly_surfaced`: a nonzero verifier after a successful remediation
+   introduces a different active blocker;
+2. `partial_remediation`: at least one blocker is resolved and one remains
+   active, without satisfying rule 1;
+3. `closure_verified`: all recognized blockers are resolved and a later
+   verifier exits zero;
+4. `closure_candidate`: all recognized blockers are resolved, but rule 3 is not
+   met;
+5. `blocked`: at least one blocker is active and none is resolved.
+
+No graph returns a state if it satisfies none of these rules. A verifier is used
+only for ordering plus its recorded exit status; the host does not accept an
+agent assertion that a nonzero verifier “progressed.”
+
+`closure_candidate` is deliberately not treated as complete closure. The
+extractor cannot use the current result to promote the current query. Empty
+history produces no graph, and blank strings must produce no spans or scope.
+The existing generated-source sandbox, opaque-ID rejection, and
+package/test/file-specific literal checks remain in force.
+
+### 7.3 Development fit and structural gate
+
+After the source is frozen, replay it over all 100 development-exposed SQLGlot
+tasks. Do not score or optimize an 80/20 split. Fit one empirical PMF per
+`(rule_id, state, target)` for latency, CPU, RSS, and Disk, using a state-target
+only when it has eligible observations from at least five distinct development
+tasks. This retains Section 5's support threshold unchanged.
+
+Before consuming fresh labels, continue only if all of these mechanical checks
+pass:
+
+- at least one pair of non-null states under the same `rule_id` is each observed
+  in five development tasks and has different hard PMF modes for at least one
+  target;
+- `closure_candidate` never satisfies the graph invariant for
+  `closure_verified`; and
+- every non-null output passes the causal and relational verifier.
+
+These checks establish that the representation can change a prediction; they
+do not select a threshold or source variant. Before fresh data is opened, choose
+one primary contrast mechanically from all qualifying same-rule state pairs:
+maximize the smaller state task-support, then combined task-support, then break
+ties lexicographically by `(rule_id, sorted state names)`. The primary target is
+the first of latency, CPU, RSS, and Disk whose fitted hard modes differ for that
+pair. Record the selected pair and target in the frozen artifact.
+
+### 7.4 Fresh evaluation and frozen gate
+
+The only evaluation corpus is every evidence-valid task in the adjacent,
+task-disjoint SQLGlot collection named in Section 6. The original 100 tasks are
+the fixed fit corpus. Current and the relational candidate receive the same
+public evidence and all 100 original tasks as settled repository-local prior;
+neither updates within the fresh collection in the primary comparison. A
+within-fresh causal-update replay is descriptive secondary evidence only.
+
+Before labels are read, require label-free carrier coverage of at least 20
+commands across five fresh tasks. Each state in the frozen primary contrast
+must appear on at least five commands from three fresh tasks. Failure is a
+coverage no-go and labels remain unscored. If coverage passes, the candidate
+replaces frozen Current independently for any target with a usable state PMF;
+every unsupported command-target falls back to bit-identical Current. Report
+every command and every failed, unfinished, or telemetry-invalid task.
+
+Fit a mandatory collapsed-state ablation from the identical development
+outputs, replacing `(rule_id, state)` with `rule_id` while preserving the same
+carrier, commands, evidence, support threshold, targets, and fallback. This is
+the direct control for “the new extractor found a better carrier, but the
+relations did no work.”
+
+The relational arm is a GO only if, relative to frozen Current on identical
+eligible command rows and labels:
+
+- exact accuracy is no lower for latency, CPU, RSS, or Disk;
+- severe underprediction is no higher for any target and lower for at least
+  two targets;
+- target-level helpful changes outnumber harmful changes; and
+- helpful changes cover at least three fresh tasks;
+- exact accuracy is no lower than the collapsed-state ablation for any target;
+  and
+- on the frozen primary target and only the fresh commands in the frozen
+  primary state pair, the relational arm has strictly more correct predictions
+  than the collapsed-state ablation.
+
+Also report accuracy and changes by relational state and by same-rule state
+pair, but no subset can select the method. This arm is a preregistered secondary
+use of the same unread corpus; it does not alter the Section 6 blind-state
+primary. Once either outcome is read, the corpus is development-exposed for all
+later methods.
+
+## 8. Implementation and checks
 
 - Reuse the existing command loader, pytest parser, Current replay, bucket
   labels, and metrics. Add no KB class or runtime integration.
@@ -261,3 +415,13 @@ claim: the new tasks precede the development tasks by creation time.
   detector, third-attempt boundary, targets, or gate from held-out results.
 - The generated-extractor arm reuses this evaluator and raw-event loader; it
   adds no KB class, runtime service, online agent call, rule DSL, or registry.
+- The relational arm reuses Section 5's selected evidence, query builder,
+  source sandbox, Current evaluator, PMF fitter, and hard metrics. Its only new
+  reusable logic is relation-record validation and frozen-fit/fresh-test
+  orchestration.
+- Focused tests cover span normalization, unsuccessful and mismatched
+  remediation, every ordered state rule, dangling and non-causal edges,
+  empty/neutral history, same-rule support, the collapsed-state ablation,
+  fit-only PMFs, frozen Current identity, and fresh task disjointness.
+  Independent review checks leakage and gate implementation before any
+  adjacent-collection output or label is opened.
