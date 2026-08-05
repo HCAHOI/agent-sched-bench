@@ -26,7 +26,12 @@ For latency, predict one normalized probability mass function over:
 ```
 
 The hard prediction is the highest-probability bucket; an exact tie selects the
-shorter bucket. The primary metric is exact five-class command accuracy.
+shorter bucket. The primary metric is exact five-class command accuracy. An
+unavailable hard prediction counts as incorrect while remaining reported as
+unavailable; it does not remove the labelled command or make the aggregate
+accuracy undefined. This fail-closed scoring amendment was recorded before the
+first residual-model fit or validation score, after the prior task-phase run
+had already exposed one unavailable validation prediction.
 Compare it with one constant majority class computed over the identical
 evaluation commands. Report eligible count, label and prediction counts, the
 5x5 confusion matrix, majority accuracy, within-one-bucket accuracy, severe

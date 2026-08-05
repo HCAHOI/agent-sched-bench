@@ -443,7 +443,11 @@ Use the already-declared CPU PyTorch dependency in float64. Initialize `W` and
 `tolerance_change=1e-9`, and strong-Wolfe line search. Seed is 0. There is no
 class weighting, hyperparameter search, calibration threshold, early stopping,
 or model selection. Rows with an unavailable target label are omitted only for
-that target. Current prediction availability must be preserved.
+that target. If Current has no PMF for an otherwise labelled command, use the
+uniform PMF as the residual base and require the candidate to produce a finite
+PMF. For the paired comparison, a Current unavailable prediction contributes
+zero correct and remains explicit in its unavailable count; it does not make
+the entire baseline accuracy undefined.
 
 Hard predictions use the canonical lower-index argmax. Disk hard predictions
 and PMFs are copied bit-for-bit from Current. Record the frozen weights, feature
@@ -465,3 +469,11 @@ Only GO authorizes a separately committed final-test invocation with the exact
 same source and frozen weights. NO-GO closes this linear residual candidate;
 do not change the hash width, feature list, regularization, optimizer, fit split,
 or gate after seeing validation.
+
+Before any real residual fit or validation score, implementation preflight
+reached the already-recorded validation row whose Current latency PMF is
+unavailable. The original “preserve prediction availability” wording made every
+candidate unable to pass by construction. This protocol was therefore openly
+amended to the uniform-base and fail-closed-correct-count rule above. The row,
+its label, and Current unavailability were already exposed by the task-phase
+NO-GO; no residual weight, prediction, or target score was visible.
