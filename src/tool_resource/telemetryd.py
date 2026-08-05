@@ -782,6 +782,56 @@ def _provisional_call(summary: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalized_cpu_window_profile(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    previous_end = 0.0
+    for item in value:
+        if not isinstance(item, Mapping):
+            return []
+        start = item.get("start_offset_s")
+        end = item.get("end_offset_s")
+        span = item.get("span_s")
+        cpu_ns = item.get("cpu_ns")
+        cores = item.get("cpu_cores")
+        if (
+            isinstance(start, bool)
+            or not isinstance(start, (int, float))
+            or isinstance(end, bool)
+            or not isinstance(end, (int, float))
+            or isinstance(span, bool)
+            or not isinstance(span, (int, float))
+            or isinstance(cpu_ns, bool)
+            or not isinstance(cpu_ns, int)
+            or isinstance(cores, bool)
+            or not isinstance(cores, (int, float))
+        ):
+            return []
+        start, end, span, cores = map(float, (start, end, span, cores))
+        if (
+            not all(math.isfinite(number) for number in (start, end, span, cores))
+            or start < previous_end
+            or end <= start
+            or span <= 0.0
+            or not math.isclose(span, end - start, abs_tol=1e-9)
+            or cpu_ns < 0
+            or cores < 0.0
+        ):
+            return []
+        normalized.append(
+            {
+                "start_offset_s": start,
+                "end_offset_s": end,
+                "span_s": span,
+                "cpu_ns": cpu_ns,
+                "cpu_cores": cores,
+            }
+        )
+        previous_end = end
+    return normalized
+
+
 def _normalized_clauses(summary: Mapping[str, Any]) -> list[dict[str, Any]]:
     allowed = {
         "bin",
@@ -802,11 +852,17 @@ def _normalized_clauses(summary: Mapping[str, Any]) -> list[dict[str, Any]]:
         "telemetry_quality",
         "eligible_for_kb",
     }
-    return [
-        {key: value for key, value in clause.items() if key in allowed}
-        for clause in summary.get("clauses", [])
-        if isinstance(clause, Mapping)
-    ]
+    rows = []
+    for clause in summary.get("clauses", []):
+        if not isinstance(clause, Mapping):
+            continue
+        row = {key: value for key, value in clause.items() if key in allowed}
+        if "cpu_window_profile" in clause:
+            row["cpu_window_profile"] = _normalized_cpu_window_profile(
+                clause["cpu_window_profile"]
+            )
+        rows.append(row)
+    return rows
 
 
 def _normalized_observation(

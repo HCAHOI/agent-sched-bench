@@ -46,7 +46,11 @@ from tool_resource.telemetry_protocol import (
     TelemetryUnavailableError,
     TelemetryUnixTransport,
 )
-from tool_resource.telemetryd import TelemetryServer, TelemetryService
+from tool_resource.telemetryd import (
+    TelemetryServer,
+    TelemetryService,
+    _normalized_clauses,
+)
 from trace_collect.openclaw_tools import ContainerAgent
 
 
@@ -72,6 +76,68 @@ class _DirectTransport:
                 None if request_id is None else (os.getuid(), request_id)
             ),
         )
+
+
+def test_normalized_clauses_preserve_cpu_window_profile_only() -> None:
+    profile = [
+        {
+            "start_offset_s": 0.0,
+            "end_offset_s": 0.5,
+            "span_s": 0.5,
+            "cpu_ns": 750_000_000,
+            "cpu_cores": 1.5,
+            "raw_future_samples": ["must-not-cross"],
+        }
+    ]
+
+    rows = _normalized_clauses(
+        {
+            "clauses": [
+                {
+                    "bin": "pytest",
+                    "argv": ["pytest"],
+                    "cpu_window_profile": profile,
+                    "provenance": {"raw": True},
+                }
+            ]
+        }
+    )
+
+    assert rows == [
+        {
+            "bin": "pytest",
+            "argv": ["pytest"],
+            "cpu_window_profile": [
+                {
+                    "start_offset_s": 0.0,
+                    "end_offset_s": 0.5,
+                    "span_s": 0.5,
+                    "cpu_ns": 750_000_000,
+                    "cpu_cores": 1.5,
+                }
+            ],
+        }
+    ]
+
+    malformed = _normalized_clauses(
+        {
+            "clauses": [
+                {
+                    "bin": "pytest",
+                    "cpu_window_profile": [
+                        {
+                            "start_offset_s": 0.0,
+                            "end_offset_s": 0.5,
+                            "span_s": 0.4,
+                            "cpu_ns": 1,
+                            "cpu_cores": 1.0,
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    assert malformed == [{"bin": "pytest", "cpu_window_profile": []}]
 
 
 class _BlockingTransport(_DirectTransport):

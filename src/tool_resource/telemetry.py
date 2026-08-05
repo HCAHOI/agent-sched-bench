@@ -4418,6 +4418,16 @@ class ClauseTelemetryCollector:
                 "peak_cpu_cores": bridged.observation.peak_cpu_cores,
                 "sampled_peak_rss_mb": bridged.observation.sampled_peak_rss_mb,
                 "cpu_ns_cumulative": bridged.observation.cpu_ns_cumulative,
+                "cpu_window_profile": [
+                    {
+                        "start_offset_s": start,
+                        "end_offset_s": end,
+                        "span_s": span,
+                        "cpu_ns": cpu_ns,
+                        "cpu_cores": cores,
+                    }
+                    for start, end, span, cpu_ns, cores in bridged.cpu_window_profile
+                ],
                 "in_loop": bridged.observation.in_loop,
                 "in_pipe": bridged.observation.in_pipe,
                 "in_subst": bridged.observation.in_subst,

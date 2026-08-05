@@ -203,6 +203,7 @@ class BridgedClause:
     disk_read_bytes_total: int | None
     disk_write_bytes_total: int | None
     disk_cancelled_write_bytes_total: int | None
+    cpu_window_profile: tuple[tuple[float, float, float, int, float], ...]
     availability: dict[str, str]
     provenance: dict[str, Any]
 
@@ -269,25 +270,29 @@ _MIN_RSS_SAMPLES = 2  # fail closed on insufficient merged RSS coverage
 
 def _merge_cpu(
     owned: Sequence[ExecImageRecord], t_exec: int, t_end: int, quota: float | None
-) -> tuple[float | None, str]:
+) -> tuple[
+    float | None,
+    str,
+    tuple[tuple[float, float, float, int, float], ...],
+]:
     if any(i.cpu_windows is None for i in owned):
-        return None, "missing_cpu_profile"
+        return None, "missing_cpu_profile", ()
     # Quota must be present, finite, and positive; clipping is meaningless
     # otherwise. No inf fallback.
     if quota is None or not math.isfinite(quota) or quota <= 0.0:
-        return None, "missing_or_inconsistent_quota"
+        return None, "missing_or_inconsistent_quota", ()
     if (t_end - t_exec) < _MIN_ELIGIBLE_SPAN_NS:
-        return None, "clause_shorter_than_1s_ineligible_for_peak"
+        return None, "clause_shorter_than_1s_ineligible_for_peak", ()
     merged: dict[int, int] = {}
     for img in owned:
         for widx, cpu_ns in img.cpu_windows or ():
             if not isinstance(widx, int) or not isinstance(cpu_ns, int) or cpu_ns < 0:
-                return None, "invalid_cpu_profile"
+                return None, "invalid_cpu_profile", ()
             merged[widx] = merged.get(widx, 0) + cpu_ns
     if not merged:
-        return None, "insufficient_cpu_samples"
-    peak: float | None = None
-    for widx, cpu_ns in merged.items():
+        return None, "insufficient_cpu_samples", ()
+    profile: list[tuple[float, float, float, int, float]] = []
+    for widx, cpu_ns in sorted(merged.items()):
         win_start = widx * _WINDOW_NS
         lo = max(win_start, t_exec)
         hi = min(win_start + _WINDOW_NS, t_end)
@@ -295,12 +300,20 @@ def _merge_cpu(
         if span < _MIN_WINDOW_SPAN_NS:
             continue
         rate = min(cpu_ns / span, quota)
-        peak = rate if peak is None else max(peak, rate)
-    if peak is None:  # every merged window was too short to time -> no 0/ok
-        return None, "no_eligible_merged_window"
-    if not math.isfinite(peak):
-        return None, "non_finite_cpu"
-    return peak, "ok"
+        if not math.isfinite(rate):
+            return None, "non_finite_cpu", ()
+        profile.append(
+            (
+                (lo - t_exec) / 1e9,
+                (hi - t_exec) / 1e9,
+                span / 1e9,
+                cpu_ns,
+                rate,
+            )
+        )
+    if not profile:  # every merged window was too short to time -> no 0/ok
+        return None, "no_eligible_merged_window", ()
+    return max(row[4] for row in profile), "ok", tuple(profile)
 
 
 def _merge_rss(owned: Sequence[ExecImageRecord]) -> tuple[float | None, str]:
@@ -1696,6 +1709,7 @@ def _zero_observation(
         disk_read_bytes_total=0,
         disk_write_bytes_total=0,
         disk_cancelled_write_bytes_total=0,
+        cpu_window_profile=(),
         availability=dict.fromkeys(("latency", "cpu", "memory", "disk_io"), "ok"),
         provenance={
             "mapping_evidence": mapping_evidence,
@@ -1728,7 +1742,9 @@ def _aggregate(
         and img.provenance["quota_cores"] > 0.0
     }
     quota = quotas.pop() if len(quotas) == 1 else None
-    peak_cpu, cpu_reason = _merge_cpu(owned_images, t_exec, t_end, quota)
+    peak_cpu, cpu_reason, cpu_window_profile = _merge_cpu(
+        owned_images, t_exec, t_end, quota
+    )
     peak_rss, rss_reason = _merge_rss(owned_images)
     disk_io, disk_io_reason = _merge_disk_io(owned_images)
     exit_signals = [i.exit_signal for i in owned_images if i.exit_signal]
@@ -1820,6 +1836,7 @@ def _aggregate(
         disk_read_bytes_total=disk_io[0] if disk_io is not None else None,
         disk_write_bytes_total=disk_io[1] if disk_io is not None else None,
         disk_cancelled_write_bytes_total=(disk_io[2] if disk_io is not None else None),
+        cpu_window_profile=cpu_window_profile,
         availability=availability,
         provenance=provenance,
     )

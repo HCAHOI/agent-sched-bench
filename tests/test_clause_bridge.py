@@ -2229,6 +2229,12 @@ def test_concurrent_descendants_cpu_sums_to_three_cores() -> None:
     assert len(result.bridged) == 1
     obs = result.observations[0]
     assert obs.peak_cpu_cores == pytest.approx(3.0, abs=0.1)  # summed, not max=1.5
+    assert result.bridged[0].cpu_window_profile == (
+        (0.0, 0.5, 0.5, 1_500_000_000, 3.0),
+        (0.5, 1.0, 0.5, 1_500_000_000, 3.0),
+        (1.0, 1.5, 0.5, 1_500_000_000, 3.0),
+        (1.5, 2.0, 0.5, 1_500_000_000, 3.0),
+    )
 
 
 def test_concurrent_descendants_rss_sums_distinct_mm() -> None:
