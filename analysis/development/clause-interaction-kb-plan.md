@@ -14,7 +14,8 @@ Adding pip package-set overlap also returned component NO-GO: RSS passed the
 five-point gate, but latency and CPU did not. The next frozen component test
 added a parameter-free early-execution lower-bound correction and returned
 NO-GO: elapsed time was valid and useful, but cgroup CPU was not a lower bound
-for the canonical clause-owned CPU target. Final remains closed.
+for the canonical clause-owned CPU target. The next frozen component isolates
+survival-conditioned Disk calibration. Final remains closed.
 
 This record extends `tool-resource-canonical-objective.md`, which remains the
 authority for targets, bucket boundaries, causal visibility, eligible command
@@ -896,3 +897,67 @@ Artifacts:
 
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-early-physical-bounds-v1/result.json`
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-early-physical-bounds-v1/rows.jsonl`
+
+## 11. Frozen component test: survival-conditioned Disk
+
+### 11.1 Question and fit evidence
+
+Section 10 showed that elapsed time is a valid early latency signal but that the
+action-level CPU value has the wrong physical scope. This phase uses no cgroup
+value. It asks whether the single causal event “the command has not finished by
+the frozen decision time” corrects Disk, where static identity misses current
+execution state.
+
+Fit only on the existing 80 committed fit tasks. Among rows still running at
+the Section 10 decision time, final Disk labels grouped by their pre-execution
+Current hard prediction are:
+
+| Current Disk | Fit rows | Final Low / Medium / High | Fitted mode |
+|---|---:|---:|---:|
+| Low | 91 | 40 / 51 / 0 | Medium |
+| Medium | 327 | 82 / 243 / 2 | Medium |
+| High | 95 | 5 / 5 / 85 | High |
+
+These are permitted fit labels. Validation liveness and labels were already
+development-exposed by Section 10, so this is an adaptive development test and
+cannot by itself authorize final.
+
+### 11.2 Frozen candidate
+
+Use the same first-sample endpoint plus 0.050 s availability pad and
+0.09132007875 s actuation p95. At prediction time, survival is only the absence
+of a finish event by that offset; no CPU value, resource counter, output, final
+duration, or future sample is read.
+
+The candidate hierarchy keeps the canonical targets separate:
+
+- latency: Section 9 semantic prediction, raised only to the elapsed-time
+  bucket exactly as in Section 10;
+- CPU and RSS: Section 9 semantic prediction, byte-identical PMFs and hard
+  decisions;
+- Disk before the decision: exact complete-command outcome evidence, then
+  Current;
+- Disk when still running at the decision: the fit PMF for its pre-execution
+  Current Disk hard class overrides the static Disk prediction.
+
+The survival PMF uses every available fit label in its Current-hard group, with
+no smoothing, support threshold, command family, parser, or learned boundary.
+Use the lower class on ties. Validation does not update this fit model. Record
+the exact-Disk plus semantic first-three-target arm as the ablation.
+
+### 11.3 Component gate
+
+This component is GO only if:
+
+1. Disk improves by at least 5.0 percentage points over Current;
+2. Disk severe underprediction does not increase;
+3. Disk helpful changes exceed harmful changes and span at least ten tasks;
+4. latency and RSS each remain at least 5.0 points above Current;
+5. CPU and RSS hard predictions and PMFs are bit-identical to the Section 9
+   semantic arm; and
+6. row identity holds.
+
+CPU is intentionally not claimed: Section 9 remains at +4.167 points. Even a
+GO leaves CPU unresolved and cannot open final. A miss closes this exact
+survival calibration without adding command families, thresholds, or timing
+choices. The replay uses retained traces and is expected below ten seconds.
