@@ -165,7 +165,9 @@ This supports an ephemeral task-local calibrator for the first three targets,
 not a static Disk claim. Physical Disk prediction now requires evidence about
 pre-command cache residency or equivalent environment state; another command
 representation, KB structure, or agent is not authorized. The next step is a
-read-only probe-feasibility and cost audit. It does not authorize collection,
+controlled file-footprint by page-residency mechanism test on 12 already-exposed
+development tasks. Its task IDs, interventions, bounds, costs, and gate are
+frozen in `clause-interaction-kb-plan.md`. It does not authorize execution,
 global cache eviction, or final-partition access.
 
 The fixed full-command targets in Section 1 remain the static-predictor

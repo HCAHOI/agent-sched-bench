@@ -230,17 +230,91 @@ buckets do not determine physical I/O. The retained interface has no
 pre-command page-cache residency, installed-package inventory, or requested
 wheel-cache inventory. Final eBPF Disk bytes exist only after execution.
 
-The next experiment must therefore test state, not another command
-representation:
+The validation error decomposition confirms that this is not just a command
+modeling problem. Of 1,008 rows with both a Disk label and Current prediction,
+181 are wrong: 96 underpredict and 85 overpredict. Sixty-nine underpredictions
+are read-dominant and 27 are write-dominant. Medium truth is mixed (162
+read-dominant, 109 write-dominant), while 119 of 122 High rows are
+write-dominant. A fixed causal model adding cumulative prior read/write bytes to
+Current changed exposed 25/25 accuracy by only +0.198 points, with 12 helpful
+and 11 harmful changes. A repeat-full-suite state harmed by 0.496 points, and
+conditioning repeat state on `PytestSignature` harmed by 1.290 points.
 
-1. identify a safe bounded pre-command cache-residency probe and measure its
-   latency without evicting global host caches;
-2. select real repeated SQLGlot commands before outcomes and define paired
-   naturally cold/warm or isolated-cache interventions;
-3. freeze state, target, split, probe-cost accounting, and a five-point Disk
-   gate before collection; and
-4. request approval with wall-time and host-impact estimates if the real run is
-   expected to exceed 30 minutes.
+Current's shell composer is not losing bytes at bucket boundaries: it composes
+deterministic draws from the raw empirical clause values and sums Disk over the
+shell graph. Single-clause and compound commands account for 92 and 89 errors,
+respectively. Another composer or aggregate history feature is therefore not
+the next experiment.
+
+The available probes are feasible but measure different state. Reading
+container cgroup-v2 `memory.stat` from a persistent Python process cost 0.048 ms
+p95 over 1,000 host trials, but it is aggregate rather than command-specific.
+`fincore` over 572 files totaling 12.39 MiB cost 13 ms p95 over 20 trials and
+uses the same `mincore` residency mechanism needed for a command footprint.
+The container cgroup mount is read-only on this Linux 5.15 host and exposes no
+`memory.reclaim`; global cache eviction remains forbidden. Per-file
+`POSIX_FADV_DONTNEED` is available.
+
+### 5.3 Frozen next mechanism test: file footprint x residency
+
+This is a controlled development experiment on already-exposed task IDs. It
+does not consume the final partition and cannot establish task generalization.
+It tests the narrower causal hypothesis that physical read bytes require both a
+command-specific file footprint and current page residency.
+
+Selection uses only the original 100 development tasks. A task is eligible when
+its first successful, single-clause command parsed by the frozen
+`PytestSignature` grammar exists. Success is used only to ensure that repeated
+execution is meaningful; no Disk label or Current error selects a task. Seed 42
+shuffles the 81 eligible task IDs and fixes the first 12:
+
+```text
+tobymao__sqlglot-4459  tobymao__sqlglot-4004
+tobymao__sqlglot-4390  tobymao__sqlglot-4430
+tobymao__sqlglot-4165  tobymao__sqlglot-3975
+tobymao__sqlglot-4438  tobymao__sqlglot-3891
+tobymao__sqlglot-4519  tobymao__sqlglot-4148
+tobymao__sqlglot-4696  tobymao__sqlglot-4393
+```
+
+For each task, replay only the causal prefix before the selected command and
+commit that filesystem state as a temporary prepared image. Run the selected
+command once under `strace -f -e trace=%file`; this discovery run is not scored.
+Normalize existing regular-file paths in first-access order, excluding
+`/proc`, `/sys`, and `/dev`, and stop at 4,096 paths or 512 MiB total file size.
+No path name, resource label, or result-dependent rule is added.
+
+Starting from the same prepared image, run each condition twice in a fresh
+container:
+
+- **cold:** apply `POSIX_FADV_DONTNEED` to every template file, then measure its
+  resident-page fraction with `mincore`;
+- **warm:** sequentially read every template file, then measure the same
+  resident-page fraction.
+
+Execute the original command unchanged after the probe and collect the existing
+eBPF physical read/write bytes. Condition order is counterbalanced by seed 42;
+concurrency is one because page cache is host-global. Charge discovery,
+preparation, intervention, probe, image storage, and command time separately.
+Delete temporary images only after the result artifact is committed.
+
+The predeclared gate is:
+
+1. at least 10/12 tasks have a bounded discovery template, matching command exit
+   codes in all four measured runs, and valid telemetry;
+2. probe p95 is below 100 ms and at least 8/12 tasks show a warm-minus-cold
+   resident fraction of at least 0.50 in both repetitions;
+3. paired physical read bytes are lower when warm in at least 8/12 tasks; and
+4. at least 4/12 tasks cross to a lower Disk bucket when warm, with at most one
+   task crossing in the opposite direction.
+
+Passing only authorizes design of a state-aware predictor; it is not itself a
+five-point accuracy result. A failure stops page-residency work without adding
+paths, changing bounds, or choosing another task sample. Preparation plus 60
+target executions requires 72 container starts and 12 prepared images; it is
+estimated at 1--3 hours and up to roughly 60 GB before shared-layer
+deduplication. This run is not authorized yet and must wait until the
+independent PennyLane collection is finished.
 
 Do not use global `drop_caches`, reinterpret physical Disk as logical bytes,
 tune on the exposed 25/25 diagnostic, or open the final partition. Mid-execution
