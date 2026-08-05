@@ -186,6 +186,9 @@ def apply_phase_candidate(
         command = by_sample[sample_id]
         current = dict(base["current_dynamic"])
         current_pmfs = dict(current.pop("probability_by_bucket"))
+        for target in CANONICAL_RESOURCE_BUCKET_EDGES:
+            current.setdefault(target, None)
+            current_pmfs.setdefault(target, None)
         candidate = dict(current)
         candidate_pmfs = dict(current_pmfs)
         applied = []

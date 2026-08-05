@@ -204,6 +204,17 @@ after validation access. The fresh evaluator reuses the existing command
 evaluator and freezes Current after the 100 development tasks; it performs no
 within-role learning.
 
+Amendment, 2026-08-05: the first validation invocation passed coverage and
+loaded the frozen scoring path, then crashed before producing any metric or
+result artifact because Current omits resource keys when its prediction is
+unavailable while the shared scorer requires explicit `None`. The only visible
+information was `KeyError: peak_cpu_cores`; no validation score, row, label, or
+method comparison was inspected. The wrapper now canonicalizes omitted Current
+resource predictions and PMFs to `None`. This does not change any available
+prediction, fit PMF, detector, override, row eligibility, or gate. Because the
+host commit changes, the repaired evaluator requires a new dev-only fit
+artifact and independent review before retrying the unchanged validation role.
+
 ## 5. Other angles, in priority order
 
 1. **Pre-command workspace workset.** The strongest genuinely new hypothesis is

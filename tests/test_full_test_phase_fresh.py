@@ -115,8 +115,12 @@ def test_fresh_phase_fit_coverage_and_monotone_application() -> None:
     already_high["probability_by_bucket"]["latency"] = [0.0, 0.0, 0.0, 0.0, 1.0]
     already_high["probability_by_bucket"]["peak_cpu_cores"] = [0.0, 0.0, 1.0]
     already_high["probability_by_bucket"]["sampled_peak_rss_mb"] = [0.0, 0.0, 1.0]
+    baseline[0]["current_dynamic"].pop("peak_cpu_cores")
+    baseline[0]["current_dynamic"]["probability_by_bucket"].pop("peak_cpu_cores")
 
     rows = apply_phase_candidate(baseline, role_commands, role_events, pmfs)
+    assert rows[0]["candidate"]["peak_cpu_cores"] is None
+    assert rows[0]["candidate_probability_by_bucket"]["peak_cpu_cores"] is None
     unchanged = [row for row in rows if row["full_test_phase"] != 2]
     changed = [row for row in rows if row["full_test_phase"] == 2]
     assert all(row["candidate"] == row["current_dynamic"] for row in unchanged)

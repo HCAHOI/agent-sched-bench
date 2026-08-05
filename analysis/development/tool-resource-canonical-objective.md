@@ -152,6 +152,12 @@ outcome access. Exact IDs and stage permissions live only in
 `analysis/development/sqlglot-relational-task-split.json` and the current
 research record.
 
+The first deterministic-phase validation invocation reached scoring but
+produced no metric or result artifact: unavailable Current resource predictions
+were represented by omitted keys and caused `KeyError: peak_cpu_cores`. The
+2026-08-05 amendment in `clause-interaction-kb-plan.md` records the sole
+plumbing repair and exactly what was visible before the unchanged retry.
+
 The fixed full-command targets in Section 1 remain the static-predictor
 baseline. Their first causal 80-task warm-up / 20-task test replay contains 349
 test commands. It is development-exposed, not confirmation evidence:
