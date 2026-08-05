@@ -1024,3 +1024,32 @@ at least ten tasks overall, and row identity holds. A miss changes none of the
 constituent methods and cannot authorize final. A pass still requires a fresh
 confirmation protocol because validation is development-exposed. Expected
 runtime is below one second and uses no agent, container, or new trace read.
+
+### 12.3 Result and decision
+
+The frozen composition returned development NO-GO on 1,044 rows:
+
+| Target | Current | Composition | Delta |
+|---|---:|---:|---:|
+| Latency | 74.904% | 80.843% | +5.939 pp |
+| CPU | 82.887% | 87.500% | +4.613 pp |
+| RSS | 80.978% | 87.500% | +6.522 pp |
+| Disk | 82.044% | 85.218% | +3.175 pp |
+
+Phase raised two latency, seven CPU, and seven RSS predictions over the
+Section 11 arm. For CPU, those seven raises were five helpful and two harmful,
+adding three net correct rows but leaving the target about three correct rows
+short of five percentage points. All targets had more helpful than harmful
+changes, severe underprediction did not regress, and row identity held.
+
+Observed: phase and requested-work evidence are complementary, but their fixed
+composition does not close CPU and cannot change Disk. Inference: thresholding
+the exposed phase rows or changing component priority would tune a nearly
+passing metric rather than add a mechanism. The retained traces have no
+clause-owned eBPF prefix counters or pre-command file-residency state, so the
+remaining CPU and Disk gaps require new physical measurements.
+
+Artifacts:
+
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-component-composition-v1/result.json`
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-component-composition-v1/rows.jsonl`

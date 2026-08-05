@@ -248,7 +248,11 @@ The next frozen development-only check composes existing predictions without
 refitting: third-or-later full-suite phase may raise semantic latency/CPU/RSS,
 elapsed time may further raise latency, and survival supplies Disk. This tests
 component complementarity only; it cannot repair a Disk miss by changing the
-survival rule or open final from the already-exposed validation partition.
+survival rule or open final from the already-exposed validation partition. The
+composition returned NO-GO: latency, CPU, RSS, and Disk changed by +5.939,
++4.613, +6.522, and +3.175 points. Phase added three net-correct CPU rows, but
+CPU remained roughly three correct rows short of the gate and Disk was
+unchanged from survival.
 
 Physical Disk prediction requires evidence about pre-command cache
 residency or equivalent environment state. The controlled file-footprint by
