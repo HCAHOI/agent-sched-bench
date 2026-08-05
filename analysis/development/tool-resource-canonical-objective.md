@@ -205,6 +205,14 @@ final remains closed. This narrows the next question to inference-time evidence
 about previously unseen requested work and physical environment state, rather
 than another coarser command key.
 
+The next frozen development test uses an intermediate work unit rather than a
+coarser generic key: Jaccard overlap between explicit pytest file/node targets,
+partitioned by the existing non-target pytest modifiers. It follows exact
+complete-command evidence and otherwise falls back to Current. A pre-outcome,
+label-free scan found 52 non-exact validation commands with causal target
+overlap. The all-four-target five-point gate is fixed in the research record;
+final remains closed.
+
 Physical Disk prediction requires evidence about pre-command cache
 residency or equivalent environment state. The controlled file-footprint by
 page-residency mechanism test on 12 already-exposed development tasks remains

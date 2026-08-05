@@ -8,6 +8,8 @@ NO-GO. The 50-task validation partition is development-exposed; the 50-task
 final partition remains unread and unauthorized. The generic linear residual
 calibrator and causal full-command outcome memory also returned NO-GO. Disk has
 a separately frozen cache-state mechanism test that is not authorized to run.
+The next frozen development test shares complete-command evidence across
+overlapping pytest target sets; it does not open final.
 
 This record extends `tool-resource-canonical-objective.md`, which remains the
 authority for targets, bucket boundaries, causal visibility, eligible command
@@ -606,3 +608,70 @@ Artifacts:
 
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-command-outcome-memory-v1/result.json`
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-command-outcome-memory-v1/rows.jsonl`
+
+## 8. Frozen development test: pytest target overlap
+
+### 8.1 Question and pre-outcome coverage
+
+The full-command result shows that aggregate outcomes transfer when an exact
+invocation recurs, while the name-free shape is too coarse. The smallest
+intermediate representation already has a physical meaning for pytest: the set
+of requested test files and node IDs. This test asks whether overlapping test
+targets extend exact-command coverage without pooling unrelated work.
+
+A label-free scan of the already-exposed validation commands found 150
+single-clause invocations accepted by the existing `parse_pytest`
+grammar. Seventy-one were not exact complete-command matches at their causal
+query time; 52 of those shared at least one target unit with an earlier settled
+fit or validation task. No target label or candidate prediction was used for
+this count.
+
+### 8.2 Frozen candidate and ablations
+
+Use the same 80 initial fit tasks and causal 50-task validation order as Section
+7. Start from the Section 7 exact-complete-command arm. When one target has no
+exact-command evidence, the primary `pytest-target-overlap-v1` arm may replace
+Current only for a single executable clause accepted by `parse_pytest` and with
+at least one explicit target.
+
+Target units are deterministic:
+
+- a file argument contributes `file:<normalized path>`;
+- a node ID contributes both its file unit and its complete node ID; and
+- a directory contributes `directory:<normalized path>`.
+
+Paths are normalized lexically by removing `.` components and trailing slashes;
+they are not opened and names are not rewritten. Match only observations with
+identical non-target pytest modifiers: maxfail, workers, distribution mode,
+collect-only, last-failed, failed-first, stepwise, and `-k`/`-m` expression
+shape. Direct and `python -m pytest` invocations share this semantic partition.
+
+For every historical observation with positive target-unit Jaccard overlap,
+weight its complete-command class label by that Jaccard value. Normalize the
+weighted class totals into a PMF and use the lower class on ties. There is no
+minimum similarity, support threshold, alpha, target-count multiplier, or
+per-resource rule. Empty-target full suites, compounds, parser refusals, and
+zero-overlap queries fall back to Current. As before, all rows in a task predict
+before that task's labels enter either exact or overlap memory.
+
+Record two causal ablations on identical rows:
+
+1. exact complete-command memory only; and
+2. exact memory followed by the prior name-free exact `PytestSignature`, which
+   retains target shapes/counts but removes target identities.
+
+### 8.3 Gate
+
+The target-overlap arm is GO only if all are true:
+
+1. latency, CPU, RSS, and Disk exact accuracy each improve by at least 5.0
+   percentage points over Current;
+2. no target's severe-underprediction rate increases;
+3. helpful changes exceed harmful changes and cover at least ten validation
+   tasks; and
+4. all arms have byte-identical row IDs, labels, Current hard predictions, and
+   Current PMFs.
+
+A miss closes target-overlap without changing unit expansion, similarity,
+partitions, or arbitration. It cannot open final. Runtime is expected below ten
+seconds with no container, filesystem probe, dependency, or agent call.
