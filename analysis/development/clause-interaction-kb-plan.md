@@ -674,8 +674,11 @@ Commands use limit 800 and failed-verifier excerpts use limit 500. An episode
 with more than 48 selected events keeps exactly the first and last 24; shorter
 episodes keep every selected event. Candidate and task aliases are assigned in
 the retained order as `F000...` and `T000...`; original task and sample IDs are
-absent. The serialized prompt must not exceed 180,000 UTF-8 bytes; overflow or
-fewer than two candidate keys is a pre-generation structural NO-GO.
+absent. After alias assignment, case-insensitive occurrences of a retained task
+ID inside command or result text are replaced by that task's alias; occurrences
+of any other development task ID are replaced by `<task>`. The serialized prompt
+must not exceed 180,000 UTF-8 bytes; overflow or fewer than two candidate keys is
+a pre-generation structural NO-GO.
 
 There is exactly one tool-free Codex `gpt-5.6-sol` call at requested fast tier
 and medium reasoning. There is no critic, repair, retry, or candidate sweep.
@@ -707,9 +710,12 @@ Every command pattern is full-matched and must support five development tasks.
 Every blocker/remediation pattern must support five tasks and capture at least
 two distinct identifiers. A command may match at most one scope. Decoded fixed
 literals remain subject to opaque-ID and development-specific positional-token
-checks, but generic argument shape and count are allowed because they define
-work scope. The agent cannot emit buckets, states, relations, weights,
-thresholds, tool names outside its patterns, or per-query decisions.
+checks. Opaque literals include every complete development ID, every evidence
+alias, and every alphabetic run of at least four characters in the repository
+owner/name portion of a development ID. Generic argument shape and count are
+allowed because they define work scope. The agent cannot emit buckets, states,
+relations, weights, thresholds, tool names outside its patterns, or per-query
+decisions.
 
 ### 10.3 Deterministic host semantics and development gate
 

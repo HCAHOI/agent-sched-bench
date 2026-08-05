@@ -17,7 +17,7 @@ import sys
 import tempfile
 import time
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
@@ -408,7 +408,11 @@ def _call_parser(
         re.purge()
 
 
-def _derive_state(query: Mapping[str, Any], namespace: Mapping[str, Any]) -> dict[str, Any] | None:
+def _derive_state(
+    query: Mapping[str, Any],
+    namespace: Mapping[str, Any],
+    verifier_match: Callable[[str], bool] | None = None,
+) -> dict[str, Any] | None:
     rule_id = _call_parser(
         namespace, "scope", query["current_command"], query["parsed_clauses"]
     )
@@ -430,7 +434,11 @@ def _derive_state(query: Mapping[str, Any], namespace: Mapping[str, Any]) -> dic
     successful_verifiers: list[int] = []
     for event in query["prior_events"]:
         event_index = int(event["event_index"])
-        is_verifier = _collapse_whitespace(str(event["command"])) == current
+        is_verifier = (
+            verifier_match(str(event["command"]))
+            if verifier_match is not None
+            else _collapse_whitespace(str(event["command"])) == current
+        )
         if is_verifier:
             verifier_indices.append(event_index)
             if event["exit_code"] == 0:
