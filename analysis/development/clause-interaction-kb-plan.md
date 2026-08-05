@@ -6,9 +6,8 @@
 closed. The parameter-free causal within-task telemetry overlay also returned
 NO-GO. The 50-task validation partition is development-exposed; the 50-task
 final partition remains unread and unauthorized. The generic linear residual
-calibrator also returned NO-GO. The next frozen development test is a causal
-full-command outcome memory; it does not open final. Disk has a separately
-frozen cache-state mechanism test that is not authorized to run.
+calibrator and causal full-command outcome memory also returned NO-GO. Disk has
+a separately frozen cache-state mechanism test that is not authorized to run.
 
 This record extends `tool-resource-canonical-objective.md`, which remains the
 authority for targets, bucket boundaries, causal visibility, eligible command
@@ -574,3 +573,36 @@ A miss closes causal full-command outcome memory without a support threshold,
 different key, target-specific arbitration, or replay reorder. It cannot open
 the final 50 tasks. Runtime and result generation are expected to take under
 ten seconds and require no container or agent call.
+
+The frozen replay returned NO-GO on 1,044 validation commands:
+
+| Target | Current | Exact only | Exact + shape | Primary delta |
+|---|---:|---:|---:|---:|
+| Latency | 74.904% | 77.969% | 77.778% | +2.874 pp |
+| CPU | 82.887% | 84.970% | 85.119% | +2.232 pp |
+| RSS | 80.978% | 84.783% | 84.918% | +3.940 pp |
+| Disk | 82.044% | 83.829% | 83.234% | +1.190 pp |
+
+The primary arm made 134 helpful and 48 harmful target changes across 35
+helpful tasks, with no severe-underprediction regression, but no target reached
+five points. Scoring and causal updates took 1.159 seconds.
+
+The mechanism split is informative. Exact-command evidence covered 363/1,044
+latency rows, 335/672 CPU rows, 359/736 RSS rows, and 349/1,008 Disk rows. Within
+those covered rows it improved Current by 8.82, 4.18, 7.80, and 5.16 points.
+Rows with neither exact nor shape evidence remained at only 71.52%, 72.82%,
+72.14%, and 81.15% Current accuracy. The shape fallback increased CPU/RSS
+slightly but reduced latency by 2.86 points and Disk by 8.57 points on its own
+covered rows.
+
+Observed: complete-command outcomes are a better unit than independent clause
+composition when the exact invocation recurs, but exact recurrence covers too
+little of the stream. Inference: the remaining problem is generalization to a
+previously unseen requested work unit, plus physical state for Disk. Another
+coarser command key would repeat the harmful shape backoff rather than add a
+new signal. Final remains closed.
+
+Artifacts:
+
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-command-outcome-memory-v1/result.json`
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-command-outcome-memory-v1/rows.jsonl`
