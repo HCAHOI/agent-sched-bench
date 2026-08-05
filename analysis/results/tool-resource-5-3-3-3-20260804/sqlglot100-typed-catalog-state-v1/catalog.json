@@ -1,0 +1,277 @@
+{
+  "configurations": [
+    {
+      "blocker_template": {
+        "capture_mode": "whole",
+        "context_tokens": [
+          "bin",
+          "sh"
+        ]
+      },
+      "causal_task_count": 17,
+      "configuration_id": "C000",
+      "identifier_count": 2,
+      "invocation_key": "pytest",
+      "remediation_template": {
+        "capture_mode": "whole",
+        "context_tokens": [
+          "bin"
+        ]
+      },
+      "scopes": [
+        {
+          "shape": "no-target",
+          "task_support": 65
+        },
+        {
+          "shape": "python-file",
+          "task_support": 55
+        },
+        {
+          "shape": "multi-python-file",
+          "task_support": 9
+        },
+        {
+          "shape": "nodeid",
+          "task_support": 9
+        }
+      ]
+    },
+    {
+      "blocker_template": {
+        "capture_mode": "whole",
+        "context_tokens": [
+          "sh"
+        ]
+      },
+      "causal_task_count": 17,
+      "configuration_id": "C001",
+      "identifier_count": 2,
+      "invocation_key": "pytest",
+      "remediation_template": {
+        "capture_mode": "whole",
+        "context_tokens": [
+          "bin"
+        ]
+      },
+      "scopes": [
+        {
+          "shape": "no-target",
+          "task_support": 65
+        },
+        {
+          "shape": "python-file",
+          "task_support": 55
+        },
+        {
+          "shape": "multi-python-file",
+          "task_support": 9
+        },
+        {
+          "shape": "nodeid",
+          "task_support": 9
+        }
+      ]
+    },
+    {
+      "blocker_template": {
+        "capture_mode": "whole",
+        "context_tokens": [
+          "dialects"
+        ]
+      },
+      "causal_task_count": 16,
+      "configuration_id": "C002",
+      "identifier_count": 9,
+      "invocation_key": "pytest",
+      "remediation_template": {
+        "capture_mode": "whole",
+        "context_tokens": [
+          "dialects"
+        ]
+      },
+      "scopes": [
+        {
+          "shape": "no-target",
+          "task_support": 65
+        },
+        {
+          "shape": "python-file",
+          "task_support": 55
+        },
+        {
+          "shape": "multi-python-file",
+          "task_support": 9
+        },
+        {
+          "shape": "nodeid",
+          "task_support": 9
+        }
+      ]
+    },
+    {
+      "blocker_template": {
+        "capture_mode": "whole",
+        "context_tokens": [
+          "dialects"
+        ]
+      },
+      "causal_task_count": 16,
+      "configuration_id": "C003",
+      "identifier_count": 9,
+      "invocation_key": "pytest",
+      "remediation_template": {
+        "capture_mode": "whole",
+        "context_tokens": [
+          "tests",
+          "dialects"
+        ]
+      },
+      "scopes": [
+        {
+          "shape": "no-target",
+          "task_support": 65
+        },
+        {
+          "shape": "python-file",
+          "task_support": 55
+        },
+        {
+          "shape": "multi-python-file",
+          "task_support": 9
+        },
+        {
+          "shape": "nodeid",
+          "task_support": 9
+        }
+      ]
+    },
+    {
+      "blocker_template": {
+        "capture_mode": "whole",
+        "context_tokens": [
+          "module",
+          "named"
+        ]
+      },
+      "causal_task_count": 7,
+      "configuration_id": "C004",
+      "identifier_count": 2,
+      "invocation_key": "unittest",
+      "remediation_template": {
+        "capture_mode": "whole",
+        "context_tokens": [
+          "break-system-packages"
+        ]
+      },
+      "scopes": [
+        {
+          "shape": "no-target",
+          "task_support": 12
+        },
+        {
+          "shape": "dotted",
+          "task_support": 5
+        }
+      ]
+    },
+    {
+      "blocker_template": {
+        "capture_mode": "whole",
+        "context_tokens": [
+          "module",
+          "named"
+        ]
+      },
+      "causal_task_count": 7,
+      "configuration_id": "C005",
+      "identifier_count": 2,
+      "invocation_key": "unittest",
+      "remediation_template": {
+        "capture_mode": "whole",
+        "context_tokens": [
+          "install",
+          "break-system-packages"
+        ]
+      },
+      "scopes": [
+        {
+          "shape": "no-target",
+          "task_support": 12
+        },
+        {
+          "shape": "dotted",
+          "task_support": 5
+        }
+      ]
+    },
+    {
+      "blocker_template": {
+        "capture_mode": "whole",
+        "context_tokens": [
+          "module",
+          "named"
+        ]
+      },
+      "causal_task_count": 7,
+      "configuration_id": "C006",
+      "identifier_count": 2,
+      "invocation_key": "unittest",
+      "remediation_template": {
+        "capture_mode": "whole",
+        "context_tokens": [
+          "pip",
+          "install",
+          "break-system-packages"
+        ]
+      },
+      "scopes": [
+        {
+          "shape": "no-target",
+          "task_support": 12
+        },
+        {
+          "shape": "dotted",
+          "task_support": 5
+        }
+      ]
+    },
+    {
+      "blocker_template": {
+        "capture_mode": "whole",
+        "context_tokens": [
+          "named"
+        ]
+      },
+      "causal_task_count": 7,
+      "configuration_id": "C007",
+      "identifier_count": 2,
+      "invocation_key": "unittest",
+      "remediation_template": {
+        "capture_mode": "whole",
+        "context_tokens": [
+          "break-system-packages"
+        ]
+      },
+      "scopes": [
+        {
+          "shape": "no-target",
+          "task_support": 12
+        },
+        {
+          "shape": "dotted",
+          "task_support": 5
+        }
+      ]
+    }
+  ],
+  "omitted": [
+    "raw_examples",
+    "captured_identifiers",
+    "durations",
+    "telemetry",
+    "resource_labels",
+    "current_predictions"
+  ],
+  "schema": "typed-relational-catalog-v1"
+}

@@ -1,0 +1,1350 @@
+{
+  "catalog_sha256": "260efb68c68463feb6d84d6e7abd9260b7f3361638dd13e0314c20737a27f6e3",
+  "claim_bearing": false,
+  "codex_version": "codex-cli 0.146.0",
+  "cost": {
+    "prompt_bytes": 3932,
+    "usage": {
+      "cached_input_tokens": 0,
+      "input_tokens": 14111,
+      "output_tokens": 113
+    },
+    "wall_seconds": 13.644663332030177
+  },
+  "coverage": {
+    "agent_relation_commands": 21,
+    "commands": 1792,
+    "support_relation_commands": 132
+  },
+  "development_fit_sha256": "51c996702c42fa274af7165897187ef6ee855352a0e1b325763edaabcdb14457",
+  "development_task_ids_sha256": "2f8d76a7ae6eb88c1078feb1fd685db6c9cb8968d590df343d54fe5f3c46bd7b",
+  "family_only_pmfs": [
+    {
+      "pmf": [
+        0.2857142857142857,
+        0.7142857142857143,
+        0.0
+      ],
+      "rule_id": "c006",
+      "state": "__family__",
+      "target": "disk_read_write_bytes_total"
+    },
+    {
+      "pmf": [
+        0.0,
+        0.09523809523809523,
+        0.2857142857142857,
+        0.047619047619047616,
+        0.5714285714285714
+      ],
+      "rule_id": "c006",
+      "state": "__family__",
+      "target": "latency"
+    },
+    {
+      "pmf": [
+        0.38095238095238093,
+        0.047619047619047616,
+        0.5714285714285714
+      ],
+      "rule_id": "c006",
+      "state": "__family__",
+      "target": "peak_cpu_cores"
+    },
+    {
+      "pmf": [
+        0.42857142857142855,
+        0.0,
+        0.5714285714285714
+      ],
+      "rule_id": "c006",
+      "state": "__family__",
+      "target": "sampled_peak_rss_mb"
+    }
+  ],
+  "family_only_support": {
+    "c006::__family__::disk_read_write_bytes_total": {
+      "distinct_tasks": 12,
+      "label_counts": {
+        "0": 6,
+        "1": 15
+      },
+      "pmf": [
+        0.2857142857142857,
+        0.7142857142857143,
+        0.0
+      ],
+      "usable": true
+    },
+    "c006::__family__::latency": {
+      "distinct_tasks": 12,
+      "label_counts": {
+        "1": 2,
+        "2": 6,
+        "3": 1,
+        "4": 12
+      },
+      "pmf": [
+        0.0,
+        0.09523809523809523,
+        0.2857142857142857,
+        0.047619047619047616,
+        0.5714285714285714
+      ],
+      "usable": true
+    },
+    "c006::__family__::peak_cpu_cores": {
+      "distinct_tasks": 12,
+      "label_counts": {
+        "0": 8,
+        "1": 1,
+        "2": 12
+      },
+      "pmf": [
+        0.38095238095238093,
+        0.047619047619047616,
+        0.5714285714285714
+      ],
+      "usable": true
+    },
+    "c006::__family__::sampled_peak_rss_mb": {
+      "distinct_tasks": 12,
+      "label_counts": {
+        "0": 9,
+        "2": 12
+      },
+      "pmf": [
+        0.42857142857142855,
+        0.0,
+        0.5714285714285714
+      ],
+      "usable": true
+    }
+  },
+  "final_test_consumed": false,
+  "full_pmfs": [
+    {
+      "pmf": [
+        0.125,
+        0.875,
+        0.0
+      ],
+      "rule_id": "c006",
+      "state": "no-target::blocked",
+      "target": "disk_read_write_bytes_total"
+    },
+    {
+      "pmf": [
+        0.0,
+        0.0,
+        0.375,
+        0.0,
+        0.625
+      ],
+      "rule_id": "c006",
+      "state": "no-target::blocked",
+      "target": "latency"
+    },
+    {
+      "pmf": [
+        0.375,
+        0.0,
+        0.625
+      ],
+      "rule_id": "c006",
+      "state": "no-target::blocked",
+      "target": "peak_cpu_cores"
+    },
+    {
+      "pmf": [
+        0.375,
+        0.0,
+        0.625
+      ],
+      "rule_id": "c006",
+      "state": "no-target::blocked",
+      "target": "sampled_peak_rss_mb"
+    },
+    {
+      "pmf": [
+        0.4444444444444444,
+        0.5555555555555556,
+        0.0
+      ],
+      "rule_id": "c006",
+      "state": "no-target::closure_candidate",
+      "target": "disk_read_write_bytes_total"
+    },
+    {
+      "pmf": [
+        0.0,
+        0.0,
+        0.3333333333333333,
+        0.1111111111111111,
+        0.5555555555555556
+      ],
+      "rule_id": "c006",
+      "state": "no-target::closure_candidate",
+      "target": "latency"
+    },
+    {
+      "pmf": [
+        0.4444444444444444,
+        0.0,
+        0.5555555555555556
+      ],
+      "rule_id": "c006",
+      "state": "no-target::closure_candidate",
+      "target": "peak_cpu_cores"
+    },
+    {
+      "pmf": [
+        0.4444444444444444,
+        0.0,
+        0.5555555555555556
+      ],
+      "rule_id": "c006",
+      "state": "no-target::closure_candidate",
+      "target": "sampled_peak_rss_mb"
+    }
+  ],
+  "full_support": {
+    "c006::dotted::blocked::disk_read_write_bytes_total": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "1": 1
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c006::dotted::blocked::latency": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "1": 1
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c006::dotted::blocked::peak_cpu_cores": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "0": 1
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c006::dotted::blocked::sampled_peak_rss_mb": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "0": 1
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c006::dotted::closure_candidate::disk_read_write_bytes_total": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "1": 1
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c006::dotted::closure_candidate::latency": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "1": 1
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c006::dotted::closure_candidate::peak_cpu_cores": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "1": 1
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c006::dotted::closure_candidate::sampled_peak_rss_mb": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "0": 1
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c006::no-target::blocked::disk_read_write_bytes_total": {
+      "distinct_tasks": 6,
+      "label_counts": {
+        "0": 1,
+        "1": 7
+      },
+      "pmf": [
+        0.125,
+        0.875,
+        0.0
+      ],
+      "usable": true
+    },
+    "c006::no-target::blocked::latency": {
+      "distinct_tasks": 6,
+      "label_counts": {
+        "2": 3,
+        "4": 5
+      },
+      "pmf": [
+        0.0,
+        0.0,
+        0.375,
+        0.0,
+        0.625
+      ],
+      "usable": true
+    },
+    "c006::no-target::blocked::peak_cpu_cores": {
+      "distinct_tasks": 6,
+      "label_counts": {
+        "0": 3,
+        "2": 5
+      },
+      "pmf": [
+        0.375,
+        0.0,
+        0.625
+      ],
+      "usable": true
+    },
+    "c006::no-target::blocked::sampled_peak_rss_mb": {
+      "distinct_tasks": 6,
+      "label_counts": {
+        "0": 3,
+        "2": 5
+      },
+      "pmf": [
+        0.375,
+        0.0,
+        0.625
+      ],
+      "usable": true
+    },
+    "c006::no-target::closure_candidate::disk_read_write_bytes_total": {
+      "distinct_tasks": 5,
+      "label_counts": {
+        "0": 4,
+        "1": 5
+      },
+      "pmf": [
+        0.4444444444444444,
+        0.5555555555555556,
+        0.0
+      ],
+      "usable": true
+    },
+    "c006::no-target::closure_candidate::latency": {
+      "distinct_tasks": 5,
+      "label_counts": {
+        "2": 3,
+        "3": 1,
+        "4": 5
+      },
+      "pmf": [
+        0.0,
+        0.0,
+        0.3333333333333333,
+        0.1111111111111111,
+        0.5555555555555556
+      ],
+      "usable": true
+    },
+    "c006::no-target::closure_candidate::peak_cpu_cores": {
+      "distinct_tasks": 5,
+      "label_counts": {
+        "0": 4,
+        "2": 5
+      },
+      "pmf": [
+        0.4444444444444444,
+        0.0,
+        0.5555555555555556
+      ],
+      "usable": true
+    },
+    "c006::no-target::closure_candidate::sampled_peak_rss_mb": {
+      "distinct_tasks": 5,
+      "label_counts": {
+        "0": 4,
+        "2": 5
+      },
+      "pmf": [
+        0.4444444444444444,
+        0.0,
+        0.5555555555555556
+      ],
+      "usable": true
+    },
+    "c006::no-target::closure_verified::disk_read_write_bytes_total": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "1": 1
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c006::no-target::closure_verified::latency": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "4": 1
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c006::no-target::closure_verified::peak_cpu_cores": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "2": 1
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c006::no-target::closure_verified::sampled_peak_rss_mb": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "2": 1
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c006::no-target::partial_remediation::disk_read_write_bytes_total": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "0": 1
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c006::no-target::partial_remediation::latency": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "4": 1
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c006::no-target::partial_remediation::peak_cpu_cores": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "2": 1
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c006::no-target::partial_remediation::sampled_peak_rss_mb": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "2": 1
+      },
+      "pmf": null,
+      "usable": false
+    }
+  },
+  "generation": {
+    "abstain": false,
+    "configuration_id": "C006",
+    "explanation": "The failed unittest context credibly indicates a missing module, while the successful pip install context is an environment-changing remediation; the no-target and dotted scopes represent meaningfully different test requests."
+  },
+  "generation_files": [
+    {
+      "name": "generation.events.jsonl",
+      "sha256": "7d25feb282a13538e5320e096eabc338e7297ee6c9bf1925653674bdfb39ff21"
+    },
+    {
+      "name": "generation.prompt.txt",
+      "sha256": "eced36445918b6467d73f38b39741c042cdd242cbc53f059573b0be9383570ca"
+    },
+    {
+      "name": "generation.response.json",
+      "sha256": "b06460d3a455fec2f812c762036b80120dec957f85037caddba68c0d6b4bf79d"
+    },
+    {
+      "name": "generation.schema.json",
+      "sha256": "00df759c4a780c18519a41f7fff76dbe4e262497e6bad5f105403d1158c3c85f"
+    },
+    {
+      "name": "generation.stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "generation_schema_sha256": "dc9cfeb9daebb3a1a8c9f92f22751df697bcf7e980e09de402573e6adb0e3cef",
+  "host_identity": {
+    "commit": "c5d8c8b8f9af551348f9cc3dd2bb2f972cde9759",
+    "paths": [
+      "scripts/evaluation",
+      "src",
+      "pyproject.toml",
+      "uv.lock"
+    ]
+  },
+  "model": "gpt-5.6-sol",
+  "preregistration_commit": "c5d8c8b8f9af551348f9cc3dd2bb2f972cde9759",
+  "primary_contrasts": null,
+  "prompt_sha256": "eced36445918b6467d73f38b39741c042cdd242cbc53f059573b0be9383570ca",
+  "public_inputs": [
+    {
+      "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+      "sha256": "1441c0113752b1508341a83b303cc0f059d3455cd78debd0a584fa051e93318e"
+    },
+    {
+      "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl",
+      "sha256": "f4dc3e360d6f24c0c2436da956a9d1adf448defaa0a41034bb9373d2f8e6ee7c"
+    }
+  ],
+  "reasoning_effort": "medium",
+  "runtime": {
+    "agent_p50_ms": 0.2488,
+    "agent_p95_ms": 0.694088,
+    "p95_limit_ms": 5.0,
+    "support_p50_ms": 0.306199,
+    "support_p95_ms": 9.535945
+  },
+  "schema": "offline-agent-typed-catalog-state-v1",
+  "scope_only_pmfs": [
+    {
+      "pmf": [
+        0.3157894736842105,
+        0.6842105263157895,
+        0.0
+      ],
+      "rule_id": "c006",
+      "state": "scope::no-target",
+      "target": "disk_read_write_bytes_total"
+    },
+    {
+      "pmf": [
+        0.0,
+        0.0,
+        0.3157894736842105,
+        0.05263157894736842,
+        0.631578947368421
+      ],
+      "rule_id": "c006",
+      "state": "scope::no-target",
+      "target": "latency"
+    },
+    {
+      "pmf": [
+        0.3684210526315789,
+        0.0,
+        0.631578947368421
+      ],
+      "rule_id": "c006",
+      "state": "scope::no-target",
+      "target": "peak_cpu_cores"
+    },
+    {
+      "pmf": [
+        0.3684210526315789,
+        0.0,
+        0.631578947368421
+      ],
+      "rule_id": "c006",
+      "state": "scope::no-target",
+      "target": "sampled_peak_rss_mb"
+    }
+  ],
+  "scope_only_support": {
+    "c006::scope::dotted::disk_read_write_bytes_total": {
+      "distinct_tasks": 2,
+      "label_counts": {
+        "1": 2
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c006::scope::dotted::latency": {
+      "distinct_tasks": 2,
+      "label_counts": {
+        "1": 2
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c006::scope::dotted::peak_cpu_cores": {
+      "distinct_tasks": 2,
+      "label_counts": {
+        "0": 1,
+        "1": 1
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c006::scope::dotted::sampled_peak_rss_mb": {
+      "distinct_tasks": 2,
+      "label_counts": {
+        "0": 2
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c006::scope::no-target::disk_read_write_bytes_total": {
+      "distinct_tasks": 12,
+      "label_counts": {
+        "0": 6,
+        "1": 13
+      },
+      "pmf": [
+        0.3157894736842105,
+        0.6842105263157895,
+        0.0
+      ],
+      "usable": true
+    },
+    "c006::scope::no-target::latency": {
+      "distinct_tasks": 12,
+      "label_counts": {
+        "2": 6,
+        "3": 1,
+        "4": 12
+      },
+      "pmf": [
+        0.0,
+        0.0,
+        0.3157894736842105,
+        0.05263157894736842,
+        0.631578947368421
+      ],
+      "usable": true
+    },
+    "c006::scope::no-target::peak_cpu_cores": {
+      "distinct_tasks": 12,
+      "label_counts": {
+        "0": 7,
+        "2": 12
+      },
+      "pmf": [
+        0.3684210526315789,
+        0.0,
+        0.631578947368421
+      ],
+      "usable": true
+    },
+    "c006::scope::no-target::sampled_peak_rss_mb": {
+      "distinct_tasks": 12,
+      "label_counts": {
+        "0": 7,
+        "2": 12
+      },
+      "pmf": [
+        0.3684210526315789,
+        0.0,
+        0.631578947368421
+      ],
+      "usable": true
+    }
+  },
+  "selected_configuration_id": "C006",
+  "service_tier": "fast",
+  "split_manifest_sha256": "75a1b25bbfeaf503da2f87a9e4f2795a94e8423a094538d8c18af58db78001fc",
+  "status": "development_structural_no_go_no_contrasts_or_runtime",
+  "support_only_configuration_id": "C000",
+  "support_only_pmfs": [
+    {
+      "pmf": [
+        0.3783783783783784,
+        0.6216216216216216,
+        0.0
+      ],
+      "rule_id": "c000",
+      "state": "no-target::blocked",
+      "target": "disk_read_write_bytes_total"
+    },
+    {
+      "pmf": [
+        0.0,
+        0.4864864864864865,
+        0.0,
+        0.0,
+        0.5135135135135135
+      ],
+      "rule_id": "c000",
+      "state": "no-target::blocked",
+      "target": "latency"
+    },
+    {
+      "pmf": [
+        0.4722222222222222,
+        0.0,
+        0.5277777777777778
+      ],
+      "rule_id": "c000",
+      "state": "no-target::blocked",
+      "target": "peak_cpu_cores"
+    },
+    {
+      "pmf": [
+        0.4864864864864865,
+        0.0,
+        0.5135135135135135
+      ],
+      "rule_id": "c000",
+      "state": "no-target::blocked",
+      "target": "sampled_peak_rss_mb"
+    },
+    {
+      "pmf": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "rule_id": "c000",
+      "state": "no-target::closure_candidate",
+      "target": "disk_read_write_bytes_total"
+    },
+    {
+      "pmf": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rule_id": "c000",
+      "state": "no-target::closure_candidate",
+      "target": "latency"
+    },
+    {
+      "pmf": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rule_id": "c000",
+      "state": "no-target::closure_candidate",
+      "target": "peak_cpu_cores"
+    },
+    {
+      "pmf": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rule_id": "c000",
+      "state": "no-target::closure_candidate",
+      "target": "sampled_peak_rss_mb"
+    },
+    {
+      "pmf": [
+        0.07692307692307693,
+        0.9230769230769231,
+        0.0
+      ],
+      "rule_id": "c000",
+      "state": "no-target::closure_verified",
+      "target": "disk_read_write_bytes_total"
+    },
+    {
+      "pmf": [
+        0.0,
+        0.46153846153846156,
+        0.0,
+        0.0,
+        0.5384615384615384
+      ],
+      "rule_id": "c000",
+      "state": "no-target::closure_verified",
+      "target": "latency"
+    },
+    {
+      "pmf": [
+        0.46153846153846156,
+        0.0,
+        0.5384615384615384
+      ],
+      "rule_id": "c000",
+      "state": "no-target::closure_verified",
+      "target": "peak_cpu_cores"
+    },
+    {
+      "pmf": [
+        0.46153846153846156,
+        0.0,
+        0.5384615384615384
+      ],
+      "rule_id": "c000",
+      "state": "no-target::closure_verified",
+      "target": "sampled_peak_rss_mb"
+    },
+    {
+      "pmf": [
+        0.5384615384615384,
+        0.46153846153846156,
+        0.0
+      ],
+      "rule_id": "c000",
+      "state": "nodeid::blocked",
+      "target": "disk_read_write_bytes_total"
+    },
+    {
+      "pmf": [
+        0.38461538461538464,
+        0.38461538461538464,
+        0.23076923076923078,
+        0.0,
+        0.0
+      ],
+      "rule_id": "c000",
+      "state": "nodeid::blocked",
+      "target": "latency"
+    },
+    {
+      "pmf": [
+        0.9,
+        0.1,
+        0.0
+      ],
+      "rule_id": "c000",
+      "state": "nodeid::blocked",
+      "target": "peak_cpu_cores"
+    },
+    {
+      "pmf": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "rule_id": "c000",
+      "state": "nodeid::blocked",
+      "target": "sampled_peak_rss_mb"
+    },
+    {
+      "pmf": [
+        0.5555555555555556,
+        0.4444444444444444,
+        0.0
+      ],
+      "rule_id": "c000",
+      "state": "python-file::blocked",
+      "target": "disk_read_write_bytes_total"
+    },
+    {
+      "pmf": [
+        0.2777777777777778,
+        0.6111111111111112,
+        0.1111111111111111,
+        0.0,
+        0.0
+      ],
+      "rule_id": "c000",
+      "state": "python-file::blocked",
+      "target": "latency"
+    },
+    {
+      "pmf": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "rule_id": "c000",
+      "state": "python-file::blocked",
+      "target": "peak_cpu_cores"
+    },
+    {
+      "pmf": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "rule_id": "c000",
+      "state": "python-file::blocked",
+      "target": "sampled_peak_rss_mb"
+    },
+    {
+      "pmf": [
+        0.2857142857142857,
+        0.7142857142857143,
+        0.0
+      ],
+      "rule_id": "c000",
+      "state": "python-file::closure_candidate",
+      "target": "disk_read_write_bytes_total"
+    },
+    {
+      "pmf": [
+        0.0,
+        0.7142857142857143,
+        0.2857142857142857,
+        0.0,
+        0.0
+      ],
+      "rule_id": "c000",
+      "state": "python-file::closure_candidate",
+      "target": "latency"
+    },
+    {
+      "pmf": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "rule_id": "c000",
+      "state": "python-file::closure_candidate",
+      "target": "peak_cpu_cores"
+    },
+    {
+      "pmf": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "rule_id": "c000",
+      "state": "python-file::closure_candidate",
+      "target": "sampled_peak_rss_mb"
+    }
+  ],
+  "support_only_support": {
+    "c000::multi-python-file::blocked::disk_read_write_bytes_total": {
+      "distinct_tasks": 3,
+      "label_counts": {
+        "0": 4,
+        "1": 4
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c000::multi-python-file::blocked::latency": {
+      "distinct_tasks": 3,
+      "label_counts": {
+        "0": 2,
+        "1": 3,
+        "2": 3
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c000::multi-python-file::blocked::peak_cpu_cores": {
+      "distinct_tasks": 3,
+      "label_counts": {
+        "0": 8
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c000::multi-python-file::blocked::sampled_peak_rss_mb": {
+      "distinct_tasks": 3,
+      "label_counts": {
+        "0": 8
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c000::multi-python-file::closure_candidate::disk_read_write_bytes_total": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "0": 1,
+        "1": 1
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c000::multi-python-file::closure_candidate::latency": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "3": 2
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c000::multi-python-file::closure_candidate::peak_cpu_cores": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "2": 2
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c000::multi-python-file::closure_candidate::sampled_peak_rss_mb": {
+      "distinct_tasks": 1,
+      "label_counts": {
+        "1": 1,
+        "2": 1
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c000::no-target::blocked::disk_read_write_bytes_total": {
+      "distinct_tasks": 16,
+      "label_counts": {
+        "0": 14,
+        "1": 23
+      },
+      "pmf": [
+        0.3783783783783784,
+        0.6216216216216216,
+        0.0
+      ],
+      "usable": true
+    },
+    "c000::no-target::blocked::latency": {
+      "distinct_tasks": 16,
+      "label_counts": {
+        "1": 18,
+        "4": 19
+      },
+      "pmf": [
+        0.0,
+        0.4864864864864865,
+        0.0,
+        0.0,
+        0.5135135135135135
+      ],
+      "usable": true
+    },
+    "c000::no-target::blocked::peak_cpu_cores": {
+      "distinct_tasks": 16,
+      "label_counts": {
+        "0": 17,
+        "2": 19
+      },
+      "pmf": [
+        0.4722222222222222,
+        0.0,
+        0.5277777777777778
+      ],
+      "usable": true
+    },
+    "c000::no-target::blocked::sampled_peak_rss_mb": {
+      "distinct_tasks": 16,
+      "label_counts": {
+        "0": 18,
+        "2": 19
+      },
+      "pmf": [
+        0.4864864864864865,
+        0.0,
+        0.5135135135135135
+      ],
+      "usable": true
+    },
+    "c000::no-target::closure_candidate::disk_read_write_bytes_total": {
+      "distinct_tasks": 9,
+      "label_counts": {
+        "1": 9
+      },
+      "pmf": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "usable": true
+    },
+    "c000::no-target::closure_candidate::latency": {
+      "distinct_tasks": 9,
+      "label_counts": {
+        "4": 9
+      },
+      "pmf": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "usable": true
+    },
+    "c000::no-target::closure_candidate::peak_cpu_cores": {
+      "distinct_tasks": 9,
+      "label_counts": {
+        "2": 9
+      },
+      "pmf": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "usable": true
+    },
+    "c000::no-target::closure_candidate::sampled_peak_rss_mb": {
+      "distinct_tasks": 9,
+      "label_counts": {
+        "2": 9
+      },
+      "pmf": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "usable": true
+    },
+    "c000::no-target::closure_verified::disk_read_write_bytes_total": {
+      "distinct_tasks": 7,
+      "label_counts": {
+        "0": 1,
+        "1": 12
+      },
+      "pmf": [
+        0.07692307692307693,
+        0.9230769230769231,
+        0.0
+      ],
+      "usable": true
+    },
+    "c000::no-target::closure_verified::latency": {
+      "distinct_tasks": 7,
+      "label_counts": {
+        "1": 6,
+        "4": 7
+      },
+      "pmf": [
+        0.0,
+        0.46153846153846156,
+        0.0,
+        0.0,
+        0.5384615384615384
+      ],
+      "usable": true
+    },
+    "c000::no-target::closure_verified::peak_cpu_cores": {
+      "distinct_tasks": 7,
+      "label_counts": {
+        "0": 6,
+        "2": 7
+      },
+      "pmf": [
+        0.46153846153846156,
+        0.0,
+        0.5384615384615384
+      ],
+      "usable": true
+    },
+    "c000::no-target::closure_verified::sampled_peak_rss_mb": {
+      "distinct_tasks": 7,
+      "label_counts": {
+        "0": 6,
+        "2": 7
+      },
+      "pmf": [
+        0.46153846153846156,
+        0.0,
+        0.5384615384615384
+      ],
+      "usable": true
+    },
+    "c000::nodeid::blocked::disk_read_write_bytes_total": {
+      "distinct_tasks": 7,
+      "label_counts": {
+        "0": 7,
+        "1": 6
+      },
+      "pmf": [
+        0.5384615384615384,
+        0.46153846153846156,
+        0.0
+      ],
+      "usable": true
+    },
+    "c000::nodeid::blocked::latency": {
+      "distinct_tasks": 7,
+      "label_counts": {
+        "0": 5,
+        "1": 5,
+        "2": 3
+      },
+      "pmf": [
+        0.38461538461538464,
+        0.38461538461538464,
+        0.23076923076923078,
+        0.0,
+        0.0
+      ],
+      "usable": true
+    },
+    "c000::nodeid::blocked::peak_cpu_cores": {
+      "distinct_tasks": 7,
+      "label_counts": {
+        "0": 9,
+        "1": 1
+      },
+      "pmf": [
+        0.9,
+        0.1,
+        0.0
+      ],
+      "usable": true
+    },
+    "c000::nodeid::blocked::sampled_peak_rss_mb": {
+      "distinct_tasks": 7,
+      "label_counts": {
+        "0": 13
+      },
+      "pmf": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "usable": true
+    },
+    "c000::nodeid::closure_candidate::disk_read_write_bytes_total": {
+      "distinct_tasks": 2,
+      "label_counts": {
+        "0": 3,
+        "1": 2
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c000::nodeid::closure_candidate::latency": {
+      "distinct_tasks": 2,
+      "label_counts": {
+        "1": 4,
+        "2": 1
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c000::nodeid::closure_candidate::peak_cpu_cores": {
+      "distinct_tasks": 2,
+      "label_counts": {
+        "0": 4
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c000::nodeid::closure_candidate::sampled_peak_rss_mb": {
+      "distinct_tasks": 2,
+      "label_counts": {
+        "0": 5
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c000::python-file::blocked::disk_read_write_bytes_total": {
+      "distinct_tasks": 24,
+      "label_counts": {
+        "0": 20,
+        "1": 16
+      },
+      "pmf": [
+        0.5555555555555556,
+        0.4444444444444444,
+        0.0
+      ],
+      "usable": true
+    },
+    "c000::python-file::blocked::latency": {
+      "distinct_tasks": 24,
+      "label_counts": {
+        "0": 10,
+        "1": 22,
+        "2": 4
+      },
+      "pmf": [
+        0.2777777777777778,
+        0.6111111111111112,
+        0.1111111111111111,
+        0.0,
+        0.0
+      ],
+      "usable": true
+    },
+    "c000::python-file::blocked::peak_cpu_cores": {
+      "distinct_tasks": 24,
+      "label_counts": {
+        "0": 29
+      },
+      "pmf": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "usable": true
+    },
+    "c000::python-file::blocked::sampled_peak_rss_mb": {
+      "distinct_tasks": 24,
+      "label_counts": {
+        "0": 36
+      },
+      "pmf": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "usable": true
+    },
+    "c000::python-file::closure_candidate::disk_read_write_bytes_total": {
+      "distinct_tasks": 5,
+      "label_counts": {
+        "0": 2,
+        "1": 5
+      },
+      "pmf": [
+        0.2857142857142857,
+        0.7142857142857143,
+        0.0
+      ],
+      "usable": true
+    },
+    "c000::python-file::closure_candidate::latency": {
+      "distinct_tasks": 5,
+      "label_counts": {
+        "1": 5,
+        "2": 2
+      },
+      "pmf": [
+        0.0,
+        0.7142857142857143,
+        0.2857142857142857,
+        0.0,
+        0.0
+      ],
+      "usable": true
+    },
+    "c000::python-file::closure_candidate::peak_cpu_cores": {
+      "distinct_tasks": 5,
+      "label_counts": {
+        "0": 5
+      },
+      "pmf": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "usable": true
+    },
+    "c000::python-file::closure_candidate::sampled_peak_rss_mb": {
+      "distinct_tasks": 5,
+      "label_counts": {
+        "0": 7
+      },
+      "pmf": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "usable": true
+    },
+    "c000::python-file::closure_verified::disk_read_write_bytes_total": {
+      "distinct_tasks": 2,
+      "label_counts": {
+        "0": 2
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c000::python-file::closure_verified::latency": {
+      "distinct_tasks": 2,
+      "label_counts": {
+        "1": 2
+      },
+      "pmf": null,
+      "usable": false
+    },
+    "c000::python-file::closure_verified::sampled_peak_rss_mb": {
+      "distinct_tasks": 2,
+      "label_counts": {
+        "0": 2
+      },
+      "pmf": null,
+      "usable": false
+    }
+  },
+  "validation_consumed": false
+}

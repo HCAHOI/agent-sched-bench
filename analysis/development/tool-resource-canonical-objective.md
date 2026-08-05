@@ -198,15 +198,17 @@ and validation/final remain unread. The independently reviewed contract and
 artifact are Section 10 of `clause-interaction-kb-plan.md` and
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot100-declarative-family-state-v1`.
 
-A separate typed-catalog selection arm is now preregistered and has not called
-an agent. The host alone mines a finite catalog of executable family, work-scope,
-and causal token-template configurations from label-free development episodes;
-the agent can return only one catalog ID. `C000` is a deterministic support-only
-selector, so fresh evaluation can distinguish agent selection from catalog
-construction. No generated regex, code, parser, literal, threshold, state, or
-prediction is permitted, and prediction-time agent cost remains zero. The
-complete construction, cost, structural, ablation, and fresh gates are Section
-11 of `clause-interaction-kb-plan.md`; validation and final remain unread.
+The separately preregistered typed-catalog selection arm is complete. The host
+mined eight executable configurations from label-free development episodes, and
+the one permitted finite-choice agent call selected `C006`: a credible
+`unittest` missing-module to successful-install relation rather than the
+support-only `C000`. The selected runtime passed its 5 ms limit, but development
+produced no supported hard-PMF relation/scope contrasts: `blocked` and
+`closure_candidate` had identical hard modes for all four targets, while the
+second scope had only one task per observed state. This is a structural NO-GO,
+so no repair, retry, validation, or final access is allowed. Exact construction,
+cost, supports, and the reviewed artifact are Section 11 of
+`clause-interaction-kb-plan.md`; prediction-time agent cost remains zero.
 
 SQLGlot is not excluded from this experiment. The original 100 SQLGlot tasks
 are development-only fit evidence; the additional 100 requested tasks were

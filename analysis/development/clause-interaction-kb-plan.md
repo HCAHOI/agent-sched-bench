@@ -2,12 +2,12 @@
 
 **Effective:** 2026-08-04
 
-**Status:** typed-catalog selection arm is being frozen before generation;
-same-repo validation/final task partitions remain scientifically unread
+**Status:** typed-catalog selection completed with a development structural
+NO-GO; same-repo validation/final task partitions remain scientifically unread
 
-This plan extends `tool-resource-canonical-objective.md`. The earlier semantic
-KB and early-execution routes are complete negative results. The final question
-was narrower:
+This plan extends `tool-resource-canonical-objective.md`. The semantic KB,
+early-execution, and offline-agent routes are now complete negative results.
+The final question was narrower:
 
 > Can a label-free offline agent define reusable command families, current work
 > scope, and dependency state that improve causal command-resource prediction?
@@ -945,9 +945,20 @@ must be more helpful than harmful with helpful changes spanning at least three
 tasks. Identical hard predictions cannot pass. Validation GO alone authorizes
 the byte-identical method to open final; overall GO requires both partitions.
 
-The catalog, prompt/schema/response, selected and support-only IDs, all four PMF
-sets, primary contrasts, fit/input/split hashes, committed host revision, and
-generation cost are frozen in one artifact. Protocol and implementation receive
-bounded independent review before generation. A structural GO artifact is
-reviewed and committed before validation; validation GO and its rows are
-reviewed and committed before final.
+The independently reviewed host produced eight configurations across `pytest`
+and `unittest`. The one permitted tool-free call selected `C006`, the
+`unittest` missing-module to successful-install relation, rather than the
+support-only `C000`. It used 14,111 input and 113 output tokens in 13.645
+seconds; the 3,932-byte prompt contained only aggregate catalog rows. The
+selected runtime passed at 0.694 ms p95 and produced 21 relation commands.
+
+The development gate nevertheless failed. Within `no-target`, `blocked` had
+8 commands across 6 tasks and `closure_candidate` had 9 commands across 5
+tasks, but their hard PMF modes were identical for latency, CPU, RSS, and Disk.
+The `dotted` scope had only one task in each observed state, so no supported
+scope contrast existed. `primary_contrasts` was therefore null. No repair or
+retry is allowed, and neither validation nor final was opened. The reviewed
+artifact is
+`analysis/results/tool-resource-5-3-3-3-20260804/sqlglot100-typed-catalog-state-v1`.
+This closes the finite-choice agent arm: it found the semantically credible
+relation, but that relation did not separate resource outcomes on development.

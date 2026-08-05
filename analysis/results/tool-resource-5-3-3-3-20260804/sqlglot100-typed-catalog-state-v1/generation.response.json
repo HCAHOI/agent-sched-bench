@@ -1,0 +1,1 @@
+{"abstain":false,"configuration_id":"C006","explanation":"The failed unittest context credibly indicates a missing module, while the successful pip install context is an environment-changing remediation; the no-target and dotted scopes represent meaningfully different test requests."}
