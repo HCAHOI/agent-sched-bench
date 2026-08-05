@@ -402,6 +402,16 @@ The predeclared gate is:
 4. at least 4/12 tasks cross to a lower Disk bucket when warm, with at most one
    task crossing in the opposite direction.
 
+Before any measured execution, task-level pairing is fixed as follows. A task
+counts toward a residency, physical-read, or Disk-bucket contrast only when the
+specified warm-versus-cold direction holds separately in both repetitions;
+mixed directions count toward neither side. Disk classes use the canonical
+1/100 MiB read-plus-write edges, while the physical-read contrast uses read
+bytes. Probe p95 uses linear interpolation over `probe_ms` from every valid
+measured execution. A task is valid only when its bounded discovery artifacts
+still match the frozen digests and all four measured executions have matching
+identity, zero exits, complete replay, and valid telemetry.
+
 Passing only authorizes design of a state-aware predictor; it is not itself a
 five-point accuracy result. A failure stops page-residency work without adding
 paths, changing bounds, or choosing another task sample. Preparation, 60 target
@@ -1093,11 +1103,25 @@ aggregate observations.
 In the Section 5.4 twelve-task cold/warm experiment, simulate an early CPU
 decision at the first profile row with at least 400 ms observed span, plus the
 same 0.050 s availability pad and 0.09132007875 s actuation p95. Raise the
-Section 12 CPU class only to the maximum profile class whose window ended by
-that decision. This mechanism check passes only if at least ten tasks have a
-valid prefix, no prefix class exceeds its final canonical class, and it makes
-at least three helpful CPU changes across three tasks with at most one harmful
-change. The task selection and Disk gates remain exactly Section 5.4.
+frozen causal Current CPU class only to the maximum profile class whose window
+ended by that decision. The Current prediction is queried before any
+observation from the selected task and uses only cross-repository public
+evidence plus earlier settled original-100 tasks. This mechanism check passes
+only if at least ten tasks have valid prefixes in all four executions, no
+execution's prefix class exceeds its final canonical class, and it makes at
+least three helpful execution-level CPU changes across three distinct tasks
+with at most one harmful execution-level change. Helpful means the raised class
+corrects a wrong Current class; harmful means it changes a correct Current
+class to a wrong class. The task selection and Disk gates remain exactly
+Section 5.4.
+
+This CPU-base correction was frozen on 2026-08-06 before preparation,
+discovery, or measured condition outcomes existed. Section 12 composition was
+defined only on the adjacent validation tasks; applying its fit back onto the
+original 100 development tasks would leak. The physical experiment therefore
+isolates the new prefix-counter mechanism against Current. A pass would
+authorize testing composition on fresh tasks, not retroactive scoring or final
+access.
 
 Passing the CPU or Disk mechanism gate is not a five-point accuracy result and
 does not open final. The full 12-task run remains unauthorized, requires 84
@@ -1143,3 +1167,13 @@ one worker, one active container, source-speed timing, and no built-in
 PMU/container sampling; the separately supplied canonical
 tool-resource profile remains the only eBPF measurement path. Temporary images
 are retained through result commit rather than removed by simulator cleanup.
+
+`scripts/evaluation/evaluate_physical_state_experiment.py` freezes the twelve
+pre-task Current CPU controls without using any observation from the task being
+queried, then scores the paired Disk and early-CPU gates from the aggregate
+simulator trace. Its result and row sidecar are the sole scoring artifacts. It
+binds every Current input artifact, rebuilds the exact condition traces, checks
+the written TSV and target action, verifies the actual container source image,
+and rejects changed manifest, discovery/template/preparation digests, task
+order, commands, or 2/4-core and 1/100-MiB buckets. Invalid or missing measured
+executions can only reduce coverage and cannot silently enter either gate.
