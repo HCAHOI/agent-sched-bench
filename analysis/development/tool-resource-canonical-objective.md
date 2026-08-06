@@ -1122,8 +1122,8 @@ run for recorded duration, and do not contribute invented CPU work. This model
 is deliberately limited to CPU; RSS remains the same hindsight admission bound.
 
 The throughput-request arm must reproduce every committed throughput-oracle
-scheduling metric exactly (makespan, completion, queue, service, reservations,
-and concurrency), and the hard-two-core arm must reproduce its committed result.
+scheduling metric (makespan, completion, queue, service, reservations, and
+concurrency), and the hard-two-core arm must reproduce its committed result.
 The new model's demand-exposure counter uses throughput demand rather than the
 old arm's peak-CPU diagnostic and therefore is not an equality control.
 The candidate uses the identical two-core admissions but the fluid server.
@@ -1136,6 +1136,18 @@ relative to the throughput oracle having both mean and 95% upper bound at most
 5%. Failure closes this action model. Passing authorizes only a separately
 frozen physical contention test; the fluid model assumes ideal work sharing and
 cannot establish real completion time.
+
+The first formal invocation stopped during the throughput-control pass, before
+any candidate schedule was evaluated or written. All control fields matched
+except one seed's accumulated RSS reservation, which differed by
+`2.98e-08` MB-seconds because the event-driven simulator sums equivalent terms
+in a different order. A control-only diagnosis after start-order accounting
+showed the same issue at `5.96e-08` MB-seconds; service, makespan, completion,
+queue, CPU reservation, concurrency, and capacity validity remained bit-equal.
+Before candidate access, exact equality is therefore retained for discrete
+fields, while floating scheduling aggregates use `rel_tol=1e-12` and
+`abs_tol=1e-6`. This tolerance is far below measurement precision and cannot
+mask a decision-relevant scheduling change.
 
 ## 5. Development-exposure record
 

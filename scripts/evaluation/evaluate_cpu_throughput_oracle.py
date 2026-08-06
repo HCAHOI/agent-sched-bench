@@ -701,8 +701,18 @@ def run_burstable_two_core() -> dict[str, Any]:
             max_cpu_cores=selected_demand,
         )
         expected = prior_by_seed[seed]["arms"]["throughput_bucket"]
-        if any(throughput[metric] != expected[metric] for metric in scheduling_metrics):
-            raise ValueError("burstable throughput control failed exact reproduction")
+        if any(
+            not math.isclose(
+                float(throughput[metric]),
+                float(expected[metric]),
+                rel_tol=1e-12,
+                abs_tol=1e-6,
+            )
+            if isinstance(expected[metric], float)
+            else throughput[metric] != expected[metric]
+            for metric in scheduling_metrics
+        ):
+            raise ValueError("burstable throughput control failed reproduction")
 
         prepared.append(
             (

@@ -51,6 +51,7 @@ class _Running:
 @dataclass
 class _BurstRunning:
     session_index: int
+    start_index: int
     command: AdmissionCommand
     start_s: float
     floor_end_s: float
@@ -341,7 +342,10 @@ def simulate_burstable_admission(
     now_s = min(session.ready_s for session in sessions)
     running: list[_BurstRunning] = []
     used_cpu = used_rss = 0.0
-    queue_s = service_s = reserved_cpu_s = reserved_rss_mb_s = 0.0
+    queue_s = 0.0
+    service_terms: list[float | None] = []
+    reserved_cpu_terms: list[float | None] = []
+    reserved_rss_terms: list[float | None] = []
     served_cpu_work = 0.0
     max_concurrent = max_modeled_cpu = max_modeled_rss = 0.0
     exposure_events = starts = 0
@@ -366,9 +370,15 @@ def simulate_burstable_admission(
             used_cpu -= item.requested_cpu_cores
             used_rss -= item.requested_rss_mb
             duration_s = now_s - item.start_s
-            service_s += duration_s
-            reserved_cpu_s += item.requested_cpu_cores * duration_s
-            reserved_rss_mb_s += item.requested_rss_mb * duration_s
+            if abs(duration_s - item.command.duration_s) <= _EPSILON:
+                duration_s = item.command.duration_s
+            service_terms[item.start_index] = duration_s
+            reserved_cpu_terms[item.start_index] = (
+                item.requested_cpu_cores * duration_s
+            )
+            reserved_rss_terms[item.start_index] = (
+                item.requested_rss_mb * duration_s
+            )
             if duration_s > item.command.duration_s + _EPSILON:
                 contended.add(item.command.command_id)
             session = sessions[item.session_index]
@@ -408,6 +418,7 @@ def simulate_burstable_admission(
             running.append(
                 _BurstRunning(
                     index,
+                    starts,
                     command,
                     now_s,
                     now_s + command.duration_s,
@@ -417,6 +428,9 @@ def simulate_burstable_admission(
                     work,
                 )
             )
+            service_terms.append(None)
+            reserved_cpu_terms.append(None)
+            reserved_rss_terms.append(None)
             used_cpu += requested_cpu
             used_rss += requested_rss
             modeled_cpu = sum(
@@ -481,8 +495,18 @@ def simulate_burstable_admission(
         abs(used_cpu) > _EPSILON
         or abs(used_rss) > _EPSILON
         or abs(served_cpu_work - total_cpu_work) > max(1e-7, total_cpu_work * 1e-12)
+        or any(value is None for value in service_terms)
+        or any(value is None for value in reserved_cpu_terms)
+        or any(value is None for value in reserved_rss_terms)
     ):
         raise ValueError("burstable replay leaked reservation or CPU work")
+    service_s = sum(float(value) for value in service_terms if value is not None)
+    reserved_cpu_s = sum(
+        float(value) for value in reserved_cpu_terms if value is not None
+    )
+    reserved_rss_mb_s = sum(
+        float(value) for value in reserved_rss_terms if value is not None
+    )
     completion_s = [float(value) for value in completion if value is not None]
     return {
         "command_count": starts,
