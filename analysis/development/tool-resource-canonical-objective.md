@@ -1122,7 +1122,10 @@ run for recorded duration, and do not contribute invented CPU work. This model
 is deliberately limited to CPU; RSS remains the same hindsight admission bound.
 
 The throughput-request arm must reproduce every committed throughput-oracle
-schedule exactly, and the hard-two-core arm must reproduce its committed result.
+scheduling metric exactly (makespan, completion, queue, service, reservations,
+and concurrency), and the hard-two-core arm must reproduce its committed result.
+The new model's demand-exposure counter uses throughput demand rather than the
+old arm's peak-CPU diagnostic and therefore is not an equality control.
 The candidate uses the identical two-core admissions but the fluid server.
 Validity requires identical tasks, commands, delays, work and RSS; full-host
 fallback for all missing work; exact CPU-work conservation; no requested
