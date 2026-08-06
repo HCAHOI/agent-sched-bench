@@ -1253,7 +1253,10 @@ CFS quota; burstable-two has no hard quota. Replay executes the exact recorded
 `exec`, read, edit, and list actions. Source-scaled LLM and inter-action delays
 are accelerated 20x, but real tool execution, tool timeout, and telemetry
 clocks are not scaled. Network mode is unchanged `host`; command-specific
-source timeouts take precedence and the fallback is 600 seconds. Per-task
+source timeouts take precedence and the fallback is 3,600 seconds. This
+pre-result amendment uses the advisor's overnight authorization to avoid
+censoring legitimate long commands; the ceiling remains only a stuck-command
+safety bound and changes no source-recorded timeout. Per-task
 container resource monitoring is enabled; PMU and host memory-bandwidth
 monitoring are disabled because the pair is concurrent.
 
