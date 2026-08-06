@@ -1,0 +1,419 @@
+{
+  "claim_bearing": false,
+  "forward_audit": {
+    "audit_rows": 723,
+    "audit_tasks": [
+      "tobymao__sqlglot-4331",
+      "tobymao__sqlglot-4347",
+      "tobymao__sqlglot-4355",
+      "tobymao__sqlglot-4373",
+      "tobymao__sqlglot-4390",
+      "tobymao__sqlglot-4393",
+      "tobymao__sqlglot-4415",
+      "tobymao__sqlglot-4417",
+      "tobymao__sqlglot-4430",
+      "tobymao__sqlglot-4438",
+      "tobymao__sqlglot-4447",
+      "tobymao__sqlglot-4448",
+      "tobymao__sqlglot-4457",
+      "tobymao__sqlglot-4459",
+      "tobymao__sqlglot-4472",
+      "tobymao__sqlglot-4488",
+      "tobymao__sqlglot-4493",
+      "tobymao__sqlglot-4505",
+      "tobymao__sqlglot-4506",
+      "tobymao__sqlglot-4516",
+      "tobymao__sqlglot-4519",
+      "tobymao__sqlglot-4523",
+      "tobymao__sqlglot-4528",
+      "tobymao__sqlglot-4533",
+      "tobymao__sqlglot-4545",
+      "tobymao__sqlglot-4546",
+      "tobymao__sqlglot-4550",
+      "tobymao__sqlglot-4563",
+      "tobymao__sqlglot-4569",
+      "tobymao__sqlglot-4618",
+      "tobymao__sqlglot-4628",
+      "tobymao__sqlglot-4643",
+      "tobymao__sqlglot-4652",
+      "tobymao__sqlglot-4661",
+      "tobymao__sqlglot-4683",
+      "tobymao__sqlglot-4696",
+      "tobymao__sqlglot-4935",
+      "tobymao__sqlglot-4941",
+      "tobymao__sqlglot-4987",
+      "tobymao__sqlglot-5015"
+    ],
+    "calibration_rows": 697,
+    "calibration_tasks": [
+      "tobymao__sqlglot-3987",
+      "tobymao__sqlglot-3994",
+      "tobymao__sqlglot-4004",
+      "tobymao__sqlglot-4007",
+      "tobymao__sqlglot-4014",
+      "tobymao__sqlglot-4015",
+      "tobymao__sqlglot-4040",
+      "tobymao__sqlglot-4041",
+      "tobymao__sqlglot-4051",
+      "tobymao__sqlglot-4067",
+      "tobymao__sqlglot-4079",
+      "tobymao__sqlglot-4087",
+      "tobymao__sqlglot-4093",
+      "tobymao__sqlglot-4096",
+      "tobymao__sqlglot-4104",
+      "tobymao__sqlglot-4106",
+      "tobymao__sqlglot-4109",
+      "tobymao__sqlglot-4110",
+      "tobymao__sqlglot-4127",
+      "tobymao__sqlglot-4130",
+      "tobymao__sqlglot-4141",
+      "tobymao__sqlglot-4148",
+      "tobymao__sqlglot-4151",
+      "tobymao__sqlglot-4165",
+      "tobymao__sqlglot-4172",
+      "tobymao__sqlglot-4194",
+      "tobymao__sqlglot-4197",
+      "tobymao__sqlglot-4206",
+      "tobymao__sqlglot-4208",
+      "tobymao__sqlglot-4218",
+      "tobymao__sqlglot-4239",
+      "tobymao__sqlglot-4252",
+      "tobymao__sqlglot-4276",
+      "tobymao__sqlglot-4287",
+      "tobymao__sqlglot-4293",
+      "tobymao__sqlglot-4301",
+      "tobymao__sqlglot-4302",
+      "tobymao__sqlglot-4311",
+      "tobymao__sqlglot-4325",
+      "tobymao__sqlglot-4328"
+    ],
+    "gate": {
+      "helpful_exceeds_harmful_cpu_disk": false,
+      "minimum_target_coverage": 0.95,
+      "no_severe_underprediction_regression_cpu_disk": true,
+      "row_identity": true,
+      "strict_gain_cpu_disk": false
+    },
+    "go": false,
+    "row_identity": true,
+    "state_count": 18,
+    "target_coverage": {
+      "disk_read_write_bytes_total": 0.995850622406639,
+      "peak_cpu_cores": 0.9908883826879271
+    },
+    "targets": {
+      "disk_read_write_bytes_total": {
+        "candidate": {
+          "accuracy": 0.8257261410788381,
+          "confusion_label_by_prediction": [
+            [
+              411,
+              85,
+              1
+            ],
+            [
+              36,
+              140,
+              2
+            ],
+            [
+              0,
+              2,
+              46
+            ]
+          ],
+          "eligible_n": 723,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.0,
+          "within_one_bucket_accuracy": 0.9986168741355463
+        },
+        "changes": {
+          "changed": 0,
+          "harmful": 0,
+          "helpful": 0,
+          "helpful_task_ids": [],
+          "neutral": 0,
+          "tasks": 0
+        },
+        "current": {
+          "accuracy": 0.8257261410788381,
+          "confusion_label_by_prediction": [
+            [
+              411,
+              85,
+              1
+            ],
+            [
+              36,
+              140,
+              2
+            ],
+            [
+              0,
+              2,
+              46
+            ]
+          ],
+          "eligible_n": 723,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.0,
+          "within_one_bucket_accuracy": 0.9986168741355463
+        },
+        "delta_percentage_points": 0.0
+      },
+      "latency": {
+        "candidate": {
+          "confusion_label_by_prediction": [
+            [
+              398,
+              24,
+              13,
+              1,
+              5
+            ],
+            [
+              22,
+              57,
+              18,
+              0,
+              21
+            ],
+            [
+              0,
+              12,
+              30,
+              2,
+              6
+            ],
+            [
+              0,
+              0,
+              6,
+              45,
+              5
+            ],
+            [
+              0,
+              8,
+              3,
+              0,
+              47
+            ]
+          ],
+          "eligible_examples": 723,
+          "exact_class_accuracy": 0.7980636237897649,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.015214384508990318,
+          "within_one_bucket_accuracy": 0.921161825726141
+        },
+        "changes": {
+          "changed": 0,
+          "harmful": 0,
+          "helpful": 0,
+          "helpful_task_ids": [],
+          "neutral": 0,
+          "tasks": 0
+        },
+        "current": {
+          "confusion_label_by_prediction": [
+            [
+              398,
+              24,
+              13,
+              1,
+              5
+            ],
+            [
+              22,
+              57,
+              18,
+              0,
+              21
+            ],
+            [
+              0,
+              12,
+              30,
+              2,
+              6
+            ],
+            [
+              0,
+              0,
+              6,
+              45,
+              5
+            ],
+            [
+              0,
+              8,
+              3,
+              0,
+              47
+            ]
+          ],
+          "eligible_examples": 723,
+          "exact_class_accuracy": 0.7980636237897649,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.015214384508990318,
+          "within_one_bucket_accuracy": 0.921161825726141
+        },
+        "delta_percentage_points": 0.0
+      },
+      "peak_cpu_cores": {
+        "candidate": {
+          "accuracy": 0.9066059225512528,
+          "confusion_label_by_prediction": [
+            [
+              356,
+              0,
+              25
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              16,
+              0,
+              42
+            ]
+          ],
+          "eligible_n": 439,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.03644646924829157,
+          "within_one_bucket_accuracy": 0.9066059225512528
+        },
+        "changes": {
+          "changed": 6,
+          "harmful": 0,
+          "helpful": 2,
+          "helpful_task_ids": [
+            "tobymao__sqlglot-4347",
+            "tobymao__sqlglot-4430"
+          ],
+          "neutral": 4,
+          "tasks": 3
+        },
+        "current": {
+          "accuracy": 0.9020501138952164,
+          "confusion_label_by_prediction": [
+            [
+              354,
+              0,
+              27
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              16,
+              0,
+              42
+            ]
+          ],
+          "eligible_n": 439,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.03644646924829157,
+          "within_one_bucket_accuracy": 0.9020501138952164
+        },
+        "delta_percentage_points": 0.4555808656036442
+      },
+      "sampled_peak_rss_mb": {
+        "candidate": {
+          "accuracy": 0.9168356997971603,
+          "confusion_label_by_prediction": [
+            [
+              410,
+              0,
+              25
+            ],
+            [
+              0,
+              3,
+              0
+            ],
+            [
+              16,
+              0,
+              39
+            ]
+          ],
+          "eligible_n": 493,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.032454361054766734,
+          "within_one_bucket_accuracy": 0.9168356997971603
+        },
+        "changes": {
+          "changed": 0,
+          "harmful": 0,
+          "helpful": 0,
+          "helpful_task_ids": [],
+          "neutral": 0,
+          "tasks": 0
+        },
+        "current": {
+          "accuracy": 0.9168356997971603,
+          "confusion_label_by_prediction": [
+            [
+              410,
+              0,
+              25
+            ],
+            [
+              0,
+              3,
+              0
+            ],
+            [
+              16,
+              0,
+              39
+            ]
+          ],
+          "eligible_n": 493,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.032454361054766734,
+          "within_one_bucket_accuracy": 0.9168356997971603
+        },
+        "delta_percentage_points": 0.0
+      }
+    }
+  },
+  "inputs": {
+    "evaluator_sha256": "707bd1f2545222b990ae230f8e3e33cc9ca32ae86ebcff6b756091a1162085fd",
+    "fit_rows": "/home/chiyu/workspace/agent-sched-bench/analysis/results/tool-resource-5-3-3-3-20260804/sqlglot20-80-current-fit-v1/rows.jsonl",
+    "fit_rows_sha256": "21543e3dc02ba00e9b81c7e2c8c632bec48630fe1db701d309053473701b11e8",
+    "git_sha": "26f16ebfa48ee07d0462b546c8b674996a05587a",
+    "validation_rows": "unopened",
+    "validation_rows_sha256": null
+  },
+  "protocol": {
+    "alpha": 16.0,
+    "calibrated_targets": [
+      "peak_cpu_cores",
+      "disk_read_write_bytes_total"
+    ],
+    "fallback": "base_pmf_bit_identical",
+    "fit_split_tasks": [
+      40,
+      40
+    ],
+    "state": [
+      "latency",
+      "peak_cpu_cores",
+      "sampled_peak_rss_mb",
+      "disk_read_write_bytes_total"
+    ],
+    "validation_base": "frozen_component_composition_v1",
+    "validation_unchanged_targets": [
+      "latency",
+      "sampled_peak_rss_mb"
+    ]
+  },
+  "schema": "joint-prediction-state-v1",
+  "status": "forward_no_go"
+}

@@ -1177,3 +1177,72 @@ the written TSV and target action, verifies the actual container source image,
 and rejects changed manifest, discovery/template/preparation digests, task
 order, commands, or 2/4-core and 1/100-MiB buckets. Invalid or missing measured
 executions can only reduce coverage and cannot silently enter either gate.
+
+## 14. Frozen joint-prediction-state calibration
+
+This development amendment was frozen after the Section 12 validation result
+and its residual errors were visible, but before this candidate was scored.
+The observation motivating it is generic: the current KB predicts latency,
+CPU, RSS, and Disk independently even though their four predicted states are
+strongly coupled. It adds no command family, pytest/package rule, output text,
+agent, filesystem probe, or target-specific threshold. The adjacent validation
+set is development-exposed; only the final 50 tasks remain untouched.
+
+The fit input is the committed 1,420 Current rows from the original-100
+20/80 prequential run. Task first-occurrence order fixes the first 40 tasks as
+calibration and the next 40 as a forward audit. The state key is the four
+Current hard predictions in fixed latency/CPU/RSS/Disk order. The label-free
+preflight found 18 calibration states and coverage of 720/723 forward-audit
+rows; fitting all 80 tasks covers 1,037/1,044 adjacent-validation states.
+
+For CPU and Disk separately, each calibration state stores class counts from
+rows with an available label. Given a base PMF `p`, state support `n`, counts
+`c`, and the already frozen project shrinkage strength 16, the candidate is
+`(c + 16p) / (n + 16)`. Missing state or zero target support falls back to the
+base PMF exactly. Lower class wins an exact tie. There is no alpha sweep,
+support cutoff, feature selection, or result-dependent arm choice.
+
+The forward audit uses first-40 counts and Current as the base. It opens no
+adjacent row unless both CPU and Disk strictly improve exact accuracy over
+Current, each has helpful changes greater than harmful changes, neither severe
+underprediction rate increases, state coverage is at least 95%, and row
+identity holds. Failure closes this method.
+
+Only after that gate passes, counts are refit on all 80 original tasks and
+applied to the frozen Section 12 composition PMFs on the adjacent 50 tasks.
+Latency and RSS predictions and PMFs remain bit-identical to Section 12; only
+CPU and Disk may change. The adjacent development GO is the unchanged Section
+12 gate: every target at least +5.0 percentage points over Current, no severe
+underprediction regression, helpful changes greater than harmful for every
+target, at least ten helpful tasks overall, and identical rows/labels. A pass
+freezes this candidate for the untouched final 50; a failure cannot change the
+state key, strength, split, fallback, or composition rule.
+
+### 14.1 Result and decision
+
+The forward audit comprised 723 rows and returned NO-GO without hashing or
+loading the adjacent-validation file. On the 439 CPU-labelled rows, accuracy
+moved from 90.205% to 90.661% (+0.456 points): six predictions changed across
+three tasks, of which two were helpful and none harmful. Disk accuracy on all
+723 labelled rows remained 82.573%, with no changed prediction. CPU and Disk
+state coverage was 99.09% and 99.59%, row identity held, and neither
+severe-underprediction rate increased.
+
+Observed: the state key mostly restates each target's own hard prediction. For
+example, the dominant `(latency=0, CPU=low, RSS=low, Disk=low)` state had 230
+labelled CPU calibration rows (227 low) and 425 Disk calibration rows (397
+low); it therefore reinforced Current. The only useful CPU transition came
+from a rare state with one labelled calibration row. Disk's calibration
+disagreements were either mixed across the audit split or too weak to change a
+hard class under the frozen posterior; no Disk row moved at all.
+
+Inference: independent-prediction coupling is real but the four hard outputs
+are too lossy and self-referential to supply the missing execution state. This
+closes joint hard-state calibration; changing its shrinkage or state key after
+seeing the audit would tune the exposed split. The adjacent 50 remains unopened
+for this method, and the untouched final 50 remains reserved.
+
+Artifacts:
+
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot40-40-joint-prediction-state-v1/result.json`
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot40-40-joint-prediction-state-v1/rows.jsonl`
