@@ -96,6 +96,33 @@ ambiguous structures remain unavailable.
 and binary/global backoff with frozen public evidence and causal repo-local
 updates. The trie is not the proposed research contribution.
 
+The current **development reference SOTA** is a target-specific multi-head
+predictor at one common `BeginCall` decision time. Latency, CPU, and RSS use
+semantic work-unit evidence, with the full-test phase allowed only to raise the
+predicted bucket. Disk uses exact complete-command outcome memory. Cross-task
+evidence updates only after whole-task settlement; the current task's outcomes
+remain hidden, while the phase head sees only the count of earlier completed
+full-test commands. The heads share the same 1,044 validation commands, labels,
+Current predictions, and bucket definitions.
+
+| Target | Eligible | Current | Development SOTA | Delta | Selected head |
+|---|---:|---:|---:|---:|---|
+| Latency | 1,044 | 74.904% | 79.023% | +4.119 pp | semantic work units + monotone test phase |
+| CPU | 672 | 82.887% | 87.500% | +4.613 pp | semantic work units + monotone test phase |
+| RSS | 736 | 80.978% | 87.500% | +6.522 pp | semantic work units + monotone test phase |
+| Disk | 1,008 | 82.044% | 83.829% | +1.786 pp | exact complete command |
+
+Equal-weighting the four target accuracies gives 84.463% versus 80.203% for
+Current, a descriptive +4.260-point gain. This configuration was selected
+post-hoc from already-exposed validation results: it is a reproducible
+development reference, not confirmation. Only RSS clears the existing
+five-point per-target gate, so the research verdict remains NO-GO and the final
+50 tasks remain unread. The separate Disk survival result reaches 85.218% only
+after an approximately 0.64-second execution prefix; it is an optional later
+update, not part of this pre-command SOTA.
+The machine-readable result and command rows are in
+`analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-multitarget-sota-v1/`.
+
 The completed semantic-signature question was:
 
 > Within many tasks from the same repository, can a deterministic semantic
