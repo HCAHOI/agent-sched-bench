@@ -570,6 +570,29 @@ but closes KV victim selection under the current action model. The reviewed
 artifact is in
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-kv-block-belady-oracle-v1/`.
 
+### KV oracle mechanism decomposition: frozen
+
+The 9.6201% Belady result remains a NO-GO and is not rescored. A final 2x2
+development diagnostic attributes its improvement using two hindsight factors:
+next-use order is either exact gap-arrival time or actual fixed FCFS request
+rank, and suffix handling either ignores or first exhausts blocks absent from
+the next reusable prefix. The four arms are therefore arrival/no-suffix (the
+committed greedy oracle), rank/no-suffix, arrival/suffix, and rank/suffix (the
+committed Belady result). Only the two missing arms are simulated; the exact
+32 schedules, requests, capacity, service model, and committed corner results
+are reused byte-for-byte.
+
+Lower recomputed prefix blocks remains primary. The rank main effect is the
+average improvement from arrival to rank with suffix off and on. The suffix
+main effect is the average improvement from no-suffix to suffix under arrival
+and rank. Their interaction and eviction-block/event changes are descriptive.
+A factor authorizes one causal-proxy experiment only if its main effect is
+positive, at least 1% of C100 recomputation, and at least 20% of the total
+C100-to-Belady improvement. If both pass, only the larger factor proceeds; if
+neither passes, the apparent block-aware opportunity is too diffuse or small
+to pursue. This decomposition cannot reopen live integration or amend any
+earlier gate.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved
