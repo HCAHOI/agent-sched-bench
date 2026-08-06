@@ -1158,6 +1158,31 @@ The original is preserved as
 reporting-only amendment adds the sorted command IDs to `coverage`; it changes
 no simulation, metric, threshold, gate, or status.
 
+The amended artifact passed independent reconstruction and every frozen gate.
+Mean burstable makespan was 12,442.412 seconds versus 13,655.637 seconds for
+hard two-core enforcement, an 8.881% paired improvement with interval
+[8.087%, 9.657%]; every seed improved. Relative to the throughput oracle, mean
+paired regret was -1.229% with interval [-1.632%, -0.829%]. The burstable arm
+also reduced mean reserved CPU time by 2,666.639 core-seconds and mean queue
+time by 45,647.176 seconds relative to hard enforcement.
+
+Contention did not erase the ceiling: only five commands across five tasks ever
+ran longer than their recorded duration, and mean added service was 11.693
+seconds per schedule. Twenty-one of 32 schedules had positive added service;
+the maximum was 63.910 seconds. The five commands were two full `make test`
+runs, one forced `pip` reinstall of DuckDB/PySpark/Pandas, and two sub-second
+environment probes. Their observed CPU-work rates were 2.05--6.97 cores, so
+they are exactly the commands for which a two-core guarantee can benefit from
+idle-host bursting and occasionally contend. The gain comes primarily from
+admitting more commands using a small guarantee while redistributing idle CPU,
+not from predicting a different class for every command.
+
+This is a development GO to the already-authorized physical contention test,
+not a scheduling result. It uses hindsight throughput demand caps and RSS,
+perfectly divisible CPU work, and an ideal fluid server on exposed tasks. The
+canonical reviewed artifact is in
+`analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-burstable-two-core-fluid-v1/`.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved
