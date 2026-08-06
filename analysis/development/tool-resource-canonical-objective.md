@@ -1235,6 +1235,51 @@ this a mechanism result, not representative SQLGlot scheduling utility. The
 independently reviewed artifact is in
 `analysis/results/tool-resource-5-3-3-3-20260804/resource-burst-contention-v1/`.
 
+#### Frozen paired SQLGlot trace replay
+
+The physical GO authorizes one development-only end-to-end action test. It
+uses only the already-exposed validation50 source traces and makes no LLM
+requests. Starting from sorted validation task IDs, NumPy PCG64 seed 20260807
+shuffles the pool; the first 24 tasks form 12 adjacent pairs. For each pair,
+PCG64 seed 20260808 independently shuffles hard-two and burstable-two arm
+order. No task is selected or ordered from duration, CPU, success, command, or
+resource outcomes.
+
+Each arm starts two fresh task containers from the same source images and uses
+the existing two-worker global replay barrier, so image/container preparation
+finishes before a common action-replay start. Both containers are pinned to
+CPUs 0--7 with equal Docker CPU shares of 1,024. Hard-two also sets a two-core
+CFS quota; burstable-two has no hard quota. Replay executes the exact recorded
+`exec`, read, edit, and list actions. Source-scaled LLM and inter-action delays
+are accelerated 20x, but real tool execution, tool timeout, and telemetry
+clocks are not scaled. Network mode is unchanged `host`; command-specific
+source timeouts take precedence and the fallback is 600 seconds. Per-task
+container resource monitoring is enabled; PMU and host memory-bandwidth
+monitoring are disabled because the pair is concurrent.
+
+The primary unit is one task pair. Pair makespan is the maximum of the two
+post-barrier task replay elapsed times, excluding image prebuild and container
+preparation. Primary improvement is
+`(hard-two - burstable-two) / hard-two`; report its mean, median, all 12 paired
+deltas, and a 10,000-draw pair bootstrap interval using seed 20260809. GO
+requires mean improvement at least 5%, a bootstrap lower bound above zero, and
+at least nine of 12 pairs improving. Every pair must also replay identical task
+and action IDs in both arms, complete every source action with zero unexpected
+replay failure, record the requested cpuset/share/quota, and show no OOM,
+cleanup-invalid, missing-summary, or task failure. Any invalid pair invalidates
+the formal matrix rather than being dropped or rerun.
+
+The run retains per-pair manifests, replay summaries, task status/resource
+artifacts, and one aggregate result. Based on the already-visible full-pool
+20,499 seconds of source tool time, the expected wall time is approximately
+three hours plus image preparation; the advisor's overnight authorization
+covers this no-LLM run. A GO authorizes completing the remaining exposed
+validation tasks before a separately costed temporal external validation. A
+NO-GO stops without changing task count, thresholds, replay speed, timeouts, or
+CPU controls. The 94 as-yet uncollected SQLGlot tasks are all older than the
+202 collected tasks, so they cannot later be described as an IID confirmation
+cohort.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved
