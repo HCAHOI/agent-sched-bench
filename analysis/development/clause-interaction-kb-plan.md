@@ -1366,3 +1366,67 @@ Artifacts:
 
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-confidence-gated-composition-v1/result.json`
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-confidence-gated-composition-v1/rows.jsonl`
+
+## 16. Frozen development diagnostic: continuous latency updates
+
+This diagnostic was fixed after all preceding validation results were exposed.
+It is therefore mechanism development only and cannot authorize access to the
+final 50 tasks. It asks whether a running command's survival and visible clause
+progress improve latency prediction early enough to matter, rather than merely
+making the final class obvious near completion.
+
+The three arms use the same Current raw-argv KB, frozen public evidence, all 100
+development tasks, causal between-task validation updates, shell parser, and
+empirical 256-draw composer:
+
+1. `static`: retain the command-start Current PMF for its whole execution;
+2. `command_survival`: at every update, retain only command-duration draws
+   strictly greater than elapsed command time and recompute the five-bucket PMF;
+3. `clause_survival`: additionally replace completed clauses by their visible
+   measured duration, condition active-clause draws on visible active elapsed
+   time, retain static draws for future clauses, and recompose in milliseconds
+   before bucketing. Sequential stages sum and pipeline stages take their max.
+
+Updates occur at command start, every 0.5 seconds while the command is alive,
+and every visible clause start or end. At an exact bucket boundary, survival
+excludes the lower bucket because the absent finish event proves final duration
+is strictly greater than elapsed time. If no selected empirical draw survives,
+the arm emits a point mass in the smallest still-possible bucket and records the
+fallback. It never sums bucket IDs or assumes a within-bucket parametric law.
+
+Clause alignment is causal and fail-closed. At a visible clause start, its
+`bin`, ordered `argv`, pipeline membership, and pipeline position must identify
+exactly one unmatched static clause. Ambiguity makes the command fall back to
+`command_survival` from that clause's visible start, while retaining its start
+and end as shared update times for all arms; it cannot affect earlier updates.
+An invalid timestamp invalidates the accepted input artifact and stops the
+evaluator. A later-stage start makes an unstarted earlier stage visibly skipped;
+no future start, end, executed branch, final duration, output, label, or
+current-task observation enters an earlier update. Completed-clause
+measurements remain ephemeral and never enter the KB.
+
+The label-free structural preflight found 1,044 eligible validation commands:
+604 compounds, 1,017 with causal unique clause alignment, and 27 required
+command-level fallback. The two globally unmatched loop cases are included in
+that fallback rather than repaired with command-specific logic.
+
+The primary metric is exact final-bucket accuracy weighted by the wall-time for
+which each prediction is active; unavailable time is incorrect. Also report the
+unweighted mean per-command correct-time fraction, time-weighted severe-or-
+unavailable rate, snapshots at 0.5/2/8/30 seconds over commands still alive,
+the first time a prediction is correct and remains correct, remaining lead
+time, trajectory changes, task support, clause coverage, zero-survivor
+fallbacks, and evaluator cost. An interval is severe-or-unavailable when its
+prediction is unavailable or at least two buckets below truth. `static` and
+`command_survival` are recomputed on every clause event too, so clause-aware
+does not gain from a denser update schedule.
+
+`command_survival` passes its development mechanism gate only if it improves
+time-weighted exact accuracy by at least 5.0 percentage points over `static`,
+does not increase time-weighted severe underprediction, has more task-level
+positive than negative deltas, and is positive in at least ten tasks.
+`clause_survival` uses the same gate relative to `command_survival` and must
+also change at least 20 commands while at least 0.5 seconds remains. Row labels,
+command order, initial Current PMFs, and all non-latency targets must remain
+identical. Any pass authorizes only a fresh-data protocol tied to a named
+mid-execution consumer; this exposed diagnostic cannot open final by itself.
