@@ -991,6 +991,48 @@ the CPU-work floor is optimistic about critical-path scaling. The reviewed
 artifact is in
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-two-core-throughput-baseline-v1/`.
 
+### Interval CPU feedback: exploratory lead and frozen robustness check
+
+After the two-core result was read, a one-off diagnosis on the same exposed
+validation traces tested a different inference-time signal already present in
+every exec trace: 0.5-second cgroup CPU-work intervals. Unlike the rejected
+attempt to treat cgroup CPU as a lower bound on clause-owned peak CPU, this
+signal and the new throughput action have the same command-container scope.
+The exploratory controller started at eight cores, selected 2/4/8 from the
+previous interval's observed CPU rate, and returned to eight after modeled
+throttling. Across 525 commands with a full interval, it reduced reserved CPU
+core-seconds by 40.02% versus eight cores while adding 2.47% to summed service
+time; a two-core policy added 73.44%. These numbers were visible before the
+following protocol was frozen. They ignored the measured observation and
+actuation delay, do not model concurrent admission, and are a lead only.
+
+The next development robustness check applies the now-fixed controller to the
+older original SQLGlot development pool, using only tasks whose collection,
+workload, telemetry, and cleanup statuses are valid. It evaluates every exec
+action with a valid 0.5-second resource timeline. Actions without a complete
+sample remain at eight cores. Eligible actions remain at eight through the
+first complete sample and for the existing 0.05-second availability pad plus
+0.09132007875-second CPU-update p95. Thereafter, an unthrottled complete sample
+selects the smallest of 2/4/8 cores no lower than its observed average CPU
+rate; a sample whose demand exceeds its assigned page selects eight cores for
+the next update. Partial samples retain the prior page. The update delay is
+charged inside the following interval by uniformly partitioning that
+interval's observed CPU work. Each partition's modeled duration is
+`max(recorded interval duration, CPU work / requested cores)`. No command,
+binary, argument, or task-specific rule is allowed.
+
+The paired controls use the identical interval partitioning: fixed-eight never
+shrinks, while probe-then-two switches to two cores after the same first-sample
+decision delay and never adapts. The primary mechanism gate requires at least
+40% of exec actions and twenty tasks to have a complete decision sample,
+feedback reservation at least 25% below fixed-eight, feedback summed service
+inflation at most 5%, and feedback service inflation strictly below
+probe-then-two. Fixed-eight reconstructed service must equal recorded action
+duration within 0.1%, every request must be in 2/4/8, and no work or action may
+be dropped. Failure closes interval feedback. Passing authorizes only a
+separately frozen real concurrent action experiment; aggregate interval sums
+do not establish scheduler utility or safe sub-interval demand.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved
