@@ -524,6 +524,37 @@ already-strong C100 victim policy is not the promising consumer. The reviewed
 machine-readable result is in
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-kv-prediction-actionability-v1/`.
 
+### Block-aware KV oracle: frozen
+
+The positive 1.4805% SOTA result and its live-integration NO-GO remain settled.
+One final development-only upper-bound diagnostic tests whether the prior
+greedy next-reuse oracle understated the KV eviction action space. It reuses
+the exact 32 task selections, FCFS schedule, 40-session load, 800,000-token
+capacity, recorded service/gap durations, and C100 metrics from the committed
+actionability result. It adds one hindsight-only block-aware Belady arm; no
+predictor is changed or rescored.
+
+Because cache misses do not feed back into service time, each schedule's
+request order is fixed before eviction. For every resident session, blocks
+beyond the next turn's reusable prefix have no next use and are evicted first.
+If no such suffix remains, the arm evicts reusable suffix blocks from the
+session whose next request occurs latest in that fixed order. Partial eviction
+stops at the non-reusable suffix boundary before choosing another victim. Under
+the simulator's unit-block cost and contiguous-prefix representation, this is
+the farthest-next-use policy for the modeled block objects. It is an offline
+upper bound, not an online policy; the current request remains protected under
+the same simulator constraint as every prior arm.
+
+The primary metric remains mean eviction-induced recomputed prefix blocks;
+mean evicted blocks is the physical-cost guardrail. The result is GO only if
+the schedules and request counts are identical to the committed baseline,
+Belady reduces C100 recomputation by at least 10%, the upper endpoint of the
+paired-seed 95% bootstrap interval for Belady minus C100 is below zero, and
+Belady does not increase mean evicted blocks. GO authorizes only design of a
+causal approximation. NO-GO closes KV victim selection for the current
+simulator. The existing result, thresholds, and greedy-oracle interpretation
+cannot be amended by this diagnostic.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved
