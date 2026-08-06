@@ -22,6 +22,7 @@ from scripts.evaluation.evaluate_clause_resource_classes import (  # noqa: E402
     load_run_rows,
 )
 from scripts.evaluation.evaluate_command_history_residual import (  # noqa: E402
+    BUCKETS,
     Row,
     _load_rows,
 )
@@ -128,8 +129,9 @@ def _dev100_static_rows(values: Sequence[Mapping[str, Any]]) -> list[Row]:
     for value in values:
         frozen = dict(value["frozen_at_80"])
         pmfs = frozen.pop("probability_by_bucket")
-        for target in pmfs:
+        for target in BUCKETS:
             frozen.setdefault(target, None)
+            pmfs.setdefault(target, None)
         rows.append(
             Row(
                 str(value["sample_id"]),

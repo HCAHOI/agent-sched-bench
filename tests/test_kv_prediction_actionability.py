@@ -34,7 +34,6 @@ def test_decoder_conditions_on_survival_and_static_rows_ignore_dynamic() -> None
                     "disk_read_write_bytes_total": "low",
                     "probability_by_bucket": {
                         "latency": [1.0, 0.0, 0.0, 0.0, 0.0],
-                        "peak_cpu_cores": [1.0, 0.0, 0.0],
                         "sampled_peak_rss_mb": [1.0, 0.0, 0.0],
                         "disk_read_write_bytes_total": [1.0, 0.0, 0.0],
                     },
@@ -49,6 +48,7 @@ def test_decoder_conditions_on_survival_and_static_rows_ignore_dynamic() -> None
     ) is None
     assert row.current["latency"] == 0
     assert row.current["peak_cpu_cores"] is None
+    assert row.pmfs["peak_cpu_cores"] is None
 
 
 def test_pmf_lookup_uses_task_and_turn_not_future_gap_end() -> None:
