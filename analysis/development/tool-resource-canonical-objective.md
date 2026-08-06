@@ -454,7 +454,7 @@ allocation, admission, ordering, or timeout action. Scheduler implementation
 and scheduling-utility claims therefore stop. CacheWise timeout remains a
 ceiling, not a remaining-work signal.
 
-### KV eviction actionability diagnostic: frozen
+### KV eviction actionability diagnostic: complete, no-go
 
 The advisor subsequently authorized one development-only action diagnostic
 with CacheWise as the baseline. It tests whether the existing latency PMFs
@@ -500,9 +500,29 @@ to every eligible validation exec command, 152 are ineligible exec calls, and
 the same latency bucket for 1,038/1,044 rows; the extra gap overhead has 23.16
 ms median and 41.17 ms p95. This supports the decoder alignment but is
 development-exposed preflight evidence, not a validation claim. Final resource
-artifacts are not used. This section freezes the protocol before any formal simulator
-outcome is produced; only plumbing failures may be repaired without an open
-amendment.
+artifacts are not used. This protocol was frozen before the formal simulator
+outcome; two pre-output plumbing failures only removed commands with no KV
+decision gap and normalized sparse unavailable fields.
+
+The completed run returned NO-GO. Mean recomputed prefix blocks were 259,557
+for LRU, 45,349 for C100, 44,910 for Current, 44,678 for SOTA, and 41,255 for
+the hindsight next-reuse oracle. SOTA reduced C100 by 671 blocks or 1.4805%;
+the paired-seed 95% bootstrap interval for the absolute delta was
+[-944.06, -402.74], so the direction was stable but far below the 10% utility
+gate. The oracle improved C100 by only 9.0272% and also failed the gate. SOTA
+improved Current by 232 blocks, or 0.5167%, without increasing evicted blocks.
+
+The mechanism evidence is twofold. First, C100 already removed 82.53% of LRU's
+recomputation, leaving little next-reuse-ordering headroom even for hindsight.
+Second, with cross-validation-task settlement disabled as concurrent causality
+requires, Current and SOTA exact latency accuracy were 74.904% and 75.766%.
+The serial replay's 4.119-point SOTA gain therefore shrank to 0.862 points;
+79.1% of that descriptive gain depended on between-task updates unavailable at
+concurrent batch start. This result stops live KV integration. It does not show
+that latency PMFs are useless to every scheduler; it shows that improving this
+already-strong C100 victim policy is not the promising consumer. The reviewed
+machine-readable result is in
+`analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-kv-prediction-actionability-v1/`.
 
 ## 5. Development-exposure record
 
