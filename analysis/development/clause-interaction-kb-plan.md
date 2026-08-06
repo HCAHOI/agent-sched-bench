@@ -1531,3 +1531,43 @@ frozen control. This gate, the unavailable-on-zero-survivor rule, and the output
 schema are fixed before the corrected outcome is read. A pass is still only
 development evidence and cannot open the final partition or claim scheduling
 utility.
+
+### 17.2 Result and decision
+
+The corrected replay covered the same 1,044 commands, 50 tasks, 9,741,959.7
+command-milliseconds, and 25,558 update intervals as Section 16. The initial
+Current rows were identical, non-latency targets were untouched, and the final
+partition remained unread.
+
+| Arm | Time-weighted exact ↑ | Severe or unavailable ↓ | Unavailable ↓ | Mean command correct-time fraction ↑ |
+|---|---:|---:|---:|---:|
+| Static Current | 60.260% | 25.834% | 0.011% | 79.502% |
+| Empirical command survival | 75.827% | 16.233% | 15.150% | 79.731% |
+
+Empirical survival improved the primary aggregate by 15.567 percentage points
+and reduced severe-or-unavailable time, but it failed the frozen task-stability
+gate: 23 tasks improved, 25 regressed, and 2 tied. The decision is therefore
+NO-GO. Of the 1,044 command rows, 61 gained correct time, 189 lost it, and 794
+were unchanged. The large aggregate gain is concentrated in long commands:
+final bucket 4 contributes 80.972% of all command-milliseconds and improves by
+18.819 points, while buckets 0 and 2 regress by 3.041 and 4.471 points.
+
+The direct failure mechanism is empirical-tail exhaustion. It affects 124
+commands and 15.150% of total wall-time. Most exhaustions are tiny near-finish
+tails (median 7.3 ms remaining), but a few long runs exceed all previously
+matched durations; the largest loses 355,915.8 ms of otherwise correct time.
+The superseded point-mass fallback happened to be correct over 97.967% of these
+unavailable intervals, explaining the numerical gap to Section 16, but that
+does not make it a predictive PMF: it inserted the lowest physically possible
+class without evidence for its probability.
+
+This closes strict finite-sample empirical survival as a deployable predictor.
+A future candidate would need a predeclared right-tail model or condition the
+existing command-start prior on physically possible buckets, then validate on
+fresh data. Neither repair is selected or evaluated here because tail
+exhaustion and task instability were already visible when they were proposed.
+
+Artifacts:
+
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-empirical-command-survival-v2/result.json`
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-empirical-command-survival-v2/rows.jsonl`

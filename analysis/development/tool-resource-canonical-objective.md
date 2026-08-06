@@ -117,11 +117,14 @@ added only 0.147 points and increased severe-or-unavailable time. A post-hoc
 elapsed-floor control reached 86.832%, explaining 26.572 of the formal arm's
 30.409-point gain. That floor is a physical constraint, not a prediction, so a
 runtime API that merely raised the hard class to the next possible bucket was
-retracted before use. The corrected development question conditions raw
-historical total durations on strict survival and recomputes their five-bucket
-PMF; an exhausted empirical tail is unavailable rather than a fabricated floor
-class. Clause inference remains closed. This development result has no
-scheduler-utility claim and does not authorize the unread final partition.
+retracted before use. The corrected strict-survival predictor recomputed the
+five-bucket PMF from raw historical durations greater than elapsed time and made
+an exhausted empirical tail unavailable. It reached 75.827% time-weighted exact
+accuracy versus Static's 60.260%, but 15.150% of wall-time became unavailable
+and task deltas were 23 positive, 25 negative, and 2 tied. It therefore failed
+the frozen task-stability gate. Strict finite-sample survival and clause
+inference are closed; this result has no scheduler-utility claim and does not
+authorize the unread final partition.
 
 The deterministic `full-test-third-or-later-v1` feature passed its reviewed,
 post-hoc development continuation rule. On the exposed 80/20 replay it improved
