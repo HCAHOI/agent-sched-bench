@@ -948,7 +948,7 @@ under-reservation duration charged by the same work-conservation floor. The
 oracle artifact is in
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-cpu-throughput-oracle-v1/`.
 
-### Two-core default action baseline: frozen, pending
+### Two-core default action baseline: complete, predictor headroom
 
 Before fitting a throughput predictor, a development preflight found only one
 command above two CPU-work cores among 1,835 labeled commands in the original
@@ -974,6 +974,22 @@ throughput-oracle schedule, full-host fallback for all missing commands,
 identical command/work inputs, and no requested-capacity violation. Mean task
 completion, queue time, dilation count, and the identities of costly
 under-reservations are secondary.
+
+The reviewed baseline reproduced every prior throughput-oracle schedule and
+passed all validity checks. Its mean makespan was 13,655.637 seconds versus
+12,594.850 seconds for the throughput oracle. Mean paired regret was 8.452%,
+with a 95% paired seed-bootstrap interval of [7.621%, 9.273%]. The two-core
+default therefore failed the frozen 5% adequacy criterion and passed the
+strictly-positive-headroom criterion.
+
+Thirteen commands across eleven tasks were slowed by the CPU-work floor,
+adding 1,580.014 seconds over the full validation pool. Eleven required four
+cores to preserve recorded average throughput; two large forced package
+reinstalls required eight. This is actionable headroom, not evidence for a
+particular predictor: the tasks and RSS values remain development-exposed and
+the CPU-work floor is optimistic about critical-path scaling. The reviewed
+artifact is in
+`analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-two-core-throughput-baseline-v1/`.
 
 ## 5. Development-exposure record
 
