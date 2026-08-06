@@ -265,36 +265,35 @@ def _make_room(
                 ),
             )
             limit = victim.resident_blocks
-        elif eviction == "belady" and next_request_rank is not None:
+        elif eviction in {"belady", "suffix_arrival"} and (
+            eviction == "suffix_arrival" or next_request_rank is not None
+        ):
+            def victim_key(session: Session) -> tuple[float | int, float, str]:
+                if eviction == "suffix_arrival":
+                    next_use = max(0.0, session.arrival_s - now_s)
+                else:
+                    assert next_request_rank is not None
+                    next_use = next_request_rank[
+                        (session.program.task_id, session.turn_index)
+                    ]
+                return -next_use, session.last_access_s, session.program.task_id
+
             free_suffix = [
                 (session.resident_blocks - _reusable_blocks(session), session)
                 for session in candidates
                 if session.resident_blocks > _reusable_blocks(session)
             ]
             if free_suffix:
-                limit, victim = max(
+                limit, victim = min(
                     free_suffix,
-                    key=lambda item: (
-                        next_request_rank[
-                            (item[1].program.task_id, item[1].turn_index)
-                        ],
-                        item[1].program.task_id,
-                    ),
+                    key=lambda item: victim_key(item[1]),
                 )
             else:
-                victim = max(
-                    candidates,
-                    key=lambda session: (
-                        next_request_rank[
-                            (session.program.task_id, session.turn_index)
-                        ],
-                        session.program.task_id,
-                    ),
-                )
+                victim = min(candidates, key=victim_key)
                 limit = victim.resident_blocks
         else:
             raise ValueError(f"unknown eviction policy {eviction}")
-        if eviction not in {"predicted", "belady"}:
+        if eviction not in {"predicted", "belady", "suffix_arrival"}:
             limit = victim.resident_blocks
         count = min(required, limit)
         victim.resident_blocks -= count

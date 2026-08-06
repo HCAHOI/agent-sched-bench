@@ -208,6 +208,84 @@ def test_block_belady_evicts_dead_suffix_then_latest_reuse() -> None:
     assert far.resident_blocks == 4
 
 
+def test_suffix_arrival_uses_gap_arrival_after_dead_suffixes() -> None:
+    current = Session(_program("current", 16), seed_rank=0)
+    later_arrival = Session(
+        Program(
+            "later",
+            (Turn(64, 16, 1.0, None), Turn(80, 16, 1.0, None)),
+        ),
+        seed_rank=1,
+        turn_index=1,
+        arrival_s=10.0,
+        resident_blocks=5,
+    )
+    later_rank = Session(
+        Program(
+            "rank",
+            (Turn(64, 16, 1.0, None), Turn(80, 16, 1.0, None)),
+        ),
+        seed_rank=2,
+        turn_index=1,
+        arrival_s=1.0,
+        resident_blocks=5,
+    )
+
+    _make_room(
+        1,
+        total_blocks=CAPACITY_BLOCKS,
+        current=current,
+        sessions=[current, later_rank, later_arrival],
+        now_s=0.0,
+        eviction="suffix_arrival",
+        global_history=np.asarray([1.0]),
+        tool_history={},
+        clusters={100: {}},
+        label_cache={},
+        next_request_rank={("later", 1): 1, ("rank", 1): 10},
+    )
+
+    assert later_arrival.resident_blocks == 4
+    assert later_rank.resident_blocks == 5
+
+
+def test_suffix_arrival_keeps_greedy_tie_break_for_arrived_sessions() -> None:
+    current = Session(_program("current", 16), seed_rank=0)
+    turns = (Turn(64, 16, 1.0, None), Turn(64, 16, 1.0, None))
+    lru_victim = Session(
+        Program("lru", turns),
+        seed_rank=1,
+        turn_index=1,
+        arrival_s=8.0,
+        resident_blocks=4,
+        last_access_s=1.0,
+    )
+    later_arrival = Session(
+        Program("later", turns),
+        seed_rank=2,
+        turn_index=1,
+        arrival_s=9.0,
+        resident_blocks=4,
+        last_access_s=2.0,
+    )
+
+    _make_room(
+        1,
+        total_blocks=CAPACITY_BLOCKS,
+        current=current,
+        sessions=[current, lru_victim, later_arrival],
+        now_s=10.0,
+        eviction="suffix_arrival",
+        global_history=np.asarray([1.0]),
+        tool_history={},
+        clusters={100: {}},
+        label_cache={},
+    )
+
+    assert lru_victim.resident_blocks == 3
+    assert later_arrival.resident_blocks == 4
+
+
 def test_request_ranks_follow_fcfs_service_and_gap_timing() -> None:
     programs = [
         Program(
