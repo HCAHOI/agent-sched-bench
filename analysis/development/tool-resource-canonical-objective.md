@@ -1065,6 +1065,40 @@ this check. Any future long-command-scoped or concurrent test requires fresh
 SQLGlot tasks and a separately frozen decision-utility gate. The artifact is in
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot98-interval-cpu-feedback-v1/`.
 
+### Admission reservation versus enforced CPU cap: stage-one ceiling frozen
+
+The interval result does not justify a more elaborate throttle controller.
+Autothrottle already uses cgroup throttling as the local signal for quota
+control; Cilantro learns job performance over repeated allocation rounds; and
+Caladan rapidly lends cores to work that can use them, but requires a custom
+runtime and scheduler. Our unresolved local modeling choice is narrower: the
+admission replay currently uses one number both to reserve host capacity and to
+enforce the CPU-work duration floor. Linux CPU shares/requests can instead
+provide an admission guarantee while allowing a command to use otherwise idle
+cores. This distinction may preserve packing without charging every low request
+as a hard two-core quota.
+
+The first stage is an optimistic development ceiling, not a deployable policy.
+It reuses the exposed validation50 programs, 32 seed-ordered 40-task schedules,
+8-core/16,000-MB host, hindsight RSS reservations, reviewed CPU-work mapping,
+and the exact two-core requests from the committed two-core baseline: commands
+with CPU-work evidence request two cores and the 152 missing-work commands
+request all eight. The only changed assumption is enforcement. The ceiling
+retains each command's recorded eight-core duration instead of applying
+`max(recorded duration, CPU work / request)`, equivalent to perfect bursting
+with no contention penalty. Existing fixed-high, throughput-oracle, and strict
+two-core results must reproduce exactly before the ceiling is inspected.
+
+The ceiling authorizes a contention-aware model only if its mean makespan is at
+least 5% below strict two-core, every paired seed delta is negative, and its
+paired regret relative to the committed throughput oracle has both mean and 95%
+bootstrap upper bound at most 5%. Modeled demand above host capacity is counted
+and reported but does not invalidate this deliberately optimistic ceiling. A
+failure stops the branch. A pass establishes only that decoupling could recover
+enough action utility to model; it does not support a scheduler claim or access
+fresh tasks. No request, service duration, schedule, threshold, or fallback may
+change after the ceiling outcome is read.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved
