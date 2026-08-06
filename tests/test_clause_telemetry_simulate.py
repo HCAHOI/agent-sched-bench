@@ -2262,6 +2262,15 @@ def test_replay_failure_is_separate_from_healthy_telemetry(
 ) -> None:
     collector = _active_collector()
     collector.artifact_path = tmp_path / "clause.json"
+    trimmed: list[tuple[str, str, str]] = []
+
+    def record_trim() -> None:
+        artifact = json.loads(collector.artifact_path.read_text(encoding="utf-8"))
+        trimmed.append(
+            (collector.state, collector._cleanup_status, artifact["collection_validity"])
+        )
+
+    monkeypatch.setattr("tool_resource.telemetry._trim_process_heap", record_trim)
     monkeypatch.setattr(
         "tool_resource.telemetry._loss_counts",
         lambda _bpf: {
@@ -2283,6 +2292,7 @@ def test_replay_failure_is_separate_from_healthy_telemetry(
     assert artifact["telemetry_quality"] == "ok"
     assert artifact["formal_completeness"] == "complete"
     assert artifact["collection_validity"] == "valid"
+    assert trimmed == [("closed", "ok", "valid")]
 
 
 def test_finalize_marks_mapping_gaps_partial_without_discarding_valid_calls(

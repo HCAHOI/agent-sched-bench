@@ -75,6 +75,18 @@ PAGE = os.sysconf("SC_PAGE_SIZE")
 _NPROC = os.cpu_count() or 1
 
 
+def _trim_process_heap() -> None:
+    """Return freed glibc arenas after a collector's analysis high-water."""
+
+    try:
+        malloc_trim = ctypes.CDLL(None).malloc_trim
+    except (AttributeError, OSError):
+        return
+    malloc_trim.argtypes = (ctypes.c_size_t,)
+    malloc_trim.restype = ctypes.c_int
+    malloc_trim(0)
+
+
 def _restore_unset() -> object:
     return _UNSET
 
@@ -4830,6 +4842,7 @@ class ClauseTelemetryCollector:
             encoding="utf-8",
         )
         self.state = "closed"
+        _trim_process_heap()
 
     def _close_bpf(self) -> None:
         if self._closed:
