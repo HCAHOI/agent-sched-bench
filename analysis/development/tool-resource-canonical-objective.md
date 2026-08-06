@@ -741,7 +741,7 @@ that does not price that risk. No real interference run, threshold tuning, or
 safety wrapper is authorized. The independently reviewed artifact is in
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-resource-admission-predictors-v1/`.
 
-### CPU and memory under-reservation calibration: frozen, pending
+### CPU and memory under-reservation calibration: complete, physical cost detected
 
 On 2026-08-06 the advisor authorized a narrow physical calibration to resolve
 the replay's missing cost: whether allocating less CPU or memory than this
@@ -750,8 +750,8 @@ a new predictor comparison or a SQLGlot scheduling result. It reuses the
 existing Docker/cgroup-v2 AST-indexing workload over 6,964 PyTorch and
 TensorFlow source files. The workload, image (`python:3.13-slim`), source tree,
 eight workers, one burst, one-second retained-AST hold, disabled network, a
-6-GiB hard memory limit, and no additional swap are fixed. An unmeasured baseline warm-up
-precedes the formal runs.
+6-GiB hard memory limit, and no additional swap are fixed. An unmeasured
+baseline warm-up precedes the formal runs.
 
 The four arms are: 8 CPU cores with no `memory.high` limit (baseline), 4 cores
 with no soft memory limit, 2 cores with no soft memory limit, and 8 cores with
@@ -766,9 +766,9 @@ Primary latency is the workload's internal elapsed time; host release-to-finish
 wall time is a consistency check. CPU evidence is the workload-time ratio plus
 the change in cgroup `nr_throttled` and `throttled_usec`. Memory evidence is the
 workload-time ratio plus `memory.events` and reclaim/refault counters; sampled
-peak cgroup memory is also retained. Successful runs must report identical source-file,
-parsed-file, and AST-node counts. All cgroup counters are differenced from a
-snapshot taken immediately before releasing the workload.
+peak cgroup memory is also retained. Successful runs must report identical
+source-file, parsed-file, and AST-node counts. All cgroup counters are
+differenced from a snapshot taken immediately before releasing the workload.
 
 CPU under-reservation is considered physically action-relevant only if all
 runs succeed, the median 2-core elapsed time is at least 25% above the 8-core
@@ -782,6 +782,24 @@ passes, this workload does not justify adding an under-reservation penalty to
 the scheduler model. Passing a gate establishes only that the omitted physical
 cost exists; it does not reopen the exposed hard-class predictor comparison or
 authorize runtime integration.
+
+The completed 12-run matrix passed both frozen mechanism gates. Median workload
+time was 18.749 seconds at 8 cores, 34.783 seconds at 4 cores, and 73.648
+seconds at 2 cores: the restricted arms were 1.855x and 3.928x the baseline.
+All CPU runs succeeded with identical work. Median cgroup `throttled_usec` rose
+from 2,220 at 8 cores to 118,248,305 at 4 cores and 408,167,371 at 2 cores; the
+2-core value exceeded its paired baseline in every block.
+
+All three 2-GiB `memory.high` runs reached 180 seconds without completing,
+versus an 18.749-second baseline median, establishing a censored slowdown
+greater than 9.60x. They recorded 118,052--121,365 `memory.events.high` events
+and 30,098--54,406 page scans while sampled memory remained near 2.15 GiB.
+There were no `memory.max`, OOM, or OOM-kill events. Every successful run
+reported the same 6,964 files and 15,029,159 AST nodes. The result establishes
+that the replay's zero penalty for under-reservation is physically false on
+this isolated workload; it does not quantify multi-command interference or
+select a predictor policy. The reviewed artifact is in
+`analysis/results/tool-resource-5-3-3-3-20260804/resource-underreservation-calibration-v1/`.
 
 #### Amendment: long-memory completion time
 
