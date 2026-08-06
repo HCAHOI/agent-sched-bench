@@ -6,6 +6,7 @@ from tool_resource_eval.early_cpu_reservation import (
     CPU_UPDATE_P95_S,
     SAMPLE_AVAILABILITY_PAD_S,
     action_row,
+    feedback_action_row,
 )
 
 
@@ -109,3 +110,38 @@ def test_oracle_does_not_treat_short_tail_as_future_interval() -> None:
 
     assert row is None
     assert reason == "no_future_cpu"
+
+
+def test_feedback_selects_a_page_then_returns_to_eight_after_throttling() -> None:
+    action = _action()
+    samples = action["data"]["resource_timeline"]["samples"]
+    samples[0]["cpu_core_s"] = 0.5  # 1 core: select 2 after the delayed update.
+    samples[1]["cpu_core_s"] = 1.5  # 3 cores: throttle after selecting 2.
+    samples[2]["cpu_core_s"] = 1.5  # The delayed next update returns to 8.
+
+    row, reason = feedback_action_row(action)
+
+    assert reason == "eligible"
+    assert row["eligible"] is True
+    feedback = row["arms"]["feedback"]
+    probe = row["arms"]["probe_then_two"]
+    assert set(feedback["request_counts"]) == {"2", "8"}
+    assert feedback["throttled_samples"] == 2
+    assert feedback["added_service_s"] < probe["added_service_s"]
+    assert row["arms"]["fixed8"]["added_service_s"] == pytest.approx(0.0)
+
+
+def test_feedback_keeps_short_actions_at_eight() -> None:
+    row, reason = feedback_action_row(_action(sample_dt=0.45))
+
+    assert reason == "no_full_decision_sample"
+    assert row["eligible"] is False
+    assert row["arms"]["feedback"] == row["arms"]["fixed8"]
+
+
+def test_feedback_rejects_a_censored_source_quota() -> None:
+    action = _action()
+    action["data"]["resource_timeline"]["samples"][0]["cpu_quota_cores"] = 4
+
+    with pytest.raises(ValueError, match="not collected at eight cores"):
+        feedback_action_row(action)
