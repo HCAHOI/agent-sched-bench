@@ -1,4 +1,6 @@
 from scripts.evaluation.measure_resource_underreservation import (
+    _completion_order,
+    _completion_summary,
     _cpu_quota_cores,
     _delta,
     _run_order,
@@ -77,3 +79,35 @@ def test_failed_or_inconsistent_runs_cannot_pass() -> None:
     assert not result["identical_successful_output"]
     assert not result["cpu_gate"]
     assert not result["memory_gate"]
+
+
+def test_completion_protocol_reports_finished_and_censored_results() -> None:
+    assert _completion_order() == [
+        (1, "memory_high_2g"),
+        (1, "baseline"),
+        (2, "memory_high_2g"),
+        (2, "baseline"),
+        (3, "baseline"),
+        (3, "memory_high_2g"),
+    ]
+    rows = []
+    for block in range(1, 4):
+        rows.extend(
+            [
+                _row(block, "baseline", 20.0, 10),
+                _row(block, "memory_high_2g", 400.0, 10, high=5),
+            ]
+        )
+    completed = _completion_summary(rows)
+    assert completed["valid"]
+    assert completed["characterization"] == "completed"
+    assert completed["memory_successful_ratio_to_baseline"] == 20.0
+
+    for row in rows:
+        if row["arm"] == "memory_high_2g" and row["block"] != 3:
+            row["timed_out"] = True
+    censored = _completion_summary(rows)
+    assert censored["valid"]
+    assert censored["characterization"] == "greater_than_3600s"
+    assert censored["memory_successful_median_s"] is None
+    assert censored["memory_successful_ratio_to_baseline"] is None

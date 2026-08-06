@@ -783,6 +783,25 @@ the scheduler model. Passing a gate establishes only that the omitted physical
 cost exists; it does not reopen the exposed hard-class predictor comparison or
 authorize runtime integration.
 
+#### Amendment: long-memory completion time
+
+After two of the three 2-GiB `memory.high` runs had reached the frozen
+180-second ceiling, the visible completed runs were: CPU2 73.9 seconds, CPU4
+35.5 seconds, baseline 19.4 seconds, and two low-memory timeouts at 180.1
+seconds. The advisor then requested a longer overnight timeout. The original
+matrix and gate remain unchanged; its timed-out runs are not replaced.
+
+A separate descriptive experiment will run only baseline and 2-GiB
+`memory.high`, once each in three seed-42 shuffled blocks, after an unmeasured
+baseline warm-up. All other workload, Docker, cgroup, sampling, counter,
+identity, and cleanup semantics remain identical. Each formal run has a
+3,600-second ceiling. If all three low-memory runs finish, the result reports
+their median elapsed time and ratio to the paired baseline median. If at least
+two reach the ceiling, the result is a `>3,600 s` lower bound. Any OOM kill,
+limit mismatch, baseline failure, output-identity mismatch, or incomplete
+matrix invalidates the characterization. No further timeout increase or arm
+change is allowed from these outcomes.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved

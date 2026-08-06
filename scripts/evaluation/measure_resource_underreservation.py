@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,11 @@ OUTPUT = (
     / "analysis/results/tool-resource-5-3-3-3-20260804"
     / "resource-underreservation-calibration-v1"
 )
+COMPLETION_OUTPUT = (
+    ROOT
+    / "analysis/results/tool-resource-5-3-3-3-20260804"
+    / "resource-underreservation-memory-completion-v1"
+)
 WORKSPACE = Path("/home/chiyu/ear-workspaces/mixed-burst-real/main")
 WORKLOAD = Path(
     "/home/chiyu/workspace/elastic-agent-runtime/experiments/analysis/"
@@ -30,6 +36,7 @@ IMAGE = "python:3.13-slim"
 MEMORY_MAX_BYTES = 6 * 1024**3
 MEMORY_HIGH_BYTES = 2 * 1024**3
 TIMEOUT_S = 180.0
+COMPLETION_TIMEOUT_S = 3_600.0
 POLL_S = 0.1
 SEED = 42
 BLOCKS = 3
@@ -140,7 +147,9 @@ def _run_order() -> list[tuple[int, str]]:
     return order
 
 
-def _run_one(*, index: int, block: int, arm: str) -> dict[str, Any]:
+def _run_one(
+    *, index: int, block: int, arm: str, timeout_s: float = TIMEOUT_S
+) -> dict[str, Any]:
     cpu_cores, memory_high = ARMS[arm]
     name = f"asb-underreserve-{os.getpid()}-{index:02d}"
     wrapper = (
@@ -211,7 +220,7 @@ def _run_one(*, index: int, block: int, arm: str) -> dict[str, Any]:
             while not (state / "status").exists():
                 sample = _snapshot(cgroup)
                 peak_current = max(peak_current, sample["memory_current_bytes"])
-                if time.perf_counter() - started >= TIMEOUT_S:
+                if time.perf_counter() - started >= timeout_s:
                     timed_out = True
                     break
                 time.sleep(POLL_S)
@@ -235,6 +244,7 @@ def _run_one(*, index: int, block: int, arm: str) -> dict[str, Any]:
                 "arm": arm,
                 "requested_cpu_cores": cpu_cores,
                 "requested_memory_high": memory_high,
+                "timeout_s": timeout_s,
                 "observed_cpu_max": observed_cpu_max,
                 "observed_cpu_cores": observed_cpu_cores,
                 "observed_memory_high": observed_memory_high,
@@ -361,15 +371,8 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def main() -> None:
-    if OUTPUT.exists():
-        raise FileExistsError(f"refusing to overwrite {OUTPUT}")
-    if not WORKLOAD.is_file() or not (WORKSPACE / "sources").is_dir():
-        raise FileNotFoundError("frozen workload or workspace is missing")
-    OUTPUT.mkdir(parents=True)
-    partial = OUTPUT / "partial.json"
-
-    host_before = {
+def _host_before() -> dict[str, Any]:
+    return {
         "platform": platform.platform(),
         "logical_cpus": os.cpu_count(),
         "docker_version": _command(
@@ -377,6 +380,133 @@ def main() -> None:
         ),
         "loadavg": list(os.getloadavg()),
     }
+
+
+def _completion_order() -> list[tuple[int, str]]:
+    rng = random.Random(SEED)
+    order: list[tuple[int, str]] = []
+    for block in range(1, BLOCKS + 1):
+        arms = ["baseline", "memory_high_2g"]
+        rng.shuffle(arms)
+        order.extend((block, arm) for arm in arms)
+    return order
+
+
+def _completion_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    baseline_elapsed = _elapsed(rows, "baseline")
+    memory_elapsed = _elapsed(rows, "memory_high_2g")
+    memory_rows = [row for row in rows if row["arm"] == "memory_high_2g"]
+    identities = {
+        (
+            row["workload"]["source_files"],
+            row["workload"]["bursts"][0]["files"],
+            row["workload"]["bursts"][0]["ast_nodes"],
+        )
+        for row in rows
+        if not row["timed_out"]
+        and row["workload_exit"] == 0
+        and row["container_exit"] == 0
+        and row["workload"] is not None
+    }
+    valid = bool(
+        len(rows) == 2 * BLOCKS
+        and len(baseline_elapsed) == BLOCKS
+        and len(memory_rows) == BLOCKS
+        and len(identities) == 1
+        and all(row["memory_events_delta"].get("oom_kill", 0) == 0 for row in rows)
+        and all(
+            row["memory_events_delta"].get("high", 0) > 0
+            for row in memory_rows
+        )
+    )
+    timeouts = sum(bool(row["timed_out"]) for row in memory_rows)
+    if valid and len(memory_elapsed) == BLOCKS:
+        characterization = "completed"
+    elif valid and timeouts >= 2:
+        characterization = "greater_than_3600s"
+    else:
+        characterization = "invalid"
+    baseline_median = statistics.median(baseline_elapsed) if baseline_elapsed else None
+    memory_median = (
+        statistics.median(memory_elapsed)
+        if characterization == "completed"
+        else None
+    )
+    return {
+        "valid": valid,
+        "characterization": characterization,
+        "baseline_median_s": baseline_median,
+        "memory_completed_runs": len(memory_elapsed),
+        "memory_timeouts": timeouts,
+        "memory_successful_median_s": memory_median,
+        "memory_successful_ratio_to_baseline": (
+            memory_median / baseline_median
+            if characterization == "completed"
+            and memory_median is not None
+            and baseline_median
+            else None
+        ),
+        "successful_output_identities": [list(value) for value in sorted(identities)],
+    }
+
+
+def _run_memory_completion() -> None:
+    if COMPLETION_OUTPUT.exists():
+        raise FileExistsError(f"refusing to overwrite {COMPLETION_OUTPUT}")
+    COMPLETION_OUTPUT.mkdir(parents=True)
+    partial = COMPLETION_OUTPUT / "partial.json"
+    host_before = _host_before()
+    warmup = _run_one(index=0, block=0, arm="baseline")
+    if warmup["timed_out"] or warmup["workload_exit"] != 0:
+        raise RuntimeError("unmeasured warm-up failed")
+
+    rows: list[dict[str, Any]] = []
+    for index, (block, arm) in enumerate(_completion_order(), start=1):
+        print(f"run {index}/{2 * BLOCKS}: block={block} arm={arm}", flush=True)
+        rows.append(
+            _run_one(
+                index=index,
+                block=block,
+                arm=arm,
+                timeout_s=COMPLETION_TIMEOUT_S,
+            )
+        )
+        partial.write_text(json.dumps({"runs": rows}, indent=2) + "\n")
+    result = {
+        "schema": "resource-underreservation-memory-completion-v1",
+        "role": "post-result-descriptive-amendment",
+        "protocol": {
+            "seed": SEED,
+            "blocks": BLOCKS,
+            "arms": ["baseline", "memory_high_2g"],
+            "timeout_s": COMPLETION_TIMEOUT_S,
+            "poll_s": POLL_S,
+            "memory_max_bytes": MEMORY_MAX_BYTES,
+            "image": IMAGE,
+            "workspace": str(WORKSPACE),
+            "workload": str(WORKLOAD),
+        },
+        "host_before": host_before,
+        "warmup_identity": warmup["workload"],
+        "runs": rows,
+        "summary": _completion_summary(rows),
+    }
+    (COMPLETION_OUTPUT / "result.json").write_text(
+        json.dumps(result, indent=2) + "\n"
+    )
+    partial.unlink()
+    print(json.dumps(result["summary"], indent=2), flush=True)
+
+
+def _run_calibration() -> None:
+    if OUTPUT.exists():
+        raise FileExistsError(f"refusing to overwrite {OUTPUT}")
+    if not WORKLOAD.is_file() or not (WORKSPACE / "sources").is_dir():
+        raise FileNotFoundError("frozen workload or workspace is missing")
+    OUTPUT.mkdir(parents=True)
+    partial = OUTPUT / "partial.json"
+
+    host_before = _host_before()
     warmup = _run_one(index=0, block=0, arm="baseline")
     if warmup["timed_out"] or warmup["workload_exit"] != 0:
         raise RuntimeError("unmeasured warm-up failed")
@@ -409,6 +539,16 @@ def main() -> None:
     (OUTPUT / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     partial.unlink()
     print(json.dumps(result["summary"], indent=2), flush=True)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--memory-completion", action="store_true")
+    args = parser.parse_args()
+    if args.memory_completion:
+        _run_memory_completion()
+    else:
+        _run_calibration()
 
 
 if __name__ == "__main__":
