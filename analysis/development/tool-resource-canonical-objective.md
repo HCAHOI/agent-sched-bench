@@ -570,7 +570,7 @@ but closes KV victim selection under the current action model. The reviewed
 artifact is in
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-kv-block-belady-oracle-v1/`.
 
-### KV oracle mechanism decomposition: frozen
+### KV oracle mechanism decomposition: complete, no-go
 
 The 9.6201% Belady result remains a NO-GO and is not rescored. A final 2x2
 development diagnostic attributes its improvement using two hindsight factors:
@@ -592,6 +592,23 @@ C100-to-Belady improvement. If both pass, only the larger factor proceeds; if
 neither passes, the apparent block-aware opportunity is too diffuse or small
 to pursue. This decomposition cannot reopen live integration or amend any
 earlier gate.
+
+The completed decomposition authorizes neither factor. Replacing exact
+gap-arrival order with exact FCFS request rank saved a 262.422-block main
+effect, or 0.579% of C100 recomputation and 6.015% of the C100-to-Belady gap;
+the paired-seed bootstrap interval was [166.203, 370.268] blocks. Dead-suffix
+handling saved only 6.422 blocks, or 0.014% of C100 and 0.147% of the gap, with
+interval [3.578, 9.844]. Both directions are positive, but both miss the
+frozen 1% and 20% minimums.
+
+The committed arrival/no-suffix oracle already accounts for 93.84% of the
+C100-to-Belady improvement. Its 9.0272% C100 reduction was the prior frozen
+NO-GO, so this is mechanism attribution rather than a new integration case:
+the small remaining Belady benefit comes mostly from knowing exact request
+order, not from block-aware suffix handling. KV victim selection is closed
+under the current simulator and action model. The independently reviewed
+artifact is in
+`analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-kv-oracle-decomposition-v1/`.
 
 ## 5. Development-exposure record
 
