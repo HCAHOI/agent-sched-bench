@@ -1,5 +1,9 @@
 import pytest
 
+from scripts.evaluation.evaluate_cpu_work_admission import (
+    _clause_cpu_work,
+    _cpu_floor_programs,
+)
 from scripts.evaluation.evaluate_clause_resource_classes import CommandRow, Row
 from scripts.evaluation.evaluate_resource_admission_oracle import _reservation
 from tool_resource_eval.resource_admission import (
@@ -76,8 +80,32 @@ def test_explicit_underreservation_reports_modeled_capacity_exposure() -> None:
 
 def test_reservation_sums_pipeline() -> None:
     clauses = (
-        Row("task", "repo", 0, "left", ("left",), 100.0, 1.0, 100.0, 0.0, in_pipe=True, pipeline_position=0),
-        Row("task", "repo", 0, "right", ("right",), 100.0, 2.0, 500.0, 0.0, in_pipe=True, pipeline_position=1),
+        Row(
+            "task",
+            "repo",
+            0,
+            "left",
+            ("left",),
+            100.0,
+            1.0,
+            100.0,
+            0.0,
+            in_pipe=True,
+            pipeline_position=0,
+        ),
+        Row(
+            "task",
+            "repo",
+            0,
+            "right",
+            ("right",),
+            100.0,
+            2.0,
+            500.0,
+            0.0,
+            in_pipe=True,
+            pipeline_position=1,
+        ),
     )
     row = CommandRow("task", "repo", 0, 0, "call_0", "left | right", 100.0, clauses)
 
@@ -117,3 +145,53 @@ def test_unknown_structure_falls_back_to_full_host() -> None:
     row = CommandRow("task", "repo", 0, 0, "call_0", "cmd", 10.0, (clause,))
 
     assert _reservation(row) == (8.0, 16_000.0, "structure_full_fallback")
+
+
+def test_cpu_work_floor_changes_only_physically_impossible_duration() -> None:
+    programs = {
+        "task": AdmissionProgram(
+            "task",
+            0.0,
+            (
+                AdmissionCommand("task:cpu", 2.0, 8.0, 100.0, 1.0),
+                AdmissionCommand("task:wait", 5.0, 8.0, 100.0, 0.0),
+                AdmissionCommand("task:missing", 3.0, 8.0, 100.0, 0.0),
+            ),
+            0.0,
+        )
+    }
+    adjusted, summary = _cpu_floor_programs(
+        programs,
+        {
+            "task:cpu": (2.0, 100.0),
+            "task:wait": (2.0, 100.0),
+            "task:missing": (2.0, 100.0),
+        },
+        {"task:cpu": 8.0, "task:wait": 1.0},
+    )
+
+    assert [command.duration_s for command in adjusted["task"].commands] == [
+        4.0,
+        5.0,
+        3.0,
+    ]
+    assert summary["dilated_commands"] == 1
+    assert summary["added_service_s"] == 2.0
+
+
+def test_clause_cpu_work_rejects_duplicate_identity() -> None:
+    clause = {
+        "bin": "pytest",
+        "argv": ["pytest"],
+        "ts_start": 1.0,
+        "ts_end": 2.0,
+        "pipeline_position": -1,
+        "in_loop": False,
+        "in_pipe": False,
+        "in_subst": False,
+        "cpu_ns_cumulative": 500_000_000,
+    }
+
+    assert _clause_cpu_work([clause]) == 0.5
+    with pytest.raises(ValueError, match="duplicate clause CPU-work identity"):
+        _clause_cpu_work([clause, dict(clause)])
