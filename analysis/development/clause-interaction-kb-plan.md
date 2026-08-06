@@ -1428,5 +1428,9 @@ positive than negative deltas, and is positive in at least ten tasks.
 `clause_survival` uses the same gate relative to `command_survival` and must
 also change at least 20 commands while at least 0.5 seconds remains. Row labels,
 command order, initial Current PMFs, and all non-latency targets must remain
-identical. Any pass authorizes only a fresh-data protocol tied to a named
-mid-execution consumer; this exposed diagnostic cannot open final by itself.
+identical. The existing validation sidecar stores the historical
+validation-frozen control, so it locks IDs, commands, labels, and the first
+task's pre-update PMFs only; later static PMFs are reconstructed from the frozen
+inputs with the causal between-task updates declared above. Any pass authorizes
+only a fresh-data protocol tied to a named mid-execution consumer; this exposed
+diagnostic cannot open final by itself.

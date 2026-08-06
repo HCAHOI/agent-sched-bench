@@ -750,15 +750,15 @@ def run(
     for row in baseline_rows:
         frozen = frozen_by_id[str(row["sample_id"])]
         current = row["current_dynamic"]
-        if (
+        labels = {"latency": row["latency_label"], **row["resource_labels"]}
+        if row["command"] != frozen.command or labels != frozen.labels:
+            raise ValueError("command or labels differ from frozen validation rows")
+        if row["task_id"] == validation_ids[0] and (
             current["latency"] != frozen.current["latency"]
             or tuple(current["probability_by_bucket"]["latency"] or ())
             != tuple(frozen.pmfs["latency"] or ())
-            or row["latency_label"] != frozen.labels["latency"]
         ):
-            raise ValueError(
-                "Current baseline values differ from frozen validation rows"
-            )
+            raise ValueError("initial Current differs from frozen validation rows")
 
     public_evidence = [
         row for row in public if row.structure_known and row.pipeline_position <= 0
