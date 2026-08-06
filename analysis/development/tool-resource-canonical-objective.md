@@ -1272,6 +1272,14 @@ replay failure, record the requested cpuset/share/quota, and show no OOM,
 cleanup-invalid, missing-summary, or task failure. Any invalid pair invalidates
 the formal matrix rather than being dropped or rerun.
 
+A pre-result development smoke exposed that simulator throughput `success`
+also copies the source agent's benchmark success, even when every recorded
+action replays correctly. That outcome is fixed before this physical replay
+and is unrelated to CPU-control validity. Here, task failure therefore means a
+replay worker/action failure: missing or unexpected actions, a failed worker,
+or invalid cleanup. Source benchmark `success=false` is retained identically in
+both arms, reported, and does not by itself invalidate a pair.
+
 The run retains per-pair manifests, replay summaries, task status/resource
 artifacts, and one aggregate result. Based on the already-visible full-pool
 20,499 seconds of source tool time, the expected wall time is approximately
