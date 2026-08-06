@@ -673,7 +673,7 @@ integration or a scheduling-performance claim. The independently reviewed
 artifact is in
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot100-resource-admission-oracle-v1/`.
 
-### CPU+RSS predictor admission: frozen
+### CPU+RSS predictor admission: complete, no-go
 
 The oracle GO authorizes one predictor action test on the 50 already-exposed
 SQLGlot validation tasks; the final partition remains closed. The exact 32
@@ -711,6 +711,35 @@ GO authorizes only a real interference experiment with an explicit failure
 policy. NO-GO closes hard-class Current/SOTA as direct admission requests; it
 does not authorize threshold tuning, a safety critic, or a new predictor on the
 exposed validation tasks.
+
+The completed comparison failed four frozen gates. On this validation pool the
+oracle reduced fixed-high makespan from 16,573.625 to 15,226.348 seconds, only
+8.1290%, so the action-space precondition itself did not transfer. Current
+averaged 12,779.025 seconds and SOTA 14,009.576 seconds: SOTA was 1,230.551
+seconds slower, or a 9.6295% regression. The paired interval for SOTA minus
+Current was [1,153.784, 1,304.620] seconds. All 32 schedules were slower.
+
+This apparent advantage for Current is not safe scheduling utility. Current and
+SOTA averaged 671.0 and 629.125 conservative exposure events per schedule,
+respectively, versus zero for the oracle. Across schedules, 924 distinct Current
+commands and 883 distinct SOTA commands participated in at least one exposure.
+Recorded runtimes charge no throttling, interference, or OOM cost, so
+under-reservation is rewarded with concurrency. These are unverified-capacity
+events under the conservative telemetry model, not observed physical overloads.
+
+SOTA changed requests for 55 commands across 30 tasks. A post-result direction
+diagnostic found that 49 CPU requests and 22 RSS requests rose, while six
+commands lowered each target. Net reserved CPU and RSS resource-time increased
+by 7.41% and 10.39%; in all 32 schedules SOTA both ran slower and reduced
+exposures. The computed 1.903 oracle-headroom ratio is therefore only gate
+arithmetic and cannot be interpreted as capturing 190% of safe oracle benefit.
+
+The result closes raw hard CPU/RSS classes as direct admission requests. It also
+shows why classification accuracy alone is insufficient: a more conservative
+request can reduce unverified overcommit while worsening makespan in a replay
+that does not price that risk. No real interference run, threshold tuning, or
+safety wrapper is authorized. The independently reviewed artifact is in
+`analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-resource-admission-predictors-v1/`.
 
 ## 5. Development-exposure record
 
