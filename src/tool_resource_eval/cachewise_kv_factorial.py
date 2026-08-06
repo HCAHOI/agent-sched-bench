@@ -8,7 +8,7 @@ import json
 import math
 from pathlib import Path
 import statistics
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -58,6 +58,9 @@ class Session:
     gap_started_s: float | None = None
     request_latency_s: float = 0.0
     finished: bool = False
+
+
+RemainingPredictor = Callable[[Session, float], float]
 
 
 def _canonical_traces(root: Path) -> dict[str, Path]:
@@ -215,6 +218,7 @@ def _make_room(
     tool_history: dict[str, np.ndarray],
     clusters: dict[int, dict[str, ClusterModel]],
     label_cache: dict[tuple[int, str, str], int],
+    remaining_predictor: RemainingPredictor | None = None,
 ) -> tuple[int, int, int]:
     required = max(0, total_blocks + add_blocks - CAPACITY_BLOCKS)
     if required == 0:
@@ -249,6 +253,15 @@ def _make_room(
                     session.program.task_id,
                 ),
             )
+        elif eviction == "predicted" and remaining_predictor is not None:
+            victim = min(
+                candidates,
+                key=lambda session: (
+                    -remaining_predictor(session, now_s),
+                    session.last_access_s,
+                    session.program.task_id,
+                ),
+            )
         else:
             raise ValueError(f"unknown eviction policy {eviction}")
         count = min(required, victim.resident_blocks)
@@ -269,6 +282,7 @@ def simulate(
     tool_history: dict[str, np.ndarray],
     clusters: dict[int, dict[str, ClusterModel]],
     label_cache: dict[tuple[int, str, str], int],
+    remaining_predictor: RemainingPredictor | None = None,
 ) -> dict[str, float | int]:
     sessions = [Session(program, rank) for rank, program in enumerate(programs)]
     total_blocks = evicted_blocks = eviction_events = pressure_events = 0
@@ -307,6 +321,7 @@ def simulate(
             tool_history=tool_history,
             clusters=clusters,
             label_cache=label_cache,
+            remaining_predictor=remaining_predictor,
         )
         pressure_events += total_blocks < before
         evicted_blocks += evicted
@@ -335,6 +350,7 @@ def simulate(
                 tool_history=tool_history,
                 clusters=clusters,
                 label_cache=label_cache,
+                remaining_predictor=remaining_predictor,
             )
             pressure_events += total_blocks < before
             evicted_blocks += evicted

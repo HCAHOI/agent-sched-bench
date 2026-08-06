@@ -479,6 +479,8 @@ Each PMF is converted to remaining time by a frozen empirical decoder. For
 each latency bucket, development gaps whose eligible command has that bucket
 form the within-bucket duration distribution. At elapsed time `e`, the decoder
 returns the PMF-weighted mean of `duration - e`, conditional on `duration > e`.
+If that empirical mixture has no survivor, the arm uses the identical C100
+fallback rather than extrapolating a tail.
 The oracle uses the observed next-reuse interval and is an upper-bound policy,
 not a deployable feature or globally optimal cache solution.
 

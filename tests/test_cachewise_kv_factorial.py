@@ -142,6 +142,32 @@ def test_c100_equal_predictions_use_lru_then_task_id() -> None:
     assert recent.resident_blocks == 1
 
 
+def test_custom_remaining_predictor_controls_the_victim() -> None:
+    current = Session(_program("current", 16), seed_rank=0)
+    short = Session(_program("short", 16), seed_rank=1, resident_blocks=1)
+    long = Session(_program("long", 16), seed_rank=2, resident_blocks=1)
+
+    _make_room(
+        1,
+        total_blocks=CAPACITY_BLOCKS,
+        current=current,
+        sessions=[current, short, long],
+        now_s=0.0,
+        eviction="predicted",
+        global_history=np.asarray([1.0]),
+        tool_history={},
+        clusters={100: {}},
+        label_cache={},
+        remaining_predictor=lambda session, _now: {
+            "short": 1.0,
+            "long": 10.0,
+        }[session.program.task_id],
+    )
+
+    assert short.resident_blocks == 1
+    assert long.resident_blocks == 0
+
+
 def test_arrival_during_service_releases_suffix_before_growth(monkeypatch) -> None:
     monkeypatch.setattr(factorial, "CAPACITY_BLOCKS", 5)
     shrink = Program(
