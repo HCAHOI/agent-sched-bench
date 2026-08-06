@@ -47,10 +47,11 @@ from tool_resource.runtime_kb import (  # noqa: E402
     ClauseResourceKB,
     _command_stages,
     _stratified_empirical_draws,
+    empirical_latency_pmf_while_alive,
 )
 from tool_resource_eval.labels import repo_of  # noqa: E402
 
-VERSION = "continuous-latency-v1"
+VERSION = "empirical-command-survival-v2"
 ARMS = ("static", "command_survival", "clause_survival")
 TICK_MS = 500.0
 SNAPSHOT_MS = (500.0, 2000.0, 8000.0, 30_000.0)
@@ -114,28 +115,16 @@ def _pmf(values: Sequence[float]) -> tuple[float, ...]:
     )
 
 
-def _point_mass(elapsed_ms: float) -> tuple[float, ...]:
-    floor = bisect_right(CANONICAL_LATENCY_BUCKETS.edges_ms, elapsed_ms)
-    return tuple(
-        1.0 if index == floor else 0.0
-        for index in range(CANONICAL_LATENCY_BUCKETS.bucket_count)
-    )
-
-
 def _condition_values(
     values: Sequence[float] | None,
     elapsed_ms: float,
-) -> tuple[tuple[float, ...], bool]:
+) -> tuple[tuple[float, ...] | None, bool]:
     if elapsed_ms <= 0.0:
         if not values:
             raise ValueError("time-zero conditioning requires empirical values")
         return _pmf(values), False
-    survivors = (
-        [] if values is None else [value for value in values if value > elapsed_ms]
-    )
-    if not survivors:
-        return _point_mass(elapsed_ms), True
-    return _pmf(survivors), False
+    pmf = empirical_latency_pmf_while_alive(values, elapsed_ms)
+    return pmf, pmf is None
 
 
 def _identity(clause: Mapping[str, Any]) -> tuple[str, tuple[str, ...], bool, int]:
@@ -366,7 +355,7 @@ def _command_prediction(
             False,
         )
     pmf, fallback = _condition_values(model.command_values, elapsed_ms)
-    return _argmax_probabilities(pmf), pmf, fallback
+    return None if pmf is None else _argmax_probabilities(pmf), pmf, fallback
 
 
 def _clause_prediction(
@@ -441,7 +430,7 @@ def _clause_prediction(
     composed = _compose(draws, model.stages)
     pmf, zero = _condition_values(composed, elapsed_ms)
     return (
-        _argmax_probabilities(pmf),
+        None if pmf is None else _argmax_probabilities(pmf),
         pmf,
         {
             "fallback_to_command": False,
@@ -712,12 +701,10 @@ def _mechanism_gate(
     }
 
 
-def _status(command_go: bool, clause_go: bool) -> str:
-    if clause_go:
-        return "development_clause_mechanism_go"
+def _status(command_go: bool) -> str:
     if command_go:
-        return "development_command_mechanism_go"
-    return "development_mechanism_no_go"
+        return "development_empirical_command_survival_go"
+    return "development_empirical_command_survival_no_go"
 
 
 def run(
@@ -826,7 +813,7 @@ def run(
     )
     return {
         "schema": VERSION,
-        "status": _status(command_gate["go"], clause_gate["go"]),
+        "status": _status(command_gate["go"]),
         "claim_bearing": False,
         "protocol": {
             "update_times": "command_start_then_0.5s_ticks_and_visible_clause_events",
@@ -835,7 +822,7 @@ def run(
             "clause_survival": "completed_exact_active_survival_future_static_then_compose",
             "sequential_latency": "sum",
             "pipeline_latency": "max",
-            "zero_survivor": "point_mass_smallest_still_possible_bucket",
+            "zero_survivor": "unavailable",
             "ambiguous_clause_alignment": "fallback_to_command_survival",
             "current_task_updates": False,
             "validation_updates": "successful whole-task settlement only",
@@ -872,7 +859,7 @@ def run(
         },
         "gates": {
             "command_survival_vs_static": command_gate,
-            "clause_survival_vs_command_survival": clause_gate,
+            "diagnostic_only_clause_survival_vs_command_survival": clause_gate,
         },
         "integrity": {
             "initial_current_rows_identical": True,

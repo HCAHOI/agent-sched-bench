@@ -224,39 +224,6 @@ class LatencyBuckets:
             raise ValueError("latency_ms must be finite and non-negative")
         return bisect_left(self.edges_ms, latency_ms)
 
-    def hard_bucket_while_alive(
-        self,
-        probability_by_bucket: Sequence[float] | None,
-        elapsed_ms: float,
-    ) -> int | None:
-        """Clamp an available hard prediction to the live elapsed-time floor."""
-
-        if (
-            not isinstance(elapsed_ms, (int, float))
-            or isinstance(elapsed_ms, bool)
-            or not math.isfinite(elapsed_ms)
-            or elapsed_ms < 0.0
-        ):
-            raise ValueError("elapsed_ms must be finite and non-negative")
-        if probability_by_bucket is None:
-            return None
-        probabilities = tuple(probability_by_bucket)
-        if (
-            len(probabilities) != self.bucket_count
-            or any(
-                not isinstance(value, (int, float))
-                or isinstance(value, bool)
-                or not math.isfinite(value)
-                or value < 0.0
-                for value in probabilities
-            )
-            or not math.isclose(sum(probabilities), 1.0, abs_tol=1e-9)
-        ):
-            raise ValueError("probability_by_bucket must be a normalized PMF")
-        initial = max(range(self.bucket_count), key=probabilities.__getitem__)
-        return max(initial, bisect_right(self.edges_ms, elapsed_ms))
-
-
 CANONICAL_LATENCY_BUCKET_EDGES_MS = (
     500.0,
     2000.0,
@@ -398,6 +365,33 @@ def _checked_latency(value: float) -> float:
     if not math.isfinite(value) or value < 0.0:
         raise ValueError("latency_ms must be finite and non-negative")
     return value
+
+
+def empirical_latency_pmf_while_alive(
+    values_ms: Sequence[float] | None,
+    elapsed_ms: float,
+    buckets: LatencyBuckets = CANONICAL_LATENCY_BUCKETS,
+) -> tuple[float, ...] | None:
+    """Condition empirical total durations on a command still being alive."""
+
+    if (
+        not isinstance(elapsed_ms, (int, float))
+        or isinstance(elapsed_ms, bool)
+        or not math.isfinite(elapsed_ms)
+        or elapsed_ms < 0.0
+    ):
+        raise ValueError("elapsed_ms must be finite and non-negative")
+    elapsed = float(elapsed_ms)
+    counts = [0] * buckets.bucket_count
+    total = 0
+    for raw_value in values_ms or ():
+        value = _checked_latency(raw_value)
+        if value > elapsed:
+            counts[buckets.bucket_id(value)] += 1
+            total += 1
+    if total == 0:
+        return None
+    return tuple(count / total for count in counts)
 
 
 def _ordered_node(values: Iterable[float]) -> list[float]:
@@ -1838,5 +1832,6 @@ __all__ = [
     "CommandResourceClassPrediction",
     "CommandResourceBucketPrediction",
     "LatencyBuckets",
+    "empirical_latency_pmf_while_alive",
     "generic_argv_keys",
 ]

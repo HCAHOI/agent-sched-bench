@@ -115,10 +115,13 @@ a command is alive. Command-duration survival passed its time-weighted mechanism
 gate, moving exact accuracy from 60.260% to 90.669%, but clause-level progress
 added only 0.147 points and increased severe-or-unavailable time. A post-hoc
 elapsed-floor control reached 86.832%, explaining 26.572 of the formal arm's
-30.409-point gain. The retained hypothesis is therefore the deterministic
-latency-bucket lower bound for a future named mid-execution consumer, not richer
-clause or KB inference. This development result has no scheduler-utility claim
-and does not authorize the unread final partition.
+30.409-point gain. That floor is a physical constraint, not a prediction, so a
+runtime API that merely raised the hard class to the next possible bucket was
+retracted before use. The corrected development question conditions raw
+historical total durations on strict survival and recomputes their five-bucket
+PMF; an exhausted empirical tail is unavailable rather than a fabricated floor
+class. Clause inference remains closed. This development result has no
+scheduler-utility claim and does not authorize the unread final partition.
 
 The deterministic `full-test-third-or-later-v1` feature passed its reviewed,
 post-hoc development continuation rule. On the exposed 80/20 replay it improved

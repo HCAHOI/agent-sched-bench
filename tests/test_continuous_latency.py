@@ -6,6 +6,7 @@ from scripts.evaluation.evaluate_continuous_latency import (
     DynamicModel,
     _align_timing,
     _clause_prediction,
+    _command_prediction,
     _condition_values,
     _status,
     _stratified_empirical_draws,
@@ -30,7 +31,24 @@ def test_empirical_survival_updates_inside_a_bucket_and_is_strict_at_edges() -> 
     assert pmf == pytest.approx((0.0, 0.5, 0.5, 0.0, 0.0))
     edge, fallback = _condition_values((500.0,), 500.0)
     assert fallback is True
-    assert edge == (0.0, 1.0, 0.0, 0.0, 0.0)
+    assert edge is None
+
+
+def test_command_survival_can_skip_buckets_and_exhaust_to_unavailable() -> None:
+    model = DynamicModel(
+        "slow",
+        (1.0, 0.0, 0.0, 0.0, 0.0),
+        (9000.0, 10_000.0, 20_000.0),
+        (),
+        (),
+        None,
+    )
+
+    hard, pmf, exhausted = _command_prediction(model, 600.0)
+    assert hard == 3
+    assert pmf == (0.0, 0.0, 0.0, 1.0, 0.0)
+    assert exhausted is False
+    assert _command_prediction(model, 20_000.0) == (None, None, True)
 
 
 def test_clause_alignment_preserves_event_clock_when_identity_is_ambiguous() -> None:
@@ -182,7 +200,6 @@ def test_pipeline_clause_update_takes_max_not_sum() -> None:
     assert pmf == pytest.approx((0.0, 0.0, 1.0, 0.0, 0.0))
 
 
-def test_top_level_status_accepts_command_only_go() -> None:
-    assert _status(True, False) == "development_command_mechanism_go"
-    assert _status(False, True) == "development_clause_mechanism_go"
-    assert _status(False, False) == "development_mechanism_no_go"
+def test_top_level_status_depends_only_on_empirical_command_survival() -> None:
+    assert _status(True) == "development_empirical_command_survival_go"
+    assert _status(False) == "development_empirical_command_survival_no_go"

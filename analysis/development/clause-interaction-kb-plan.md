@@ -1487,17 +1487,47 @@ Artifacts:
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-continuous-latency-v1/rows.jsonl`
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-continuous-latency-v1-superseded-observed-clause-count/`
 
-## 17. Runtime boundary for the elapsed bucket floor
+## 17. Corrected runtime boundary: empirical survival prediction
 
-The retained mechanism is one deterministic predictor primitive, not a new
-scheduler policy. Given an initial available latency PMF and elapsed monotonic
-milliseconds for a command known to still be alive, return the larger of the
-initial hard bucket and the smallest final bucket still physically possible.
-An exact boundary advances the floor because the missing completion event proves
-strict survival. An unavailable initial prediction remains unavailable.
+The elapsed-time floor is a physical constraint, not a prediction. The earlier
+runtime primitive that returned the larger of the initial hard bucket and this
+floor is therefore retracted: it could only keep the bucket or raise it to the
+next possible bucket, without predicting where the command would finish.
 
-This API does not alter the stored PMF, start a timer, add a protocol operation,
-inspect clauses, estimate remaining work, or choose an allocation, timeout, or
-KV action. The live service currently has no such consumer, while the existing
-KV path already uses an exact utility-clock deadline. Runtime wiring therefore
-waits for a separately named action whose cost changes under this signal.
+The retained primitive instead requires raw historical total-duration values.
+For a command known to remain alive at elapsed time `t`, it keeps only values
+strictly greater than `t`, rebuckets those survivors, and returns their empirical
+five-bucket PMF. Its hard prediction is the ordinary lower-index argmax of that
+PMF, so it may remain unchanged, move one bucket, or skip multiple buckets. If
+no historical value survives, the prediction is unavailable; it must not invent
+a point mass at the elapsed floor. Bucket PMFs alone are insufficient input
+because they discard the within-bucket durations needed for conditioning.
+
+This remains a predictor primitive only. It does not start a timer, add a
+protocol operation, inspect current-task clauses, estimate remaining work, or
+choose an allocation, timeout, or KV action. Runtime wiring still waits for a
+named consumer whose action and error costs are explicit.
+
+### 17.1 Frozen development diagnostic
+
+Before reading the corrected outcome, freeze one development-only comparison on
+the same already exposed SQLGlot 100-development/50-validation partition used in
+Section 16. The final 50 tasks remain unread. At command start, both arms use the
+same causal Current PMF. At each 0.5-second tick and visible clause event, the
+control retains that PMF while `empirical_command_survival` applies the strict
+raw-duration conditioning above. No clause-progress arm is claim-bearing; its
+Section 16 NO-GO is not reopened. Current-task observations remain invisible,
+and successful validation tasks update the KB only after task settlement.
+
+The primary metric remains exact final-bucket accuracy weighted by the wall-time
+for which each prediction is active; unavailable time is incorrect. Also report
+severe-or-unavailable time, per-command correct-time fraction, fixed elapsed-time
+snapshots, task-level deltas, survivor exhaustion, and evaluator cost. The arm is
+GO only if it improves time-weighted exact accuracy by at least 5.0 percentage
+points, does not increase severe-or-unavailable time, has more positive than
+negative task deltas, and is positive in at least ten tasks. IDs, labels,
+initial PMFs, update clocks, and non-latency targets must be identical to the
+frozen control. This gate, the unavailable-on-zero-survivor rule, and the output
+schema are fixed before the corrected outcome is read. A pass is still only
+development evidence and cannot open the final partition or claim scheduling
+utility.

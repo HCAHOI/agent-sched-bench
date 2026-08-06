@@ -13,6 +13,7 @@ from tool_resource.runtime_kb import (
     ClauseObservation,
     ClauseResourceKB,
     LatencyBuckets,
+    empirical_latency_pmf_while_alive,
     generic_argv_keys,
 )
 
@@ -285,18 +286,21 @@ def test_latency_buckets_match_strict_threshold_decisions() -> None:
     )
 
 
-def test_live_latency_floor_advances_at_exact_boundaries_without_lowering() -> None:
+def test_live_empirical_latency_recomputes_pmf_and_can_skip_buckets() -> None:
     buckets = LatencyBuckets((500.0, 2000.0))
 
-    assert buckets.hard_bucket_while_alive((0.8, 0.1, 0.1), 499.9) == 0
-    assert buckets.hard_bucket_while_alive((0.8, 0.1, 0.1), 500.0) == 1
-    assert buckets.hard_bucket_while_alive((0.8, 0.1, 0.1), 2000.0) == 2
-    assert buckets.hard_bucket_while_alive((0.1, 0.1, 0.8), 500.0) == 2
-    assert buckets.hard_bucket_while_alive(None, 2000.0) is None
-    with pytest.raises(ValueError, match="normalized PMF"):
-        buckets.hard_bucket_while_alive((0.5, 0.5), 500.0)
+    assert empirical_latency_pmf_while_alive(
+        (400.0, 800.0, 1800.0, 5000.0), 1000.0, buckets
+    ) == pytest.approx((0.0, 0.5, 0.5))
+    assert empirical_latency_pmf_while_alive(
+        (5000.0, 6000.0, 9000.0), 600.0, buckets
+    ) == pytest.approx((0.0, 0.0, 1.0))
+    assert empirical_latency_pmf_while_alive((500.0,), 500.0, buckets) is None
+    assert empirical_latency_pmf_while_alive(None, 500.0, buckets) is None
     with pytest.raises(ValueError, match="elapsed_ms"):
-        buckets.hard_bucket_while_alive((1.0, 0.0, 0.0), float("nan"))
+        empirical_latency_pmf_while_alive((1000.0,), float("nan"), buckets)
+    with pytest.raises(ValueError, match="latency_ms"):
+        empirical_latency_pmf_while_alive((float("inf"),), 0.0, buckets)
 
 
 @pytest.mark.parametrize(
