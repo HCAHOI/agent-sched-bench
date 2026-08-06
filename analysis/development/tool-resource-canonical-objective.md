@@ -820,7 +820,7 @@ limit mismatch, baseline failure, output-identity mismatch, or incomplete
 matrix invalidates the characterization. No further timeout increase or arm
 change is allowed from these outcomes.
 
-### CPU-work lower-bound admission replay: frozen, pending
+### CPU-work lower-bound admission replay: complete, no-go
 
 The physical calibration shows that zero-cost CPU under-reservation is false,
 but its AST scaling curve is workload-specific and will not be transferred to
@@ -858,6 +858,67 @@ CPU cost changes the development replay. The tasks and predictors are exposed,
 memory under-reservation remains unpriced, and the CPU-work formula assumes a
 per-command enforced quota. It therefore authorizes at most a fresh real or
 held-out action experiment, not runtime integration.
+
+The reviewed replay passed its evidence and reproduction gates but failed the
+mechanism gate. CPU work covered 1,044/1,196 commands (87.29%) and all 55
+changed-request commands; the maximum work/wall rate was 6.967 cores, below the
+8.1 validity ceiling. The recorded-duration control reproduced the earlier
+Current and SOTA mean makespans exactly.
+
+The CPU-work floor increased mean Current makespan from 12,779.025 to
+13,426.011 seconds and SOTA from 14,009.576 to 15,275.528 seconds. SOTA was
+1,849.516 seconds (13.78%) slower than Current, with paired interval
+[1,701.861, 1,992.539]. Twelve commands across ten tasks received additional
+service time, adding 1,579.174 seconds over the full validation pool, but the
+same twelve and the same added work occurred in both arms. Thus zero commands
+across zero tasks had arm-specific service time, failing the frozen 20-command
+/ 10-task mechanism requirement. Holding RSS to the same hindsight bound
+reduced but did not reverse the result: SOTA remained 4.13% slower.
+
+The post-result case analysis explains the zero overlap. Across the 55 commands
+whose requests changed, median CPU work/wall was 0.983 cores and the maximum was
+1.943; none needed more than Current's 2-core request under this lower bound.
+The twelve floor-active commands had work/wall of 2.05--6.97 cores and included
+large forced pip reinstalls and repeated full test suites, but Current and SOTA
+assigned them identical CPU requests. The SOTA changes therefore reserve more
+peak capacity for commands that do not need it to preserve recorded throughput,
+while missing the commands whose cumulative work exceeds a 2-core budget.
+
+This closes “add a CPU slowdown price to the existing peak-class predictor.”
+The root cause is target mismatch: instantaneous peak CPU is not the CPU quota
+needed to sustain command throughput. A separate hindsight action-space test
+may evaluate CPU work divided by duration as the reservation target before any
+new predictor is built. The artifact is in
+`analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-cpu-work-admission-v1/`.
+
+### CPU-throughput reservation oracle: frozen, pending
+
+Before building another predictor, this development-only oracle asks whether
+the alternative target can improve the action at all. It reuses the exposed
+validation50 programs, the same 32 seed-ordered 40-task schedules, FCFS-ready
+backfill, 8-core/16,000-MB host, and the reviewed command CPU-work mapping.
+Both compared arms use the same hindsight RSS reservation, so only CPU target
+semantics differ. Missing CPU-work or peak evidence reserves all 8 cores.
+
+The peak-target arm maps the existing hindsight clause-composed peak CPU value
+to the deployed request classes: at most 2 cores requests 2, at most 4 requests
+4, and larger values request 8. The throughput-target arm maps
+`CPU work / recorded duration` through the same 2/4/8 classes. Both arms then
+apply the same CPU-work duration floor. Any mapped command whose resulting
+duration exceeds its recorded duration invalidates that arm's claimed ability
+to preserve throughput; no scaling factor or threshold is fitted. Fixed-high
+and the existing continuous peak oracle are descriptive controls only.
+
+The primary comparison is throughput-target minus peak-target mean makespan.
+GO requires at least 10% lower throughput-target makespan, a paired
+seed-bootstrap interval strictly below zero, zero duration dilation in both
+target arms, at least 20 CPU-request changes across ten tasks, identical
+commands and CPU work, full-host fallback for every missing command, and no
+requested capacity violation. Mean task completion, queue time, overlaps, and
+reserved CPU time are secondary. Failure closes this target without building a
+predictor. GO authorizes only a causal prediction experiment for throughput
+class; it does not establish real performance because average CPU work does not
+capture critical-path parallelism or short-timescale contention.
 
 ## 5. Development-exposure record
 
