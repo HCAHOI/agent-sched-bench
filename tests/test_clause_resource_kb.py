@@ -285,6 +285,20 @@ def test_latency_buckets_match_strict_threshold_decisions() -> None:
     )
 
 
+def test_live_latency_floor_advances_at_exact_boundaries_without_lowering() -> None:
+    buckets = LatencyBuckets((500.0, 2000.0))
+
+    assert buckets.hard_bucket_while_alive((0.8, 0.1, 0.1), 499.9) == 0
+    assert buckets.hard_bucket_while_alive((0.8, 0.1, 0.1), 500.0) == 1
+    assert buckets.hard_bucket_while_alive((0.8, 0.1, 0.1), 2000.0) == 2
+    assert buckets.hard_bucket_while_alive((0.1, 0.1, 0.8), 500.0) == 2
+    assert buckets.hard_bucket_while_alive(None, 2000.0) is None
+    with pytest.raises(ValueError, match="normalized PMF"):
+        buckets.hard_bucket_while_alive((0.5, 0.5), 500.0)
+    with pytest.raises(ValueError, match="elapsed_ms"):
+        buckets.hard_bucket_while_alive((1.0, 0.0, 0.0), float("nan"))
+
+
 @pytest.mark.parametrize(
     "edges",
     [

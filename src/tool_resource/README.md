@@ -66,6 +66,9 @@ cores, sampled RSS uses `500, 2000` decimal MB, and Disk I/O uses `1, 100` MiB.
 An exact boundary belongs to the lower bucket. Command prediction composes raw
 empirical clause values by shell stage before bucketing: pipeline members
 overlap and successive stages run sequentially; it never composes bucket IDs.
+For a command known to remain alive, `LatencyBuckets.hard_bucket_while_alive`
+can clamp an available initial hard prediction to the strict elapsed-time
+floor. It does not alter the PMF or imply remaining work.
 
 The serving default remains `raw-argv-prefix-v1`: repository exact/prefix/bin
 evidence backs off to public bin/global evidence. Development evaluation may

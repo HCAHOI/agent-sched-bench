@@ -1486,3 +1486,18 @@ Artifacts:
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-continuous-latency-v1/result.json`
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-continuous-latency-v1/rows.jsonl`
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-continuous-latency-v1-superseded-observed-clause-count/`
+
+## 17. Runtime boundary for the elapsed bucket floor
+
+The retained mechanism is one deterministic predictor primitive, not a new
+scheduler policy. Given an initial available latency PMF and elapsed monotonic
+milliseconds for a command known to still be alive, return the larger of the
+initial hard bucket and the smallest final bucket still physically possible.
+An exact boundary advances the floor because the missing completion event proves
+strict survival. An unavailable initial prediction remains unavailable.
+
+This API does not alter the stored PMF, start a timer, add a protocol operation,
+inspect clauses, estimate remaining work, or choose an allocation, timeout, or
+KV action. The live service currently has no such consumer, while the existing
+KV path already uses an exact utility-clock deadline. Runtime wiring therefore
+waits for a separately named action whose cost changes under this signal.
