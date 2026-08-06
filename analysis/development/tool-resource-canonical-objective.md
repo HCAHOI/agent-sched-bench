@@ -2,8 +2,8 @@
 
 **Effective:** 2026-08-04; amended to 5/3/3/3 classes after the earlier
 3/2/2/2-class SQLGlot results were visible
-**Status:** development-only; the reserved 50-task validation partition was
-evaluated and returned NO-GO; the 50-task final partition remains unread
+**Status:** development-only; validation returned NO-GO; final resource labels
+remain unopened, but collector result metadata was exposed on 2026-08-06
 
 This is the authoritative contract for tool-resource prediction. It records
 current truth, not the implementation history. Detailed experiment procedures
@@ -117,7 +117,7 @@ Current, a descriptive +4.260-point gain. This configuration was selected
 post-hoc from already-exposed validation results: it is a reproducible
 development reference, not confirmation. Only RSS clears the existing
 five-point per-target gate, so the research verdict remains NO-GO and the final
-50 tasks remain unread. The separate Disk survival result reaches 85.218% only
+partition remains unauthorized. The separate Disk survival result reaches 85.218% only
 after an approximately 0.64-second execution prefix; it is an optional later
 update, not part of this pre-command SOTA.
 The machine-readable result and command rows are in
@@ -497,13 +497,22 @@ to every eligible validation exec command, 152 are ineligible exec calls, and
 646 are non-exec calls. Eligible command duration and whole-gap duration share
 the same latency bucket for 1,038/1,044 rows; the extra gap overhead has 23.16
 ms median and 41.17 ms p95. This supports the decoder alignment but is
-development-exposed preflight evidence, not a validation claim. The final 50
-remain unread. This section freezes the protocol before any formal simulator
+development-exposed preflight evidence, not a validation claim. Final resource
+artifacts are not used. This section freezes the protocol before any formal simulator
 outcome is produced; only plumbing failures may be repaired without an open
 amendment.
 
 ## 5. Development-exposure record
 
+- On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved
+  run's complete `results.jsonl` before filtering to validation IDs, and its
+  first two rows were printed. This exposed final-task collector outcomes and
+  proxies including success, elapsed time, iteration count, and model patch.
+  Final-task traces, resource observations, canonical bucket labels, and
+  evaluation scores were not opened. Nevertheless, the final 50 are no longer
+  an untouched confirmation partition and cannot support a confirmatory claim.
+  All subsequent access is restricted to paths constructed directly from the
+  already-exposed validation IDs; fresh tasks are required for confirmation.
 - The Phase A numbers above were visible before Phase B was corrected from a
   cross-repository SWE test to a same-repository SQLGlot test.
 - At the SQLGlot-only scope correction, no SQLGlot pytest coverage count or
