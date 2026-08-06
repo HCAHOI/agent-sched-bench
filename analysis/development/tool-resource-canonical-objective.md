@@ -254,6 +254,16 @@ composition returned NO-GO: latency, CPU, RSS, and Disk changed by +5.939,
 CPU remained roughly three correct rows short of the gate and Disk was
 unchanged from survival.
 
+Two post-composition selectors are also closed. A first-40/next-40 causal
+calibration keyed by the four Current hard predictions improved CPU by only
+0.456 points and changed no Disk prediction; its gate stopped before reading
+the adjacent-validation file. A task-clustered five-fold confidence gate on the
+exposed 50 validation tasks then selected composition corrections solely from
+the difference in winning PMF probability. It preserved latency/RSS but
+returned +4.167 CPU and +2.282 Disk points. Fold thresholds rejected more
+helpful than harmful Disk corrections. These results close hard-state coupling,
+PMF-confidence thresholding, and further selector tuning on exposed rows.
+
 Physical Disk prediction requires evidence about pre-command cache
 residency or equivalent environment state. The controlled file-footprint by
 page-residency mechanism test on 12 already-exposed development tasks remains
