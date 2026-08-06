@@ -1,0 +1,79 @@
+from scripts.evaluation.measure_resource_underreservation import (
+    _cpu_quota_cores,
+    _delta,
+    _run_order,
+    _summarize,
+)
+
+
+def _row(block: int, arm: str, elapsed: float, throttled: int, high: int = 0):
+    return {
+        "block": block,
+        "arm": arm,
+        "timed_out": False,
+        "workload_exit": 0,
+        "container_exit": 0,
+        "workload": {
+            "elapsed_s": elapsed,
+            "source_files": 10,
+            "bursts": [{"files": 10, "ast_nodes": 100}],
+        },
+        "cpu_delta": {"throttled_usec": throttled},
+        "memory_events_delta": {"high": high, "oom_kill": 0},
+    }
+
+
+def test_frozen_order_and_gates() -> None:
+    assert _run_order() == [
+        (1, "cpu2"),
+        (1, "cpu4"),
+        (1, "memory_high_2g"),
+        (1, "baseline"),
+        (2, "memory_high_2g"),
+        (2, "cpu2"),
+        (2, "baseline"),
+        (2, "cpu4"),
+        (3, "cpu4"),
+        (3, "memory_high_2g"),
+        (3, "cpu2"),
+        (3, "baseline"),
+    ]
+    rows = []
+    for block in range(1, 4):
+        rows.extend(
+            [
+                _row(block, "baseline", 20.0, 10),
+                _row(block, "cpu4", 25.0, 20),
+                _row(block, "cpu2", 35.0, 30),
+                _row(block, "memory_high_2g", 24.0, 10, high=5),
+            ]
+        )
+    result = _summarize(rows)
+    assert result["cpu_gate"]
+    assert result["memory_gate"]
+    assert result["identical_successful_output"]
+    assert _delta({"a": 7, "b": 2}, {"a": 3}) == {"a": 4, "b": 2}
+    assert _cpu_quota_cores("200000 100000") == 2.0
+
+
+def test_failed_or_inconsistent_runs_cannot_pass() -> None:
+    rows = []
+    for block in range(1, 4):
+        rows.extend(
+            [
+                _row(block, "baseline", 20.0, 10),
+                _row(block, "cpu4", 25.0, 20),
+                _row(block, "cpu2", 35.0, 30),
+                _row(block, "memory_high_2g", 24.0, 10, high=5),
+            ]
+        )
+    rows[2]["workload"]["bursts"][0]["ast_nodes"] = 99
+    rows[3]["timed_out"] = True
+    rows[3]["workload"]["elapsed_s"] = 10_000.0
+
+    result = _summarize(rows)
+
+    assert result["elapsed_median_s"]["memory_high_2g"] == 24.0
+    assert not result["identical_successful_output"]
+    assert not result["cpu_gate"]
+    assert not result["memory_gate"]

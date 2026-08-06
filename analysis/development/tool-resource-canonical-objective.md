@@ -749,8 +749,8 @@ workload uses causes measurable delay or failure. This is a mechanism test, not
 a new predictor comparison or a SQLGlot scheduling result. It reuses the
 existing Docker/cgroup-v2 AST-indexing workload over 6,964 PyTorch and
 TensorFlow source files. The workload, image (`python:3.13-slim`), source tree,
-eight workers, one burst, one-second retained-AST hold, disabled network, and
-6-GiB hard memory and swap limits are fixed. An unmeasured baseline warm-up
+eight workers, one burst, one-second retained-AST hold, disabled network, a
+6-GiB hard memory limit, and no additional swap are fixed. An unmeasured baseline warm-up
 precedes the formal runs.
 
 The four arms are: 8 CPU cores with no `memory.high` limit (baseline), 4 cores
@@ -765,8 +765,8 @@ not rerun.
 Primary latency is the workload's internal elapsed time; host release-to-finish
 wall time is a consistency check. CPU evidence is the workload-time ratio plus
 the change in cgroup `nr_throttled` and `throttled_usec`. Memory evidence is the
-workload-time ratio plus `memory.events` and reclaim/refault counters; cgroup
-peak memory is also retained. Successful runs must report identical source-file,
+workload-time ratio plus `memory.events` and reclaim/refault counters; sampled
+peak cgroup memory is also retained. Successful runs must report identical source-file,
 parsed-file, and AST-node counts. All cgroup counters are differenced from a
 snapshot taken immediately before releasing the workload.
 
