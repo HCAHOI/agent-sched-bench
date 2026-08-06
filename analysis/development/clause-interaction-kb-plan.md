@@ -1571,3 +1571,34 @@ Artifacts:
 
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-empirical-command-survival-v2/result.json`
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-empirical-command-survival-v2/rows.jsonl`
+
+### 17.3 Post-result metric amendment
+
+On 2026-08-06, after all Section 17.2 outcomes were visible, the primary metric
+was corrected to match the canonical command evaluation unit. The frozen v2
+result remains unchanged as the historical record; this is explicitly a
+post-hoc amendment, not a revised preregistration.
+
+For each command, first divide correct, severe, and unavailable milliseconds by
+that command's own duration, then average those fractions across commands. Each
+command therefore contributes one equal-weight observation. The prior global
+millisecond-weighted quantities remain secondary diagnostics only; they would
+be primary only for a named consumer whose error cost accrues with occupied
+wall-time. Task deltas likewise average command-level fractions within each
+task instead of weighting commands by duration.
+
+| Arm | Command-equal correct-time ↑ | Command-equal severe/unavailable ↓ | Command-equal unavailable ↓ |
+|---|---:|---:|---:|
+| Static Current | 79.502% | 3.927% | 0.096% |
+| Empirical command survival | 79.731% | 3.123% | 2.799% |
+
+The amended primary gain is only 0.229 percentage points, far below the frozen
+5.0-point threshold. Task deltas are 22 positive, 26 negative, and 2 tied. The
+decision remains NO-GO, now for both insufficient command-level gain and task
+instability. The earlier 15.567-point time-weighted delta is retained only to
+show that a few long commands benefit; it is not evidence of general predictor
+improvement. No final task was read.
+
+Machine-readable amendment:
+
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-empirical-command-survival-v2/metric-amendment.json`

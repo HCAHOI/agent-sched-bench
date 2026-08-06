@@ -4,10 +4,12 @@ from scripts.evaluation.evaluate_continuous_latency import (
     CallTiming,
     ClauseTiming,
     DynamicModel,
+    _aggregate,
     _align_timing,
     _clause_prediction,
     _command_prediction,
     _condition_values,
+    _mechanism_gate,
     _status,
     _stratified_empirical_draws,
     _update_times,
@@ -203,3 +205,45 @@ def test_pipeline_clause_update_takes_max_not_sum() -> None:
 def test_top_level_status_depends_only_on_empirical_command_survival() -> None:
     assert _status(True) == "development_empirical_command_survival_go"
     assert _status(False) == "development_empirical_command_survival_no_go"
+
+
+def test_mechanism_gate_weights_commands_not_runtime() -> None:
+    def arm(correct_fraction: float, duration_ms: float) -> dict[str, float | None]:
+        return {
+            "correct_fraction": correct_fraction,
+            "correct_ms": correct_fraction * duration_ms,
+            "unavailable_ms": 0.0,
+            "severe_or_unavailable_ms": 0.0,
+            "stable_correct_lead_ms": None,
+        }
+
+    rows = [
+        {
+            "task_id": "long",
+            "duration_ms": 10_000.0,
+            "clause_actionable_change": False,
+            "arms": {
+                "static": arm(0.0, 10_000.0),
+                "command_survival": arm(1.0, 10_000.0),
+            },
+        },
+        {
+            "task_id": "short",
+            "duration_ms": 1.0,
+            "clause_actionable_change": False,
+            "arms": {
+                "static": arm(1.0, 1.0),
+                "command_survival": arm(0.0, 1.0),
+            },
+        },
+    ]
+    metrics = {
+        name: _aggregate(rows, name) for name in ("static", "command_survival")
+    }
+
+    assert metrics["command_survival"]["time_weighted_exact_accuracy"] > 0.99
+    assert metrics["command_survival"]["command_equal_correct_time_fraction"] == 0.5
+    assert metrics["static"]["command_equal_correct_time_fraction"] == 0.5
+    gate = _mechanism_gate(metrics, rows, "command_survival", "static")
+    assert gate["delta_percentage_points"] == 0.0
+    assert gate["go"] is False

@@ -119,12 +119,15 @@ elapsed-floor control reached 86.832%, explaining 26.572 of the formal arm's
 runtime API that merely raised the hard class to the next possible bucket was
 retracted before use. The corrected strict-survival predictor recomputed the
 five-bucket PMF from raw historical durations greater than elapsed time and made
-an exhausted empirical tail unavailable. It reached 75.827% time-weighted exact
-accuracy versus Static's 60.260%, but 15.150% of wall-time became unavailable
-and task deltas were 23 positive, 25 negative, and 2 tied. It therefore failed
-the frozen task-stability gate. Strict finite-sample survival and clause
-inference are closed; this result has no scheduler-utility claim and does not
-authorize the unread final partition.
+an exhausted empirical tail unavailable. Its initially frozen wall-time metric
+was subsequently amended, after results were visible, because the canonical
+evaluation unit is a command and no named consumer incurs time-proportional
+error cost. Command-equal correct-time fraction moved only from 79.502% to
+79.731% (+0.229 points), with 22 positive, 26 negative, and 2 tied task deltas.
+The 75.827% versus 60.260% wall-time-weighted result is retained as a secondary
+long-command diagnostic, not the primary predictor claim. Strict finite-sample
+survival and clause inference are closed; this result has no scheduler-utility
+claim and does not authorize the unread final partition.
 
 The deterministic `full-test-third-or-later-v1` feature passed its reviewed,
 post-hoc development continuation rule. On the exposed 80/20 replay it improved

@@ -51,7 +51,7 @@ from tool_resource.runtime_kb import (  # noqa: E402
 )
 from tool_resource_eval.labels import repo_of  # noqa: E402
 
-VERSION = "empirical-command-survival-v2"
+VERSION = "empirical-command-survival-v3"
 ARMS = ("static", "command_survival", "clause_survival")
 TICK_MS = 500.0
 SNAPSHOT_MS = (500.0, 2000.0, 8000.0, 30_000.0)
@@ -585,11 +585,23 @@ def _aggregate(rows: Sequence[Mapping[str, Any]], arm: str) -> dict[str, Any]:
         if (value := row["arms"][arm]["stable_correct_lead_ms"]) is not None
     )
     return {
-        "time_weighted_exact_accuracy": correct_ms / total_ms,
-        "mean_command_correct_time_fraction": sum(
+        "command_equal_correct_time_fraction": sum(
             float(row["arms"][arm]["correct_fraction"]) for row in rows
         )
         / len(rows),
+        "command_equal_severe_or_unavailable_fraction": sum(
+            float(row["arms"][arm]["severe_or_unavailable_ms"])
+            / float(row["duration_ms"])
+            for row in rows
+        )
+        / len(rows),
+        "command_equal_unavailable_fraction": sum(
+            float(row["arms"][arm]["unavailable_ms"])
+            / float(row["duration_ms"])
+            for row in rows
+        )
+        / len(rows),
+        "time_weighted_exact_accuracy": correct_ms / total_ms,
         "time_weighted_severe_or_unavailable_rate": severe_ms / total_ms,
         "time_weighted_unavailable_rate": unavailable_ms / total_ms,
         "stable_correct_commands": len(leads),
@@ -610,14 +622,11 @@ def _task_delta(
         grouped[str(row["task_id"])].append(row)
     deltas = {}
     for task_id, task_rows in grouped.items():
-        total = sum(float(row["duration_ms"]) for row in task_rows)
-        candidate_correct = sum(
-            float(row["arms"][candidate]["correct_ms"]) for row in task_rows
-        )
-        control_correct = sum(
-            float(row["arms"][control]["correct_ms"]) for row in task_rows
-        )
-        deltas[task_id] = (candidate_correct - control_correct) / total
+        deltas[task_id] = sum(
+            float(row["arms"][candidate]["correct_fraction"])
+            - float(row["arms"][control]["correct_fraction"])
+            for row in task_rows
+        ) / len(task_rows)
     return {
         "positive_tasks": sum(value > 1e-12 for value in deltas.values()),
         "negative_tasks": sum(value < -1e-12 for value in deltas.values()),
@@ -664,13 +673,13 @@ def _mechanism_gate(
     control: str,
 ) -> dict[str, Any]:
     delta = 100.0 * (
-        metrics[candidate]["time_weighted_exact_accuracy"]
-        - metrics[control]["time_weighted_exact_accuracy"]
+        metrics[candidate]["command_equal_correct_time_fraction"]
+        - metrics[control]["command_equal_correct_time_fraction"]
     )
     tasks = _task_delta(rows, candidate, control)
     severe_ok = (
-        metrics[candidate]["time_weighted_severe_or_unavailable_rate"]
-        <= metrics[control]["time_weighted_severe_or_unavailable_rate"]
+        metrics[candidate]["command_equal_severe_or_unavailable_fraction"]
+        <= metrics[control]["command_equal_severe_or_unavailable_fraction"]
     )
     actionable = (
         sum(bool(row["clause_actionable_change"]) for row in rows)
@@ -688,6 +697,7 @@ def _mechanism_gate(
         "go": go,
         "candidate": candidate,
         "control": control,
+        "primary_metric": "command_equal_correct_time_fraction",
         "delta_percentage_points": delta,
         "minimum_gain_percentage_points": MINIMUM_GAIN_PP,
         "no_severe_or_unavailable_regression": severe_ok,
@@ -816,6 +826,8 @@ def run(
         "status": _status(command_gate["go"]),
         "claim_bearing": False,
         "protocol": {
+            "primary_metric": "command_equal_correct_time_fraction",
+            "secondary_metric": "time_weighted_exact_accuracy",
             "update_times": "command_start_then_0.5s_ticks_and_visible_clause_events",
             "static": "Current command-start PMF",
             "command_survival": "strict empirical command-duration survival",

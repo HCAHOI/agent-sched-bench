@@ -1,0 +1,50 @@
+{
+  "amendment_date": "2026-08-06",
+  "decision": {
+    "go": false,
+    "minimum_gain_percentage_points": 5.0,
+    "reason": [
+      "command_equal_gain_below_threshold",
+      "positive_tasks_do_not_exceed_negative_tasks"
+    ]
+  },
+  "integrity": {
+    "development_exposed_only": true,
+    "final_partition_read": false,
+    "posthoc_amendment": true
+  },
+  "primary_metric": {
+    "candidate": 0.7973078754924656,
+    "control": 0.7950191570881227,
+    "delta_percentage_points": 0.2288718404342939,
+    "formula": "mean_per_command(correct_ms / duration_ms)",
+    "name": "command_equal_correct_time_fraction",
+    "unit": "command"
+  },
+  "primary_safety": {
+    "candidate_severe_or_unavailable_fraction": 0.031231336287360592,
+    "candidate_unavailable_fraction": 0.027989299706617524,
+    "control_severe_or_unavailable_fraction": 0.039272030651340994,
+    "control_unavailable_fraction": 0.0009578544061302681
+  },
+  "schema": "continuous-latency-metric-amendment-v1",
+  "secondary_time_weighted_metric": {
+    "candidate": 0.7582714390925299,
+    "control": 0.6026017126718354,
+    "delta_percentage_points": 15.566972642069455
+  },
+  "source_result": "result.json",
+  "source_rows": "rows.jsonl",
+  "status": "posthoc_command_equal_no_go",
+  "task_deltas": {
+    "negative_tasks": 26,
+    "positive_tasks": 22,
+    "unit": "mean command-level correct-time delta within task",
+    "zero_tasks": 2
+  },
+  "visible_before_amendment": [
+    "all v2 aggregate metrics",
+    "task deltas",
+    "tail exhaustion diagnosis"
+  ]
+}
