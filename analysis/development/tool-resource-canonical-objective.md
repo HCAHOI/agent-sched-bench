@@ -123,6 +123,19 @@ update, not part of this pre-command SOTA.
 The machine-readable result and command rows are in
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-multitarget-sota-v1/`.
 
+A frozen follow-up asked whether repeated pytest argument transitions add
+information beyond this SOTA. On the exposed validation partition, the joint
+occurrence/transition residual reduced the equal-weight latency/CPU/RSS
+accuracy from 84.674% to 82.646%. Relative to SOTA it changed predictions in
+24 tasks, with 15 helpful and 62 harmful target changes; latency, CPU, and RSS
+fell by 1.149, 2.083, and 2.853 percentage points, while Disk and non-pytest
+rows remained bit-identical. The gate returned NO-GO and did not authorize the
+final partition. Post-hoc trace inspection suggests, but does not establish,
+the mechanism: the same pytest transition can be a dependency-driven fast
+failure or a real suite execution, so argument sequence alone aliases distinct
+environment states. The reviewed artifact is in
+`analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-pytest-transition-residual-v1/`.
+
 The completed semantic-signature question was:
 
 > Within many tasks from the same repository, can a deterministic semantic
