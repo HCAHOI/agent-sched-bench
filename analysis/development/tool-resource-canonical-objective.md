@@ -618,8 +618,8 @@ a single-host admission controller that starts ready `exec` commands only when
 their reserved CPU and RSS fit within 8 cores and 16,000 MB. It uses the 100
 already-exposed SQLGlot tasks from
 `sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803`, with the same 32 seeds and
-40-task selections as the KV diagnostics. No final task or predictor output is
-read in this phase.
+the same sorted-pool shuffle then first-40 selection procedure as the KV
+diagnostics. No final task or predictor output is read in this phase.
 
 Each task is a closed serial program. The replay preserves recorded time before
 the first `exec`, between successive `exec` calls, after the final `exec`, and
