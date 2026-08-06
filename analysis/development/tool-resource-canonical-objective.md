@@ -1183,6 +1183,39 @@ perfectly divisible CPU work, and an ideal fluid server on exposed tasks. The
 canonical reviewed artifact is in
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-burstable-two-core-fluid-v1/`.
 
+#### Frozen physical burst-contention test
+
+The fluid result authorizes one physical mechanism test on the validated AST
+workload; it is not a SQLGlot replay and cannot confirm scheduling utility. All
+containers are pinned to host CPUs 0--7 and have equal CPU weight. One batch
+contains two concurrent AST-indexing containers and two concurrent 30-second
+sleep containers. Each represents a two-core admission reservation, so the
+four admitted commands fill the eight-core pool, while only the AST pair has
+sustained runnable work. This isolates the hypothesis that idle guarantees can
+be lent to runnable commands without admitting more work.
+
+The three arms are hard-two, burstable-two, and hard-four positive control. In
+hard-two, all four containers have a two-core CFS quota. In burstable-two, none
+has a hard quota; equal cgroup weights provide proportional sharing when
+runnable. In hard-four, each AST container has a four-core quota while the
+sleep containers retain two-core quotas. The same image, source tree, AST
+workload, eight workers per AST container, 6-GiB per-AST memory limit, disabled
+swap and network, start barrier, and output-identity checks apply to every arm.
+An unmeasured hard-four warm-up precedes three formal blocks. Arm order is
+shuffled within each block with seed 42. Every batch has a 900-second ceiling;
+a timeout is retained as a failure and is not rerun.
+
+Primary latency is batch makespan from common release until all four workloads
+finish. AST internal elapsed time, cgroup CPU/throttle counters, sampled peak
+memory, and OOM events are retained. GO requires every workload to complete
+with identical AST work, no OOM, and the requested cpuset/quota/weight; every
+paired block's burstable makespan must beat hard-two; median burstable makespan
+must be at least 25% lower than hard-two and no more than 10% above hard-four;
+and hard-two AST throttled time must exceed burstable AST throttled time in
+every block. Failure closes this physical mechanism. Passing authorizes only a
+fresh SQLGlot action protocol that uses CPU guarantees and borrowing; it does
+not validate the hindsight demand caps, RSS reservations, or ideal fluid model.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved
