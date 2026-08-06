@@ -888,6 +888,7 @@ def run_burstable_two_core() -> dict[str, Any]:
             "cpu_work_commands": len(cpu_work),
             "missing_cpu_work_commands": len(missing),
             "contended_commands": len(contended_commands),
+            "contended_command_ids": sorted(contended_commands),
             "contended_tasks": len(
                 {command_id.split(":", 1)[0] for command_id in contended_commands}
             ),

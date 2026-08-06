@@ -1149,6 +1149,15 @@ fields, while floating scheduling aggregates use `rel_tol=1e-12` and
 `abs_tol=1e-6`. This tolerance is far below measurement precision and cannot
 mask a decision-relevant scheduling change.
 
+The first completed artifact passed every frozen gate, but independent review
+found a reporting omission after its results were visible: it retained the
+count of five contended commands across five tasks without their identities, so
+those distinct-union counts could not be reconstructed from the artifact alone.
+The original is preserved as
+`sqlglot50-burstable-two-core-fluid-v1.incomplete-no-contended-ids`. The
+reporting-only amendment adds the sorted command IDs to `coverage`; it changes
+no simulation, metric, threshold, gate, or status.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved
