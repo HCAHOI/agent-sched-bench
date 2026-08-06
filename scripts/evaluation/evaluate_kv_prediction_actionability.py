@@ -340,8 +340,11 @@ def run() -> dict[str, Any]:
             bucket = CANONICAL_LATENCY_BUCKETS.bucket_id(command.duration_ms)
             durations[bucket].append(gap.end - gap.start)
             mapped_development.add(call_key)
-    if mapped_development != set(command_by_call) or any(not values for values in durations):
-        raise ValueError("development gap decoder does not cover every bucket and command")
+    if (
+        len(mapped_development) != sum(len(values) for values in durations)
+        or any(not values for values in durations)
+    ):
+        raise ValueError("development gap decoder is duplicated or misses a bucket")
     duration_arrays = tuple(np.asarray(values) for values in durations)
 
     current_by_call, sota_by_call, prediction_coverage = _static_predictions(
@@ -483,6 +486,9 @@ def run() -> dict[str, Any]:
         "coverage": {
             "development_gaps": len(fit_gaps),
             "development_eligible_commands": len(development_commands),
+            "decoder_eligible_gaps": len(mapped_development),
+            "decoder_commands_without_next_llm_gap": len(development_commands)
+            - len(mapped_development),
             "decoder_gap_counts_by_bucket": [len(values) for values in durations],
             "validation_tasks": len(programs),
             "validation_gaps": gap_count,
