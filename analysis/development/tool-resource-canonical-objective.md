@@ -631,19 +631,20 @@ time but consumes no modeled host reservation.
 The fixed-high control reserves the full host for every command, so at most one
 command executes at a time. The hindsight oracle composes retained clause
 telemetry using the canonical physical rule: sequential stages take the maximum
-and concurrent pipeline members sum. A missing CPU or RSS value from a
-sub-500-ms clause reserves that target's Low-class ceiling (2 cores or 500 MB);
-a longer missing value, invalid structure, or unmatched command reserves the
-full host for that target. Composed values are bounded by the physical host
-capacity. Thus missing telemetry never creates packing headroom. The oracle is
-not causal and cannot be used as a predictor result.
+and concurrent pipeline members sum. Any missing CPU or RSS value reserves the
+full host for that target; the canonical short-null Low label is not treated as
+a measured physical ceiling. Invalid structure or an unmatched command also
+reserves the full host. Composed values are bounded by the physical host
+capacity, so missing telemetry never creates packing headroom. The oracle is not
+causal and cannot be used as a predictor result. This stricter fallback was
+fixed before any schedule outcome was read.
 
 Mean batch makespan is primary; mean task completion time and total command
 queue time are secondary. GO requires at least 10% lower mean makespan, a
 paired-seed bootstrap interval for oracle-minus-control makespan strictly below
 zero, at least 20 distinct commands across 10 tasks starting while another
 command runs, identical commands and recorded durations in both arms, and no
-CPU/RSS reservation-capacity violation. GO authorizes only evaluation of
+modeled CPU/RSS reservation-capacity violation. GO authorizes only evaluation of
 Current and development SOTA as admission inputs. NO-GO closes command-level
 CPU+RSS admission for this action model. The replay does not model idle
 container memory, Disk/network contention, or performance interference, so even
