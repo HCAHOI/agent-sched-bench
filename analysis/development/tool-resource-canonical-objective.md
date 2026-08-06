@@ -809,16 +809,18 @@ After two of the three 2-GiB `memory.high` runs had reached the frozen
 seconds. The advisor then requested a longer overnight timeout. The original
 matrix and gate remain unchanged; its timed-out runs are not replaced.
 
-A separate descriptive experiment will run only baseline and 2-GiB
-`memory.high`, once each in three seed-42 shuffled blocks, after an unmeasured
-baseline warm-up. All other workload, Docker, cgroup, sampling, counter,
-identity, and cleanup semantics remain identical. Each formal run has a
-3,600-second ceiling. If all three low-memory runs finish, the result reports
-their median elapsed time and ratio to the paired baseline median. If at least
-two reach the ceiling, the result is a `>3,600 s` lower bound. Any OOM kill,
-limit mismatch, baseline failure, output-identity mismatch, or incomplete
-matrix invalidates the characterization. No further timeout increase or arm
-change is allowed from these outcomes.
+The separate descriptive matrix completed without changing the original
+result. All three baselines succeeded with identical work and a median of
+18.493 seconds. All three 2-GiB `memory.high` runs reached the 3,600-second
+ceiling without completing, establishing a censored slowdown greater than
+194.67x the baseline median. They recorded 601,545--647,176
+`memory.events.high` events, sampled peaks of 2.299--2.306 GiB, and no
+`memory.max`, OOM, or OOM-kill events. The independently reviewed matrix is
+valid and contains no replacement or rerun. The result therefore strengthens
+the earlier conclusion from `>180 s` to `>3,600 s`: for this 4.18-GiB working
+set, a 2-GiB soft limit is persistent reclaim collapse rather than a useful
+remaining-work signal. The artifact is in
+`analysis/results/tool-resource-5-3-3-3-20260804/resource-underreservation-memory-completion-v1/`.
 
 ### CPU-work lower-bound admission replay: complete, no-go
 
