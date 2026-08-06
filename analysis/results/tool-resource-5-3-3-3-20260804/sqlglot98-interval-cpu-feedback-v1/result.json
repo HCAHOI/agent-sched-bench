@@ -1,0 +1,1273 @@
+{
+  "claim_bearing": false,
+  "comparisons": {
+    "feedback_reservation_reduction_vs_fixed8": 0.5141113863528908,
+    "feedback_service_inflation": 0.023905699311632184,
+    "fixed8_reconstruction_error_fraction": 0.0,
+    "probe_then_two_service_inflation": 0.2902177282366142
+  },
+  "coverage": {
+    "declared_tasks": 100,
+    "eligible_actions": 661,
+    "eligible_fraction": 0.3510355815188529,
+    "eligible_tasks": 98,
+    "evidence_valid_tasks": 98,
+    "exclusions": {
+      "eligible": 0,
+      "no_full_decision_sample": 1222,
+      "task_not_evidence_valid": 2
+    },
+    "exec_actions": 1883
+  },
+  "gate": {
+    "all_exec_actions_retained": true,
+    "all_timeline_work_conserved": true,
+    "at_least_20_eligible_tasks": true,
+    "coverage_at_least_40_percent": false,
+    "feedback_better_than_probe_then_two": true,
+    "feedback_reservation_reduction_at_least_25_percent": true,
+    "feedback_service_inflation_at_most_5_percent": true,
+    "fixed8_reconstruction_error_at_most_0_1_percent": true,
+    "go": false,
+    "requests_are_2_4_8": true
+  },
+  "input_adjustment": {
+    "clipped_cpu_core_s": 1.8934139999996917,
+    "clipped_samples": 153,
+    "physical_timeline_cpu_core_s": 43588.227075,
+    "raw_timeline_cpu_core_s": 43590.120489
+  },
+  "inputs": {
+    "development_run": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803",
+    "git_sha": "fc058a921b93e69ea68b276e57e865a5730d9e8d",
+    "split": "/home/chiyu/workspace/agent-sched-bench/analysis/development/sqlglot-relational-task-split.json"
+  },
+  "limitations": [
+    "This is an aggregate single-command replay, not a concurrent scheduler result.",
+    "Within each sampled interval, CPU work is assumed uniform.",
+    "Interval-average demand can hide sub-0.5-second bursts.",
+    "The corpus is development-exposed and cannot support confirmation."
+  ],
+  "protocol": {
+    "fallback": "fixed8",
+    "observation_and_update_delay_s": 0.14132007875000002,
+    "pages_cores": [
+      2,
+      4,
+      8
+    ],
+    "sample_interval_s": 0.5,
+    "task_pool": "original SQLGlot development100 evidence-valid tasks"
+  },
+  "request_counts": {
+    "feedback": {
+      "2": 29068,
+      "4": 33790,
+      "8": 11733
+    },
+    "fixed8": {
+      "8": 38663
+    },
+    "probe_then_two": {
+      "2": 36729,
+      "8": 2569
+    }
+  },
+  "schema": "interval-cpu-feedback-v1",
+  "source_files": {
+    "tobymao__sqlglot-3798": {
+      "resource_observations": {
+        "bytes": 77355,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3798/attempt_1/resource_observations.json",
+        "sha256": "44f290b509f0957b31ca7acc3d2bdf0fb3b0be0c97906669b9e01d3d91e5db38"
+      },
+      "trace": {
+        "bytes": 4408178,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3798/attempt_1/trace.jsonl",
+        "sha256": "8b4ea14d92fc097e409db8d98f8c685f5593559ec92005959cfb4c89e5a91358"
+      }
+    },
+    "tobymao__sqlglot-3799": {
+      "resource_observations": {
+        "bytes": 105759,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3799/attempt_1/resource_observations.json",
+        "sha256": "66d98a3fa04c50ee1cb0ef656b16bcc3a1e70098d0411885abffc02dafeff6bf"
+      },
+      "trace": {
+        "bytes": 6402270,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3799/attempt_1/trace.jsonl",
+        "sha256": "6ff846cbeca22056d59811c5f7c5b2c2012a2bd6160c86aed83edfe332f81667"
+      }
+    },
+    "tobymao__sqlglot-3806": {
+      "resource_observations": {
+        "bytes": 61529,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3806/attempt_1/resource_observations.json",
+        "sha256": "61f63eba9eb981594b3b7e5e1f8dd279cc78aabf4b08545687c2f5ede70d8088"
+      },
+      "trace": {
+        "bytes": 2948940,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3806/attempt_1/trace.jsonl",
+        "sha256": "600de54006f1cad38aadcd0021145227d3bc4e015622e4a83ed6d101d08fc7ca"
+      }
+    },
+    "tobymao__sqlglot-3820": {
+      "resource_observations": {
+        "bytes": 62504,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3820/attempt_1/resource_observations.json",
+        "sha256": "7c55bc1e0bc316b403998b054eac05f2c069cc20da77d98df01bce1de57b7bf5"
+      },
+      "trace": {
+        "bytes": 6125721,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3820/attempt_1/trace.jsonl",
+        "sha256": "c882e9cae590f8ab53a0db4bf6da215e6e19b2be2205c868ab7369fb2ff3fb93"
+      }
+    },
+    "tobymao__sqlglot-3839": {
+      "resource_observations": {
+        "bytes": 118148,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3839/attempt_1/resource_observations.json",
+        "sha256": "845534849e30059f3eca29e69e76057337810046053b7a26e0bce1f98ac0c932"
+      },
+      "trace": {
+        "bytes": 7437346,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3839/attempt_1/trace.jsonl",
+        "sha256": "79c1371fa5d1924d7fac5e415fd8f7abd05e7909503127611def1a7bc7e368f9"
+      }
+    },
+    "tobymao__sqlglot-3842": {
+      "resource_observations": {
+        "bytes": 62443,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3842/attempt_1/resource_observations.json",
+        "sha256": "aa482e0cef953ba0ac79753d86013db74c37ab159efe5bb64cb5421c5a8e421c"
+      },
+      "trace": {
+        "bytes": 5621010,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3842/attempt_1/trace.jsonl",
+        "sha256": "161a20371bd51e96b3511e45e871d2e69a7356217acaa038855bf24990ee768e"
+      }
+    },
+    "tobymao__sqlglot-3847": {
+      "resource_observations": {
+        "bytes": 58368,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3847/attempt_1/resource_observations.json",
+        "sha256": "4cd2c85aee582182ce7041415ed3e9141a98e73979137ad5b5ec3e7070c037e1"
+      },
+      "trace": {
+        "bytes": 2452430,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3847/attempt_1/trace.jsonl",
+        "sha256": "bfce29e54921c90256a3acfe4703d3c751763717ccf86f66e13200fd23433bbd"
+      }
+    },
+    "tobymao__sqlglot-3848": {
+      "resource_observations": {
+        "bytes": 84885,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3848/attempt_1/resource_observations.json",
+        "sha256": "fcea7e05b69d9879bdb8e8d23d682224c71c1d377a9d70cccd60b2b92aefda74"
+      },
+      "trace": {
+        "bytes": 5290772,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3848/attempt_1/trace.jsonl",
+        "sha256": "6800fbda910f058e069be7870ee04275caedbb88673c316cd2202bc3df3426e6"
+      }
+    },
+    "tobymao__sqlglot-3855": {
+      "resource_observations": {
+        "bytes": 58733,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3855/attempt_1/resource_observations.json",
+        "sha256": "6f8aca5e006a4ed2e7b60c0b93d382b375b4e4665c25c94e0be9b78e19c64504"
+      },
+      "trace": {
+        "bytes": 5044933,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3855/attempt_1/trace.jsonl",
+        "sha256": "721413455d9f2b25d34efa29ea4bf9e82aa2ac1cf983630ff6cf9175cea2aadb"
+      }
+    },
+    "tobymao__sqlglot-3870": {
+      "resource_observations": {
+        "bytes": 65802,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3870/attempt_1/resource_observations.json",
+        "sha256": "d56e498dacdf326557d263801a0066b7a0cbb33a391224375d92c3793efa24d2"
+      },
+      "trace": {
+        "bytes": 3657689,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3870/attempt_1/trace.jsonl",
+        "sha256": "f483fd15dcdb4fb512e95652863c5284faad36ee94f014ab512938b5dbf2e595"
+      }
+    },
+    "tobymao__sqlglot-3871": {
+      "resource_observations": {
+        "bytes": 58196,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3871/attempt_1/resource_observations.json",
+        "sha256": "85f416d05f69a218fa847c1b1a24f6ed2abb28e2cd1aa108e2793b45469a050e"
+      },
+      "trace": {
+        "bytes": 4398114,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3871/attempt_1/trace.jsonl",
+        "sha256": "af426baa6761934ef8932e438271dcb5d5b6a5ec31ed73bd2ea0ca7e423becb9"
+      }
+    },
+    "tobymao__sqlglot-3885": {
+      "resource_observations": {
+        "bytes": 73432,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3885/attempt_1/resource_observations.json",
+        "sha256": "ddab2273b5a685b6b36dbef3e5e1421f1da09074d7a207bcf52dc3f9ea3cfad3"
+      },
+      "trace": {
+        "bytes": 5483168,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3885/attempt_1/trace.jsonl",
+        "sha256": "3e8f7db6b1a86fd203ed6a71880b71e15b2c47f06fca3b029d38d9c4b940a298"
+      }
+    },
+    "tobymao__sqlglot-3891": {
+      "resource_observations": {
+        "bytes": 84885,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3891/attempt_1/resource_observations.json",
+        "sha256": "4a768709ce744d2ce4e70208d0b02aab85ffed3eebdb399e3a439f6d91d95dc7"
+      },
+      "trace": {
+        "bytes": 5197191,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3891/attempt_1/trace.jsonl",
+        "sha256": "85ac145802768a92d58bbe29de029832e8bc528b972f182bdbcc5eb85b28f882"
+      }
+    },
+    "tobymao__sqlglot-3935": {
+      "resource_observations": {
+        "bytes": 48911,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3935/attempt_1/resource_observations.json",
+        "sha256": "def70e83630b7bd6402378f822390295b170ea7ad651b64bf49ff37ea6814cb8"
+      },
+      "trace": {
+        "bytes": 7448211,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3935/attempt_1/trace.jsonl",
+        "sha256": "da0cc42bc307b81a9cb746e9c72905b46b408d7d80102d4ab195d6c9e3d632e0"
+      }
+    },
+    "tobymao__sqlglot-3937": {
+      "resource_observations": {
+        "bytes": 64034,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3937/attempt_1/resource_observations.json",
+        "sha256": "d9d7205017c0e8c89ba23849c71d8a0678a2643632500dcc52ed674de1bc89f7"
+      },
+      "trace": {
+        "bytes": 5453194,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3937/attempt_1/trace.jsonl",
+        "sha256": "0a32e7ddcd09f41bac922ae8b01453f20e696f9f6abfb224f2a84770026fcab0"
+      }
+    },
+    "tobymao__sqlglot-3954": {
+      "resource_observations": {
+        "bytes": 51078,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3954/attempt_1/resource_observations.json",
+        "sha256": "195dcb9c1b2de0d030672898edd8b06afda43cc0cea33e6dfae8da707b68e20e"
+      },
+      "trace": {
+        "bytes": 3498404,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3954/attempt_1/trace.jsonl",
+        "sha256": "242344b8c81e56d5a3b793a7ec9180d20c2611c9bad88db5affe122e4f51c7ef"
+      }
+    },
+    "tobymao__sqlglot-3971": {
+      "resource_observations": {
+        "bytes": 98696,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3971/attempt_1/resource_observations.json",
+        "sha256": "7ea1032c92a6ce83d3be226d872f0c396063b075d41f9f2eae46735fc51d1151"
+      },
+      "trace": {
+        "bytes": 3994100,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3971/attempt_1/trace.jsonl",
+        "sha256": "d7b3c69163abc6b42a1e65fc44d08bb8a2f67a7aee95a60e4b96f8a76f4638cb"
+      }
+    },
+    "tobymao__sqlglot-3975": {
+      "resource_observations": {
+        "bytes": 88276,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3975/attempt_1/resource_observations.json",
+        "sha256": "2719d828cfb60e524f72e6717768822c4ea3a2708a8314695dfdcd1add8ecdbc"
+      },
+      "trace": {
+        "bytes": 10211282,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3975/attempt_1/trace.jsonl",
+        "sha256": "7c71f5693095ea1c985926f4605ff07256a09696ec50733f9a7ba85c5ad50584"
+      }
+    },
+    "tobymao__sqlglot-3987": {
+      "resource_observations": {
+        "bytes": 86126,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3987/attempt_1/resource_observations.json",
+        "sha256": "5a98ae079d2fb829fa270fa7f1dee75e7b01d0bc6b15e6165305f89e1222f3ec"
+      },
+      "trace": {
+        "bytes": 6941741,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3987/attempt_1/trace.jsonl",
+        "sha256": "bf746688f7861e039d6dd45b26d71a7b9c4e6e10fb4303ae28738cc6806dc88c"
+      }
+    },
+    "tobymao__sqlglot-3994": {
+      "resource_observations": {
+        "bytes": 101786,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3994/attempt_1/resource_observations.json",
+        "sha256": "8f98253948c6bf2b15b4f927e148e5ccde8b383d5d1149d54b140d93722b40c7"
+      },
+      "trace": {
+        "bytes": 6996116,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3994/attempt_1/trace.jsonl",
+        "sha256": "12e88fc1f69feff0e92eb97d6fccd91e78d4e432ff439d6b74647d0f420c67d6"
+      }
+    },
+    "tobymao__sqlglot-4004": {
+      "resource_observations": {
+        "bytes": 52925,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4004/attempt_1/resource_observations.json",
+        "sha256": "5fea07b97bbd61eca84cec862b5bdafc40afcc55bcf28cdffcea32b5a7f664ba"
+      },
+      "trace": {
+        "bytes": 4157404,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4004/attempt_1/trace.jsonl",
+        "sha256": "928a0f0250bbc75287ecd6fcbe30d6774a1aa5d5622444a83a5b8bbcd00f47db"
+      }
+    },
+    "tobymao__sqlglot-4007": {
+      "resource_observations": {
+        "bytes": 42979,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4007/attempt_1/resource_observations.json",
+        "sha256": "468937219a4c28415805ecec9b9371f5e80e43c1ee231e42a991b8e4b23a9027"
+      },
+      "trace": {
+        "bytes": 3196547,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4007/attempt_1/trace.jsonl",
+        "sha256": "93524d94e67573853c3948499710447617f2808943a14fe4b3daa0c08607e52e"
+      }
+    },
+    "tobymao__sqlglot-4014": {
+      "resource_observations": {
+        "bytes": 45616,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4014/attempt_1/resource_observations.json",
+        "sha256": "c5b047b2debbbfcff3dce4dd7b8f5c5e5bc96c8f0dfc084c3687f6a86612a067"
+      },
+      "trace": {
+        "bytes": 2324815,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4014/attempt_1/trace.jsonl",
+        "sha256": "9ea798434395a98961723f78da9da9ff2c8ab17284b7ca98cca7f5a2d1f5c72c"
+      }
+    },
+    "tobymao__sqlglot-4015": {
+      "resource_observations": {
+        "bytes": 78288,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4015/attempt_1/resource_observations.json",
+        "sha256": "de324bdf3ed5977a83922a44b1f31c4d04aee4e4a221af0481ec0df127f7ba43"
+      },
+      "trace": {
+        "bytes": 6531246,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4015/attempt_1/trace.jsonl",
+        "sha256": "8bc652a4662bf01bfc8033a0b98fa7805dc234d30303bd7dd12c8c0da8908694"
+      }
+    },
+    "tobymao__sqlglot-4040": {
+      "resource_observations": {
+        "bytes": 44489,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4040/attempt_1/resource_observations.json",
+        "sha256": "2c3f31bf7479ae55f19012c7547c07fc6e09fb9ed31d1ab358e6d43b238af76c"
+      },
+      "trace": {
+        "bytes": 3487190,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4040/attempt_1/trace.jsonl",
+        "sha256": "90c2741a29eafd3c2af8fac33575c811e8dad57cfb722baf8db02d81a792c0ad"
+      }
+    },
+    "tobymao__sqlglot-4041": {
+      "resource_observations": {
+        "bytes": 93589,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4041/attempt_1/resource_observations.json",
+        "sha256": "037db8b1296295f9e14026aaab767ee17ceb041c378e140f70e9f53d520841e9"
+      },
+      "trace": {
+        "bytes": 6004126,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4041/attempt_1/trace.jsonl",
+        "sha256": "dba3cf3b83b55d95c11ba5fdbb382ee3681aa4fd1b1d32fa12d31b009ba3adee"
+      }
+    },
+    "tobymao__sqlglot-4051": {
+      "resource_observations": {
+        "bytes": 73865,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4051/attempt_1/resource_observations.json",
+        "sha256": "36da269aab2040844e2db9ce4e64e4810cbd7444ca056b5061217ec73efc6c48"
+      },
+      "trace": {
+        "bytes": 12305181,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4051/attempt_1/trace.jsonl",
+        "sha256": "a27fb412e81bcc16484d51bf3a7f4d1d700018c841c15a20d8c0a6003174d934"
+      }
+    },
+    "tobymao__sqlglot-4067": {
+      "resource_observations": {
+        "bytes": 52967,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4067/attempt_1/resource_observations.json",
+        "sha256": "4ceaf4e357a1282a833c987c08bfd698e9bf91b0db18acfc0e9dc5fe7b0a6ac9"
+      },
+      "trace": {
+        "bytes": 2672951,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4067/attempt_1/trace.jsonl",
+        "sha256": "c31adcdecbc291781a4293ecee3d3ebe918b6fe2091588001242b5873dad48a8"
+      }
+    },
+    "tobymao__sqlglot-4079": {
+      "resource_observations": {
+        "bytes": 43334,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4079/attempt_1/resource_observations.json",
+        "sha256": "151e2309c723ff22c9ae708bfe6b166f29d3516bbcd6c167419156e1ce53292b"
+      },
+      "trace": {
+        "bytes": 2542983,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4079/attempt_1/trace.jsonl",
+        "sha256": "67bf2d2c8528d75623f1ca4132720e9b46d066a60fbfc8aa6af6a732caeebe56"
+      }
+    },
+    "tobymao__sqlglot-4087": {
+      "resource_observations": {
+        "bytes": 72128,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4087/attempt_1/resource_observations.json",
+        "sha256": "2b093ad66095ff5079ca291cd561e736966730a4910c85225dc8a92ccf01f72f"
+      },
+      "trace": {
+        "bytes": 3795651,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4087/attempt_1/trace.jsonl",
+        "sha256": "45479589528994570ac14370fb158d37574b0c41b19c877c2c5089d27550abbb"
+      }
+    },
+    "tobymao__sqlglot-4093": {
+      "resource_observations": {
+        "bytes": 54417,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4093/attempt_1/resource_observations.json",
+        "sha256": "976a8fcd7051ce21d1be33c1f667c5bbcf7d215d72cd6f0ce628fb9691118cb5"
+      },
+      "trace": {
+        "bytes": 3296241,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4093/attempt_1/trace.jsonl",
+        "sha256": "1e2c4640b85e55268da815ae7b0e5b9d68337047b16f03cb9dae25dee2cce58c"
+      }
+    },
+    "tobymao__sqlglot-4096": {
+      "resource_observations": {
+        "bytes": 66548,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4096/attempt_1/resource_observations.json",
+        "sha256": "2e6802821e4bd330de8d2d29e3ac7af4ef53e20bcd868bdb63aa3aef11a6d756"
+      },
+      "trace": {
+        "bytes": 4881011,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4096/attempt_1/trace.jsonl",
+        "sha256": "1dc0f413f40a30834707f14220284eab438f1a80bb38af613e4e4be03d1da2c1"
+      }
+    },
+    "tobymao__sqlglot-4104": {
+      "resource_observations": {
+        "bytes": 68572,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4104/attempt_1/resource_observations.json",
+        "sha256": "81fa3709634029db76206b033ff0d28f85224ddf85fa0630e5ca049a9c5f5d45"
+      },
+      "trace": {
+        "bytes": 11617597,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4104/attempt_1/trace.jsonl",
+        "sha256": "e3db3991404f5aaa2c961aa794f93ee359a24abbb43183db1285c8064dab30d4"
+      }
+    },
+    "tobymao__sqlglot-4106": {
+      "resource_observations": {
+        "bytes": 76659,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4106/attempt_1/resource_observations.json",
+        "sha256": "9d3a86397bb221d70153cc769989dde140692fdb671953f872a1520acf426ff9"
+      },
+      "trace": {
+        "bytes": 3627563,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4106/attempt_1/trace.jsonl",
+        "sha256": "cd4ae69621014a62117609944b59d18f1f9b29eb3383f73fe15f88d8085674f3"
+      }
+    },
+    "tobymao__sqlglot-4109": {
+      "resource_observations": {
+        "bytes": 42409,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4109/attempt_1/resource_observations.json",
+        "sha256": "f0de10a5fd8769361a2c07c4e96d00a1fe478176843175cbe248fbf7a52b82a0"
+      },
+      "trace": {
+        "bytes": 4574223,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4109/attempt_1/trace.jsonl",
+        "sha256": "5b87a477ee6b42fbae004cdfddd7debbaedb0bed394fdac5df9f380294625e36"
+      }
+    },
+    "tobymao__sqlglot-4110": {
+      "resource_observations": {
+        "bytes": 70058,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4110/attempt_1/resource_observations.json",
+        "sha256": "dd916d20105faae87a664829d2133e010dc90b5e37413c6aa05b667bca11dc91"
+      },
+      "trace": {
+        "bytes": 12022018,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4110/attempt_1/trace.jsonl",
+        "sha256": "76ffcf52c0c2771a44613056f95f0dba2cb12918476603efe3694a418ea2face"
+      }
+    },
+    "tobymao__sqlglot-4127": {
+      "resource_observations": {
+        "bytes": 88445,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4127/attempt_1/resource_observations.json",
+        "sha256": "bf41a2ea9b142b2e3712c491676b5493600e4d821b6b7a1ec90fdbc789c3ad72"
+      },
+      "trace": {
+        "bytes": 2998259,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4127/attempt_1/trace.jsonl",
+        "sha256": "2e88d0c23154a870da281543e32aad19b44ee6279d191e17e3a0173c02223779"
+      }
+    },
+    "tobymao__sqlglot-4130": {
+      "resource_observations": {
+        "bytes": 53515,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4130/attempt_1/resource_observations.json",
+        "sha256": "ee648b3d061232fff9b1a3c1e923c707e78d5e8bef4785242798308564f74c1a"
+      },
+      "trace": {
+        "bytes": 3931203,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4130/attempt_1/trace.jsonl",
+        "sha256": "34693f1ac6e4a806342ba5577f9f056d59cc7100d81a37352f518d5de8058ff3"
+      }
+    },
+    "tobymao__sqlglot-4141": {
+      "resource_observations": {
+        "bytes": 91696,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4141/attempt_1/resource_observations.json",
+        "sha256": "8851565d9564c12dc79a86853c8662fc622bea5c00b86f88db4ea4724de89344"
+      },
+      "trace": {
+        "bytes": 9918729,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4141/attempt_1/trace.jsonl",
+        "sha256": "b98b47c78ae919d396c75a3df5a2a9a2abb93f7c4a55291725e133b32ca6bf1b"
+      }
+    },
+    "tobymao__sqlglot-4148": {
+      "resource_observations": {
+        "bytes": 54992,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4148/attempt_1/resource_observations.json",
+        "sha256": "ce562e00656b96a9ce274ee9950dae0a41637ab405e67f2d4d5f1da65709ce69"
+      },
+      "trace": {
+        "bytes": 3326728,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4148/attempt_1/trace.jsonl",
+        "sha256": "35e25a39f53f202614a4774d9f13248b3514bd950d43548ffd74a646151afb7c"
+      }
+    },
+    "tobymao__sqlglot-4151": {
+      "resource_observations": {
+        "bytes": 62580,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4151/attempt_1/resource_observations.json",
+        "sha256": "066ac1969111051b6bd8cf9365aad0d1c98aac1479fa9606ab89707179b3fe92"
+      },
+      "trace": {
+        "bytes": 6444476,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4151/attempt_1/trace.jsonl",
+        "sha256": "3025b48b756d3cbc5692701c38e2453f9376c2a9da5b426733337a729e8e0a45"
+      }
+    },
+    "tobymao__sqlglot-4165": {
+      "resource_observations": {
+        "bytes": 67885,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4165/attempt_1/resource_observations.json",
+        "sha256": "25d1def383d952a34cb9c9ec79e549cfa627334feeeb592264cef37736455900"
+      },
+      "trace": {
+        "bytes": 6118329,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4165/attempt_1/trace.jsonl",
+        "sha256": "40b368de9ce0eaf6dd4f4bbcd902d0d20e3947b98982fdcb1a4e3ead70180dd6"
+      }
+    },
+    "tobymao__sqlglot-4172": {
+      "resource_observations": {
+        "bytes": 80778,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4172/attempt_1/resource_observations.json",
+        "sha256": "e33fa41833f23017111ab1077471e829ce78d684ed3a5a260a7f981dc4ef9fdc"
+      },
+      "trace": {
+        "bytes": 3326087,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4172/attempt_1/trace.jsonl",
+        "sha256": "276f7acb862ec224b717b793320204d30278c6d3bd1922a90f301f5f90442937"
+      }
+    },
+    "tobymao__sqlglot-4194": {
+      "resource_observations": {
+        "bytes": 47384,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4194/attempt_1/resource_observations.json",
+        "sha256": "a91dd2591ffef2364ea59771dc718a0d149a2bf41b41f535742dd7c5ad7bbb32"
+      },
+      "trace": {
+        "bytes": 4561978,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4194/attempt_1/trace.jsonl",
+        "sha256": "fd2a46beeb2abff2cc024209fae87d3f5403484ee9e4743c2c0a0efdd246696d"
+      }
+    },
+    "tobymao__sqlglot-4197": {
+      "resource_observations": {
+        "bytes": 53925,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4197/attempt_1/resource_observations.json",
+        "sha256": "133786d375730989db9f4314a4cd674b154530ac267ab8f43507ecda9e789e33"
+      },
+      "trace": {
+        "bytes": 4107808,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4197/attempt_1/trace.jsonl",
+        "sha256": "ded44bd6ec9da81b9662f8a798a7ca5a4cc1f8c855b97ccb8a084761f5e86c29"
+      }
+    },
+    "tobymao__sqlglot-4206": {
+      "resource_observations": {
+        "bytes": 70237,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4206/attempt_1/resource_observations.json",
+        "sha256": "8efbb25896b63c6752ea6738a58f721923d87aa4f25e65ec3866e7772dab36ed"
+      },
+      "trace": {
+        "bytes": 1913099,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4206/attempt_1/trace.jsonl",
+        "sha256": "6db4594503106de4a6fac7b05d3b89095686388e89293e661c58a8bf57da6150"
+      }
+    },
+    "tobymao__sqlglot-4208": {
+      "resource_observations": {
+        "bytes": 53146,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4208/attempt_1/resource_observations.json",
+        "sha256": "f39e2575b4ea3140247e4d8708429901f7cfa9bcb41763812a1f4983ed545948"
+      },
+      "trace": {
+        "bytes": 3363157,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4208/attempt_1/trace.jsonl",
+        "sha256": "544d171c40def0338102a82b6ef80db7eeb8ab2b4fc166a5ecf48d6356ece53f"
+      }
+    },
+    "tobymao__sqlglot-4218": {
+      "resource_observations": {
+        "bytes": 74329,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4218/attempt_1/resource_observations.json",
+        "sha256": "f25ee9387e39901d51cc0b3dac14e1007bc61f36f49c027998445851f484c699"
+      },
+      "trace": {
+        "bytes": 7322190,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4218/attempt_1/trace.jsonl",
+        "sha256": "a9fe35e9f844dbf1970d76691f59368a8fd5e43c5ce9b5c48b3db18b268ec10a"
+      }
+    },
+    "tobymao__sqlglot-4239": {
+      "resource_observations": {
+        "bytes": 80047,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4239/attempt_1/resource_observations.json",
+        "sha256": "0a12c6555a5107d9b827f17a92552526ab0b5d7d5f0ce5948386b8e2626c2c82"
+      },
+      "trace": {
+        "bytes": 3852405,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4239/attempt_1/trace.jsonl",
+        "sha256": "9a243513522ce40a4476fb881a8264c60b3915e6b450352d01f26b472a827b16"
+      }
+    },
+    "tobymao__sqlglot-4252": {
+      "resource_observations": {
+        "bytes": 60290,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4252/attempt_1/resource_observations.json",
+        "sha256": "54bc2b3053b400c896451cf56521ae7f2da9d2cbc349566f790859935a963bf6"
+      },
+      "trace": {
+        "bytes": 5454325,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4252/attempt_1/trace.jsonl",
+        "sha256": "bdf783de17d490bbe6dd0c946ad325fbdb8bf14c904a6da5f41da72e320e0080"
+      }
+    },
+    "tobymao__sqlglot-4276": {
+      "resource_observations": {
+        "bytes": 71571,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4276/attempt_1/resource_observations.json",
+        "sha256": "30674cad4a1c4149ca16430ecd1e9e871014f7011d3f39c393d947fd5e86cf75"
+      },
+      "trace": {
+        "bytes": 4887561,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4276/attempt_1/trace.jsonl",
+        "sha256": "254da82a64f99fcd52411d637ab53ba174bafb33c807447be5c0d970e574c202"
+      }
+    },
+    "tobymao__sqlglot-4287": {
+      "resource_observations": {
+        "bytes": 57902,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4287/attempt_1/resource_observations.json",
+        "sha256": "2d139f4946c28d6c185fe53bc6a7dd2d40c7bf28056b0adee332910a225da170"
+      },
+      "trace": {
+        "bytes": 5213501,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4287/attempt_1/trace.jsonl",
+        "sha256": "1a531dd275f1c29987bf3806e73e4e855adec816106b1dd453aa117b39dc0224"
+      }
+    },
+    "tobymao__sqlglot-4293": {
+      "resource_observations": {
+        "bytes": 51178,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4293/attempt_1/resource_observations.json",
+        "sha256": "28c5707218c317d687e8be71f5b80e7b8b6b356130cad6b217eea30ba9541776"
+      },
+      "trace": {
+        "bytes": 4666541,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4293/attempt_1/trace.jsonl",
+        "sha256": "ea8bb5ff7896c839f190244594ee090e95a510ef89e0ec0a42ddd1522c48f72f"
+      }
+    },
+    "tobymao__sqlglot-4301": {
+      "resource_observations": {
+        "bytes": 44218,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4301/attempt_1/resource_observations.json",
+        "sha256": "b7bf264935eaf0de32f2d451c4d6e3d55f08848ad85a34286dec8c0eca5de65e"
+      },
+      "trace": {
+        "bytes": 2798522,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4301/attempt_1/trace.jsonl",
+        "sha256": "99dd414caf54273106f1ca4fceee92518c0eab30c7f49fe3bb906450daf663de"
+      }
+    },
+    "tobymao__sqlglot-4302": {
+      "resource_observations": {
+        "bytes": 86104,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4302/attempt_1/resource_observations.json",
+        "sha256": "c824f99d6e16daa807bc0a4eff58818fec3f90393ce942ddb16075a2de200f0d"
+      },
+      "trace": {
+        "bytes": 2494157,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4302/attempt_1/trace.jsonl",
+        "sha256": "b8ee714ecc405c2e605f571e79a1feb4d451bd78e32639b8f392713c92605eef"
+      }
+    },
+    "tobymao__sqlglot-4311": {
+      "resource_observations": {
+        "bytes": 46762,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4311/attempt_1/resource_observations.json",
+        "sha256": "302da61de6c8c8092e4d4ca36abec134d2b5a679aca1b7ba65f4cae243ed8e5f"
+      },
+      "trace": {
+        "bytes": 3131671,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4311/attempt_1/trace.jsonl",
+        "sha256": "55dbf897c0a9b3633162a6d515a68cc0c382424db151cd9c49e03706628f5ed8"
+      }
+    },
+    "tobymao__sqlglot-4325": {
+      "resource_observations": {
+        "bytes": 105666,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4325/attempt_1/resource_observations.json",
+        "sha256": "8782732cb6a3f7d336fc314d8027c3a9223c06853ea807c9e8344b78566e222b"
+      },
+      "trace": {
+        "bytes": 4212509,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4325/attempt_1/trace.jsonl",
+        "sha256": "0f828b4decc1ec70a1af6d223a854ccaa61a840022433c104a33fa069e90d99c"
+      }
+    },
+    "tobymao__sqlglot-4328": {
+      "resource_observations": {
+        "bytes": 54375,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4328/attempt_1/resource_observations.json",
+        "sha256": "1c29e3babde1ee9bb1eef50bf721111079368d8a28e82200e5ce4cf563e6a065"
+      },
+      "trace": {
+        "bytes": 4737427,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4328/attempt_1/trace.jsonl",
+        "sha256": "ab351b6c2912e26e454fd56fcd138b184fe57ee20ed7d5a9b6d5f81c0b660a71"
+      }
+    },
+    "tobymao__sqlglot-4331": {
+      "resource_observations": {
+        "bytes": 59522,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4331/attempt_1/resource_observations.json",
+        "sha256": "3a2d6730acf41e0a78cd270c9978bf8c35693c87deed6708f475550bdade56a2"
+      },
+      "trace": {
+        "bytes": 3186487,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4331/attempt_1/trace.jsonl",
+        "sha256": "23a05c7665778d12a8d2a96563722f9635b6d87ce0ccc2e646d4ad5254cee4da"
+      }
+    },
+    "tobymao__sqlglot-4347": {
+      "resource_observations": {
+        "bytes": 47990,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4347/attempt_1/resource_observations.json",
+        "sha256": "0f0680894e6f9cdaabf0f0f5fde7a340b6d74963efd35feb8e609539a0147620"
+      },
+      "trace": {
+        "bytes": 2778833,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4347/attempt_1/trace.jsonl",
+        "sha256": "50dd1d26e564165c68ba8e9a5e0210f9a840bc4a435d68a9b72119065c88228d"
+      }
+    },
+    "tobymao__sqlglot-4355": {
+      "resource_observations": {
+        "bytes": 71525,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4355/attempt_1/resource_observations.json",
+        "sha256": "bf007a5ad256b650c27d822d7cca02d1e8bdb23524ab54e3b710ab83df1d452b"
+      },
+      "trace": {
+        "bytes": 5951474,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4355/attempt_1/trace.jsonl",
+        "sha256": "34718b758946749742a22b40ebe4684da32eee88bf933d549363892cb36ac09d"
+      }
+    },
+    "tobymao__sqlglot-4373": {
+      "resource_observations": {
+        "bytes": 54331,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4373/attempt_1/resource_observations.json",
+        "sha256": "a63e4e2fd83829197c1eb7eaec5c745e8862fba592d1ae0f89c3e313b8a9885c"
+      },
+      "trace": {
+        "bytes": 4767513,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4373/attempt_1/trace.jsonl",
+        "sha256": "23bf1f842ee950636ac734d1ffb1c1a3183647423949c8ceeb0a1c7f1182c88d"
+      }
+    },
+    "tobymao__sqlglot-4390": {
+      "resource_observations": {
+        "bytes": 67967,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4390/attempt_1/resource_observations.json",
+        "sha256": "567863d6195adcf88bceca161b33ddbac5df2e04d32e6063f7ff0071a601d177"
+      },
+      "trace": {
+        "bytes": 5063919,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4390/attempt_1/trace.jsonl",
+        "sha256": "2e3ea553ef407bac5b127fe6aa113a2d9725d81fb4d914cf91f218c66f17f4cf"
+      }
+    },
+    "tobymao__sqlglot-4393": {
+      "resource_observations": {
+        "bytes": 66235,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4393/attempt_1/resource_observations.json",
+        "sha256": "b1f309edb1332e24e53cf93c41b4d24a5ca55f0387864ec9d142550b8fbc8b6c"
+      },
+      "trace": {
+        "bytes": 3264034,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4393/attempt_1/trace.jsonl",
+        "sha256": "e424289e4e0e8afa7de6de63a406167b6c146c3add689762ece4b75ac8a4a866"
+      }
+    },
+    "tobymao__sqlglot-4415": {
+      "resource_observations": {
+        "bytes": 95788,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4415/attempt_1/resource_observations.json",
+        "sha256": "c4e9358242a39b625232044fe4dca115c7a37e68c55e70f1f0bc9e203604a4aa"
+      },
+      "trace": {
+        "bytes": 8318883,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4415/attempt_1/trace.jsonl",
+        "sha256": "f10d537ddac84c59ad827bb5bad8d72b18bdf0e0350de7daa27c96825282be35"
+      }
+    },
+    "tobymao__sqlglot-4417": {
+      "resource_observations": {
+        "bytes": 79908,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4417/attempt_1/resource_observations.json",
+        "sha256": "a244cf53c10192089f46bc0d965ec1610f1f094b8090b141db0465ec2cc5aa64"
+      },
+      "trace": {
+        "bytes": 6908107,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4417/attempt_1/trace.jsonl",
+        "sha256": "dd9667783c6759eeac3b02a4f3cbd0d17374cf03f7327616537b893f96ddce50"
+      }
+    },
+    "tobymao__sqlglot-4430": {
+      "resource_observations": {
+        "bytes": 109014,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4430/attempt_1/resource_observations.json",
+        "sha256": "5eeadf6b71ba29ed27c387624de07fca395545759f4f3ee1433fc03f3ab1849c"
+      },
+      "trace": {
+        "bytes": 8518848,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4430/attempt_1/trace.jsonl",
+        "sha256": "9c6cfdda41fdf4d6c30cd48a0a8221c1b0ebfb7eedf527a92087a7d54d776df9"
+      }
+    },
+    "tobymao__sqlglot-4438": {
+      "resource_observations": {
+        "bytes": 82445,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4438/attempt_1/resource_observations.json",
+        "sha256": "ed7f15b3fc5ebc16b1ef0955a37180e1c782b0d65b8a1cc206ea624545c9e595"
+      },
+      "trace": {
+        "bytes": 5500464,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4438/attempt_1/trace.jsonl",
+        "sha256": "ef222a94a43d2d7e52bfdbece7e84294d87018ff369de609f10aa2175dd11243"
+      }
+    },
+    "tobymao__sqlglot-4447": {
+      "resource_observations": {
+        "bytes": 93046,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4447/attempt_1/resource_observations.json",
+        "sha256": "6c3914a30e6816d8aa755c42fb3dbce2d8f0db2898b315a2ca0f95f5bb7fd8fc"
+      },
+      "trace": {
+        "bytes": 8934525,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4447/attempt_1/trace.jsonl",
+        "sha256": "9e05b7453850f051e5e152e5ea3090003ff75ffd67ae99bd0675e77c926abe1a"
+      }
+    },
+    "tobymao__sqlglot-4448": {
+      "resource_observations": {
+        "bytes": 110682,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4448/attempt_1/resource_observations.json",
+        "sha256": "13098f45140fd59950b68511b9a5397c4ae4e932b51bc295837186dbaa0f6e8a"
+      },
+      "trace": {
+        "bytes": 7664102,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4448/attempt_1/trace.jsonl",
+        "sha256": "616f8e622311f06407d98de3fb46d517a4270dce3f6570a31cd9d0b815038fe9"
+      }
+    },
+    "tobymao__sqlglot-4457": {
+      "resource_observations": {
+        "bytes": 36540,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4457/attempt_1/resource_observations.json",
+        "sha256": "9af2af9c62c51395a06a8072fd157a2a727982daf030cca53b8963ae2404fd54"
+      },
+      "trace": {
+        "bytes": 2075978,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4457/attempt_1/trace.jsonl",
+        "sha256": "86ba040d1482f2cb2d12eb38171b1787628ad9e4c735af395e9e5849304495af"
+      }
+    },
+    "tobymao__sqlglot-4459": {
+      "resource_observations": {
+        "bytes": 53496,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4459/attempt_1/resource_observations.json",
+        "sha256": "b087c0b123255ab1675c154098586395019e126164ae9c3027cbe0a3cbf4e10f"
+      },
+      "trace": {
+        "bytes": 1150657,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4459/attempt_1/trace.jsonl",
+        "sha256": "8ab1b835001a6363d356b884638c40b29a1b8698080fa632c95655661c83b197"
+      }
+    },
+    "tobymao__sqlglot-4472": {
+      "resource_observations": {
+        "bytes": 33212,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4472/attempt_1/resource_observations.json",
+        "sha256": "abb7c9df922a547013cd54b14ca33b14bc637abc88bacc67b9b7ac20ff9226fa"
+      },
+      "trace": {
+        "bytes": 3802313,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4472/attempt_1/trace.jsonl",
+        "sha256": "125cc15e575973a32cdfd11ebe651a446b8f91e3b985e8facb17f4748c54b5ed"
+      }
+    },
+    "tobymao__sqlglot-4488": {
+      "resource_observations": {
+        "bytes": 87105,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4488/attempt_1/resource_observations.json",
+        "sha256": "a95c7eef895b83292b6723ce40f3b7f9e692ba595bb23cebbe0ab7ce5eb573aa"
+      },
+      "trace": {
+        "bytes": 2983549,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4488/attempt_1/trace.jsonl",
+        "sha256": "c0de01155886a8cb22ddc1f65bcf8cff09e4cb13749870894143d5bd0f67af00"
+      }
+    },
+    "tobymao__sqlglot-4493": {
+      "resource_observations": {
+        "bytes": 60988,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4493/attempt_1/resource_observations.json",
+        "sha256": "c3950243683d8c6311a454bfc5e085066b4e8c474f3a4d89406c3caabda85dd2"
+      },
+      "trace": {
+        "bytes": 7438154,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4493/attempt_1/trace.jsonl",
+        "sha256": "638290bf80306d7ccfeba50c36e290ad6c856459a4f18422d4055dd4dc10fe41"
+      }
+    },
+    "tobymao__sqlglot-4505": {
+      "resource_observations": {
+        "bytes": 48047,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4505/attempt_1/resource_observations.json",
+        "sha256": "8c6febf00aa52ebf7716ac67055b3055ebf06b32360b1ccfe02700f0bf26f822"
+      },
+      "trace": {
+        "bytes": 4013620,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4505/attempt_1/trace.jsonl",
+        "sha256": "f4bc42c0d5cd7f592bd97ad0c13bbdb4ffa215ffbfc2441b36c087c47341793a"
+      }
+    },
+    "tobymao__sqlglot-4506": {
+      "resource_observations": {
+        "bytes": 42342,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4506/attempt_1/resource_observations.json",
+        "sha256": "4c325684f42c42734c8d616e771f606d861162401d9a4f7ef5ff70e0a154380b"
+      },
+      "trace": {
+        "bytes": 3590201,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4506/attempt_1/trace.jsonl",
+        "sha256": "cd7d752d5b3c81fe8c560acb9ef045f51f8d889de9b820763733d9389b2a2654"
+      }
+    },
+    "tobymao__sqlglot-4516": {
+      "resource_observations": {
+        "bytes": 66499,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4516/attempt_1/resource_observations.json",
+        "sha256": "1930d69cf5779d01bdd3b7d6985e891cbaf15144add36deb44d37b66be5100a5"
+      },
+      "trace": {
+        "bytes": 5230112,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4516/attempt_1/trace.jsonl",
+        "sha256": "1d426be13b045c6e8b169b5ae3d89e8619b962d4b7a05d2bc1b088fc9c061655"
+      }
+    },
+    "tobymao__sqlglot-4519": {
+      "resource_observations": {
+        "bytes": 69219,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4519/attempt_1/resource_observations.json",
+        "sha256": "a0cbfebd7220e2f3008326d3a30114d0ff75957a0de11e2805f6a36e705932b7"
+      },
+      "trace": {
+        "bytes": 5577088,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4519/attempt_1/trace.jsonl",
+        "sha256": "5e85fd17a655f7043e63fa9b9b9d86fbc8a49131e017556c9c33edca12a0302d"
+      }
+    },
+    "tobymao__sqlglot-4523": {
+      "resource_observations": {
+        "bytes": 49254,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4523/attempt_1/resource_observations.json",
+        "sha256": "a1670ce68ea609ce7603e1dc265f8bb45d1640b6d00570caf2d08c1805d13380"
+      },
+      "trace": {
+        "bytes": 2234819,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4523/attempt_1/trace.jsonl",
+        "sha256": "69286af2d0968a8d1585ab2e34971f0c2901fc380ba87cbb2ae0ce1aa0a01a89"
+      }
+    },
+    "tobymao__sqlglot-4528": {
+      "resource_observations": {
+        "bytes": 91821,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4528/attempt_1/resource_observations.json",
+        "sha256": "09bcfa92fa302032e241c4801ace07ddae8077f7bbd0a3aece656fa2a7ed7dd8"
+      },
+      "trace": {
+        "bytes": 4098711,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4528/attempt_1/trace.jsonl",
+        "sha256": "e6cba4e3a54886280423920f48ee1690330270116d9f4e549376051a1daaccd1"
+      }
+    },
+    "tobymao__sqlglot-4533": {
+      "resource_observations": {
+        "bytes": 42218,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4533/attempt_1/resource_observations.json",
+        "sha256": "8907e823defb8c0535c3c22c35fcb138a300636106e1945bc6faab625e318f42"
+      },
+      "trace": {
+        "bytes": 2007398,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4533/attempt_1/trace.jsonl",
+        "sha256": "d9201bf63370bcd59f23f4f09321dbbdd89728e6ab04f010b066031278ff435a"
+      }
+    },
+    "tobymao__sqlglot-4545": {
+      "resource_observations": {
+        "bytes": 58357,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4545/attempt_1/resource_observations.json",
+        "sha256": "40e082643b032a5ac8b88e99e08c178c241c365dc72af84a916159c13392fde3"
+      },
+      "trace": {
+        "bytes": 9443477,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4545/attempt_1/trace.jsonl",
+        "sha256": "08767cb8999780027c7f395ffc4c4a1a2240bc83d0d924ed262676955bc7d935"
+      }
+    },
+    "tobymao__sqlglot-4546": {
+      "resource_observations": {
+        "bytes": 59514,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4546/attempt_1/resource_observations.json",
+        "sha256": "64f30c696b67dd9932cba604e98cf8dcf28adef85d8ce0247fb16e646c84f277"
+      },
+      "trace": {
+        "bytes": 6330243,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4546/attempt_1/trace.jsonl",
+        "sha256": "a120a813ebd9cd8fbace9183cae0ef19e67e3ecdca61162615f15ab90171043b"
+      }
+    },
+    "tobymao__sqlglot-4550": {
+      "resource_observations": {
+        "bytes": 96165,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4550/attempt_1/resource_observations.json",
+        "sha256": "c8b0f5ad20f98f8ddeed76cabe91f2ac0f4c263dbd85337e2de1544429782d3e"
+      },
+      "trace": {
+        "bytes": 11758035,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4550/attempt_1/trace.jsonl",
+        "sha256": "7cf52e70af0cc18016d4800fc9a5c75f4e6cba72071bd5914381f143c80b801f"
+      }
+    },
+    "tobymao__sqlglot-4563": {
+      "resource_observations": {
+        "bytes": 34464,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4563/attempt_1/resource_observations.json",
+        "sha256": "7e7d10ab097dafea5c3a6fbe3476bb9f2e1edb392fc120772207e5746017af6c"
+      },
+      "trace": {
+        "bytes": 1953385,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4563/attempt_1/trace.jsonl",
+        "sha256": "c972bc533d37d0af74b2c5db64a28d8717776020ea33ccf6d028a3b3005abb30"
+      }
+    },
+    "tobymao__sqlglot-4569": {
+      "resource_observations": {
+        "bytes": 54220,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4569/attempt_1/resource_observations.json",
+        "sha256": "a455739b0083d52744965297e41980061e761e776fe83f3169fe8c4858f1ac78"
+      },
+      "trace": {
+        "bytes": 4870007,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4569/attempt_1/trace.jsonl",
+        "sha256": "0421cb64afa9c400f5e71a2e36f36d300614f67e3ec1e788bf69e70b1d095d75"
+      }
+    },
+    "tobymao__sqlglot-4618": {
+      "resource_observations": {
+        "bytes": 47057,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4618/attempt_1/resource_observations.json",
+        "sha256": "5b0518f02e70c7e00ce9f1bc08e9f279ad9aaefbae2f040269ff85e4a169c24e"
+      },
+      "trace": {
+        "bytes": 4039994,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4618/attempt_1/trace.jsonl",
+        "sha256": "79bacfb26a2f062d33e29ce3b78846a50da4d28a6cd43fae9b03b7cfb8a3f1c7"
+      }
+    },
+    "tobymao__sqlglot-4628": {
+      "resource_observations": {
+        "bytes": 44055,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4628/attempt_1/resource_observations.json",
+        "sha256": "2fcdbdaa38cc7555ad7c14658b5b4f4845b9cba3501e41b9b1674627aec50549"
+      },
+      "trace": {
+        "bytes": 1517565,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4628/attempt_1/trace.jsonl",
+        "sha256": "3cde5db920f27269eae38c47e7c1cb9ef4275b5d1de3ae21db4e7a305e1a1fc7"
+      }
+    },
+    "tobymao__sqlglot-4643": {
+      "resource_observations": {
+        "bytes": 57695,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4643/attempt_1/resource_observations.json",
+        "sha256": "366c1b9c09408a45031f7e5c6f08cc7cfc57f934d8962615ac4818a61e6cb436"
+      },
+      "trace": {
+        "bytes": 3418956,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4643/attempt_1/trace.jsonl",
+        "sha256": "c4e5c1a9928db664f7a811ce25e380194a05798f2ea7091123d9c1b3a3464488"
+      }
+    },
+    "tobymao__sqlglot-4652": {
+      "resource_observations": {
+        "bytes": 46147,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4652/attempt_1/resource_observations.json",
+        "sha256": "05295e97aa0e95a494c5f9b74e056ed17594838ec17077960c362121ed999d38"
+      },
+      "trace": {
+        "bytes": 3629337,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4652/attempt_1/trace.jsonl",
+        "sha256": "127447430834c5f3cc3d77c94341c36ab7941917272e3d64808bdde8e817f631"
+      }
+    },
+    "tobymao__sqlglot-4661": {
+      "resource_observations": {
+        "bytes": 83041,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4661/attempt_1/resource_observations.json",
+        "sha256": "7bf77b51fd8183fce2b39b262c4a0a24c1eb69d0d2ae7daddc78a8286c93b167"
+      },
+      "trace": {
+        "bytes": 4143998,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4661/attempt_1/trace.jsonl",
+        "sha256": "2abc054684938d83e267797500748f2b082d1cffad43e6c3a1f46e18c7ddf192"
+      }
+    },
+    "tobymao__sqlglot-4683": {
+      "resource_observations": {
+        "bytes": 77488,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4683/attempt_1/resource_observations.json",
+        "sha256": "24db245e177e57061297899936bb53188df4df6fabe5418ee9690238af8b213a"
+      },
+      "trace": {
+        "bytes": 9192240,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4683/attempt_1/trace.jsonl",
+        "sha256": "1cf74606947a8f19b8f19c1cd270ba8e04f072335bb539f7339e8cab8966e74b"
+      }
+    },
+    "tobymao__sqlglot-4696": {
+      "resource_observations": {
+        "bytes": 50934,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4696/attempt_1/resource_observations.json",
+        "sha256": "28e36be99f9f4cfe3395806967fbd2dcc28febb6f8b1e26a15727eb72525d061"
+      },
+      "trace": {
+        "bytes": 3198804,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4696/attempt_1/trace.jsonl",
+        "sha256": "d65aa0a070e99e67422682b6ac15514b1c2705cd18e593dbfcc6c6ef1526a3e3"
+      }
+    },
+    "tobymao__sqlglot-4935": {
+      "resource_observations": {
+        "bytes": 40503,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4935/attempt_1/resource_observations.json",
+        "sha256": "a58e65a5886f6a9e4a3d69506a6a65824d0a9e1723eb894e42869ba4aabde162"
+      },
+      "trace": {
+        "bytes": 2450012,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4935/attempt_1/trace.jsonl",
+        "sha256": "d3c1da8d6200636ca217f711846eda690616688994f75b1eb0a6ddd7f4e41518"
+      }
+    },
+    "tobymao__sqlglot-4941": {
+      "resource_observations": {
+        "bytes": 81979,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4941/attempt_1/resource_observations.json",
+        "sha256": "bf9e911d770e34e77b94ad86237e44339d04adac89387cb1e19bee90d6c68a56"
+      },
+      "trace": {
+        "bytes": 6833146,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4941/attempt_1/trace.jsonl",
+        "sha256": "ca8cebc73f97e39d8f90e63f1ee4a41447c56f71fd4db18ce6816352dc439dce"
+      }
+    },
+    "tobymao__sqlglot-4987": {
+      "resource_observations": {
+        "bytes": 59474,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4987/attempt_1/resource_observations.json",
+        "sha256": "91d8ace5d6c40363efbe0c77a032e893914882187f483b06553339376d8510ca"
+      },
+      "trace": {
+        "bytes": 5653199,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4987/attempt_1/trace.jsonl",
+        "sha256": "9938bfa02df61899ab1866eeb52e9fc8f9efd62d479bbfd0847f739e891a3e47"
+      }
+    },
+    "tobymao__sqlglot-5015": {
+      "resource_observations": {
+        "bytes": 42422,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-5015/attempt_1/resource_observations.json",
+        "sha256": "7ca00332318c2d47e22a003c2272f5c4fa3e5cdecfa0f2cd0f55214cbeec1780"
+      },
+      "trace": {
+        "bytes": 2002971,
+        "path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-5015/attempt_1/trace.jsonl",
+        "sha256": "c80006e2eb8d16ef55b1468d03ffcbd76eb636c99f229de152ade8601751a1ae"
+      }
+    }
+  },
+  "status": "development_no_go_interval_feedback",
+  "totals": {
+    "feedback": {
+      "added_service_s": 439.39898485478324,
+      "reserved_cpu_core_s": 71447.05061529897,
+      "service_s": 18819.910641377533
+    },
+    "fixed8": {
+      "added_service_s": 6.301625887772389e-13,
+      "reserved_cpu_core_s": 147044.093252182,
+      "service_s": 18380.51165652275
+    },
+    "probe_then_two": {
+      "added_service_s": 5334.350336782639,
+      "reserved_cpu_core_s": 50481.01677457192,
+      "service_s": 23714.86199330539
+    }
+  }
+}

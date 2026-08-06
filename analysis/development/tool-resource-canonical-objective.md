@@ -1044,6 +1044,27 @@ early-reservation evaluator. Rows retain raw work, capped work, clipped-sample
 count, and clipped core-seconds. The work-conservation gate applies to capped
 physical work; any source quota other than eight still fails the run.
 
+The independently reviewed robustness result is formally NO-GO because one
+gate failed. Of 1,883 exec actions from 98 evidence-valid tasks, 661 actions
+(35.10%) across all 98 tasks had a complete decision sample, below the frozen
+40% command-count threshold. Every other gate passed. Relative to fixed-eight,
+feedback reduced reserved CPU core-seconds from 147,044.093 to 71,447.051
+(51.41%) while increasing summed service from 18,380.512 to 18,819.911 seconds
+(2.39%). Probe-then-two increased service by 29.02%. Fixed-eight reproduced
+recorded action duration exactly; all arms conserved capped work and used only
+2/4/8-core pages. The input amendment clipped 1.893414 of 43,590.120 raw
+core-seconds across 153 samples.
+
+A post-result scope diagnosis, not a replacement gate, found that the 661
+eligible actions account for 18,298.334 seconds, or 99.55% of recorded exec
+service; the 1,222 fallbacks total only 82.178 seconds. Thus the failed count
+gate identifies limited per-command applicability, while the replicated
+aggregate effect remains a lead for long-command control. The favorable effect
+does not override the predeclared failure: interval feedback is closed under
+this check. Any future long-command-scoped or concurrent test requires fresh
+SQLGlot tasks and a separately frozen decision-utility gate. The artifact is in
+`analysis/results/tool-resource-5-3-3-3-20260804/sqlglot98-interval-cpu-feedback-v1/`.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved
