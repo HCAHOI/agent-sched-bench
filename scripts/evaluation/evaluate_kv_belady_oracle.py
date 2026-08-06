@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 
 _ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "src"))
 
 from tool_resource_eval.cachewise_kv_factorial import (  # noqa: E402
