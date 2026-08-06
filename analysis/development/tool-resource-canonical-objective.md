@@ -454,6 +454,54 @@ allocation, admission, ordering, or timeout action. Scheduler implementation
 and scheduling-utility claims therefore stop. CacheWise timeout remains a
 ceiling, not a remaining-work signal.
 
+### KV eviction actionability diagnostic: frozen
+
+The advisor subsequently authorized one development-only action diagnostic
+with CacheWise as the baseline. It tests whether the existing latency PMFs
+improve a named consumer, KV victim selection, without changing the predictor
+or opening the final partition. The already-exposed validation 50 are the
+workload; all predictor and decoder evidence comes from completed development
+tasks.
+
+The existing trace-driven simulator remains fixed at FCFS, 40 sessions,
+800,000 KV tokens, 16-token blocks, and seeds 0--31. Prefix scheduling is
+excluded because it removed all eviction pressure in the earlier factorial.
+The arms are LRU, CacheWise tool-name survival, CacheWise C100, frozen Current,
+frozen development SOTA, and a hindsight next-reuse oracle. Current and SOTA
+replace C100 only for an eligible exec gap with an available latency PMF; all
+other gaps use identical C100 fallback. C100 and the tool-name histories are
+fit on the 100 development traces. Current is the fixed KB snapshot after
+those development tasks, with no validation update. The semantic head retains
+its fixed 80-task fit, and the test-phase head uses only earlier command names
+within the same task.
+
+Each PMF is converted to remaining time by a frozen empirical decoder. For
+each latency bucket, development gaps whose eligible command has that bucket
+form the within-bucket duration distribution. At elapsed time `e`, the decoder
+returns the PMF-weighted mean of `duration - e`, conditional on `duration > e`.
+The oracle uses the observed next-reuse interval and is an upper-bound policy,
+not a deployable feature or globally optimal cache solution.
+
+The primary metric is mean eviction-induced recomputed prefix blocks; lower is
+better. Evicted blocks are the physical-cost guardrail. A live experiment is
+authorized only if all of the following hold: C100 has nonzero primary cost;
+the oracle improves it by at least 10%; SOTA improves it by at least 10%; the
+upper endpoint of the paired-seed bootstrap interval for SOTA minus C100 is
+below zero; SOTA is strictly better than Current; and SOTA does not increase
+mean evicted blocks over C100. Otherwise the result is NO-GO for live KV
+integration. LRU and tool-name are descriptive baselines. Simulated latency is
+not a utility metric because cache misses do not feed back into service time.
+
+A pre-result unit audit found 1,842 single-call tool gaps: 1,044 map one-to-one
+to every eligible validation exec command, 152 are ineligible exec calls, and
+646 are non-exec calls. Eligible command duration and whole-gap duration share
+the same latency bucket for 1,038/1,044 rows; the extra gap overhead has 23.16
+ms median and 41.17 ms p95. This supports the decoder alignment but is
+development-exposed preflight evidence, not a validation claim. The final 50
+remain unread. This section freezes the protocol before any formal simulator
+outcome is produced; only plumbing failures may be repaired without an open
+amendment.
+
 ## 5. Development-exposure record
 
 - The Phase A numbers above were visible before Phase B was corrected from a
