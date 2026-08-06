@@ -1,4 +1,7 @@
 from scripts.evaluation.measure_resource_underreservation import (
+    EXPECTED_AST_IDENTITY,
+    _burst_order,
+    _burst_summary,
     _completion_order,
     _completion_summary,
     _cpu_quota_cores,
@@ -111,3 +114,75 @@ def test_completion_protocol_reports_finished_and_censored_results() -> None:
     assert censored["characterization"] == "greater_than_3600s"
     assert censored["memory_successful_median_s"] is None
     assert censored["memory_successful_ratio_to_baseline"] is None
+
+
+def test_burst_contention_gate_requires_speed_and_throttle_effect() -> None:
+    assert _burst_order() == [
+        (1, "burstable_two"),
+        (1, "hard_two"),
+        (1, "hard_four"),
+        (2, "hard_four"),
+        (2, "burstable_two"),
+        (2, "hard_two"),
+        (3, "burstable_two"),
+        (3, "hard_four"),
+        (3, "hard_two"),
+    ]
+
+    def batch(block: int, arm: str, wall_s: float, throttled: int):
+        jobs = []
+        for role, slot in (("ast", 1), ("ast", 2), ("idle", 1), ("idle", 2)):
+            jobs.append(
+                {
+                    "role": role,
+                    "slot": slot,
+                    "workload_exit": 0,
+                    "container_exit": 0,
+                    "workload": {
+                        "elapsed_s": wall_s,
+                        "source_files": EXPECTED_AST_IDENTITY[0],
+                        "bursts": [
+                            {
+                                "files": EXPECTED_AST_IDENTITY[1],
+                                "ast_nodes": EXPECTED_AST_IDENTITY[2],
+                            }
+                        ],
+                    },
+                    "observed": {"cpuset_cpus_effective": "0-7"},
+                    "telemetry_lost": False,
+                    "docker_oom_killed": False,
+                    "cpu_delta": {
+                        "throttled_usec": throttled if role == "ast" else 0
+                    },
+                    "memory_events_delta": {"oom": 0, "oom_kill": 0},
+                }
+            )
+        return {
+            "block": block,
+            "arm": arm,
+            "timed_out": False,
+            "abrupt_exit": False,
+            "batch_wall_s": wall_s,
+            "jobs": jobs,
+        }
+
+    rows = []
+    for block in range(1, 4):
+        rows.extend(
+            [
+                batch(block, "hard_two", 80.0, 100),
+                batch(block, "burstable_two", 40.0, 0),
+                batch(block, "hard_four", 38.0, 5),
+            ]
+        )
+    result = _burst_summary(rows)
+    assert result["valid"]
+    assert result["gate"]
+    assert result["status"] == "development_go_to_fresh_sqlglot_burst_protocol"
+
+    rows[1]["batch_wall_s"] = 90.0
+    assert not _burst_summary(rows)["gate"]
+
+    rows[1]["batch_wall_s"] = 40.0
+    rows[1]["jobs"][0]["memory_events_delta"]["oom"] = 1
+    assert not _burst_summary(rows)["valid"]
