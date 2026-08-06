@@ -1246,3 +1246,57 @@ Artifacts:
 
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot40-40-joint-prediction-state-v1/result.json`
 - `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot40-40-joint-prediction-state-v1/rows.jsonl`
+
+## 15. Frozen development test: confidence-gated corrections
+
+This protocol is post-hoc development, not preregistration of an untouched
+validation set. The 50-task validation outcomes and Section 12 composition
+errors were already exposed. Before this protocol was fixed, a hindsight union
+of the existing non-agent arms was observed to put a correct class within reach
+for an additional 14.18, 10.42, 10.60, and 7.14 percentage points of latency,
+CPU, RSS, and Disk rows over Current. The Section 12 composition itself changed
+CPU with 42 helpful and 11 harmful labelled corrections and Disk with 56
+helpful and 24 harmful corrections. The median difference between candidate
+and Current winning-class probability was also visible: CPU helpful/harmful
+was +0.177/+0.056 and Disk helpful/harmful was +0.020/-0.138. These observations
+motivate the method; only the final 50 tasks remain capable of confirmation.
+
+The candidate starts from the frozen Section 12 composition. Latency and RSS
+remain bit-identical. For CPU and Disk separately, rows where composition and
+Current predict the same class also remain bit-identical. On a disagreement,
+the sole selector feature is:
+
+```text
+max(composition target PMF) - max(Current target PMF)
+```
+
+No command bytes, tool identity, task metadata, output, telemetry, support,
+other target, agent, or environment signal enters the selector. Fit one scalar
+threshold per target by exact empirical risk minimization: enumerate accepting
+all, accepting none, and every distinct observed feature value; accept the
+composition class when the feature is greater than or equal to the threshold.
+Score only labelled disagreements during fit. Choose the threshold with the
+largest exact-correct count; an exact tie selects the higher threshold, hence
+the more conservative policy. There is no sweep reported as multiple arms and
+no target-specific rule beyond fitting the two independent canonical targets.
+
+Development evaluation is five-fold task-cluster out-of-fold replay over the
+50 validation tasks. Task first-occurrence order assigns task index modulo five
+to the held-out fold; each fold fits on the other 40 tasks and predicts every
+row of its ten held-out tasks. The label-free preflight found CPU disagreement
+counts of 7/18/15/11/8 and Disk counts of 24/22/9/21/8, so every held-out fold
+can exercise both selectors. No task contributes labels to its own threshold.
+
+Development GO requires the out-of-fold candidate to improve latency, CPU,
+RSS, and Disk by at least 5.0 percentage points over Current on identical
+eligible rows; not increase any severe-underprediction rate; have more helpful
+than harmful changes for every target; retain Section 12 latency/RSS hard
+predictions and PMFs bit-identically; and preserve sample order, task,
+command, labels, Current hard predictions, and Current PMFs. It also requires
+CPU and Disk helpful accepted corrections each to span at least five tasks.
+
+Failure closes confidence-gated correction without changing folds, threshold
+tie-breaking, input feature, or base arm. Only a pass authorizes fitting the
+two thresholds on all 50 development-exposed validation tasks, freezing a
+final-test evaluator, and then independently reviewing that evaluator before
+one access to the untouched final 50 tasks.
