@@ -1099,6 +1099,41 @@ enough action utility to model; it does not support a scheduler claim or access
 fresh tasks. No request, service duration, schedule, threshold, or fallback may
 change after the ceiling outcome is read.
 
+The ceiling passed all frozen gates. Existing controls reproduced exactly over
+1,196 commands and 32 schedules. Mean makespan was 12,438.102 seconds versus
+13,655.637 for strict two-core and 12,594.850 for the throughput oracle. The
+paired improvement over strict two-core was 8.913%, with interval
+[8.110%, 9.690%], and every seed improved. Paired regret relative to the
+throughput oracle was -1.263%, with interval [-1.660%, -0.868%]. This favorable
+number assumes away contention: schedules recorded a mean 344.78 starts at
+which summed modeled demand exceeded eight cores. It is therefore a ceiling,
+not scheduler evidence.
+
+The authorized contention-aware stage keeps every input and request above
+fixed. A running command with CPU-work evidence has a maximum runnable demand
+equal to its reviewed 2/4/8 throughput class. Its fixed CPU work is served by an
+8-core fluid server. Runnable commands share the server in proportion to their
+admission requests, redistributing unused shares from commands at their demand
+cap; because admitted requests never exceed eight cores, each runnable command
+receives at least its request. A command completes only after both its CPU work
+is served and its recorded duration has elapsed. It retains its CPU/RSS
+reservation while it is alive. Missing-work commands request all eight cores,
+run for recorded duration, and do not contribute invented CPU work. This model
+is deliberately limited to CPU; RSS remains the same hindsight admission bound.
+
+The throughput-request arm must reproduce every committed throughput-oracle
+schedule exactly, and the hard-two-core arm must reproduce its committed result.
+The candidate uses the identical two-core admissions but the fluid server.
+Validity requires identical tasks, commands, delays, work and RSS; full-host
+fallback for all missing work; exact CPU-work conservation; no requested
+capacity violation; and only 2/4/8 requests and demand caps. GO requires at
+least 5% paired mean makespan improvement over hard two-core with its bootstrap
+interval strictly above zero, every seed improving, and paired candidate regret
+relative to the throughput oracle having both mean and 95% upper bound at most
+5%. Failure closes this action model. Passing authorizes only a separately
+frozen physical contention test; the fluid model assumes ideal work sharing and
+cannot establish real completion time.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved
