@@ -30,7 +30,6 @@ def test_decoder_conditions_on_survival_and_static_rows_ignore_dynamic() -> None
                 "current_dynamic": {"latency": 4},
                 "frozen_at_80": {
                     "latency": 0,
-                    "peak_cpu_cores": "low",
                     "sampled_peak_rss_mb": "low",
                     "disk_read_write_bytes_total": "low",
                     "probability_by_bucket": {
@@ -49,6 +48,7 @@ def test_decoder_conditions_on_survival_and_static_rows_ignore_dynamic() -> None
         (0.25, 0.75), 4.0, (np.asarray([1.0]), np.asarray([3.0]))
     ) is None
     assert row.current["latency"] == 0
+    assert row.current["peak_cpu_cores"] is None
 
 
 def test_pmf_lookup_uses_task_and_turn_not_future_gap_end() -> None:

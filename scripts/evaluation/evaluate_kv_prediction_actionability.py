@@ -128,6 +128,8 @@ def _dev100_static_rows(values: Sequence[Mapping[str, Any]]) -> list[Row]:
     for value in values:
         frozen = dict(value["frozen_at_80"])
         pmfs = frozen.pop("probability_by_bucket")
+        for target in pmfs:
+            frozen.setdefault(target, None)
         rows.append(
             Row(
                 str(value["sample_id"]),
