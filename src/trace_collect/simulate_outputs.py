@@ -518,6 +518,7 @@ def _write_combined_worker_trace(
     network_mode: str,
     model: str | None,
     monitoring_policy: dict[str, object] | None,
+    exec_timeout_floor_s: float | None,
 ) -> None:
     """Concatenate worker JSONL files behind one global metadata header."""
     if trace_file.exists():
@@ -542,6 +543,7 @@ def _write_combined_worker_trace(
                 "effective_workers": min(workers, len(sessions)),
                 "worker_trace_files": [result.trace_file for result in worker_results],
                 "monitoring": monitoring_policy or {},
+                "exec_timeout_floor_s": exec_timeout_floor_s,
             },
         )
     finally:

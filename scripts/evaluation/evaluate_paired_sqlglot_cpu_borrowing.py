@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 import statistics
 import traceback
@@ -13,6 +14,7 @@ from typing import Any
 import numpy as np
 
 from trace_collect.simulator import simulate
+from trace_collect.simulate_openclaw import OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -26,13 +28,14 @@ TASKS = ROOT / "data/swe-rebench/tasks.json"
 RESULT_DIR = (
     ROOT
     / "analysis/results/tool-resource-5-3-3-3-20260804"
-    / "sqlglot24-paired-cpu-borrowing-v1"
+    / "sqlglot24-paired-cpu-borrowing-timeout-floor-v2"
 )
 REPLAY_DIR = (
     ROOT
     / "traces/swe-rebench/gpt-5.6-sol"
-    / "sqlglot24-paired-cpu-borrowing-v1"
+    / "sqlglot24-paired-cpu-borrowing-timeout-floor-v2"
 )
+EXEC_TIMEOUT_FLOOR_S = 3_600
 SELECTION_SEED = 20_260_807
 ARM_SEED = 20_260_808
 BOOTSTRAP_SEED = 20_260_809
@@ -76,6 +79,7 @@ def _protocol() -> dict[str, Any]:
         ],
         "source_dir": str(SOURCE),
         "task_source": str(TASKS),
+        "exec_timeout_floor_s": EXEC_TIMEOUT_FLOOR_S,
     }
 
 
@@ -116,13 +120,17 @@ def _task_artifacts(arm_dir: Path, task_id: str, arm: str) -> dict[str, Any]:
     startup_path = attempt / "container_startup.json"
     status_path = attempt / "openclaw_host_replay_status.json"
     resources_path = attempt / "resources.json"
-    for path in (startup_path, status_path, resources_path):
+    request_path = attempt / "openclaw_host_replay_request.json"
+    for path in (startup_path, status_path, resources_path, request_path):
         if not path.is_file():
             raise AssertionError(f"missing task artifact: {path}")
 
     startup = json.loads(startup_path.read_text(encoding="utf-8"))
     status = json.loads(status_path.read_text(encoding="utf-8"))
     resources = json.loads(resources_path.read_text(encoding="utf-8"))
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    if request.get("exec_timeout_floor_s") != EXEC_TIMEOUT_FLOOR_S:
+        raise AssertionError(f"wrong timeout floor for {task_id} {arm}")
     start_phase = next(
         phase for phase in startup["phases"] if phase["name"] == "start_task_container"
     )
@@ -185,6 +193,7 @@ def _task_artifacts(arm_dir: Path, task_id: str, arm: str) -> dict[str, Any]:
         },
         "resource_sample_count": len(resources.get("samples") or []),
         "cpu_controls": expected_controls,
+        "exec_timeout_floor_s": request["exec_timeout_floor_s"],
         "final_container_state": final_state,
     }
 
@@ -266,7 +275,7 @@ def _aggregate(protocol: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str
         "all_validity_checks_passed": True,
     }
     return {
-        "schema": "sqlglot-paired-cpu-borrowing-v1",
+        "schema": "sqlglot-paired-cpu-borrowing-timeout-floor-v2",
         "status": "go" if all(gate.values()) else "no_go",
         "protocol": protocol,
         "comparison": {
@@ -292,6 +301,7 @@ def main() -> None:
         json.dumps(protocol, indent=2) + "\n", encoding="utf-8"
     )
     runs: list[dict[str, Any]] = []
+    os.environ[OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV] = str(EXEC_TIMEOUT_FLOOR_S)
     try:
         for declared in protocol["pairs"]:
             pair = int(declared["pair"])
@@ -324,7 +334,7 @@ def main() -> None:
         (RESULT_DIR / "result.json").write_text(
             json.dumps(
                 {
-                    "schema": "sqlglot-paired-cpu-borrowing-v1",
+                    "schema": "sqlglot-paired-cpu-borrowing-timeout-floor-v2",
                     "status": "invalid",
                     "protocol": protocol,
                     "runs": runs,
@@ -337,6 +347,8 @@ def main() -> None:
             encoding="utf-8",
         )
         raise
+    finally:
+        os.environ.pop(OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV, None)
 
 
 if __name__ == "__main__":

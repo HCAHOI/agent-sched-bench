@@ -930,6 +930,7 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
     tmp_path: Path,
 ) -> None:
     """Container OpenClaw traces must use the host replay runner/provider for LLM calls."""
+    monkeypatch.setenv("OPENCLAW_REPLAY_EXEC_TIMEOUT_FLOOR_S", "3600")
     trace_path = tmp_path / "trace.jsonl"
     trace_path.write_text(
         "\n".join(
@@ -1136,12 +1137,14 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
         for line in trace_file.read_text(encoding="utf-8").splitlines()
     ]
     summary = next(record for record in records if record["type"] == "summary")
+    metadata = next(record for record in records if record["type"] == "trace_metadata")
     assert summary["agent_execution_environment"] == "host"
     assert summary["tool_execution_environment"] == "task_container"
     assert summary["tool_container_user"] == "root"
     assert summary["openclaw_host_pid"] == 4321
     assert summary["sleep_drift"]["by_phase"]["llm_replay"]["sample_count"] == 1
     assert summary["source_model"] == "qwen/qwen3.7-max"
+    assert metadata["exec_timeout_floor_s"] == 3_600.0
     import sys
 
     assert len(launched_commands) == 1
@@ -1156,6 +1159,7 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
     assert request["task_instance_id"] == "fc_openclaw_replay"
     assert request["source_action_agent_id"] == "fc_openclaw_replay"
     assert request["source_model"] == "qwen/qwen3.7-max"
+    assert request["exec_timeout_floor_s"] == 3_600.0
 
 
 def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(

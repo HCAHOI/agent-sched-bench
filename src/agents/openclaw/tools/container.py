@@ -228,6 +228,7 @@ class ContainerExecTool(_ContainerTool):
         agent: ContainerAgent,
         *,
         timeout: int = 300,
+        timeout_floor: int | None = None,
         path_append: str = "",
         restrict_to_workspace: bool = False,
         workspace: str = "/testbed",
@@ -235,6 +236,8 @@ class ContainerExecTool(_ContainerTool):
     ) -> None:
         super().__init__(agent)
         self.timeout = timeout
+        self.timeout_floor = int(timeout_floor or 0)
+        self._max_timeout = max(self._MAX_TIMEOUT, self.timeout_floor)
         self.path_append = path_append
         self.workspace = workspace or "/testbed"
         self._resource_trace = resource_trace
@@ -322,7 +325,10 @@ class ContainerExecTool(_ContainerTool):
                 except BaseException as exc:
                     self._record_resource_failure("safety_guard", exc)
             return replay_result
-        effective_timeout = min(int(timeout or self.timeout), self._MAX_TIMEOUT)
+        effective_timeout = min(
+            max(int(timeout or self.timeout), self.timeout_floor),
+            self._max_timeout,
+        )
         effective_command = command
         if workdir != self.workspace:
             effective_command = f"cd {shlex.quote(workdir)} && {command}"
@@ -391,6 +397,7 @@ def build_container_tool_overrides(
     agent: ContainerAgent,
     *,
     exec_timeout: int = 300,
+    exec_timeout_floor: int | None = None,
     exec_path_append: str = "",
     restrict_to_workspace: bool = False,
     workspace: str = "/testbed",
@@ -410,6 +417,7 @@ def build_container_tool_overrides(
         ContainerExecTool(
             agent,
             timeout=exec_timeout,
+            timeout_floor=exec_timeout_floor,
             path_append=exec_path_append,
             restrict_to_workspace=restrict_to_workspace,
             workspace=workspace,

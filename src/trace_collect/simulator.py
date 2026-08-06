@@ -56,7 +56,10 @@ from trace_collect.simulate_manifest import (
     _load_worker_trace_inputs,
     _worker_trace_input,
 )
-from trace_collect.simulate_openclaw import _run_openclaw_replay_session
+from trace_collect.simulate_openclaw import (
+    _run_openclaw_replay_session,
+    replay_exec_timeout_floor_s,
+)
 from trace_collect.simulate_outputs import (
     _assign_task_output_dir,
     _build_run_id,
@@ -2626,6 +2629,7 @@ async def _run_worker_wave_async(
                 "replay_start_delay_s": _REPLAY_START_DELAY_S,
                 "monitoring": monitoring_policy or {},
                 "container_start_extra_args": list(container_start_extra_args),
+                "exec_timeout_floor_s": replay_exec_timeout_floor_s(),
             },
         )
         replay_zero_monotonic = await _wait_for_global_replay_start(
@@ -3420,6 +3424,7 @@ async def simulate(
         raise ValueError("workers must be >= 1")
     if prep_concurrency < 0:
         raise ValueError("prep_concurrency must be >= 0")
+    exec_timeout_floor_s = replay_exec_timeout_floor_s()
     resolved_tool_resource_profile: Path | None = None
     if tool_resource_profile is None:
         os.environ.pop("TOOL_RESOURCE_PROFILE", None)
@@ -3585,6 +3590,7 @@ async def simulate(
                     "prep_concurrency": prep_concurrency,
                     "monitoring": monitoring_policy_dict,
                     "container_start_extra_args": list(container_start_extra_args),
+                    "exec_timeout_floor_s": exec_timeout_floor_s,
                     "tool_resource": {
                         "profile": (
                             str(tool_resource_profile.resolve())
@@ -3673,6 +3679,7 @@ async def simulate(
                 network_mode=network_mode,
                 model=model,
                 monitoring_policy=monitoring_policy_dict,
+                exec_timeout_floor_s=exec_timeout_floor_s,
             )
             _split_combined_worker_trace_by_agent(
                 combined_path=combined_trace_file,

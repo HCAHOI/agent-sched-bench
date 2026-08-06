@@ -685,6 +685,7 @@ def build_container_tools_for_agent(
     agent: ContainerAgent,
     *,
     exec_timeout: int,
+    exec_timeout_floor: int | None = None,
     exec_path_append: str = "",
     workspace: str = "/testbed",
     resource_trace: Any | None = None,
@@ -693,6 +694,7 @@ def build_container_tools_for_agent(
     return build_container_tool_overrides(
         agent,
         exec_timeout=exec_timeout,
+        exec_timeout_floor=exec_timeout_floor,
         exec_path_append=exec_path_append,
         workspace=workspace,
         resource_trace=resource_trace,
@@ -955,6 +957,9 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
     if tool_resource_run_token is not None:
         tool_resource_run_token = str(tool_resource_run_token)
     command_timeout_s = float(request["command_timeout_s"])
+    exec_timeout_floor_s = request.get("exec_timeout_floor_s")
+    if exec_timeout_floor_s is not None:
+        exec_timeout_floor_s = int(exec_timeout_floor_s)
     run_instance_id = str(request["run_instance_id"])
     prompt = str(request["prompt"])
     container_workdir = str(request.get("container_workdir") or "/testbed")
@@ -1077,6 +1082,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             tool_overrides=build_container_tools_for_agent(
                 agent,
                 exec_timeout=int(command_timeout_s),
+                exec_timeout_floor=exec_timeout_floor_s,
                 workspace=container_workdir,
                 resource_trace=resource_trace,
                 runtime_artifact_root_map=dict(
@@ -1091,6 +1097,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             "source_agent_id": request["source_action_agent_id"],
             "run_instance_id": run_instance_id,
             "replay_mode": "openclaw_host_worker",
+            "exec_timeout_floor_s": exec_timeout_floor_s,
             "tool_resource": {
                 "profile": tool_resource_profile,
                 "service_enabled": bool(tool_resource_profile),

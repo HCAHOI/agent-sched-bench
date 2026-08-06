@@ -132,6 +132,23 @@ def _container_override_tools_by_name(agent: FakeAgent) -> dict[str, object]:
     return {tool.name: tool for tool in tools}
 
 
+def test_container_exec_timeout_floor_overrides_source_timeout() -> None:
+    from agents.openclaw.tools.container import build_container_tool_overrides
+
+    agent = FakeAgent()
+    tools = build_container_tool_overrides(
+        agent=agent,
+        exec_timeout=3_600,
+        exec_timeout_floor=3_600,
+    )
+    exec_tool = next(tool for tool in tools if tool.name == "exec")
+
+    asyncio.run(exec_tool.execute(command="echo ok", timeout=600))
+
+    assert agent.requests[0]["args"]["timeout"] == 3_600
+    assert agent.timeouts == [3_600.0]
+
+
 def test_container_and_filesystem_share_file_tool_parameter_schemas() -> None:
     from agents.openclaw.tools.filesystem import (
         ListDirTool,

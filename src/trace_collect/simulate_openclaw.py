@@ -24,6 +24,19 @@ from trace_collect.simulate_utils import (
 )
 
 
+OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV = "OPENCLAW_REPLAY_EXEC_TIMEOUT_FLOOR_S"
+
+
+def replay_exec_timeout_floor_s() -> float | None:
+    raw = os.environ.get(OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV)
+    if raw is None:
+        return None
+    value = float(raw)
+    if value <= 0:
+        raise ValueError(f"{OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV} must be positive")
+    return value
+
+
 def _append_replay_record(trace_logger: TraceLogger, record: dict[str, Any]) -> None:
     handle = getattr(trace_logger, "_handle")
     handle.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -191,6 +204,7 @@ async def _run_openclaw_replay_session(
         resource_setup_timeout_s = RESOURCE_OPERATION_TIMEOUTS_S[
             "AwaitTraceReady"
         ]
+    exec_timeout_floor_s = replay_exec_timeout_floor_s()
     request = {
         "source_trace": str(loaded.source_trace),
         "source_actions": loaded.actions,
@@ -214,6 +228,7 @@ async def _run_openclaw_replay_session(
             "tpot_ms": llm_timing.tpot_ms,
         },
         "command_timeout_s": command_timeout_s,
+        "exec_timeout_floor_s": exec_timeout_floor_s,
         "tool_resource_profile": tool_resource_profile,
         "tool_resource_run_token": resource_run_token,
         "task_instance_id": loaded.task_instance_id,
