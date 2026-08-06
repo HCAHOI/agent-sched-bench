@@ -820,6 +820,45 @@ limit mismatch, baseline failure, output-identity mismatch, or incomplete
 matrix invalidates the characterization. No further timeout increase or arm
 change is allowed from these outcomes.
 
+### CPU-work lower-bound admission replay: frozen, pending
+
+The physical calibration shows that zero-cost CPU under-reservation is false,
+but its AST scaling curve is workload-specific and will not be transferred to
+SQLGlot. The next development diagnostic instead uses a quantity already
+measured for each clause: cumulative CPU work. For a fully mapped command whose
+clauses all have nonnegative `cpu_ns_cumulative`, command CPU work is their sum.
+For each prediction arm, replayed service time is
+`max(recorded duration, CPU work / requested CPU cores)`. This is a
+work-conservation lower bound, not a fitted slowdown model. Commands without
+complete CPU-work evidence retain recorded duration and are reported.
+
+The task pool, frozen Current and SOTA predictions, 32 seed-ordered 40-task
+schedules, FCFS-ready backfill, 8-core/16,000-MB host, and 2/4/8-core and
+500/2,000/16,000-MB request mappings are unchanged from the exposed validation
+admission result. A required control must reproduce the prior recorded-duration
+Current and SOTA means. The primary comparison keeps each arm's joint CPU and
+RSS requests and changes only service time by the CPU-work lower bound. A
+prespecified attribution arm holds RSS requests to the same hindsight telemetry
+bound for both predictors while retaining their CPU requests; it cannot be
+interpreted as a deployable policy.
+
+Before schedule outcomes are read, the evidence gate requires CPU work for at
+least 80% of all replayed commands and at least 80% of the 55 already-known
+Current/SOTA changed-request commands. Any mapped command with CPU work greater
+than 8.1 times its recorded wall duration invalidates the work aggregation and
+stops the replay. The primary result is SOTA-minus-Current mean makespan. A
+promising mechanism result requires at least 5% lower SOTA makespan, a paired
+seed-bootstrap interval strictly below zero, and arm-specific service time for
+at least 20 commands across 10 tasks. The attribution arm is descriptive and
+cannot rescue a failed primary result. No PMF, bucket, request, coverage, or
+effect threshold may be changed after coverage or schedule outcomes are read.
+
+Even a promising result would only show that pricing a physically necessary
+CPU cost changes the development replay. The tasks and predictors are exposed,
+memory under-reservation remains unpriced, and the CPU-work formula assumes a
+per-command enforced quota. It therefore authorizes at most a fresh real or
+held-out action experiment, not runtime integration.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved
