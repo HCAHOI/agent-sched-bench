@@ -57,6 +57,23 @@ def test_admission_rejects_zero_duration_overlap() -> None:
         )
 
 
+def test_explicit_underreservation_reports_modeled_capacity_exposure() -> None:
+    programs = [_program("a"), _program("b")]
+    reservations = {"a:0": (1.0, 1.0), "b:0": (1.0, 1.0)}
+
+    result = simulate_admission(
+        programs,
+        cpu_capacity=4.0,
+        rss_capacity_mb=16_000.0,
+        fixed_high=False,
+        requested_reservations=reservations,
+    )
+
+    assert result["modeled_capacity_exposure_events"] == 1
+    assert result["modeled_capacity_exposure_command_ids"] == ["b:0"]
+    assert result["max_modeled_cpu_demand_cores"] == 8.0
+
+
 def test_reservation_sums_pipeline() -> None:
     clauses = (
         Row("task", "repo", 0, "left", ("left",), 100.0, 1.0, 100.0, 0.0, in_pipe=True, pipeline_position=0),

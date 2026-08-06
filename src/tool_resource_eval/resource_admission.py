@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import statistics
 
@@ -41,8 +42,10 @@ class _Running:
     session_index: int
     command: AdmissionCommand
     end_s: float
-    cpu_cores: float
-    rss_mb: float
+    requested_cpu_cores: float
+    requested_rss_mb: float
+    modeled_cpu_cores: float
+    modeled_rss_mb: float
 
 
 def simulate_admission(
@@ -51,11 +54,14 @@ def simulate_admission(
     cpu_capacity: float,
     rss_capacity_mb: float,
     fixed_high: bool,
+    requested_reservations: Mapping[str, tuple[float, float]] | None = None,
 ) -> dict[str, object]:
     """Replay FCFS-ready commands with work-conserving resource backfill."""
 
     if not programs or cpu_capacity <= 0.0 or rss_capacity_mb <= 0.0:
         raise ValueError("admission replay requires programs and positive capacities")
+    if fixed_high and requested_reservations is not None:
+        raise ValueError("fixed-high and explicit reservations are mutually exclusive")
     if any(not program.commands for program in programs):
         raise ValueError("every admission program must contain an exec command")
     sessions = [
@@ -88,10 +94,14 @@ def simulate_admission(
     now_s = min(session.ready_s for session in sessions)
     running: list[_Running] = []
     used_cpu = used_rss = 0.0
+    modeled_cpu = modeled_rss = 0.0
     queue_s = reserved_cpu_s = reserved_rss_mb_s = service_s = 0.0
     max_concurrent = 0
     overlapped: set[str] = set()
     capacity_violation = False
+    exposure_events = 0
+    exposure_commands: set[str] = set()
+    max_modeled_cpu = max_modeled_rss = 0.0
     starts = 0
 
     while running or any(
@@ -103,8 +113,10 @@ def simulate_admission(
         )
         for item in completed:
             running.remove(item)
-            used_cpu -= item.cpu_cores
-            used_rss -= item.rss_mb
+            used_cpu -= item.requested_cpu_cores
+            used_rss -= item.requested_rss_mb
+            modeled_cpu -= item.modeled_cpu_cores
+            modeled_rss -= item.modeled_rss_mb
             session = sessions[item.session_index]
             session.running = False
             session.command_index += 1
@@ -129,8 +141,17 @@ def simulate_admission(
         )
         for index, session in ready:
             command = session.program.commands[session.command_index]
-            cpu = cpu_capacity if fixed_high else command.cpu_cores
-            rss = rss_capacity_mb if fixed_high else command.rss_mb
+            if fixed_high:
+                cpu, rss = cpu_capacity, rss_capacity_mb
+            elif requested_reservations is not None:
+                try:
+                    cpu, rss = requested_reservations[command.command_id]
+                except KeyError as error:
+                    raise ValueError(
+                        f"command lacks an explicit reservation: {command.command_id}"
+                    ) from error
+            else:
+                cpu, rss = command.cpu_cores, command.rss_mb
             if cpu > cpu_capacity + _EPSILON or rss > rss_capacity_mb + _EPSILON:
                 raise ValueError(f"command reservation exceeds capacity: {command.command_id}")
             if used_cpu + cpu > cpu_capacity + _EPSILON or used_rss + rss > rss_capacity_mb + _EPSILON:
@@ -141,9 +162,26 @@ def simulate_admission(
             service_s += command.duration_s
             reserved_cpu_s += cpu * command.duration_s
             reserved_rss_mb_s += rss * command.duration_s
-            running.append(_Running(index, command, now_s + command.duration_s, cpu, rss))
+            running.append(
+                _Running(
+                    index,
+                    command,
+                    now_s + command.duration_s,
+                    cpu,
+                    rss,
+                    command.cpu_cores,
+                    command.rss_mb,
+                )
+            )
             used_cpu += cpu
             used_rss += rss
+            modeled_cpu += command.cpu_cores
+            modeled_rss += command.rss_mb
+            max_modeled_cpu = max(max_modeled_cpu, modeled_cpu)
+            max_modeled_rss = max(max_modeled_rss, modeled_rss)
+            if modeled_cpu > cpu_capacity + _EPSILON or modeled_rss > rss_capacity_mb + _EPSILON:
+                exposure_events += 1
+                exposure_commands.add(command.command_id)
             capacity_violation |= (
                 used_cpu > cpu_capacity + _EPSILON
                 or used_rss > rss_capacity_mb + _EPSILON
@@ -172,7 +210,12 @@ def simulate_admission(
     completion = [session.completion_s for session in sessions]
     if any(value is None for value in completion):
         raise ValueError("admission replay ended before every task completed")
-    if abs(used_cpu) > _EPSILON or abs(used_rss) > _EPSILON:
+    if (
+        abs(used_cpu) > _EPSILON
+        or abs(used_rss) > _EPSILON
+        or abs(modeled_cpu) > _EPSILON
+        or abs(modeled_rss) > _EPSILON
+    ):
         raise ValueError("admission replay leaked a reservation")
     completion_s = [float(value) for value in completion if value is not None]
     return {
@@ -186,4 +229,8 @@ def simulate_admission(
         "max_concurrent_commands": max_concurrent,
         "overlapped_command_ids": sorted(overlapped),
         "capacity_violation": capacity_violation,
+        "modeled_capacity_exposure_events": exposure_events,
+        "modeled_capacity_exposure_command_ids": sorted(exposure_commands),
+        "max_modeled_cpu_demand_cores": max_modeled_cpu,
+        "max_modeled_rss_demand_mb": max_modeled_rss,
     }
