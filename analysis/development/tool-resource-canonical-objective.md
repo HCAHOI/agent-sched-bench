@@ -1291,6 +1291,38 @@ CPU controls. The 94 as-yet uncollected SQLGlot tasks are all older than the
 202 collected tasks, so they cannot later be described as an IID confirmation
 cohort.
 
+The formal matrix stopped invalid after the first pair, exactly as required.
+Both borrowing tasks replayed cleanly, with pair makespan 774.960 seconds. In
+hard-two, task `tobymao__sqlglot-2821` replayed all 103 actions but one action
+changed from success to timeout, so the 1,076.393-second pair result is not a
+comparable outcome. The source action installed DuckDB 0.9.2, PySpark 3.5.0,
+and Pandas below 3 with an explicit 600-second tool timeout; it succeeded in
+294.628 seconds in the source trace and 344.420 seconds under borrowing, but
+hard-two killed it at 600.355 seconds. Both arms recorded zero OOM/OOM-kill
+events and valid cleanup. The artifact remains preserved as
+`sqlglot24-paired-cpu-borrowing-v1`; it is invalid, not a NO-GO or an effect
+estimate.
+
+#### Frozen descriptive timeout-floor replay
+
+The advisor requested a one-hour overnight ceiling before the invalid result,
+but the first implementation changed only the simulator fallback. OpenClaw's
+source argument and internal 600-second maximum still won. A separate
+development-only matrix therefore repeats the exact committed task IDs, pair
+order, arm order, CPU controls, replay speed, monitoring, metrics, bootstrap,
+and GO/NO-GO thresholds under one explicit correction: every exec action's
+effective timeout is `max(source timeout, 3,600 seconds)`, and the replay-only
+tool maximum is raised to admit that floor. Original command text, arguments,
+action order, and outputs remain otherwise unchanged. The exact floor must be
+recorded in every replay request and trace metadata.
+
+This is an openly amended descriptive matrix after pair 1 was exposed; it does
+not replace the invalid artifact or provide confirmation. It uses new output
+directories ending `timeout-floor-v2`, refuses overwrite, and never drops or
+reruns an invalid pair. A clean pass may establish SQLGlot development utility
+and motivate a fresh temporal validation; it cannot validate a tuned predictor
+or open the old final partition. Failure stops this physical branch.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved
