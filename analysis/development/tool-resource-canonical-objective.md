@@ -610,6 +610,45 @@ under the current simulator and action model. The independently reviewed
 artifact is in
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-kv-oracle-decomposition-v1/`.
 
+### CPU+RSS command admission oracle: frozen
+
+KV eviction is closed. The next development-only action-space test asks whether
+the existing command CPU/RSS targets could support a concrete consumer at all:
+a single-host admission controller that starts ready `exec` commands only when
+their reserved CPU and RSS fit within 8 cores and 16,000 MB. It uses the 100
+already-exposed SQLGlot tasks from
+`sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803`, with the same 32 seeds and
+40-task selections as the KV diagnostics. No final task or predictor output is
+read in this phase.
+
+Each task is a closed serial program. The replay preserves recorded time before
+the first `exec`, between successive `exec` calls, after the final `exec`, and
+each command's recorded duration. Delaying one command shifts the rest of that
+task; other tasks continue independently. Ready commands use deterministic FCFS
+order with work-conserving backfill. Non-`exec` work contributes recorded think
+time but consumes no modeled host reservation.
+
+The fixed-high control reserves the full host for every command, so at most one
+command executes at a time. The hindsight oracle composes retained clause
+telemetry using the canonical physical rule: sequential stages take the maximum
+and concurrent pipeline members sum. A missing CPU or RSS value from a
+sub-500-ms clause reserves that target's Low-class ceiling (2 cores or 500 MB);
+a longer missing value, invalid structure, or unmatched command reserves the
+full host for that target. Composed values are bounded by the physical host
+capacity. Thus missing telemetry never creates packing headroom. The oracle is
+not causal and cannot be used as a predictor result.
+
+Mean batch makespan is primary; mean task completion time and total command
+queue time are secondary. GO requires at least 10% lower mean makespan, a
+paired-seed bootstrap interval for oracle-minus-control makespan strictly below
+zero, at least 20 distinct commands across 10 tasks starting while another
+command runs, identical commands and recorded durations in both arms, and no
+CPU/RSS reservation-capacity violation. GO authorizes only evaluation of
+Current and development SOTA as admission inputs. NO-GO closes command-level
+CPU+RSS admission for this action model. The replay does not model idle
+container memory, Disk/network contention, or performance interference, so even
+GO is only an upper bound and cannot authorize runtime integration.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved
