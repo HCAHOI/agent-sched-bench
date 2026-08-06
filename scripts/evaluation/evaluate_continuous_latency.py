@@ -817,6 +817,13 @@ def run(
     clause_gate = _mechanism_gate(
         metrics, sidecar, "clause_survival", "command_survival"
     )
+    parsed_validation = [
+        parse_command_clauses(row.command) for row in validation_commands
+    ]
+    compound_commands = sum(
+        isinstance(parsed.get("clauses"), list) and len(parsed["clauses"]) > 1
+        for parsed in parsed_validation
+    )
     return {
         "schema": VERSION,
         "status": _status(command_gate["go"], clause_gate["go"]),
@@ -836,9 +843,7 @@ def run(
         "coverage": {
             "commands": len(sidecar),
             "tasks": len(validation_ids),
-            "compound_commands": sum(
-                len(row.clauses) > 1 for row in validation_commands
-            ),
+            "compound_commands": compound_commands,
             "clause_usable_at_start_commands": sum(
                 timing.clause_usable for timing in timings.values()
             ),
