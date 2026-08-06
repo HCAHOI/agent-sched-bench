@@ -58,6 +58,11 @@ PRIOR_ADMISSION_RESULT = (
     / "analysis/results/tool-resource-5-3-3-3-20260804"
     / "sqlglot50-resource-admission-predictors-v1/result.json"
 )
+THROUGHPUT_RESULT = (
+    _ROOT
+    / "analysis/results/tool-resource-5-3-3-3-20260804"
+    / "sqlglot50-cpu-throughput-oracle-v1/result.json"
+)
 
 
 def _bucket_cpu(value: float) -> float:
@@ -116,12 +121,13 @@ def _simulate(
     return result, overlaps
 
 
-def _require_committed_inputs() -> None:
+def _require_committed_inputs(extra: tuple[Path, ...] = ()) -> None:
     paths = (
         Path(__file__).resolve(),
         SPLIT.resolve(),
         CPU_WORK_RESULT.resolve(),
         PRIOR_ADMISSION_RESULT.resolve(),
+        *extra,
     )
     for path in paths:
         subprocess.run(
@@ -135,6 +141,24 @@ def _require_committed_inputs() -> None:
         cwd=_ROOT,
         check=True,
     )
+
+
+def _program_snapshot(
+    programs: Mapping[str, AdmissionProgram],
+    cpu_work: Mapping[str, float],
+) -> dict[str, dict[str, Any]]:
+    return {
+        command.command_id: {
+            "task_id": task_id,
+            "recorded_duration_s": command.duration_s,
+            "peak_cpu_cores": command.cpu_cores,
+            "rss_mb": command.rss_mb,
+            "delay_after_s": command.delay_after_s,
+            "cpu_work_core_s": cpu_work.get(command.command_id),
+        }
+        for task_id, program in sorted(programs.items())
+        for command in program.commands
+    }
 
 
 def run() -> dict[str, Any]:
@@ -344,18 +368,7 @@ def run() -> dict[str, Any]:
                 key: list(value) for key, value in sorted(throughput_requests.items())
             },
         },
-        "program_inputs_by_command": {
-            command.command_id: {
-                "task_id": task_id,
-                "recorded_duration_s": command.duration_s,
-                "peak_cpu_cores": command.cpu_cores,
-                "rss_mb": command.rss_mb,
-                "delay_after_s": command.delay_after_s,
-                "cpu_work_core_s": cpu_work.get(command.command_id),
-            }
-            for task_id, program in sorted(programs.items())
-            for command in program.commands
-        },
+        "program_inputs_by_command": _program_snapshot(programs, cpu_work),
         "control_reproduction": {
             "prior_admission_result": str(PRIOR_ADMISSION_RESULT.resolve()),
             "all_seed_task_ids_and_metrics_exact": True,
@@ -384,6 +397,188 @@ def run() -> dict[str, Any]:
     }
 
 
+def run_two_core_baseline() -> dict[str, Any]:
+    prior = json.loads(THROUGHPUT_RESULT.read_text(encoding="utf-8"))
+    task_ids = list(json.loads(SPLIT.read_text(encoding="utf-8"))["validation"])
+    if task_ids != prior["protocol"]["validation_task_ids"]:
+        raise ValueError("validation cohort differs from throughput oracle")
+    cpu_work = {
+        command_id: float(row["cpu_work_core_s"])
+        for command_id, row in prior["program_inputs_by_command"].items()
+        if row["cpu_work_core_s"] is not None
+    }
+    missing = set(prior["coverage"]["missing_cpu_work_command_ids"])
+    command_rows, raw_counts, traces = _validation_commands(task_ids)
+    source_counts: Counter[str] = Counter()
+    programs = {
+        task_id: _program(
+            task_id,
+            traces[task_id],
+            command_rows,
+            raw_counts,
+            source_counts,
+        )
+        for task_id in task_ids
+    }
+    if _program_snapshot(programs, cpu_work) != prior["program_inputs_by_command"]:
+        raise ValueError("command program differs from throughput oracle")
+
+    throughput_requests = {
+        command_id: tuple(value)
+        for command_id, value in prior["requests"]["throughput_bucket"].items()
+    }
+    two_core_requests = {
+        command.command_id: (
+            CPU_CAPACITY if command.command_id in missing else 2.0,
+            command.rss_mb,
+        )
+        for program in programs.values()
+        for command in program.commands
+    }
+    if not all(
+        two_core_requests[command_id][0] == CPU_CAPACITY for command_id in missing
+    ):
+        raise ValueError("missing CPU-work commands do not use full-host fallback")
+    throughput_programs, throughput_dilation = _cpu_floor_programs(
+        programs, throughput_requests, cpu_work
+    )
+    two_core_programs, two_core_dilation = _cpu_floor_programs(
+        programs, two_core_requests, cpu_work
+    )
+
+    prior_by_seed = {int(row["seed"]): row for row in prior["schedule_results"]}
+    schedule_results = []
+    for seed in SEEDS:
+        selected = sorted(programs)
+        np.random.default_rng(seed).shuffle(selected)
+        selected = selected[:LOAD]
+        oracle, _ = _simulate(
+            throughput_programs,
+            selected,
+            requests=throughput_requests,
+        )
+        if (
+            selected != prior_by_seed[seed]["task_ids"]
+            or oracle != prior_by_seed[seed]["arms"]["throughput_bucket"]
+        ):
+            raise ValueError("throughput-oracle schedule control drifted")
+        two_core, _ = _simulate(
+            two_core_programs,
+            selected,
+            requests=two_core_requests,
+        )
+        schedule_results.append(
+            {
+                "seed": seed,
+                "task_ids": selected,
+                "arms": {"throughput_oracle": oracle, "two_core_default": two_core},
+            }
+        )
+
+    metrics = (
+        "makespan_s",
+        "mean_task_completion_s",
+        "total_command_queue_s",
+        "total_command_service_s",
+        "reserved_cpu_core_s",
+        "reserved_rss_mb_s",
+        "max_concurrent_commands",
+        "modeled_capacity_exposure_events",
+    )
+    means = {
+        arm: {
+            metric: float(
+                np.mean([row["arms"][arm][metric] for row in schedule_results])
+            )
+            for metric in metrics
+        }
+        for arm in ("throughput_oracle", "two_core_default")
+    }
+    regrets = [
+        (
+            float(row["arms"]["two_core_default"]["makespan_s"])
+            - float(row["arms"]["throughput_oracle"]["makespan_s"])
+        )
+        / float(row["arms"]["throughput_oracle"]["makespan_s"])
+        for row in schedule_results
+    ]
+    comparison = {
+        "candidate": "two_core_default",
+        "baseline": "throughput_oracle",
+        "metric": "paired relative makespan regret; lower is better",
+        **_bootstrap(regrets),
+    }
+    upper = comparison["ci95_paired_seed_bootstrap"][1]
+    lower = comparison["ci95_paired_seed_bootstrap"][0]
+    mean_regret = comparison["mean"]
+    adequate = mean_regret <= 0.05 and upper <= 0.05
+    prediction_headroom = mean_regret > 0.05 and lower > 0.0
+    no_violation = not any(
+        bool(row["arms"][arm]["capacity_violation"])
+        for row in schedule_results
+        for arm in ("throughput_oracle", "two_core_default")
+    )
+    validity = {
+        "prior_oracle_reproduced": True,
+        "missing_commands_use_full_cpu": all(
+            two_core_requests[command_id][0] == CPU_CAPACITY for command_id in missing
+        ),
+        "identical_commands_and_work": all(
+            row["arms"]["throughput_oracle"]["command_count"]
+            == row["arms"]["two_core_default"]["command_count"]
+            for row in schedule_results
+        ),
+        "no_requested_capacity_violation": no_violation,
+    }
+    if not all(validity.values()):
+        raise ValueError("two-core baseline validity gate failed")
+    if adequate:
+        status = "development_stop_predictor_two_core_adequate"
+    elif prediction_headroom:
+        status = "development_go_to_throughput_predictor"
+    else:
+        status = "development_inconclusive_two_core_regret"
+    return {
+        "schema": "two-core-throughput-baseline-v1",
+        "status": status,
+        "claim_bearing": False,
+        "protocol": {
+            "task_pool": "exposed SQLGlot validation50",
+            "validation_task_ids": task_ids,
+            "load": LOAD,
+            "seeds": list(SEEDS),
+            "maximum_adequate_regret": 0.05,
+            "shared_rss": "reviewed hindsight throughput-oracle RSS",
+        },
+        "coverage": {
+            "tasks": len(programs),
+            "commands": len(prior["program_inputs_by_command"]),
+            "cpu_work_commands": len(cpu_work),
+            "missing_cpu_work_command_ids": sorted(missing),
+        },
+        "requests": {
+            key: list(value) for key, value in sorted(two_core_requests.items())
+        },
+        "duration_adjustment": {
+            "throughput_oracle": throughput_dilation,
+            "two_core_default": two_core_dilation,
+        },
+        "mean_metrics": means,
+        "primary_comparison": comparison,
+        "decision": {
+            "two_core_adequate": adequate,
+            "prediction_has_actionable_headroom": prediction_headroom,
+        },
+        "validity": validity,
+        "schedule_results": schedule_results,
+        "limitations": [
+            "This baseline uses hindsight RSS and development-exposed tasks.",
+            "The CPU-work duration floor is optimistic about critical-path scaling.",
+            "Missing CPU-work commands conservatively reserve the full host.",
+        ],
+    }
+
+
 def _git_sha() -> str:
     return subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -397,15 +592,21 @@ def _git_sha() -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument("--two-core-baseline", action="store_true")
     args = parser.parse_args()
     if args.out_dir.exists():
         raise FileExistsError("output directory already exists")
-    _require_committed_inputs()
-    result = run()
+    _require_committed_inputs(
+        (THROUGHPUT_RESULT.resolve(),) if args.two_core_baseline else ()
+    )
+    result = run_two_core_baseline() if args.two_core_baseline else run()
     result["inputs"] = {
         "split": str(SPLIT.resolve()),
         "cpu_work_result": str(CPU_WORK_RESULT.resolve()),
         "prior_admission_result": str(PRIOR_ADMISSION_RESULT.resolve()),
+        "throughput_result": (
+            str(THROUGHPUT_RESULT.resolve()) if args.two_core_baseline else None
+        ),
         "git_sha": _git_sha(),
     }
     args.out_dir.mkdir(parents=True)
