@@ -145,3 +145,15 @@ def test_feedback_rejects_a_censored_source_quota() -> None:
 
     with pytest.raises(ValueError, match="not collected at eight cores"):
         feedback_action_row(action)
+
+
+def test_feedback_caps_counter_quantization_above_cpu_opportunity() -> None:
+    action = _action()
+    action["data"]["resource_timeline"]["samples"][0]["cpu_core_s"] = 4.01
+
+    row, reason = feedback_action_row(action)
+
+    assert reason == "eligible"
+    assert row["clipped_samples"] == 1
+    assert row["clipped_cpu_core_s"] == pytest.approx(0.01)
+    assert row["raw_timeline_cpu_core_s"] - row["timeline_cpu_core_s"] == pytest.approx(0.01)

@@ -195,6 +195,18 @@ def run() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         "source_files": source_files,
         "totals": totals,
         "request_counts": request_counts,
+        "input_adjustment": {
+            "clipped_samples": sum(int(row["clipped_samples"]) for row in rows),
+            "clipped_cpu_core_s": sum(
+                float(row["clipped_cpu_core_s"]) for row in rows
+            ),
+            "raw_timeline_cpu_core_s": sum(
+                float(row["raw_timeline_cpu_core_s"] or 0.0) for row in rows
+            ),
+            "physical_timeline_cpu_core_s": sum(
+                float(row["timeline_cpu_core_s"] or 0.0) for row in rows
+            ),
+        },
         "comparisons": {
             "fixed8_reconstruction_error_fraction": fixed_error,
             "feedback_reservation_reduction_vs_fixed8": reservation_reduction,

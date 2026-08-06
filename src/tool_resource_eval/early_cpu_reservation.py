@@ -184,11 +184,16 @@ def feedback_action_row(action: dict[str, Any]) -> tuple[dict[str, Any], str]:
             "tool_call_id": str(data.get("tool_call_id") or action.get("action_id") or ""),
             "recorded_duration_s": duration,
             "timeline_cpu_core_s": None,
+            "raw_timeline_cpu_core_s": None,
+            "clipped_samples": 0,
+            "clipped_cpu_core_s": 0.0,
             "eligible": False,
             "arms": {name: dict(fallback) for name in ("fixed8", "probe_then_two", "feedback")},
         }, "no_valid_timeline"
 
     parsed: list[tuple[float, float]] = []
+    raw_cpu_work = clipped_cpu_work = 0.0
+    clipped_samples = 0
     for sample in samples:
         if not isinstance(sample, dict):
             raise ValueError("resource timeline contains a non-object sample")
@@ -199,9 +204,11 @@ def feedback_action_row(action: dict[str, Any]) -> tuple[dict[str, Any], str]:
             raise ValueError("resource timeline sample lacks CPU work or duration")
         if not math.isclose(quota, CONTROL_PAGE, abs_tol=1e-9):
             raise ValueError("feedback source timeline was not collected at eight cores")
-        if cpu > quota * dt + 1e-6:
-            raise ValueError("resource timeline CPU work exceeds its quota")
-        parsed.append((dt, cpu))
+        raw_cpu_work += cpu
+        physical_cpu = min(cpu, quota * dt)
+        clipped_cpu_work += physical_cpu
+        clipped_samples += physical_cpu < cpu
+        parsed.append((dt, physical_cpu))
     if not parsed:
         raise ValueError("valid resource timeline has no samples")
     sample_wall = sum(dt for dt, _ in parsed)
@@ -225,6 +232,9 @@ def feedback_action_row(action: dict[str, Any]) -> tuple[dict[str, Any], str]:
             "tool_call_id": str(data.get("tool_call_id") or action.get("action_id") or ""),
             "recorded_duration_s": duration,
             "timeline_cpu_core_s": sum(cpu for _, cpu in parsed),
+            "raw_timeline_cpu_core_s": raw_cpu_work,
+            "clipped_samples": clipped_samples,
+            "clipped_cpu_core_s": raw_cpu_work - clipped_cpu_work,
             "eligible": False,
             "arms": {name: dict(fallback) for name in ("fixed8", "probe_then_two", "feedback")},
         }, "no_full_decision_sample"
@@ -286,6 +296,9 @@ def feedback_action_row(action: dict[str, Any]) -> tuple[dict[str, Any], str]:
         "tool_call_id": str(data.get("tool_call_id") or action.get("action_id") or ""),
         "recorded_duration_s": duration,
         "timeline_cpu_core_s": sum(cpu for _, cpu in parsed),
+        "raw_timeline_cpu_core_s": raw_cpu_work,
+        "clipped_samples": clipped_samples,
+        "clipped_cpu_core_s": raw_cpu_work - clipped_cpu_work,
         "eligible": True,
         "arms": arms,
     }, "eligible"
