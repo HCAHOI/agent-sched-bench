@@ -8,7 +8,7 @@ import json
 import math
 from pathlib import Path
 import statistics
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 import numpy as np
 
@@ -61,6 +61,7 @@ class Session:
 
 
 RemainingPredictor = Callable[[Session, float], float]
+RequestKey = tuple[str, int]
 
 
 def _canonical_traces(root: Path) -> dict[str, Path]:
@@ -219,6 +220,7 @@ def _make_room(
     clusters: dict[int, dict[str, ClusterModel]],
     label_cache: dict[tuple[int, str, str], int],
     remaining_predictor: RemainingPredictor | None = None,
+    next_request_rank: Mapping[RequestKey, int] | None = None,
 ) -> tuple[int, int, int]:
     required = max(0, total_blocks + add_blocks - CAPACITY_BLOCKS)
     if required == 0:
@@ -262,9 +264,39 @@ def _make_room(
                     session.program.task_id,
                 ),
             )
+            limit = victim.resident_blocks
+        elif eviction == "belady" and next_request_rank is not None:
+            free_suffix = [
+                (session.resident_blocks - _reusable_blocks(session), session)
+                for session in candidates
+                if session.resident_blocks > _reusable_blocks(session)
+            ]
+            if free_suffix:
+                limit, victim = max(
+                    free_suffix,
+                    key=lambda item: (
+                        next_request_rank[
+                            (item[1].program.task_id, item[1].turn_index)
+                        ],
+                        item[1].program.task_id,
+                    ),
+                )
+            else:
+                victim = max(
+                    candidates,
+                    key=lambda session: (
+                        next_request_rank[
+                            (session.program.task_id, session.turn_index)
+                        ],
+                        session.program.task_id,
+                    ),
+                )
+                limit = victim.resident_blocks
         else:
             raise ValueError(f"unknown eviction policy {eviction}")
-        count = min(required, victim.resident_blocks)
+        if eviction not in {"predicted", "belady"}:
+            limit = victim.resident_blocks
+        count = min(required, limit)
         victim.resident_blocks -= count
         required -= count
         total_blocks -= count
@@ -283,6 +315,7 @@ def simulate(
     clusters: dict[int, dict[str, ClusterModel]],
     label_cache: dict[tuple[int, str, str], int],
     remaining_predictor: RemainingPredictor | None = None,
+    next_request_rank: Mapping[RequestKey, int] | None = None,
 ) -> dict[str, float | int]:
     sessions = [Session(program, rank) for rank, program in enumerate(programs)]
     total_blocks = evicted_blocks = eviction_events = pressure_events = 0
@@ -322,6 +355,7 @@ def simulate(
             clusters=clusters,
             label_cache=label_cache,
             remaining_predictor=remaining_predictor,
+            next_request_rank=next_request_rank,
         )
         pressure_events += total_blocks < before
         evicted_blocks += evicted
@@ -351,6 +385,7 @@ def simulate(
                 clusters=clusters,
                 label_cache=label_cache,
                 remaining_predictor=remaining_predictor,
+                next_request_rank=next_request_rank,
             )
             pressure_events += total_blocks < before
             evicted_blocks += evicted
@@ -387,6 +422,41 @@ def simulate(
         "p95_session_llm_latency_s": float(np.quantile(session_latencies, 0.95)),
         "makespan_s": now_s,
     }
+
+
+def request_ranks(
+    programs: list[Program], *, scheduler: str = "fcfs"
+) -> dict[RequestKey, int]:
+    """Return the fixed request order when cache misses do not affect service."""
+
+    sessions = [Session(program, rank) for rank, program in enumerate(programs)]
+    ranks: dict[RequestKey, int] = {}
+    now_s = 0.0
+    while not all(session.finished for session in sessions):
+        queued = [
+            session
+            for session in sessions
+            if not session.finished and session.arrival_s <= now_s + 1e-12
+        ]
+        if not queued:
+            now_s = min(
+                session.arrival_s for session in sessions if not session.finished
+            )
+            continue
+        current = _choose_session(queued, scheduler)
+        key = (current.program.task_id, current.turn_index)
+        ranks[key] = len(ranks)
+        turn = current.program.turns[current.turn_index]
+        finish_s = now_s + turn.service_s
+        current.turn_index += 1
+        if current.turn_index == len(current.program.turns):
+            current.finished = True
+        else:
+            if turn.gap is None:
+                raise ValueError("non-final turn lacks a CacheWise tool gap")
+            current.arrival_s = finish_s + turn.gap.end - turn.gap.start
+        now_s = finish_s
+    return ranks
 
 
 def _paper_sized(

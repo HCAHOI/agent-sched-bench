@@ -12,6 +12,7 @@ from tool_resource_eval.cachewise_kv_factorial import (
     _make_room,
     _paper_sized,
     simulate,
+    request_ranks,
 )
 from tool_resource_eval.cachewise_reproduction import (
     Gap,
@@ -166,6 +167,60 @@ def test_custom_remaining_predictor_controls_the_victim() -> None:
 
     assert short.resident_blocks == 1
     assert long.resident_blocks == 0
+
+
+def test_block_belady_evicts_dead_suffix_then_latest_reuse() -> None:
+    current = Session(_program("current", 16), seed_rank=0)
+    near = Session(
+        Program(
+            "near",
+            (Turn(64, 16, 1.0, None), Turn(32, 16, 1.0, None)),
+        ),
+        seed_rank=1,
+        turn_index=1,
+        resident_blocks=5,
+    )
+    far = Session(
+        Program(
+            "far",
+            (Turn(64, 16, 1.0, None), Turn(80, 16, 1.0, None)),
+        ),
+        seed_rank=2,
+        turn_index=1,
+        resident_blocks=5,
+    )
+
+    _make_room(
+        4,
+        total_blocks=CAPACITY_BLOCKS,
+        current=current,
+        sessions=[current, near, far],
+        now_s=0.0,
+        eviction="belady",
+        global_history=np.asarray([1.0]),
+        tool_history={},
+        clusters={100: {}},
+        label_cache={},
+        next_request_rank={("near", 1): 1, ("far", 1): 10},
+    )
+
+    assert near.resident_blocks == 2
+    assert far.resident_blocks == 4
+
+
+def test_request_ranks_follow_fcfs_service_and_gap_timing() -> None:
+    programs = [
+        Program(
+            "a",
+            (
+                Turn(16, 16, 1.0, Gap("a", 0.0, 10.0, "exec", "a")),
+                Turn(16, 16, 1.0, None),
+            ),
+        ),
+        _program("b", 16),
+    ]
+
+    assert request_ranks(programs) == {("a", 0): 0, ("b", 0): 1, ("a", 1): 2}
 
 
 def test_arrival_during_service_releases_suffix_before_growth(monkeypatch) -> None:
