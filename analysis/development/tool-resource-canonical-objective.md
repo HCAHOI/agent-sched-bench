@@ -610,7 +610,7 @@ under the current simulator and action model. The independently reviewed
 artifact is in
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-kv-oracle-decomposition-v1/`.
 
-### CPU+RSS command admission oracle: frozen
+### CPU+RSS command admission oracle: complete, go
 
 KV eviction is closed. The next development-only action-space test asks whether
 the existing command CPU/RSS targets could support a concrete consumer at all:
@@ -649,6 +649,29 @@ Current and development SOTA as admission inputs. NO-GO closes command-level
 CPU+RSS admission for this action model. The replay does not model idle
 container memory, Disk/network contention, or performance interference, so even
 GO is only an upper bound and cannot authorize runtime integration.
+
+The completed oracle passed the frozen action-space gate. Across the 32
+40-task schedules, fixed-high mean makespan was 7,618.831 seconds and the
+oracle mean was 6,790.848 seconds: an absolute reduction of 827.983 seconds
+(13.8 minutes), or 10.8676%. The paired schedule-bootstrap interval for the
+oracle-minus-control delta was [-857.835, -796.253] seconds. All 32 schedules
+improved; individual relative reductions ranged from 7.29% to 12.81%, and 25
+of 32 exceeded 10%.
+
+The oracle started 369 distinct commands from 87 tasks while another command
+was running, with mean maximum concurrency 6.19. Of 1,916 commands, only 459
+used fully observed CPU/RSS bounds; 1,333 had at least one null target and 124
+unmatched commands fell back conservatively. The two arms retained identical
+commands and service durations and had no modeled capacity violation.
+
+This GO is narrow. Mean task completion improved by only 131.784 seconds
+(2.35%) and total queue time by 2.52%; some individual schedules regressed on
+those secondary metrics. Recorded durations do not include performance
+interference from modeled co-admission. The result authorizes one development
+comparison of causal Current and SOTA reservation inputs, not runtime
+integration or a scheduling-performance claim. The independently reviewed
+artifact is in
+`analysis/results/tool-resource-5-3-3-3-20260804/sqlglot100-resource-admission-oracle-v1/`.
 
 ## 5. Development-exposure record
 
