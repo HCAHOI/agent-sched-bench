@@ -41,6 +41,7 @@ from tool_resource_eval.cachewise_kv_factorial import (  # noqa: E402
 from tool_resource_eval.resource_admission import (  # noqa: E402
     AdmissionProgram,
     simulate_admission,
+    simulate_burstable_admission,
 )
 
 
@@ -62,6 +63,20 @@ THROUGHPUT_RESULT = (
     _ROOT
     / "analysis/results/tool-resource-5-3-3-3-20260804"
     / "sqlglot50-cpu-throughput-oracle-v1/result.json"
+)
+TWO_CORE_RESULT = (
+    _ROOT
+    / "analysis/results/tool-resource-5-3-3-3-20260804"
+    / "sqlglot50-two-core-throughput-baseline-v1/result.json"
+)
+RESOURCE_ADMISSION_SOURCE = _ROOT / "src/tool_resource_eval/resource_admission.py"
+BURST_SOURCE_INPUTS = (
+    RESOURCE_ADMISSION_SOURCE,
+    _ROOT / "src/tool_resource_eval/cachewise_kv_factorial.py",
+    _ROOT / "scripts/evaluation/evaluate_cpu_work_admission.py",
+    _ROOT / "scripts/evaluation/evaluate_kv_prediction_actionability.py",
+    _ROOT / "scripts/evaluation/evaluate_resource_admission_oracle.py",
+    _ROOT / "scripts/evaluation/evaluate_resource_admission_predictors.py",
 )
 
 
@@ -579,6 +594,310 @@ def run_two_core_baseline() -> dict[str, Any]:
     }
 
 
+def run_burstable_two_core() -> dict[str, Any]:
+    prior = json.loads(THROUGHPUT_RESULT.read_text(encoding="utf-8"))
+    committed_two_core = json.loads(TWO_CORE_RESULT.read_text(encoding="utf-8"))
+    committed_without_inputs = dict(committed_two_core)
+    committed_without_inputs.pop("inputs")
+    if run_two_core_baseline() != committed_without_inputs:
+        raise ValueError("hard two-core control no longer reproduces")
+
+    task_ids = list(json.loads(SPLIT.read_text(encoding="utf-8"))["validation"])
+    if task_ids != prior["protocol"]["validation_task_ids"]:
+        raise ValueError("validation cohort differs from throughput oracle")
+    cpu_work = {
+        command_id: float(row["cpu_work_core_s"])
+        for command_id, row in prior["program_inputs_by_command"].items()
+        if row["cpu_work_core_s"] is not None
+    }
+    missing = set(prior["coverage"]["missing_cpu_work_command_ids"])
+    command_rows, raw_counts, traces = _validation_commands(task_ids)
+    source_counts: Counter[str] = Counter()
+    programs = {
+        task_id: _program(
+            task_id,
+            traces[task_id],
+            command_rows,
+            raw_counts,
+            source_counts,
+        )
+        for task_id in task_ids
+    }
+    if _program_snapshot(programs, cpu_work) != prior["program_inputs_by_command"]:
+        raise ValueError("command program differs from throughput oracle")
+
+    throughput_requests = {
+        command_id: tuple(value)
+        for command_id, value in prior["requests"]["throughput_bucket"].items()
+    }
+    two_core_requests = {
+        command_id: tuple(value)
+        for command_id, value in committed_two_core["requests"].items()
+    }
+    max_cpu = {
+        command.command_id: (
+            CPU_CAPACITY
+            if command.command_id in missing
+            else _bucket_cpu(cpu_work[command.command_id] / command.duration_s)
+        )
+        for program in programs.values()
+        for command in program.commands
+    }
+    if any(
+        throughput_requests[command_id][0] != max_cpu[command_id]
+        for command_id in max_cpu
+    ):
+        raise ValueError("runtime demand differs from reviewed throughput class")
+
+    scheduling_metrics = (
+        "command_count",
+        "total_command_service_s",
+        "makespan_s",
+        "mean_task_completion_s",
+        "total_command_queue_s",
+        "reserved_cpu_core_s",
+        "reserved_rss_mb_s",
+        "max_concurrent_commands",
+        "capacity_violation",
+    )
+    prior_by_seed = {int(row["seed"]): row for row in prior["schedule_results"]}
+    strict_by_seed = {
+        int(row["seed"]): row for row in committed_two_core["schedule_results"]
+    }
+    prepared = []
+    for seed in SEEDS:
+        selected = sorted(programs)
+        np.random.default_rng(seed).shuffle(selected)
+        selected = selected[:LOAD]
+        if (
+            selected != prior_by_seed[seed]["task_ids"]
+            or selected != strict_by_seed[seed]["task_ids"]
+        ):
+            raise ValueError("schedule selection drifted")
+        selected_programs = [programs[task_id] for task_id in selected]
+        command_ids = {
+            command.command_id
+            for program in selected_programs
+            for command in program.commands
+        }
+        selected_work = {
+            command_id: value
+            for command_id, value in cpu_work.items()
+            if command_id in command_ids
+        }
+        selected_demand = {
+            command_id: max_cpu[command_id] for command_id in command_ids
+        }
+
+        throughput = simulate_burstable_admission(
+            selected_programs,
+            cpu_capacity=CPU_CAPACITY,
+            rss_capacity_mb=RSS_CAPACITY_MB,
+            requested_reservations={
+                command_id: throughput_requests[command_id]
+                for command_id in command_ids
+            },
+            cpu_work_core_s=selected_work,
+            max_cpu_cores=selected_demand,
+        )
+        expected = prior_by_seed[seed]["arms"]["throughput_bucket"]
+        if any(throughput[metric] != expected[metric] for metric in scheduling_metrics):
+            raise ValueError("burstable throughput control failed exact reproduction")
+
+        prepared.append(
+            (
+                seed,
+                selected,
+                selected_programs,
+                command_ids,
+                selected_work,
+                selected_demand,
+                throughput,
+            )
+        )
+
+    schedule_results = []
+    contended_commands: set[str] = set()
+    for (
+        seed,
+        selected,
+        selected_programs,
+        command_ids,
+        selected_work,
+        selected_demand,
+        throughput,
+    ) in prepared:
+        candidate = simulate_burstable_admission(
+            selected_programs,
+            cpu_capacity=CPU_CAPACITY,
+            rss_capacity_mb=RSS_CAPACITY_MB,
+            requested_reservations={
+                command_id: two_core_requests[command_id]
+                for command_id in command_ids
+            },
+            cpu_work_core_s=selected_work,
+            max_cpu_cores=selected_demand,
+        )
+        contended_commands.update(candidate["contended_command_ids"])
+        hard_two_core = dict(
+            strict_by_seed[seed]["arms"]["two_core_default"]
+        )
+        hard_two_core["added_service_s"] = (
+            float(hard_two_core["total_command_service_s"])
+            - float(throughput["total_command_service_s"])
+        )
+        schedule_results.append(
+            {
+                "seed": seed,
+                "task_ids": selected,
+                "arms": {
+                    "throughput_oracle": {
+                        metric: throughput[metric]
+                        for metric in (*scheduling_metrics, "added_service_s")
+                    },
+                    "hard_two_core": hard_two_core,
+                    "burstable_two_core": {
+                        metric: candidate[metric]
+                        for metric in (
+                            *scheduling_metrics,
+                            "modeled_capacity_exposure_events",
+                            "max_modeled_cpu_demand_cores",
+                            "total_cpu_work_core_s",
+                            "served_cpu_work_core_s",
+                            "added_service_s",
+                        )
+                    },
+                },
+            }
+        )
+
+    metrics = (
+        "makespan_s",
+        "mean_task_completion_s",
+        "total_command_queue_s",
+        "total_command_service_s",
+        "reserved_cpu_core_s",
+        "reserved_rss_mb_s",
+        "max_concurrent_commands",
+        "added_service_s",
+    )
+    means = {
+        arm: {
+            metric: float(
+                np.mean([row["arms"][arm][metric] for row in schedule_results])
+            )
+            for metric in metrics
+        }
+        for arm in ("throughput_oracle", "hard_two_core", "burstable_two_core")
+    }
+    improvements = [
+        (
+            float(row["arms"]["hard_two_core"]["makespan_s"])
+            - float(row["arms"]["burstable_two_core"]["makespan_s"])
+        )
+        / float(row["arms"]["hard_two_core"]["makespan_s"])
+        for row in schedule_results
+    ]
+    regrets = [
+        (
+            float(row["arms"]["burstable_two_core"]["makespan_s"])
+            - float(row["arms"]["throughput_oracle"]["makespan_s"])
+        )
+        / float(row["arms"]["throughput_oracle"]["makespan_s"])
+        for row in schedule_results
+    ]
+    improvement = _bootstrap(improvements)
+    regret = _bootstrap(regrets)
+    all_improve = all(value > 0.0 for value in improvements)
+    validity = {
+        "hard_two_core_reproduced": True,
+        "throughput_scheduling_metrics_reproduced": True,
+        "identical_commands_and_work": all(
+            row["arms"]["throughput_oracle"]["command_count"]
+            == row["arms"]["burstable_two_core"]["command_count"]
+            for row in schedule_results
+        ),
+        "missing_commands_use_full_cpu": all(
+            two_core_requests[command_id][0] == CPU_CAPACITY
+            and max_cpu[command_id] == CPU_CAPACITY
+            for command_id in missing
+        ),
+        "cpu_work_conserved": all(
+            math.isclose(
+                float(row["arms"]["burstable_two_core"]["total_cpu_work_core_s"]),
+                float(row["arms"]["burstable_two_core"]["served_cpu_work_core_s"]),
+                rel_tol=1e-12,
+                abs_tol=1e-7,
+            )
+            for row in schedule_results
+        ),
+        "no_requested_capacity_violation": not any(
+            bool(row["arms"]["burstable_two_core"]["capacity_violation"])
+            for row in schedule_results
+        ),
+        "only_frozen_classes": set(max_cpu.values()) <= {2.0, 4.0, 8.0}
+        and {value[0] for value in two_core_requests.values()} <= {2.0, 4.0, 8.0},
+    }
+    if not all(validity.values()):
+        raise ValueError("burstable replay validity gate failed")
+    gate = {
+        "mean_improvement_at_least_5_percent": improvement["mean"] >= 0.05,
+        "improvement_interval_above_zero": improvement[
+            "ci95_paired_seed_bootstrap"
+        ][0]
+        > 0.0,
+        "every_seed_improves": all_improve,
+        "mean_regret_at_most_5_percent": regret["mean"] <= 0.05,
+        "regret_upper_bound_at_most_5_percent": regret[
+            "ci95_paired_seed_bootstrap"
+        ][1]
+        <= 0.05,
+    }
+    gate["go"] = all(gate.values())
+    return {
+        "schema": "burstable-two-core-fluid-v1",
+        "status": (
+            "development_go_to_physical_burst_test"
+            if gate["go"]
+            else "development_no_go_burstable_action"
+        ),
+        "claim_bearing": False,
+        "protocol": {
+            "task_pool": "exposed SQLGlot validation50",
+            "validation_task_ids": task_ids,
+            "load": LOAD,
+            "seeds": list(SEEDS),
+            "cpu_capacity": CPU_CAPACITY,
+            "rss_capacity_mb": RSS_CAPACITY_MB,
+            "maximum_regret": 0.05,
+            "minimum_hard_cap_improvement": 0.05,
+        },
+        "coverage": {
+            "tasks": len(programs),
+            "commands": len(max_cpu),
+            "cpu_work_commands": len(cpu_work),
+            "missing_cpu_work_commands": len(missing),
+            "contended_commands": len(contended_commands),
+            "contended_tasks": len(
+                {command_id.split(":", 1)[0] for command_id in contended_commands}
+            ),
+        },
+        "mean_metrics": means,
+        "comparisons": {
+            "burstable_vs_hard_two_core_relative_improvement": improvement,
+            "burstable_vs_throughput_oracle_relative_regret": regret,
+        },
+        "validity": validity,
+        "gate": gate,
+        "schedule_results": schedule_results,
+        "limitations": [
+            "The fluid server assumes ideal proportional CPU sharing up to hindsight throughput classes.",
+            "Recorded duration is a floor and CPU work is perfectly divisible within each command.",
+            "The replay uses hindsight RSS and development-exposed SQLGlot tasks.",
+        ],
+    }
+
+
 def _git_sha() -> str:
     return subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -593,19 +912,44 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--two-core-baseline", action="store_true")
+    parser.add_argument("--burstable-two-core", action="store_true")
     args = parser.parse_args()
+    if args.two_core_baseline and args.burstable_two_core:
+        parser.error("choose at most one evaluation mode")
     if args.out_dir.exists():
         raise FileExistsError("output directory already exists")
-    _require_committed_inputs(
-        (THROUGHPUT_RESULT.resolve(),) if args.two_core_baseline else ()
-    )
-    result = run_two_core_baseline() if args.two_core_baseline else run()
+    extra: tuple[Path, ...] = ()
+    if args.two_core_baseline:
+        extra = (THROUGHPUT_RESULT.resolve(),)
+    elif args.burstable_two_core:
+        extra = (
+            THROUGHPUT_RESULT.resolve(),
+            TWO_CORE_RESULT.resolve(),
+            *(path.resolve() for path in BURST_SOURCE_INPUTS),
+        )
+    _require_committed_inputs(extra)
+    if args.burstable_two_core:
+        result = run_burstable_two_core()
+    elif args.two_core_baseline:
+        result = run_two_core_baseline()
+    else:
+        result = run()
     result["inputs"] = {
         "split": str(SPLIT.resolve()),
         "cpu_work_result": str(CPU_WORK_RESULT.resolve()),
         "prior_admission_result": str(PRIOR_ADMISSION_RESULT.resolve()),
         "throughput_result": (
-            str(THROUGHPUT_RESULT.resolve()) if args.two_core_baseline else None
+            str(THROUGHPUT_RESULT.resolve())
+            if args.two_core_baseline or args.burstable_two_core
+            else None
+        ),
+        "two_core_result": (
+            str(TWO_CORE_RESULT.resolve()) if args.burstable_two_core else None
+        ),
+        "burst_source_inputs": (
+            [str(path.resolve()) for path in BURST_SOURCE_INPUTS]
+            if args.burstable_two_core
+            else None
         ),
         "git_sha": _git_sha(),
     }

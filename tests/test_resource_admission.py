@@ -11,6 +11,7 @@ from tool_resource_eval.resource_admission import (
     AdmissionCommand,
     AdmissionProgram,
     simulate_admission,
+    simulate_burstable_admission,
 )
 
 
@@ -77,6 +78,122 @@ def test_explicit_underreservation_reports_modeled_capacity_exposure() -> None:
     assert result["modeled_capacity_exposure_events"] == 1
     assert result["modeled_capacity_exposure_command_ids"] == ["b:0"]
     assert result["max_modeled_cpu_demand_cores"] == 8.0
+
+
+def test_burstable_requests_share_spare_cpu_and_conserve_work() -> None:
+    programs = [
+        AdmissionProgram(
+            task_id,
+            0.0,
+            (AdmissionCommand(f"{task_id}:0", 2.0, 4.0, 1.0, 0.0),),
+            0.0,
+        )
+        for task_id in ("a", "b", "c")
+    ]
+    requests = {f"{task_id}:0": (2.0, 1.0) for task_id in ("a", "b", "c")}
+    work = {f"{task_id}:0": 8.0 for task_id in ("a", "b", "c")}
+    demand = {f"{task_id}:0": 4.0 for task_id in ("a", "b", "c")}
+
+    result = simulate_burstable_admission(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=16_000.0,
+        requested_reservations=requests,
+        cpu_work_core_s=work,
+        max_cpu_cores=demand,
+    )
+
+    assert result["makespan_s"] == pytest.approx(3.0)
+    assert result["total_cpu_work_core_s"] == 24.0
+    assert result["served_cpu_work_core_s"] == pytest.approx(24.0)
+    assert result["modeled_capacity_exposure_events"] == 1
+    assert result["contended_command_ids"] == ["a:0", "b:0", "c:0"]
+
+
+def test_burstable_throughput_requests_reproduce_recorded_duration() -> None:
+    programs = [
+        AdmissionProgram(
+            task_id,
+            0.0,
+            (AdmissionCommand(f"{task_id}:0", 2.0, 4.0, 1.0, 0.0),),
+            0.0,
+        )
+        for task_id in ("a", "b", "c")
+    ]
+    requests = {f"{task_id}:0": (4.0, 1.0) for task_id in ("a", "b", "c")}
+    work = {f"{task_id}:0": 8.0 for task_id in ("a", "b", "c")}
+    demand = {f"{task_id}:0": 4.0 for task_id in ("a", "b", "c")}
+
+    result = simulate_burstable_admission(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=16_000.0,
+        requested_reservations=requests,
+        cpu_work_core_s=work,
+        max_cpu_cores=demand,
+    )
+
+    assert result["makespan_s"] == 4.0
+    assert result["added_service_s"] == 0.0
+    assert result["contended_command_ids"] == []
+
+
+def test_burstable_cpu_redistributes_share_after_demand_cap() -> None:
+    programs = [
+        AdmissionProgram(
+            "capped",
+            0.0,
+            (AdmissionCommand("capped:0", 2.0, 2.0, 1.0, 0.0),),
+            0.0,
+        ),
+        AdmissionProgram(
+            "elastic",
+            0.0,
+            (AdmissionCommand("elastic:0", 2.0, 6.0, 1.0, 0.0),),
+            0.0,
+        ),
+    ]
+
+    result = simulate_burstable_admission(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=16_000.0,
+        requested_reservations={"capped:0": (2.0, 1.0), "elastic:0": (1.0, 1.0)},
+        cpu_work_core_s={"capped:0": 4.0, "elastic:0": 12.0},
+        max_cpu_cores={"capped:0": 2.0, "elastic:0": 6.0},
+    )
+
+    assert result["makespan_s"] == 2.0
+    assert result["served_cpu_work_core_s"] == 16.0
+
+
+def test_burstable_exposure_excludes_work_completed_before_wall_floor() -> None:
+    programs = [
+        AdmissionProgram(
+            "waiting",
+            0.0,
+            (AdmissionCommand("waiting:0", 10.0, 2.0, 1.0, 0.0),),
+            0.0,
+        ),
+        AdmissionProgram(
+            "later",
+            2.0,
+            (AdmissionCommand("later:0", 2.0, 4.0, 1.0, 0.0),),
+            0.0,
+        ),
+    ]
+
+    result = simulate_burstable_admission(
+        programs,
+        cpu_capacity=4.0,
+        rss_capacity_mb=16_000.0,
+        requested_reservations={"waiting:0": (2.0, 1.0), "later:0": (2.0, 1.0)},
+        cpu_work_core_s={"waiting:0": 2.0, "later:0": 8.0},
+        max_cpu_cores={"waiting:0": 2.0, "later:0": 4.0},
+    )
+
+    assert result["max_modeled_cpu_demand_cores"] == 4.0
+    assert result["modeled_capacity_exposure_events"] == 0
 
 
 def test_reservation_sums_pipeline() -> None:
