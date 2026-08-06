@@ -1033,6 +1033,17 @@ be dropped. Failure closes interval feedback. Passing authorizes only a
 separately frozen real concurrent action experiment; aggregate interval sums
 do not establish scheduler utility or safe sub-interval demand.
 
+Before the first robustness outcome was produced, the evaluator failed on an
+input-validity assertion: 153 source samples reported CPU work above their
+eight-core opportunity by 0.032--0.7% for complete intervals (one 49 ms tail
+was 6.25% high), with a maximum absolute excess of 0.026952 core-seconds. The
+counter is quantized and cannot physically exceed the recorded quota. The
+protocol is therefore amended, before any arm aggregate or gate was visible,
+to use `min(cpu_core_s, quota * dt)` as interval work, matching the existing
+early-reservation evaluator. Rows retain raw work, capped work, clipped-sample
+count, and clipped core-seconds. The work-conservation gate applies to capped
+physical work; any source quota other than eight still fails the run.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved
