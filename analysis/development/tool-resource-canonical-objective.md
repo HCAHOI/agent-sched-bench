@@ -673,6 +673,45 @@ integration or a scheduling-performance claim. The independently reviewed
 artifact is in
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot100-resource-admission-oracle-v1/`.
 
+### CPU+RSS predictor admission: frozen
+
+The oracle GO authorizes one predictor action test on the 50 already-exposed
+SQLGlot validation tasks; the final partition remains closed. The exact 32
+seeds, sorted-pool shuffle, first-40 selection, 8-core/16,000-MB capacity,
+closed-task timing replay, and FCFS-ready work-conserving backfill remain fixed.
+All four arms evaluate identical commands and recorded durations: fixed-high,
+the conservative telemetry oracle, Current, and development SOTA.
+
+Current is regenerated from its dev100-frozen state with no validation-task
+settlement. SOTA uses the frozen semantic work-unit evidence and the same-task
+third-or-later full-test phase; it also receives no cross-validation-task
+updates. Only information available by each command's `BeginCall` may choose a
+reservation. CPU Low/Medium/High request 2/4/8 cores; RSS Low/Medium/High request
+500/2,000/16,000 MB. An unavailable or unmatched target requests that target's
+full host capacity. No threshold, class mapping, PMF quantile, fallback, or
+feature is tuned in this phase.
+
+Admission uses each arm's requested reservation. Separately, concurrent demand
+is checked against the same conservative telemetry requirement used by the
+oracle. Because a null target is full-host fallback, exceeding capacity means
+the schedule is not safety-verifiable from retained evidence; it is not a claim
+that physical overload was directly observed. Such exposure cannot be hidden by
+unchanged recorded runtimes.
+
+The primary comparison is SOTA-minus-Current mean batch makespan. GO requires:
+the validation-pool oracle still reduces fixed-high makespan by at least 10%;
+SOTA reduces Current makespan by at least 5%; its paired-seed bootstrap interval
+is strictly below zero; it captures at least half of the oracle headroom over
+fixed-high; at least 20 commands across 10 tasks receive a different CPU or RSS
+request than Current; SOTA creates zero conservative capacity exposures; and all
+arms retain identical commands and service durations. Mean task completion,
+queue time, Current exposures, and requested resource-time are secondary.
+
+GO authorizes only a real interference experiment with an explicit failure
+policy. NO-GO closes hard-class Current/SOTA as direct admission requests; it
+does not authorize threshold tuning, a safety critic, or a new predictor on the
+exposed validation tasks.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved
