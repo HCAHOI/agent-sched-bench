@@ -1168,6 +1168,16 @@ PMU/container sampling; the separately supplied canonical
 tool-resource profile remains the only eBPF measurement path. Temporary images
 are retained through result commit rather than removed by simulator cleanup.
 
+On 2026-08-06 the first formal replay attempt was rejected before opening a
+resource trace because synthetic inputs contained no `llm_call`, which the
+OpenClaw replay transport requires to issue tool calls. No cold/warm command or
+resource outcome was observed. Before regenerating inputs, the transport was
+amended to interleave the same three frozen tool actions with three zero-duration
+deterministic LLM calls that issue them and one zero-duration terminal response.
+These carrier calls run on the host, add no tool action, and are excluded from
+scoring; task IDs, condition order, commands, state intervention, telemetry,
+and gates are unchanged.
+
 `scripts/evaluation/evaluate_physical_state_experiment.py` freezes the twelve
 pre-task Current CPU controls without using any observation from the task being
 queried, then scores the paired Disk and early-CPU gates from the aggregate

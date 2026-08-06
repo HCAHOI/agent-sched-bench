@@ -570,7 +570,7 @@ def _score_entry(
             {"command": probe_command, "timeout": 600, "working_dir": "/testbed"},
         ),
         (
-            manifest_task["target_action_id"],
+            "physical_state_target",
             "exec",
             dict(manifest_task["target_tool_args"]),
         ),
@@ -578,14 +578,14 @@ def _score_entry(
     if len(actions) != len(expected):
         raise ValueError("measured action sequence differs from the frozen protocol")
     parsed_actions = []
-    for action, (action_id, tool_name, expected_args) in zip(
+    for action, (tool_call_id, tool_name, expected_args) in zip(
         actions, expected, strict=True
     ):
         data = action["data"]
         raw_args = data.get("tool_args")
         args = json.loads(raw_args) if isinstance(raw_args, str) else None
         if (
-            action.get("action_id") != action_id
+            data.get("tool_call_id") != tool_call_id
             or data.get("task_instance_id") != entry["task_id"]
             or data.get("tool_name") != tool_name
             or args != expected_args

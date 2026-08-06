@@ -270,9 +270,15 @@ def read_prepared_artifact_with_digest(
 
 
 def _action(
-    *, task_id: str, action_id: str, iteration: int, tool_name: str, args: dict[str, Any]
+    *,
+    task_id: str,
+    action_id: str,
+    iteration: int,
+    tool_name: str,
+    tool_call_id: str,
+    args: dict[str, Any],
 ) -> dict[str, Any]:
-    timestamp = iteration / 1000
+    timestamp = iteration * 2 / 1000
     return {
         "type": "action",
         "action_type": "tool_exec",
@@ -284,10 +290,71 @@ def _action(
         "ts_end": timestamp,
         "data": {
             "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
             "tool_args": json.dumps(args, sort_keys=True),
             "tool_result": "Exit code: 0" if tool_name == "exec" else "File written",
             "duration_ms": 0.0,
             "success": True,
+        },
+    }
+
+
+def _llm_action(
+    *,
+    task_id: str,
+    iteration: int,
+    tool_name: str | None = None,
+    tool_call_id: str | None = None,
+    args: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    timestamp = (iteration * 2 - 1) / 1000
+    message: dict[str, Any] = {
+        "role": "assistant",
+        "content": None if tool_name else "Physical-state control replay complete.",
+    }
+    finish_reason = "stop"
+    if tool_name is not None:
+        if tool_call_id is None or args is None:
+            raise ValueError("tool carrier requires an id and arguments")
+        message["tool_calls"] = [
+            {
+                "id": tool_call_id,
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "arguments": json.dumps(args, sort_keys=True),
+                },
+            }
+        ]
+        finish_reason = "tool_calls"
+    return {
+        "type": "action",
+        "action_type": "llm_call",
+        "action_id": f"physical_state_llm_{iteration}",
+        "agent_id": task_id,
+        "instance_id": task_id,
+        "iteration": iteration,
+        "ts_start": timestamp,
+        "ts_end": timestamp,
+        "data": {
+            "messages_in": [],
+            "raw_response": {
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": message,
+                        "finish_reason": finish_reason,
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                },
+            },
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "llm_latency_ms": 0.0,
         },
     }
 
@@ -311,35 +378,68 @@ def _trace(
         "physical_state_condition": condition,
         "physical_state_repeat": repeat,
     }
+    write_args = {"path": TEMPLATE_CONTAINER_PATH, "content": probe_input}
+    probe_args = {
+        "command": f"{PROBE_CONTAINER_PATH} {condition} {TEMPLATE_CONTAINER_PATH}",
+        "timeout": 600,
+        "working_dir": "/testbed",
+    }
+    target_args = dict(target["tool_args"])
     write = _action(
         task_id=task_id,
         action_id="physical_state_template",
-        iteration=0,
+        iteration=1,
         tool_name="write_file",
-        args={"path": TEMPLATE_CONTAINER_PATH, "content": probe_input},
+        tool_call_id="physical_state_template",
+        args=write_args,
     )
     probe = _action(
         task_id=task_id,
         action_id=f"physical_state_probe_{condition}",
-        iteration=1,
+        iteration=2,
         tool_name="exec",
-        args={
-            "command": f"{PROBE_CONTAINER_PATH} {condition} {TEMPLATE_CONTAINER_PATH}",
-            "timeout": 600,
-            "working_dir": "/testbed",
-        },
+        tool_call_id=f"physical_state_probe_{condition}",
+        args=probe_args,
     )
     target_action = _action(
         task_id=task_id,
         action_id=str(target["action_id"]),
-        iteration=2,
+        iteration=3,
         tool_name="exec",
-        args=dict(target["tool_args"]),
+        tool_call_id="physical_state_target",
+        args=target_args,
     )
     target_action["data"]["duration_ms"] = target["source_duration_ms"]
     return "".join(
         json.dumps(row, sort_keys=True) + "\n"
-        for row in (metadata, write, probe, target_action)
+        for row in (
+            metadata,
+            _llm_action(
+                task_id=task_id,
+                iteration=1,
+                tool_name="write_file",
+                tool_call_id="physical_state_template",
+                args=write_args,
+            ),
+            write,
+            _llm_action(
+                task_id=task_id,
+                iteration=2,
+                tool_name="exec",
+                tool_call_id=f"physical_state_probe_{condition}",
+                args=probe_args,
+            ),
+            probe,
+            _llm_action(
+                task_id=task_id,
+                iteration=3,
+                tool_name="exec",
+                tool_call_id="physical_state_target",
+                args=target_args,
+            ),
+            target_action,
+            _llm_action(task_id=task_id, iteration=4),
+        )
     )
 
 

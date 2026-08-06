@@ -205,10 +205,11 @@ def _fixture(tmp_path, monkeypatch):
                 {
                     "type": "action",
                     "action_type": "tool_exec",
-                    "action_id": "physical_state_template",
+                    "action_id": "tool_0_physical_state_template",
                     "data": {
                         **common,
                         "tool_name": "write_file",
+                        "tool_call_id": "physical_state_template",
                         "tool_args": json.dumps(
                             {
                                 "path": physical.TEMPLATE_CONTAINER_PATH,
@@ -223,10 +224,11 @@ def _fixture(tmp_path, monkeypatch):
                 {
                     "type": "action",
                     "action_type": "tool_exec",
-                    "action_id": f"physical_state_probe_{condition}",
+                    "action_id": f"tool_1_physical_state_probe_{condition}",
                     "data": {
                         **common,
                         "tool_name": "exec",
+                        "tool_call_id": f"physical_state_probe_{condition}",
                         "tool_args": json.dumps(
                             {
                                 "command": (
@@ -245,10 +247,11 @@ def _fixture(tmp_path, monkeypatch):
                 {
                     "type": "action",
                     "action_type": "tool_exec",
-                    "action_id": task_by_id[task_id]["target_action_id"],
+                    "action_id": "tool_2_physical_state_target",
                     "data": {
                         **common,
                         "tool_name": "exec",
+                        "tool_call_id": "physical_state_target",
                         "tool_args": json.dumps(
                             task_by_id[task_id]["target_tool_args"], sort_keys=True
                         ),
@@ -358,7 +361,9 @@ def test_rejects_changed_probe_payload_and_prepared_image(
     repo, protocol, baseline, telemetry = _fixture(tmp_path, monkeypatch)
     rows = [json.loads(line) for line in telemetry.read_text().splitlines()]
     write = next(
-        row for row in rows if row.get("action_id") == "physical_state_template"
+        row
+        for row in rows
+        if row.get("action_id") == "tool_0_physical_state_template"
     )
     args = json.loads(write["data"]["tool_args"])
     args["content"] = "4096\t/testbed/other.py\n"

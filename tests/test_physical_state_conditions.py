@@ -227,15 +227,41 @@ def test_builds_counterbalanced_simulator_inputs(tmp_path, monkeypatch) -> None:
         manifest_entries[0].docker_image,
         manifest_entries[0].label,
     )
-    assert [row["data"]["tool_name"] for row in loaded.actions] == [
+    assert [row["action_type"] for row in loaded.actions] == [
+        "llm_call",
+        "tool_exec",
+        "llm_call",
+        "tool_exec",
+        "llm_call",
+        "tool_exec",
+        "llm_call",
+    ]
+    tool_actions = [
+        row for row in loaded.actions if row["action_type"] == "tool_exec"
+    ]
+    assert [row["data"]["tool_name"] for row in tool_actions] == [
         "write_file",
         "exec",
         "exec",
     ]
-    assert loaded.actions[-1]["data"]["tool_args"].find("test_0.py") > 0
-    assert "resource_observation" not in loaded.actions[-1]["data"]
-    assert "resource_timeline" not in loaded.actions[-1]["data"]
-    assert "1 passed" not in loaded.actions[-1]["data"]["tool_result"]
+    carrier_calls = [
+        (row["data"]["raw_response"]["choices"][0]["message"].get("tool_calls") or [
+            {}
+        ])[0].get("id")
+        for row in loaded.actions
+        if row["action_type"] == "llm_call"
+    ]
+    assert carrier_calls == [
+        *(row["data"]["tool_call_id"] for row in tool_actions),
+        None,
+    ]
+    assert tool_actions[-1]["data"]["tool_args"].find("test_0.py") > 0
+    assert "resource_observation" not in tool_actions[-1]["data"]
+    assert "resource_timeline" not in tool_actions[-1]["data"]
+    assert "1 passed" not in tool_actions[-1]["data"]["tool_result"]
+    assert loaded.actions[-1]["data"]["raw_response"]["choices"][0][
+        "finish_reason"
+    ] == "stop"
 
 
 def test_rejects_probe_input_that_differs_from_template(tmp_path, monkeypatch) -> None:
