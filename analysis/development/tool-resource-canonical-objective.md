@@ -891,7 +891,7 @@ may evaluate CPU work divided by duration as the reservation target before any
 new predictor is built. The artifact is in
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-cpu-work-admission-v1/`.
 
-### CPU-throughput reservation oracle: frozen, pending
+### CPU-throughput reservation oracle: complete, go
 
 Before building another predictor, this development-only oracle asks whether
 the alternative target can improve the action at all. It reuses the exposed
@@ -924,6 +924,56 @@ reserved CPU time are secondary. Failure closes this target without building a
 predictor. GO authorizes only a causal prediction experiment for throughput
 class; it does not establish real performance because average CPU work does not
 capture critical-path parallelism or short-timescale contention.
+
+The completed oracle passed every frozen gate. It exactly reproduced all prior
+fixed-high and continuous-peak schedules before evaluating the new targets.
+Peak-class mean makespan was 15,555.187 seconds; throughput-class mean makespan
+was 12,594.850 seconds, a reduction of 2,960.336 seconds (19.03%). The paired
+interval was [-3,070.612, -2,843.526] seconds, and all 32 schedule deltas were
+negative, ranging from -3,517.350 to -2,053.253 seconds.
+
+Mean task completion fell 17.56%, total queue time 18.46%, and reserved CPU
+core-seconds 26.34%. The two targets changed 858 commands across all 50 tasks.
+Peak classes requested 2/4/8 cores for 184/20/992 commands; throughput classes
+requested them for 1,031/11/154. Of the latter 154 high requests, 152 are the
+frozen missing-work full-host fallbacks. Both target arms preserved every
+recorded duration under the CPU-work lower bound, had no requested-capacity
+violation, and used identical commands and work.
+
+This is the first action-level GO after the hard peak-class predictor NO-GO.
+It says the target has substantial hindsight headroom, not that average CPU
+work is already a safe runtime request. The next authorized experiment is a
+causal throughput-class predictor evaluated by schedule utility, with
+under-reservation duration charged by the same work-conservation floor. The
+oracle artifact is in
+`analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-cpu-throughput-oracle-v1/`.
+
+### Two-core default action baseline: frozen, pending
+
+Before fitting a throughput predictor, a development preflight found only one
+command above two CPU-work cores among 1,835 labeled commands in the original
+SQLGlot development pool, versus 13/1,044 in the exposed validation pool. A
+static classifier therefore has almost no positive development evidence and
+must first beat the simpler action of requesting two cores by default.
+
+This baseline reuses the reviewed throughput-oracle command programs, CPU work,
+hindsight RSS, 32 seed-ordered 40-task schedules, and CPU-work duration floor.
+The candidate requests two cores for every command with CPU-work evidence and
+eight cores for each of the 152 missing-work commands. The comparison arm is
+the hindsight throughput-class oracle. No target, request class, RSS value,
+duration rule, or schedule input changes.
+
+Primary regret is paired per-schedule
+`(two-core makespan - oracle makespan) / oracle makespan`. If mean regret and
+the paired bootstrap upper bound are both at most 5%, the two-core default is
+adequate on this workload and throughput-predictor development stops. If mean
+regret exceeds 5% and the paired interval is strictly above zero, prediction
+has actionable headroom. Anything else is inconclusive and does not authorize
+model development. Validity also requires exact reproduction of every prior
+throughput-oracle schedule, full-host fallback for all missing commands,
+identical command/work inputs, and no requested-capacity violation. Mean task
+completion, queue time, dilation count, and the identities of costly
+under-reservations are secondary.
 
 ## 5. Development-exposure record
 
