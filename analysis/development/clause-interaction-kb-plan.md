@@ -1300,3 +1300,38 @@ tie-breaking, input feature, or base arm. Only a pass authorizes fitting the
 two thresholds on all 50 development-exposed validation tasks, freezing a
 final-test evaluator, and then independently reviewing that evaluator before
 one access to the untouched final 50 tasks.
+
+### 15.1 Result and decision
+
+The task-cluster out-of-fold replay returned development NO-GO on the same
+1,044 rows:
+
+| Target | Current | Confidence gate | Delta |
+|---|---:|---:|---:|
+| Latency | 74.904% | 80.843% | +5.939 pp |
+| CPU | 82.887% | 87.054% | +4.167 pp |
+| RSS | 80.978% | 87.500% | +6.522 pp |
+| Disk | 82.044% | 84.325% | +2.282 pp |
+
+Latency/RSS remained bit-identical to composition, every target had more
+helpful than harmful changes, severe underprediction did not regress, and row
+identity held. The all-target five-point gate nevertheless failed on CPU and
+Disk.
+
+Observed: four of five CPU folds learned the lowest available threshold and
+accepted every disagreement; the remaining fold rejected five rows, including
+four helpful corrections and only one harmful correction. Disk thresholds
+alternated between -0.1062 and -0.4396. Across folds, the selector rejected 13
+helpful Disk corrections but only four harmful ones, lowering the composition's
+Disk gain rather than improving it.
+
+Inference: candidate-versus-Current PMF confidence is correlated with
+correctness in aggregate but is not a stable task-general selector. The PMFs
+describe reuse support, not physical cache state, so threshold fitting cannot
+recover the missing Disk variable. This closes confidence gating; no threshold
+is refit on all 50 tasks, and the final partition remains unread.
+
+Artifacts:
+
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-confidence-gated-composition-v1/result.json`
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-confidence-gated-composition-v1/rows.jsonl`

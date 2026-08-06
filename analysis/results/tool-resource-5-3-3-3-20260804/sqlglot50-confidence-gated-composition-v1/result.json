@@ -1,0 +1,467 @@
+{
+  "claim_bearing": false,
+  "fold_thresholds": {
+    "0": {
+      "disk_read_write_bytes_total": -0.10622710622710618,
+      "peak_cpu_cores": -0.3232323232323232
+    },
+    "1": {
+      "disk_read_write_bytes_total": -0.43956043956043955,
+      "peak_cpu_cores": -0.07792207792207795
+    },
+    "2": {
+      "disk_read_write_bytes_total": -0.10622710622710618,
+      "peak_cpu_cores": -0.3232323232323232
+    },
+    "3": {
+      "disk_read_write_bytes_total": -0.43956043956043955,
+      "peak_cpu_cores": -0.3232323232323232
+    },
+    "4": {
+      "disk_read_write_bytes_total": -0.10622710622710618,
+      "peak_cpu_cores": -0.3232323232323232
+    }
+  },
+  "gate": {
+    "all_targets_meet_gain": false,
+    "cpu_disk_helpful_tasks_meet_minimum": true,
+    "go": false,
+    "helpful_exceeds_harmful_each_target": true,
+    "latency_rss_bit_identical_to_composition": true,
+    "minimum_cpu_disk_helpful_tasks_each": 5,
+    "minimum_gain_percentage_points_each": 5.0,
+    "no_severe_underprediction_regression": true,
+    "row_identity": true
+  },
+  "helpful_tasks": {
+    "disk_read_write_bytes_total": 27,
+    "peak_cpu_cores": 23
+  },
+  "inputs": {
+    "evaluator_sha256": "c44e47e578e28763402cdb16fb71b726cc30fc0cda144892f225bb57f493aa64",
+    "git_sha": "efa2a452ab8988d7f1bf35c48fd7541509b10d74",
+    "rows": "/home/chiyu/workspace/agent-sched-bench/analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-component-composition-v1/rows.jsonl",
+    "rows_sha256": "f32f0fceabaf2983f67a85ef806cb9476733489bbaf73987a398fdff408e9dd6"
+  },
+  "latency_rss_bit_identical_to_composition": true,
+  "protocol": {
+    "accept": "feature_greater_than_or_equal_to_threshold",
+    "feature": "candidate_winning_probability_minus_current_winning_probability",
+    "fit": "exact_empirical_risk_minimization_on_labelled_disagreements",
+    "folds": 5,
+    "selected_targets": [
+      "peak_cpu_cores",
+      "disk_read_write_bytes_total"
+    ],
+    "task_assignment": "first_occurrence_index_modulo_5",
+    "tie_break": "higher_threshold",
+    "unchanged_targets": [
+      "latency",
+      "sampled_peak_rss_mb"
+    ]
+  },
+  "row_identity": true,
+  "schema": "confidence-gated-composition-v1",
+  "status": "development_oof_no_go",
+  "targets": {
+    "disk_read_write_bytes_total": {
+      "candidate": {
+        "accuracy": 0.8432539682539683,
+        "confusion_label_by_prediction": [
+          [
+            533,
+            76,
+            6
+          ],
+          [
+            58,
+            203,
+            10
+          ],
+          [
+            1,
+            7,
+            114
+          ]
+        ],
+        "eligible_n": 1008,
+        "prediction_unavailable": 0,
+        "severe_underprediction_rate": 0.000992063492063492,
+        "within_one_bucket_accuracy": 0.9930555555555556
+      },
+      "changes": {
+        "changed": 66,
+        "harmful": 20,
+        "helpful": 43,
+        "helpful_task_ids": [
+          "tobymao__sqlglot-2337",
+          "tobymao__sqlglot-2461",
+          "tobymao__sqlglot-2507",
+          "tobymao__sqlglot-2576",
+          "tobymao__sqlglot-2605",
+          "tobymao__sqlglot-2794",
+          "tobymao__sqlglot-2821",
+          "tobymao__sqlglot-2822",
+          "tobymao__sqlglot-2825",
+          "tobymao__sqlglot-2935",
+          "tobymao__sqlglot-3150",
+          "tobymao__sqlglot-3182",
+          "tobymao__sqlglot-3204",
+          "tobymao__sqlglot-3230",
+          "tobymao__sqlglot-3242",
+          "tobymao__sqlglot-3272",
+          "tobymao__sqlglot-3549",
+          "tobymao__sqlglot-3552",
+          "tobymao__sqlglot-3566",
+          "tobymao__sqlglot-3630",
+          "tobymao__sqlglot-3637",
+          "tobymao__sqlglot-3641",
+          "tobymao__sqlglot-3650",
+          "tobymao__sqlglot-3699",
+          "tobymao__sqlglot-3734",
+          "tobymao__sqlglot-3745",
+          "tobymao__sqlglot-3765"
+        ],
+        "neutral": 3,
+        "tasks": 27
+      },
+      "current": {
+        "accuracy": 0.8204365079365079,
+        "confusion_label_by_prediction": [
+          [
+            540,
+            69,
+            6
+          ],
+          [
+            88,
+            173,
+            10
+          ],
+          [
+            1,
+            7,
+            114
+          ]
+        ],
+        "eligible_n": 1008,
+        "prediction_unavailable": 0,
+        "severe_underprediction_rate": 0.000992063492063492,
+        "within_one_bucket_accuracy": 0.9930555555555556
+      },
+      "delta_percentage_points": 2.2817460317460347
+    },
+    "latency": {
+      "candidate": {
+        "confusion_label_by_prediction": [
+          [
+            561,
+            38,
+            8,
+            1,
+            2
+          ],
+          [
+            11,
+            119,
+            16,
+            0,
+            12
+          ],
+          [
+            0,
+            18,
+            74,
+            16,
+            9
+          ],
+          [
+            0,
+            11,
+            18,
+            49,
+            8
+          ],
+          [
+            0,
+            4,
+            17,
+            11,
+            41
+          ]
+        ],
+        "eligible_examples": 1044,
+        "exact_class_accuracy": 0.8084291187739464,
+        "prediction_unavailable": 0,
+        "severe_underprediction_rate": 0.03065134099616858,
+        "within_one_bucket_accuracy": 0.9386973180076629
+      },
+      "changes": {
+        "changed": 109,
+        "harmful": 19,
+        "helpful": 81,
+        "helpful_task_ids": [
+          "tobymao__sqlglot-2412",
+          "tobymao__sqlglot-2443",
+          "tobymao__sqlglot-2461",
+          "tobymao__sqlglot-2507",
+          "tobymao__sqlglot-2576",
+          "tobymao__sqlglot-2605",
+          "tobymao__sqlglot-2619",
+          "tobymao__sqlglot-2754",
+          "tobymao__sqlglot-2794",
+          "tobymao__sqlglot-2821",
+          "tobymao__sqlglot-2822",
+          "tobymao__sqlglot-2825",
+          "tobymao__sqlglot-2857",
+          "tobymao__sqlglot-2935",
+          "tobymao__sqlglot-3179",
+          "tobymao__sqlglot-3182",
+          "tobymao__sqlglot-3198",
+          "tobymao__sqlglot-3204",
+          "tobymao__sqlglot-3242",
+          "tobymao__sqlglot-3272",
+          "tobymao__sqlglot-3284",
+          "tobymao__sqlglot-3329",
+          "tobymao__sqlglot-3333",
+          "tobymao__sqlglot-3339",
+          "tobymao__sqlglot-3394",
+          "tobymao__sqlglot-3401",
+          "tobymao__sqlglot-3417",
+          "tobymao__sqlglot-3515",
+          "tobymao__sqlglot-3549",
+          "tobymao__sqlglot-3552",
+          "tobymao__sqlglot-3566",
+          "tobymao__sqlglot-3630",
+          "tobymao__sqlglot-3637",
+          "tobymao__sqlglot-3641",
+          "tobymao__sqlglot-3699",
+          "tobymao__sqlglot-3734",
+          "tobymao__sqlglot-3745",
+          "tobymao__sqlglot-3765"
+        ],
+        "neutral": 9,
+        "tasks": 41
+      },
+      "current": {
+        "confusion_label_by_prediction": [
+          [
+            555,
+            33,
+            7,
+            1,
+            14
+          ],
+          [
+            29,
+            100,
+            13,
+            0,
+            15
+          ],
+          [
+            14,
+            25,
+            54,
+            13,
+            11
+          ],
+          [
+            2,
+            11,
+            22,
+            44,
+            7
+          ],
+          [
+            0,
+            5,
+            24,
+            15,
+            29
+          ]
+        ],
+        "eligible_examples": 1044,
+        "exact_class_accuracy": 0.7490421455938697,
+        "prediction_unavailable": 1,
+        "severe_underprediction_rate": 0.05459770114942529,
+        "within_one_bucket_accuracy": 0.8994252873563219
+      },
+      "delta_percentage_points": 5.9386973180076685
+    },
+    "peak_cpu_cores": {
+      "candidate": {
+        "accuracy": 0.8705357142857143,
+        "confusion_label_by_prediction": [
+          [
+            536,
+            0,
+            18
+          ],
+          [
+            18,
+            2,
+            8
+          ],
+          [
+            43,
+            0,
+            47
+          ]
+        ],
+        "eligible_n": 672,
+        "prediction_unavailable": 0,
+        "severe_underprediction_rate": 0.06398809523809523,
+        "within_one_bucket_accuracy": 0.9092261904761905
+      },
+      "changes": {
+        "changed": 54,
+        "harmful": 10,
+        "helpful": 38,
+        "helpful_task_ids": [
+          "tobymao__sqlglot-2412",
+          "tobymao__sqlglot-2461",
+          "tobymao__sqlglot-2507",
+          "tobymao__sqlglot-2576",
+          "tobymao__sqlglot-2605",
+          "tobymao__sqlglot-2754",
+          "tobymao__sqlglot-2821",
+          "tobymao__sqlglot-2822",
+          "tobymao__sqlglot-2825",
+          "tobymao__sqlglot-2857",
+          "tobymao__sqlglot-2935",
+          "tobymao__sqlglot-3198",
+          "tobymao__sqlglot-3242",
+          "tobymao__sqlglot-3272",
+          "tobymao__sqlglot-3329",
+          "tobymao__sqlglot-3333",
+          "tobymao__sqlglot-3417",
+          "tobymao__sqlglot-3549",
+          "tobymao__sqlglot-3566",
+          "tobymao__sqlglot-3641",
+          "tobymao__sqlglot-3695",
+          "tobymao__sqlglot-3699",
+          "tobymao__sqlglot-3765"
+        ],
+        "neutral": 6,
+        "tasks": 29
+      },
+      "current": {
+        "accuracy": 0.8288690476190477,
+        "confusion_label_by_prediction": [
+          [
+            540,
+            0,
+            14
+          ],
+          [
+            25,
+            0,
+            3
+          ],
+          [
+            73,
+            0,
+            17
+          ]
+        ],
+        "eligible_n": 672,
+        "prediction_unavailable": 0,
+        "severe_underprediction_rate": 0.10863095238095238,
+        "within_one_bucket_accuracy": 0.8705357142857143
+      },
+      "delta_percentage_points": 4.1666666666666625
+    },
+    "sampled_peak_rss_mb": {
+      "candidate": {
+        "accuracy": 0.875,
+        "confusion_label_by_prediction": [
+          [
+            582,
+            1,
+            15
+          ],
+          [
+            45,
+            37,
+            5
+          ],
+          [
+            26,
+            0,
+            25
+          ]
+        ],
+        "eligible_n": 736,
+        "prediction_unavailable": 0,
+        "severe_underprediction_rate": 0.035326086956521736,
+        "within_one_bucket_accuracy": 0.9442934782608695
+      },
+      "changes": {
+        "changed": 65,
+        "harmful": 8,
+        "helpful": 56,
+        "helpful_task_ids": [
+          "tobymao__sqlglot-2412",
+          "tobymao__sqlglot-2461",
+          "tobymao__sqlglot-2507",
+          "tobymao__sqlglot-2576",
+          "tobymao__sqlglot-2605",
+          "tobymao__sqlglot-2619",
+          "tobymao__sqlglot-2754",
+          "tobymao__sqlglot-2821",
+          "tobymao__sqlglot-2822",
+          "tobymao__sqlglot-2825",
+          "tobymao__sqlglot-2857",
+          "tobymao__sqlglot-3129",
+          "tobymao__sqlglot-3150",
+          "tobymao__sqlglot-3179",
+          "tobymao__sqlglot-3182",
+          "tobymao__sqlglot-3198",
+          "tobymao__sqlglot-3204",
+          "tobymao__sqlglot-3238",
+          "tobymao__sqlglot-3242",
+          "tobymao__sqlglot-3272",
+          "tobymao__sqlglot-3284",
+          "tobymao__sqlglot-3329",
+          "tobymao__sqlglot-3333",
+          "tobymao__sqlglot-3394",
+          "tobymao__sqlglot-3417",
+          "tobymao__sqlglot-3515",
+          "tobymao__sqlglot-3549",
+          "tobymao__sqlglot-3566",
+          "tobymao__sqlglot-3641",
+          "tobymao__sqlglot-3699",
+          "tobymao__sqlglot-3765"
+        ],
+        "neutral": 1,
+        "tasks": 32
+      },
+      "current": {
+        "accuracy": 0.8097826086956522,
+        "confusion_label_by_prediction": [
+          [
+            582,
+            0,
+            16
+          ],
+          [
+            83,
+            0,
+            4
+          ],
+          [
+            37,
+            0,
+            14
+          ]
+        ],
+        "eligible_n": 736,
+        "prediction_unavailable": 0,
+        "severe_underprediction_rate": 0.050271739130434784,
+        "within_one_bucket_accuracy": 0.9279891304347826
+      },
+      "delta_percentage_points": 6.521739130434778
+    }
+  }
+}
