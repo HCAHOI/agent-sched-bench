@@ -1,0 +1,1777 @@
+{
+  "schema": "resource-burst-contention-v1",
+  "role": "development-physical-mechanism-test",
+  "inputs": {
+    "git_sha": "6ec696ece68e7e30ebdf0ad24f596351fbfd412d",
+    "workspace": "/home/chiyu/ear-workspaces/mixed-burst-real/main",
+    "workload": "/home/chiyu/workspace/elastic-agent-runtime/experiments/analysis/elastic-memory-remote-20260729/workloads/code_index_burst.py"
+  },
+  "protocol": {
+    "seed": 42,
+    "blocks": 3,
+    "arms": [
+      "hard_two",
+      "burstable_two",
+      "hard_four"
+    ],
+    "ast_jobs": 2,
+    "idle_jobs": 2,
+    "idle_s": 30.0,
+    "cpuset": "0-7",
+    "cpu_shares": 1024,
+    "ast_workers": 8,
+    "timeout_s": 900.0,
+    "poll_s": 0.1,
+    "ast_memory_max_bytes": 6442450944,
+    "idle_memory_max_bytes": 134217728,
+    "image": "python:3.13-slim"
+  },
+  "host_before": {
+    "platform": "Linux-5.15.0-185-generic-x86_64-with-glibc2.35",
+    "logical_cpus": 8,
+    "docker_version": "29.6.1",
+    "loadavg": [
+      7.5654296875,
+      8.02734375,
+      8.1240234375
+    ]
+  },
+  "warmup": {
+    "index": 0,
+    "block": 0,
+    "arm": "hard_four",
+    "timeout_s": 900.0,
+    "timed_out": false,
+    "abrupt_exit": false,
+    "batch_wall_s": 36.14421483222395,
+    "jobs": [
+      {
+        "role": "ast",
+        "slot": 1,
+        "requested_quota_cores": 4.0,
+        "observed": {
+          "cpu_max": "400000 100000",
+          "cpu_weight": 100,
+          "cpuset_cpus_effective": "0-7",
+          "memory_max_bytes": 6442450944,
+          "memory_swap_max_bytes": 0
+        },
+        "workload_exit": 0,
+        "workload": {
+          "bursts": [
+            {
+              "ast_nodes": 15029159,
+              "files": 6964
+            }
+          ],
+          "elapsed_s": 34.781504842918366,
+          "source_files": 6964
+        },
+        "cpu_delta": {
+          "nr_periods": 372,
+          "nr_throttled": 74,
+          "system_usec": 5083384,
+          "throttled_usec": 1276055,
+          "usage_usec": 129829587,
+          "user_usec": 124746203
+        },
+        "memory_events_delta": {
+          "high": 0,
+          "low": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0
+        },
+        "telemetry_lost": false,
+        "sampled_peak_memory_current_bytes": 4497174528,
+        "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\n",
+        "container_exit": 0,
+        "docker_oom_killed": false
+      },
+      {
+        "role": "ast",
+        "slot": 2,
+        "requested_quota_cores": 4.0,
+        "observed": {
+          "cpu_max": "400000 100000",
+          "cpu_weight": 100,
+          "cpuset_cpus_effective": "0-7",
+          "memory_max_bytes": 6442450944,
+          "memory_swap_max_bytes": 0
+        },
+        "workload_exit": 0,
+        "workload": {
+          "bursts": [
+            {
+              "ast_nodes": 15029159,
+              "files": 6964
+            }
+          ],
+          "elapsed_s": 35.42993646673858,
+          "source_files": 6964
+        },
+        "cpu_delta": {
+          "nr_periods": 368,
+          "nr_throttled": 84,
+          "system_usec": 5091801,
+          "throttled_usec": 2306333,
+          "usage_usec": 130484594,
+          "user_usec": 125392793
+        },
+        "memory_events_delta": {
+          "high": 0,
+          "low": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0
+        },
+        "telemetry_lost": false,
+        "sampled_peak_memory_current_bytes": 4498087936,
+        "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\n",
+        "container_exit": 0,
+        "docker_oom_killed": false
+      },
+      {
+        "role": "idle",
+        "slot": 1,
+        "requested_quota_cores": 2.0,
+        "observed": {
+          "cpu_max": "200000 100000",
+          "cpu_weight": 100,
+          "cpuset_cpus_effective": "0-7",
+          "memory_max_bytes": 134217728,
+          "memory_swap_max_bytes": 0
+        },
+        "workload_exit": 0,
+        "workload": {
+          "elapsed_s": 30.0,
+          "sleep_s": 30.0
+        },
+        "cpu_delta": {
+          "nr_periods": 67,
+          "nr_throttled": 0,
+          "system_usec": 335032,
+          "throttled_usec": 0,
+          "usage_usec": 495767,
+          "user_usec": 160736
+        },
+        "memory_events_delta": {
+          "high": 0,
+          "low": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0
+        },
+        "telemetry_lost": false,
+        "sampled_peak_memory_current_bytes": 1585152,
+        "stderr_tail": "",
+        "container_exit": 0,
+        "docker_oom_killed": false
+      },
+      {
+        "role": "idle",
+        "slot": 2,
+        "requested_quota_cores": 2.0,
+        "observed": {
+          "cpu_max": "200000 100000",
+          "cpu_weight": 100,
+          "cpuset_cpus_effective": "0-7",
+          "memory_max_bytes": 134217728,
+          "memory_swap_max_bytes": 0
+        },
+        "workload_exit": 0,
+        "workload": {
+          "elapsed_s": 30.0,
+          "sleep_s": 30.0
+        },
+        "cpu_delta": {
+          "nr_periods": 63,
+          "nr_throttled": 0,
+          "system_usec": 372506,
+          "throttled_usec": 0,
+          "usage_usec": 481790,
+          "user_usec": 109284
+        },
+        "memory_events_delta": {
+          "high": 0,
+          "low": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0
+        },
+        "telemetry_lost": false,
+        "sampled_peak_memory_current_bytes": 1712128,
+        "stderr_tail": "",
+        "container_exit": 0,
+        "docker_oom_killed": false
+      }
+    ]
+  },
+  "runs": [
+    {
+      "index": 1,
+      "block": 1,
+      "arm": "burstable_two",
+      "timeout_s": 900.0,
+      "timed_out": false,
+      "abrupt_exit": false,
+      "batch_wall_s": 35.56152862776071,
+      "jobs": [
+        {
+          "role": "ast",
+          "slot": 1,
+          "requested_quota_cores": null,
+          "observed": {
+            "cpu_max": "max 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "bursts": [
+              {
+                "ast_nodes": 15029159,
+                "files": 6964
+              }
+            ],
+            "elapsed_s": 34.859502244740725,
+            "source_files": 6964
+          },
+          "cpu_delta": {
+            "nr_periods": 0,
+            "nr_throttled": 0,
+            "system_usec": 4599050,
+            "throttled_usec": 0,
+            "usage_usec": 130117978,
+            "user_usec": 125518928
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 4538404864,
+          "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\n",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "ast",
+          "slot": 2,
+          "requested_quota_cores": null,
+          "observed": {
+            "cpu_max": "max 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "bursts": [
+              {
+                "ast_nodes": 15029159,
+                "files": 6964
+              }
+            ],
+            "elapsed_s": 34.722787690814584,
+            "source_files": 6964
+          },
+          "cpu_delta": {
+            "nr_periods": 0,
+            "nr_throttled": 0,
+            "system_usec": 4457793,
+            "throttled_usec": 0,
+            "usage_usec": 131201604,
+            "user_usec": 126743811
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 4521140224,
+          "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\n",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "idle",
+          "slot": 1,
+          "requested_quota_cores": null,
+          "observed": {
+            "cpu_max": "max 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 134217728,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "elapsed_s": 30.0,
+            "sleep_s": 30.0
+          },
+          "cpu_delta": {
+            "nr_periods": 0,
+            "nr_throttled": 0,
+            "system_usec": 341153,
+            "throttled_usec": 0,
+            "usage_usec": 448802,
+            "user_usec": 107648
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 1105920,
+          "stderr_tail": "",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "idle",
+          "slot": 2,
+          "requested_quota_cores": null,
+          "observed": {
+            "cpu_max": "max 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 134217728,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "elapsed_s": 30.0,
+            "sleep_s": 30.0
+          },
+          "cpu_delta": {
+            "nr_periods": 0,
+            "nr_throttled": 0,
+            "system_usec": 337588,
+            "throttled_usec": 0,
+            "usage_usec": 424173,
+            "user_usec": 86585
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 2052096,
+          "stderr_tail": "",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "block": 1,
+      "arm": "hard_two",
+      "timeout_s": 900.0,
+      "timed_out": false,
+      "abrupt_exit": false,
+      "batch_wall_s": 75.15469399280846,
+      "jobs": [
+        {
+          "role": "ast",
+          "slot": 1,
+          "requested_quota_cores": 2.0,
+          "observed": {
+            "cpu_max": "200000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "bursts": [
+              {
+                "ast_nodes": 15029159,
+                "files": 6964
+              }
+            ],
+            "elapsed_s": 74.39901201287284,
+            "source_files": 6964
+          },
+          "cpu_delta": {
+            "nr_periods": 764,
+            "nr_throttled": 721,
+            "system_usec": 5672498,
+            "throttled_usec": 282839372,
+            "usage_usec": 148103065,
+            "user_usec": 142430567
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 4489453568,
+          "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\n",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "ast",
+          "slot": 2,
+          "requested_quota_cores": 2.0,
+          "observed": {
+            "cpu_max": "200000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "bursts": [
+              {
+                "ast_nodes": 15029159,
+                "files": 6964
+              }
+            ],
+            "elapsed_s": 73.73756000120193,
+            "source_files": 6964
+          },
+          "cpu_delta": {
+            "nr_periods": 759,
+            "nr_throttled": 724,
+            "system_usec": 5550967,
+            "throttled_usec": 277405980,
+            "usage_usec": 147016910,
+            "user_usec": 141465943
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 4490412032,
+          "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\n",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "idle",
+          "slot": 1,
+          "requested_quota_cores": 2.0,
+          "observed": {
+            "cpu_max": "200000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 134217728,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "elapsed_s": 30.0,
+            "sleep_s": 30.0
+          },
+          "cpu_delta": {
+            "nr_periods": 458,
+            "nr_throttled": 0,
+            "system_usec": 2885099,
+            "throttled_usec": 0,
+            "usage_usec": 3681047,
+            "user_usec": 795948
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 1417216,
+          "stderr_tail": "",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "idle",
+          "slot": 2,
+          "requested_quota_cores": 2.0,
+          "observed": {
+            "cpu_max": "200000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 134217728,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "elapsed_s": 30.0,
+            "sleep_s": 30.0
+          },
+          "cpu_delta": {
+            "nr_periods": 454,
+            "nr_throttled": 0,
+            "system_usec": 2712995,
+            "throttled_usec": 0,
+            "usage_usec": 3613759,
+            "user_usec": 900764
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 1318912,
+          "stderr_tail": "",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "block": 1,
+      "arm": "hard_four",
+      "timeout_s": 900.0,
+      "timed_out": false,
+      "abrupt_exit": false,
+      "batch_wall_s": 36.60038758208975,
+      "jobs": [
+        {
+          "role": "ast",
+          "slot": 1,
+          "requested_quota_cores": 4.0,
+          "observed": {
+            "cpu_max": "400000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "bursts": [
+              {
+                "ast_nodes": 15029159,
+                "files": 6964
+              }
+            ],
+            "elapsed_s": 35.93040747521445,
+            "source_files": 6964
+          },
+          "cpu_delta": {
+            "nr_periods": 373,
+            "nr_throttled": 109,
+            "system_usec": 4635177,
+            "throttled_usec": 2148572,
+            "usage_usec": 132686893,
+            "user_usec": 128051716
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 4489838592,
+          "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\n",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "ast",
+          "slot": 2,
+          "requested_quota_cores": 4.0,
+          "observed": {
+            "cpu_max": "400000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "bursts": [
+              {
+                "ast_nodes": 15029159,
+                "files": 6964
+              }
+            ],
+            "elapsed_s": 35.34715674398467,
+            "source_files": 6964
+          },
+          "cpu_delta": {
+            "nr_periods": 373,
+            "nr_throttled": 98,
+            "system_usec": 4470514,
+            "throttled_usec": 2213032,
+            "usage_usec": 133019646,
+            "user_usec": 128549132
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 4488888320,
+          "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\n",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "idle",
+          "slot": 1,
+          "requested_quota_cores": 2.0,
+          "observed": {
+            "cpu_max": "200000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 134217728,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "elapsed_s": 30.0,
+            "sleep_s": 30.0
+          },
+          "cpu_delta": {
+            "nr_periods": 72,
+            "nr_throttled": 0,
+            "system_usec": 405017,
+            "throttled_usec": 0,
+            "usage_usec": 524762,
+            "user_usec": 119745
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 1052672,
+          "stderr_tail": "",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "idle",
+          "slot": 2,
+          "requested_quota_cores": 2.0,
+          "observed": {
+            "cpu_max": "200000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 134217728,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "elapsed_s": 30.0,
+            "sleep_s": 30.0
+          },
+          "cpu_delta": {
+            "nr_periods": 67,
+            "nr_throttled": 0,
+            "system_usec": 354740,
+            "throttled_usec": 0,
+            "usage_usec": 477328,
+            "user_usec": 122589
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 1196032,
+          "stderr_tail": "",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "block": 2,
+      "arm": "hard_four",
+      "timeout_s": 900.0,
+      "timed_out": false,
+      "abrupt_exit": false,
+      "batch_wall_s": 36.45658724894747,
+      "jobs": [
+        {
+          "role": "ast",
+          "slot": 1,
+          "requested_quota_cores": 4.0,
+          "observed": {
+            "cpu_max": "400000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "bursts": [
+              {
+                "ast_nodes": 15029159,
+                "files": 6964
+              }
+            ],
+            "elapsed_s": 35.388810388278216,
+            "source_files": 6964
+          },
+          "cpu_delta": {
+            "nr_periods": 379,
+            "nr_throttled": 73,
+            "system_usec": 4717807,
+            "throttled_usec": 1176210,
+            "usage_usec": 130244084,
+            "user_usec": 125526277
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 4487647232,
+          "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\n",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "ast",
+          "slot": 2,
+          "requested_quota_cores": 4.0,
+          "observed": {
+            "cpu_max": "400000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "bursts": [
+              {
+                "ast_nodes": 15029159,
+                "files": 6964
+              }
+            ],
+            "elapsed_s": 35.82579487608746,
+            "source_files": 6964
+          },
+          "cpu_delta": {
+            "nr_periods": 375,
+            "nr_throttled": 93,
+            "system_usec": 4732338,
+            "throttled_usec": 2318111,
+            "usage_usec": 131015735,
+            "user_usec": 126283397
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 4487471104,
+          "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\n",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "idle",
+          "slot": 1,
+          "requested_quota_cores": 2.0,
+          "observed": {
+            "cpu_max": "200000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 134217728,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "elapsed_s": 30.0,
+            "sleep_s": 30.0
+          },
+          "cpu_delta": {
+            "nr_periods": 73,
+            "nr_throttled": 0,
+            "system_usec": 411018,
+            "throttled_usec": 0,
+            "usage_usec": 548546,
+            "user_usec": 137528
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 1220608,
+          "stderr_tail": "",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "idle",
+          "slot": 2,
+          "requested_quota_cores": 2.0,
+          "observed": {
+            "cpu_max": "200000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 134217728,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "elapsed_s": 30.0,
+            "sleep_s": 30.0
+          },
+          "cpu_delta": {
+            "nr_periods": 67,
+            "nr_throttled": 0,
+            "system_usec": 362795,
+            "throttled_usec": 0,
+            "usage_usec": 489618,
+            "user_usec": 126822
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 1163264,
+          "stderr_tail": "",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "block": 2,
+      "arm": "burstable_two",
+      "timeout_s": 900.0,
+      "timed_out": false,
+      "abrupt_exit": false,
+      "batch_wall_s": 34.577722711954266,
+      "jobs": [
+        {
+          "role": "ast",
+          "slot": 1,
+          "requested_quota_cores": null,
+          "observed": {
+            "cpu_max": "max 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "bursts": [
+              {
+                "ast_nodes": 15029159,
+                "files": 6964
+              }
+            ],
+            "elapsed_s": 33.01721543818712,
+            "source_files": 6964
+          },
+          "cpu_delta": {
+            "nr_periods": 0,
+            "nr_throttled": 0,
+            "system_usec": 4347468,
+            "throttled_usec": 0,
+            "usage_usec": 126725112,
+            "user_usec": 122377644
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 4497002496,
+          "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\n",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "ast",
+          "slot": 2,
+          "requested_quota_cores": null,
+          "observed": {
+            "cpu_max": "max 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "bursts": [
+              {
+                "ast_nodes": 15029159,
+                "files": 6964
+              }
+            ],
+            "elapsed_s": 33.71209465293214,
+            "source_files": 6964
+          },
+          "cpu_delta": {
+            "nr_periods": 0,
+            "nr_throttled": 0,
+            "system_usec": 4435623,
+            "throttled_usec": 0,
+            "usage_usec": 127058638,
+            "user_usec": 122623014
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 4495839232,
+          "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\n",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "idle",
+          "slot": 1,
+          "requested_quota_cores": null,
+          "observed": {
+            "cpu_max": "max 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 134217728,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "elapsed_s": 30.0,
+            "sleep_s": 30.0
+          },
+          "cpu_delta": {
+            "nr_periods": 0,
+            "nr_throttled": 0,
+            "system_usec": 393318,
+            "throttled_usec": 0,
+            "usage_usec": 476693,
+            "user_usec": 83374
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 1392640,
+          "stderr_tail": "",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "idle",
+          "slot": 2,
+          "requested_quota_cores": null,
+          "observed": {
+            "cpu_max": "max 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 134217728,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "elapsed_s": 30.0,
+            "sleep_s": 30.0
+          },
+          "cpu_delta": {
+            "nr_periods": 0,
+            "nr_throttled": 0,
+            "system_usec": 359469,
+            "throttled_usec": 0,
+            "usage_usec": 449728,
+            "user_usec": 90259
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 1847296,
+          "stderr_tail": "",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "block": 2,
+      "arm": "hard_two",
+      "timeout_s": 900.0,
+      "timed_out": false,
+      "abrupt_exit": false,
+      "batch_wall_s": 70.16948962723836,
+      "jobs": [
+        {
+          "role": "ast",
+          "slot": 1,
+          "requested_quota_cores": 2.0,
+          "observed": {
+            "cpu_max": "200000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "bursts": [
+              {
+                "ast_nodes": 15029159,
+                "files": 6964
+              }
+            ],
+            "elapsed_s": 69.44675684534013,
+            "source_files": 6964
+          },
+          "cpu_delta": {
+            "nr_periods": 710,
+            "nr_throttled": 678,
+            "system_usec": 4657951,
+            "throttled_usec": 264539517,
+            "usage_usec": 137571939,
+            "user_usec": 132913987
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 4497686528,
+          "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\n",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "ast",
+          "slot": 2,
+          "requested_quota_cores": 2.0,
+          "observed": {
+            "cpu_max": "200000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "bursts": [
+              {
+                "ast_nodes": 15029159,
+                "files": 6964
+              }
+            ],
+            "elapsed_s": 69.27036738861352,
+            "source_files": 6964
+          },
+          "cpu_delta": {
+            "nr_periods": 707,
+            "nr_throttled": 675,
+            "system_usec": 4767699,
+            "throttled_usec": 262096033,
+            "usage_usec": 137157482,
+            "user_usec": 132389783
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 4501331968,
+          "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\n",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "idle",
+          "slot": 1,
+          "requested_quota_cores": 2.0,
+          "observed": {
+            "cpu_max": "200000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 134217728,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "elapsed_s": 30.0,
+            "sleep_s": 30.0
+          },
+          "cpu_delta": {
+            "nr_periods": 406,
+            "nr_throttled": 0,
+            "system_usec": 2327349,
+            "throttled_usec": 0,
+            "usage_usec": 3005425,
+            "user_usec": 678075
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 1474560,
+          "stderr_tail": "",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "idle",
+          "slot": 2,
+          "requested_quota_cores": 2.0,
+          "observed": {
+            "cpu_max": "200000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 134217728,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "elapsed_s": 30.0,
+            "sleep_s": 30.0
+          },
+          "cpu_delta": {
+            "nr_periods": 403,
+            "nr_throttled": 0,
+            "system_usec": 2217367,
+            "throttled_usec": 0,
+            "usage_usec": 2957162,
+            "user_usec": 739796
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 1368064,
+          "stderr_tail": "",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "block": 3,
+      "arm": "burstable_two",
+      "timeout_s": 900.0,
+      "timed_out": false,
+      "abrupt_exit": false,
+      "batch_wall_s": 33.626847627107054,
+      "jobs": [
+        {
+          "role": "ast",
+          "slot": 1,
+          "requested_quota_cores": null,
+          "observed": {
+            "cpu_max": "max 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "bursts": [
+              {
+                "ast_nodes": 15029159,
+                "files": 6964
+              }
+            ],
+            "elapsed_s": 32.10310761258006,
+            "source_files": 6964
+          },
+          "cpu_delta": {
+            "nr_periods": 0,
+            "nr_throttled": 0,
+            "system_usec": 3983265,
+            "throttled_usec": 0,
+            "usage_usec": 122146229,
+            "user_usec": 118162964
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 4489613312,
+          "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\n",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "ast",
+          "slot": 2,
+          "requested_quota_cores": null,
+          "observed": {
+            "cpu_max": "max 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "bursts": [
+              {
+                "ast_nodes": 15029159,
+                "files": 6964
+              }
+            ],
+            "elapsed_s": 32.945990616921335,
+            "source_files": 6964
+          },
+          "cpu_delta": {
+            "nr_periods": 0,
+            "nr_throttled": 0,
+            "system_usec": 4162692,
+            "throttled_usec": 0,
+            "usage_usec": 121760555,
+            "user_usec": 117597862
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 4487872512,
+          "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\n",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "idle",
+          "slot": 1,
+          "requested_quota_cores": null,
+          "observed": {
+            "cpu_max": "max 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 134217728,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "elapsed_s": 30.0,
+            "sleep_s": 30.0
+          },
+          "cpu_delta": {
+            "nr_periods": 0,
+            "nr_throttled": 0,
+            "system_usec": 211425,
+            "throttled_usec": 0,
+            "usage_usec": 296870,
+            "user_usec": 85445
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 1044480,
+          "stderr_tail": "",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "idle",
+          "slot": 2,
+          "requested_quota_cores": null,
+          "observed": {
+            "cpu_max": "max 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 134217728,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "elapsed_s": 30.0,
+            "sleep_s": 30.0
+          },
+          "cpu_delta": {
+            "nr_periods": 0,
+            "nr_throttled": 0,
+            "system_usec": 200264,
+            "throttled_usec": 0,
+            "usage_usec": 274859,
+            "user_usec": 74594
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 1073152,
+          "stderr_tail": "",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "block": 3,
+      "arm": "hard_four",
+      "timeout_s": 900.0,
+      "timed_out": false,
+      "abrupt_exit": false,
+      "batch_wall_s": 35.40963604906574,
+      "jobs": [
+        {
+          "role": "ast",
+          "slot": 1,
+          "requested_quota_cores": 4.0,
+          "observed": {
+            "cpu_max": "400000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "bursts": [
+              {
+                "ast_nodes": 15029159,
+                "files": 6964
+              }
+            ],
+            "elapsed_s": 34.601056697778404,
+            "source_files": 6964
+          },
+          "cpu_delta": {
+            "nr_periods": 364,
+            "nr_throttled": 84,
+            "system_usec": 4313269,
+            "throttled_usec": 1991545,
+            "usage_usec": 129204963,
+            "user_usec": 124891695
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 4487692288,
+          "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\n",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "ast",
+          "slot": 2,
+          "requested_quota_cores": 4.0,
+          "observed": {
+            "cpu_max": "400000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "bursts": [
+              {
+                "ast_nodes": 15029159,
+                "files": 6964
+              }
+            ],
+            "elapsed_s": 34.67001637117937,
+            "source_files": 6964
+          },
+          "cpu_delta": {
+            "nr_periods": 360,
+            "nr_throttled": 95,
+            "system_usec": 4517983,
+            "throttled_usec": 1778439,
+            "usage_usec": 130635062,
+            "user_usec": 126117078
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 4487626752,
+          "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\n",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "idle",
+          "slot": 1,
+          "requested_quota_cores": 2.0,
+          "observed": {
+            "cpu_max": "200000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 134217728,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "elapsed_s": 30.0,
+            "sleep_s": 30.0
+          },
+          "cpu_delta": {
+            "nr_periods": 59,
+            "nr_throttled": 0,
+            "system_usec": 342837,
+            "throttled_usec": 0,
+            "usage_usec": 468964,
+            "user_usec": 126126
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 1183744,
+          "stderr_tail": "",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "idle",
+          "slot": 2,
+          "requested_quota_cores": 2.0,
+          "observed": {
+            "cpu_max": "200000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 134217728,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "elapsed_s": 30.0,
+            "sleep_s": 30.0
+          },
+          "cpu_delta": {
+            "nr_periods": 56,
+            "nr_throttled": 0,
+            "system_usec": 334268,
+            "throttled_usec": 0,
+            "usage_usec": 433430,
+            "user_usec": 99162
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 1060864,
+          "stderr_tail": "",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "block": 3,
+      "arm": "hard_two",
+      "timeout_s": 900.0,
+      "timed_out": false,
+      "abrupt_exit": false,
+      "batch_wall_s": 73.49511830601841,
+      "jobs": [
+        {
+          "role": "ast",
+          "slot": 1,
+          "requested_quota_cores": 2.0,
+          "observed": {
+            "cpu_max": "200000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "bursts": [
+              {
+                "ast_nodes": 15029159,
+                "files": 6964
+              }
+            ],
+            "elapsed_s": 72.81475489586592,
+            "source_files": 6964
+          },
+          "cpu_delta": {
+            "nr_periods": 747,
+            "nr_throttled": 711,
+            "system_usec": 5858246,
+            "throttled_usec": 272924844,
+            "usage_usec": 144838627,
+            "user_usec": 138980381
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 4487622656,
+          "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\n",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "ast",
+          "slot": 2,
+          "requested_quota_cores": 2.0,
+          "observed": {
+            "cpu_max": "200000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "bursts": [
+              {
+                "ast_nodes": 15029159,
+                "files": 6964
+              }
+            ],
+            "elapsed_s": 71.85823172423989,
+            "source_files": 6964
+          },
+          "cpu_delta": {
+            "nr_periods": 745,
+            "nr_throttled": 703,
+            "system_usec": 5699588,
+            "throttled_usec": 270328207,
+            "usage_usec": 143920500,
+            "user_usec": 138220913
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 4487385088,
+          "stderr_tail": "h self.assertRaisesRegex(RuntimeError, \"shape\\[0\\] to be >= 3, but got 2\"):\nsources/tensorflow/tensorflow/python/kernel_tests/control_flow/control_flow_ops_py_test.py:1146: SyntaxWarning: invalid escape sequence '\\('\n  \"tf.compat.v1.experimental.output_all_intermediates\\(True\\).\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3867: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[4,2]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/data_structures/lookup_ops_test.py:3874: SyntaxWarning: invalid escape sequence '\\['\n  \"Expected shape \\[2\\] or \\[2,2,2\\] for default value, got \\[1,2,2\\]\"):\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:163: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"indices\\[0\\] = 4 is not in \\[0, 4\\)\")\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:174: SyntaxWarning: invalid escape sequence '\\['\n  expected_error_message=\"Expected batch_dims in the range \\[0, 0\\], \" +\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_xent_op_d9m_test.py:186: SyntaxWarning: invalid escape sequence '\\['\n  expected_regex=\"Expected batch_dims in the range \\[0, 0\\], but got 1.*\")\nsources/tensorflow/third_party/xla/third_party/tsl/third_party/py/manylinux_compliance_test.py:92: SyntaxWarning: invalid escape sequence '\\s'\n  regex = 'following platform tag:\\s+\"{}\"'.format(compliance_tag)\nsources/pytorch/test/functorch/xfail_suggester.py:17: SyntaxWarning: invalid escape sequence '\\w'\n  p = re.compile(\"FAILED test/test_\\w+.py::\\w+::(\\S+)\")  # noqa: W605\nsources/tensorflow/tensorflow/python/kernel_tests/sparse_ops/sparse_to_dense_op_py_test.py:127: SyntaxWarning: invalid escape sequence '\\['\n  \"index < \\[5\\]\")\nsources/tensorflow/tensorflow/python/profiler/profiler_v2_test.py:44: SyntaxWarning: invalid escape sequence '\\/'\n  profiler.start('/dev/null/\\/\\/:123')\n",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "idle",
+          "slot": 1,
+          "requested_quota_cores": 2.0,
+          "observed": {
+            "cpu_max": "200000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 134217728,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "elapsed_s": 30.0,
+            "sleep_s": 30.0
+          },
+          "cpu_delta": {
+            "nr_periods": 442,
+            "nr_throttled": 0,
+            "system_usec": 2739769,
+            "throttled_usec": 0,
+            "usage_usec": 3529034,
+            "user_usec": 789265
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 1441792,
+          "stderr_tail": "",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        },
+        {
+          "role": "idle",
+          "slot": 2,
+          "requested_quota_cores": 2.0,
+          "observed": {
+            "cpu_max": "200000 100000",
+            "cpu_weight": 100,
+            "cpuset_cpus_effective": "0-7",
+            "memory_max_bytes": 134217728,
+            "memory_swap_max_bytes": 0
+          },
+          "workload_exit": 0,
+          "workload": {
+            "elapsed_s": 30.0,
+            "sleep_s": 30.0
+          },
+          "cpu_delta": {
+            "nr_periods": 437,
+            "nr_throttled": 0,
+            "system_usec": 2652688,
+            "throttled_usec": 0,
+            "usage_usec": 3435617,
+            "user_usec": 782930
+          },
+          "memory_events_delta": {
+            "high": 0,
+            "low": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0
+          },
+          "telemetry_lost": false,
+          "sampled_peak_memory_current_bytes": 1236992,
+          "stderr_tail": "",
+          "container_exit": 0,
+          "docker_oom_killed": false
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "valid": true,
+    "batch_wall_median_s": {
+      "hard_two": 73.49511830601841,
+      "burstable_two": 34.577722711954266,
+      "hard_four": 36.45658724894747
+    },
+    "burstable_reduction_vs_hard_two": 0.5295235451152033,
+    "burstable_ratio_to_hard_four": 0.9484629615996915,
+    "every_block_burstable_faster": true,
+    "every_block_burstable_less_throttled": true,
+    "successful_output_identities": [
+      [
+        6964,
+        6964,
+        15029159
+      ]
+    ],
+    "gate": true,
+    "status": "development_go_to_fresh_sqlglot_burst_protocol"
+  },
+  "limitations": [
+    "This mechanism test uses the AST workload, not SQLGlot task commands.",
+    "Idle sleep jobs isolate CPU borrowing but do not model other resource interference.",
+    "Equal cgroup weights provide borrowing, not the simulator's hindsight demand caps."
+  ]
+}

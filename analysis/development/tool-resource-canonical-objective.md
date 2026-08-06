@@ -1218,6 +1218,23 @@ every block. Failure closes this physical mechanism. Passing authorizes only a
 fresh SQLGlot action protocol that uses CPU guarantees and borrowing; it does
 not validate the hindsight demand caps, RSS reservations, or ideal fluid model.
 
+The physical test passed every frozen gate. Median batch makespan was 73.495
+seconds with hard two-core quotas, 34.578 seconds with equal-weight borrowing,
+and 36.457 seconds with the hard-four positive control. Burstable execution
+reduced hard-two makespan by 52.952%, won in every block, and was 0.948x the
+positive-control median. Its summed AST `throttled_usec` was zero in every
+block, while hard-two recorded 526.6--560.2 million microseconds per block.
+
+All 36 formal jobs completed with the frozen cpuset, quota/weight, and memory
+settings; all 18 AST jobs reported the same 6,964 files and 15,029,159 nodes.
+There were no OOM, OOM-kill, timeout, abrupt-exit, or telemetry-loss events.
+AST sampled peaks were 4.179--4.227 GiB per container. This establishes on real
+cgroups that equal guarantees redistribute otherwise idle CPU under contention
+and recover the expected four-core throughput. The constructed idle pair makes
+this a mechanism result, not representative SQLGlot scheduling utility. The
+independently reviewed artifact is in
+`analysis/results/tool-resource-5-3-3-3-20260804/resource-burst-contention-v1/`.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved
