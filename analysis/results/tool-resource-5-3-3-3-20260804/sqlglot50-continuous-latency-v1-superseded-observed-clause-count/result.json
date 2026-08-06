@@ -1,0 +1,283 @@
+{
+  "claim_bearing": false,
+  "cost": {
+    "agent_calls": 0,
+    "new_collection": false,
+    "projection_and_scoring_seconds": 13.844318382907659
+  },
+  "coverage": {
+    "clause_eventual_fallback_commands": 27,
+    "clause_fully_aligned_commands": 1017,
+    "clause_usable_at_start_commands": 1043,
+    "commands": 1044,
+    "compound_commands": 547,
+    "tasks": 50,
+    "updates": 25558,
+    "zero_survivor_fallbacks": {
+      "clause_active": 2728,
+      "clause_command": 3039,
+      "command": 3235
+    }
+  },
+  "gates": {
+    "clause_survival_vs_command_survival": {
+      "actionable_changed_commands": 45,
+      "candidate": "clause_survival",
+      "control": "command_survival",
+      "delta_percentage_points": 0.1470081820822644,
+      "go": false,
+      "minimum_action_lead_ms": 500.0,
+      "minimum_actionable_changed_commands": 20,
+      "minimum_gain_percentage_points": 5.0,
+      "minimum_positive_tasks": 10,
+      "no_severe_or_unavailable_regression": false,
+      "task_deltas": {
+        "delta_by_task": {
+          "tobymao__sqlglot-2337": 0.0010529003775218966,
+          "tobymao__sqlglot-2412": 0.040768331011487795,
+          "tobymao__sqlglot-2439": 0.000329830932711278,
+          "tobymao__sqlglot-2443": -0.018250369729533894,
+          "tobymao__sqlglot-2461": 0.0027661612930783403,
+          "tobymao__sqlglot-2507": 0.011044299980486873,
+          "tobymao__sqlglot-2576": 7.796349441658253e-05,
+          "tobymao__sqlglot-2605": -0.00378836203412498,
+          "tobymao__sqlglot-2619": 2.033900680787195e-05,
+          "tobymao__sqlglot-2739": -0.004449872180845042,
+          "tobymao__sqlglot-2754": -0.031317674852205844,
+          "tobymao__sqlglot-2794": 0.0006668931648167504,
+          "tobymao__sqlglot-2821": 0.0026955775632776656,
+          "tobymao__sqlglot-2822": 5.929999008052161e-05,
+          "tobymao__sqlglot-2825": 0.028616194480346354,
+          "tobymao__sqlglot-2857": 0.013625570659148213,
+          "tobymao__sqlglot-2935": -0.008642847954742938,
+          "tobymao__sqlglot-3129": 0.16285015750652287,
+          "tobymao__sqlglot-3150": 0.036653641037601735,
+          "tobymao__sqlglot-3179": 0.0004913290035595376,
+          "tobymao__sqlglot-3182": 0.00012298191572623346,
+          "tobymao__sqlglot-3198": 0.000800365713024922,
+          "tobymao__sqlglot-3204": 0.011725532419141045,
+          "tobymao__sqlglot-3230": 0.10854105525225731,
+          "tobymao__sqlglot-3238": 0.00352856577580894,
+          "tobymao__sqlglot-3242": 3.122803768189057e-05,
+          "tobymao__sqlglot-3272": 7.828365886892803e-05,
+          "tobymao__sqlglot-3284": 0.01611325232866387,
+          "tobymao__sqlglot-3329": 0.0001812398001197872,
+          "tobymao__sqlglot-3333": 0.007549626670629336,
+          "tobymao__sqlglot-3339": -0.005103197202228286,
+          "tobymao__sqlglot-3394": -0.0012959937057147749,
+          "tobymao__sqlglot-3401": 0.00037897216209988944,
+          "tobymao__sqlglot-3417": 0.15184342050406902,
+          "tobymao__sqlglot-3440": 0.00011177288074217095,
+          "tobymao__sqlglot-3515": 0.0002988034425805202,
+          "tobymao__sqlglot-3549": 2.3224215860590985e-05,
+          "tobymao__sqlglot-3552": 1.886364909469315e-05,
+          "tobymao__sqlglot-3566": 5.4318098026483134e-05,
+          "tobymao__sqlglot-3620": -0.011282636642833752,
+          "tobymao__sqlglot-3630": 0.002898264616326991,
+          "tobymao__sqlglot-3637": -0.01322564817760245,
+          "tobymao__sqlglot-3641": 0.0004494039005659808,
+          "tobymao__sqlglot-3650": -0.0034586917912820133,
+          "tobymao__sqlglot-3682": -0.002098009766171687,
+          "tobymao__sqlglot-3695": 6.718211511033046e-05,
+          "tobymao__sqlglot-3699": 0.00012454748489066977,
+          "tobymao__sqlglot-3734": 4.8515500045680494e-05,
+          "tobymao__sqlglot-3745": -0.006578176461783925,
+          "tobymao__sqlglot-3765": 5.978960756905354e-05
+        },
+        "negative_tasks": 12,
+        "positive_tasks": 38,
+        "zero_tasks": 0
+      }
+    },
+    "command_survival_vs_static": {
+      "actionable_changed_commands": null,
+      "candidate": "command_survival",
+      "control": "static",
+      "delta_percentage_points": 30.408920955697848,
+      "go": true,
+      "minimum_action_lead_ms": 500.0,
+      "minimum_actionable_changed_commands": null,
+      "minimum_gain_percentage_points": 5.0,
+      "minimum_positive_tasks": 10,
+      "no_severe_or_unavailable_regression": true,
+      "task_deltas": {
+        "delta_by_task": {
+          "tobymao__sqlglot-2337": -0.03392406211724856,
+          "tobymao__sqlglot-2412": -0.04061763536869817,
+          "tobymao__sqlglot-2439": 0.10548416671228036,
+          "tobymao__sqlglot-2443": 0.07649083579697837,
+          "tobymao__sqlglot-2461": 0.050047444176203965,
+          "tobymao__sqlglot-2507": 0.024902522691138025,
+          "tobymao__sqlglot-2576": -0.014523758558562128,
+          "tobymao__sqlglot-2605": 0.00025217850233056444,
+          "tobymao__sqlglot-2619": 0.6919714235402081,
+          "tobymao__sqlglot-2739": -0.061537716774068524,
+          "tobymao__sqlglot-2754": -0.07584279475982528,
+          "tobymao__sqlglot-2794": 0.14928832348533838,
+          "tobymao__sqlglot-2821": 0.5730722567141545,
+          "tobymao__sqlglot-2822": 0.005531131719943269,
+          "tobymao__sqlglot-2825": 0.294791786025117,
+          "tobymao__sqlglot-2857": 0.6760211302843279,
+          "tobymao__sqlglot-2935": 0.8095576755504347,
+          "tobymao__sqlglot-3129": 0.20922360152167813,
+          "tobymao__sqlglot-3150": -0.05700871890863393,
+          "tobymao__sqlglot-3179": -0.002500285760009086,
+          "tobymao__sqlglot-3182": 0.009525894427057839,
+          "tobymao__sqlglot-3198": 0.4142938052708572,
+          "tobymao__sqlglot-3204": 0.0030371920316728074,
+          "tobymao__sqlglot-3230": 0.023325991973171235,
+          "tobymao__sqlglot-3238": -0.08108155186332043,
+          "tobymao__sqlglot-3242": 0.0005908156847768134,
+          "tobymao__sqlglot-3272": 0.0,
+          "tobymao__sqlglot-3284": -0.13546570625322307,
+          "tobymao__sqlglot-3329": -0.0036754998362924438,
+          "tobymao__sqlglot-3333": 0.16401162849605552,
+          "tobymao__sqlglot-3339": 0.012150037202981148,
+          "tobymao__sqlglot-3394": 0.733141199077626,
+          "tobymao__sqlglot-3401": 0.411579376785672,
+          "tobymao__sqlglot-3417": -0.00888283483299114,
+          "tobymao__sqlglot-3440": 0.7239383084355518,
+          "tobymao__sqlglot-3515": 0.15117978530377119,
+          "tobymao__sqlglot-3549": 0.40420510570280765,
+          "tobymao__sqlglot-3552": 0.0,
+          "tobymao__sqlglot-3566": 0.6513108611354624,
+          "tobymao__sqlglot-3620": -0.00011544471895329248,
+          "tobymao__sqlglot-3630": 0.10287644110310604,
+          "tobymao__sqlglot-3637": 0.0007075530287705701,
+          "tobymao__sqlglot-3641": -0.00034045317666533926,
+          "tobymao__sqlglot-3650": -0.00023861875377638697,
+          "tobymao__sqlglot-3682": -0.0035335590584681955,
+          "tobymao__sqlglot-3695": 0.7604947963540865,
+          "tobymao__sqlglot-3699": 0.4254172086308005,
+          "tobymao__sqlglot-3734": 0.7661360797688687,
+          "tobymao__sqlglot-3745": 0.6741988510727043,
+          "tobymao__sqlglot-3765": 0.0
+        },
+        "negative_tasks": 15,
+        "positive_tasks": 32,
+        "zero_tasks": 3
+      }
+    }
+  },
+  "inputs": {
+    "development_run": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803",
+    "git_sha": "86aeeb9f0ec298ded869631a9d68f283cc5511b2",
+    "public_telemetry": [
+      "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+      "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl"
+    ],
+    "validation_rows": "/home/chiyu/workspace/agent-sched-bench/analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-full-test-phase-validation-v1/rows.jsonl",
+    "validation_run": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804"
+  },
+  "integrity": {
+    "development_exposed_only": true,
+    "final_partition_read": false,
+    "initial_current_rows_identical": true,
+    "non_latency_targets_untouched": true
+  },
+  "metrics": {
+    "clause_survival": {
+      "mean_command_correct_time_fraction": 0.8374383559689802,
+      "median_stable_correct_lead_ms": 40.4,
+      "stable_correct_commands": 1034,
+      "time_weighted_exact_accuracy": 0.9081610040496365,
+      "time_weighted_severe_or_unavailable_rate": 0.010987195559694862,
+      "time_weighted_unavailable_rate": 5.132437573109649e-05,
+      "total_command_ms": 9741959.7
+    },
+    "command_survival": {
+      "mean_command_correct_time_fraction": 0.8230016605088661,
+      "median_stable_correct_lead_ms": 50.7,
+      "stable_correct_commands": 811,
+      "time_weighted_exact_accuracy": 0.9066909222288139,
+      "time_weighted_severe_or_unavailable_rate": 0.010880767654992456,
+      "time_weighted_unavailable_rate": 5.132437573109649e-05,
+      "total_command_ms": 9741959.7
+    },
+    "static": {
+      "mean_command_correct_time_fraction": 0.7950191570881227,
+      "median_stable_correct_lead_ms": 52.1,
+      "stable_correct_commands": 830,
+      "time_weighted_exact_accuracy": 0.6026017126718354,
+      "time_weighted_severe_or_unavailable_rate": 0.2583449919219025,
+      "time_weighted_unavailable_rate": 0.00011488448263648639,
+      "total_command_ms": 9741959.7
+    }
+  },
+  "protocol": {
+    "ambiguous_clause_alignment": "fallback_to_command_survival",
+    "clause_survival": "completed_exact_active_survival_future_static_then_compose",
+    "command_survival": "strict empirical command-duration survival",
+    "current_task_updates": false,
+    "pipeline_latency": "max",
+    "sequential_latency": "sum",
+    "static": "Current command-start PMF",
+    "update_times": "command_start_then_0.5s_ticks_and_visible_clause_events",
+    "validation_updates": "successful whole-task settlement only",
+    "zero_survivor": "point_mass_smallest_still_possible_bucket"
+  },
+  "schema": "continuous-latency-v1",
+  "snapshots": {
+    "2000": {
+      "alive_commands": 276,
+      "clause_survival": {
+        "accuracy": 0.6739130434782609,
+        "correct": 186
+      },
+      "command_survival": {
+        "accuracy": 0.6739130434782609,
+        "correct": 186
+      },
+      "static": {
+        "accuracy": 0.6123188405797102,
+        "correct": 169
+      }
+    },
+    "30000": {
+      "alive_commands": 73,
+      "clause_survival": {
+        "accuracy": 1.0,
+        "correct": 73
+      },
+      "command_survival": {
+        "accuracy": 1.0,
+        "correct": 73
+      },
+      "static": {
+        "accuracy": 0.6438356164383562,
+        "correct": 47
+      }
+    },
+    "500": {
+      "alive_commands": 434,
+      "clause_survival": {
+        "accuracy": 0.6912442396313364,
+        "correct": 300
+      },
+      "command_survival": {
+        "accuracy": 0.6889400921658986,
+        "correct": 299
+      },
+      "static": {
+        "accuracy": 0.6244239631336406,
+        "correct": 271
+      }
+    },
+    "8000": {
+      "alive_commands": 159,
+      "clause_survival": {
+        "accuracy": 0.8238993710691824,
+        "correct": 131
+      },
+      "command_survival": {
+        "accuracy": 0.8238993710691824,
+        "correct": 131
+      },
+      "static": {
+        "accuracy": 0.660377358490566,
+        "correct": 105
+      }
+    }
+  },
+  "status": "development_command_mechanism_go"
+}

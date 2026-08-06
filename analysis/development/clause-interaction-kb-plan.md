@@ -1434,3 +1434,55 @@ task's pre-update PMFs only; later static PMFs are reconstructed from the frozen
 inputs with the causal between-task updates declared above. Any pass authorizes
 only a fresh-data protocol tied to a named mid-execution consumer; this exposed
 diagnostic cannot open final by itself.
+
+### 16.1 Result and decision
+
+The frozen replay covered 1,044 commands and 9,741,959.7 command-milliseconds
+across 50 tasks. Of 604 parser-defined compound commands, 1,017 commands were
+fully clause-aligned and 27 eventually fell back to command survival. The
+evaluator scored 25,558 update intervals.
+
+| Arm | Time-weighted exact ↑ | Severe or unavailable ↓ | Mean command correct-time fraction ↑ |
+|---|---:|---:|---:|
+| Static Current | 60.260% | 25.834% | 79.502% |
+| Command survival | 90.669% | 1.088% | 82.300% |
+| Clause survival | 90.816% | 1.099% | 83.744% |
+
+Command survival passed its frozen mechanism gate: +30.409 percentage points,
+no severe regression, and positive/negative/zero task deltas of 32/15/3.
+Clause survival returned NO-GO: its additional gain was only +0.147 points,
+below 5.0 points, and severe-or-unavailable time increased from 1.088% to
+1.099%. It changed 45 commands with at least 0.5 seconds remaining and had
+38/12 positive/negative tasks, so lack of coverage or task breadth does not
+explain the miss.
+
+Accuracy among commands still alive shows when the signal becomes useful:
+
+| Elapsed | Alive | Static | Command survival | Clause survival |
+|---|---:|---:|---:|---:|
+| 0.5 s | 434 | 62.442% | 68.894% | 69.124% |
+| 2 s | 276 | 61.232% | 67.391% | 67.391% |
+| 8 s | 159 | 66.038% | 82.390% | 82.390% |
+| 30 s | 73 | 64.384% | 100.000% | 100.000% |
+
+A post-hoc attribution, not part of the frozen gate, clamps each available
+Static hard class to the smallest class still physically possible from elapsed
+time and leaves unavailable predictions unavailable. This trivial elapsed-floor
+arm reaches 86.832% time-weighted exact accuracy and 2.003%
+severe-or-unavailable time. It explains 26.572 of the formal arm's 30.409-point
+gain; empirical command-duration survival adds only 3.837 points beyond the
+floor. Therefore the observed GO is mainly evidence for continuously enforcing
+the latency-bucket lower bound, not for a richer KB distribution. Clause-level
+progress adds no decision-worthy improvement and is closed without retuning.
+
+The first written result used observed `CommandRow.clauses` for the coverage
+counter and reported 547 compounds. Post-result review found that reporting-only
+error; the parser/model count is 604. The superseded artifact is preserved, and
+its rows are byte-identical to the corrected result. Metrics, gates, and the
+decision did not change.
+
+Artifacts:
+
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-continuous-latency-v1/result.json`
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-continuous-latency-v1/rows.jsonl`
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-continuous-latency-v1-superseded-observed-clause-count/`

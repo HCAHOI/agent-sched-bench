@@ -110,6 +110,16 @@ action set. It used each command's own timestamped execution prefix rather than
 cross-task similarity, but its hindsight action-space upper bound did not pass
 the frozen utility gate.
 
+A later development-exposed latency diagnostic tested continuous updates while
+a command is alive. Command-duration survival passed its time-weighted mechanism
+gate, moving exact accuracy from 60.260% to 90.669%, but clause-level progress
+added only 0.147 points and increased severe-or-unavailable time. A post-hoc
+elapsed-floor control reached 86.832%, explaining 26.572 of the formal arm's
+30.409-point gain. The retained hypothesis is therefore the deterministic
+latency-bucket lower bound for a future named mid-execution consumer, not richer
+clause or KB inference. This development result has no scheduler-utility claim
+and does not authorize the unread final partition.
+
 The deterministic `full-test-third-or-later-v1` feature passed its reviewed,
 post-hoc development continuation rule. On the exposed 80/20 replay it improved
 latency, CPU, and RSS by 1.146, 2.857, and 2.532 percentage points, with Disk
