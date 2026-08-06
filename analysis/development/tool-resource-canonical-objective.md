@@ -264,14 +264,18 @@ returned +4.167 CPU and +2.282 Disk points. Fold thresholds rejected more
 helpful than harmful Disk corrections. These results close hard-state coupling,
 PMF-confidence thresholding, and further selector tuning on exposed rows.
 
-Physical Disk prediction requires evidence about pre-command cache
-residency or equivalent environment state. The controlled file-footprint by
-page-residency mechanism test on 12 already-exposed development tasks remains
-frozen in the same record. The same runs will retain the already-computed
-clause-owned 500 ms CPU profile and test a same-scope early CPU lower bound;
-this replaces the invalid cgroup-wide prefix without adding another execution.
-No completed candidate authorizes runtime integration, the long physical-state
-run, global cache eviction, or final-partition access.
+Physical Disk prediction requires evidence about pre-command cache residency
+or equivalent environment state. The controlled file-footprint by
+page-residency experiment on 12 already-exposed tasks completed on 2026-08-06.
+Its official joint-validity gate returned NO-GO: five sub-one-second executions
+had valid Disk but unavailable canonical peak CPU, leaving nine complete tasks.
+Those nine all showed the intended residency and physical-read contrast, four
+crossed to a lower Disk bucket, and none crossed upward. A post-hoc Disk-only
+availability check found 12/12 residency/read contrasts and 7/12 lower buckets,
+but cannot amend the frozen verdict. The same run's clause-owned 500 ms CPU
+prefix made one helpful and zero harmful changes, below its three-task gate.
+No completed candidate authorizes runtime integration, global cache eviction,
+or final-partition access.
 
 The fixed full-command targets in Section 1 remain the static-predictor
 baseline. Their first causal 80-task warm-up / 20-task test replay contains 349

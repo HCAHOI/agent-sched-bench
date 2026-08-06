@@ -1,0 +1,121 @@
+{
+  "claim_bearing": false,
+  "cost": {
+    "intervention_ms_total": 2040.8857859999998,
+    "probe_ms_total": 361.317507,
+    "target_ms_total": 602027.0
+  },
+  "coverage": {
+    "invalid_executions": [
+      "tobymao__sqlglot-4390/r1/warm",
+      "tobymao__sqlglot-4390/r1/cold",
+      "tobymao__sqlglot-4390/r2/warm",
+      "tobymao__sqlglot-4438/r2/warm",
+      "tobymao__sqlglot-4519/r1/warm"
+    ],
+    "scheduled_executions": 48,
+    "scheduled_tasks": 12,
+    "valid_executions": 43,
+    "valid_tasks_all_four_executions": 9
+  },
+  "cpu": {
+    "gate": {
+      "maximum_harmful_changes": 1,
+      "minimum_helpful_changes": 3,
+      "minimum_helpful_tasks": 3,
+      "minimum_prefix_valid_tasks": 10
+    },
+    "go": false,
+    "harmful_changes": 0,
+    "harmful_tasks": [],
+    "helpful_changes": 1,
+    "helpful_tasks": [
+      "tobymao__sqlglot-4004"
+    ],
+    "prefix_exceeds_final": [],
+    "prefix_valid_tasks": [
+      "tobymao__sqlglot-4459",
+      "tobymao__sqlglot-4004",
+      "tobymao__sqlglot-4430",
+      "tobymao__sqlglot-4165",
+      "tobymao__sqlglot-3975",
+      "tobymao__sqlglot-3891",
+      "tobymao__sqlglot-4148",
+      "tobymao__sqlglot-4696",
+      "tobymao__sqlglot-4393"
+    ]
+  },
+  "disk": {
+    "gate": {
+      "maximum_opposite_bucket_tasks": 1,
+      "minimum_lower_bucket_tasks": 4,
+      "minimum_read_lower_tasks": 8,
+      "minimum_resident_contrast_tasks": 8,
+      "minimum_valid_tasks": 10
+    },
+    "go": false,
+    "lower_bucket_tasks": [
+      "tobymao__sqlglot-4459",
+      "tobymao__sqlglot-4430",
+      "tobymao__sqlglot-3975",
+      "tobymao__sqlglot-4148"
+    ],
+    "opposite_bucket_tasks": [],
+    "probe_p95_limit_ms_exclusive": 100.0,
+    "probe_p95_ms": 24.0504695,
+    "read_lower_tasks": [
+      "tobymao__sqlglot-4459",
+      "tobymao__sqlglot-4004",
+      "tobymao__sqlglot-4430",
+      "tobymao__sqlglot-4165",
+      "tobymao__sqlglot-3975",
+      "tobymao__sqlglot-3891",
+      "tobymao__sqlglot-4148",
+      "tobymao__sqlglot-4696",
+      "tobymao__sqlglot-4393"
+    ],
+    "resident_contrast_tasks": [
+      "tobymao__sqlglot-4459",
+      "tobymao__sqlglot-4004",
+      "tobymao__sqlglot-4430",
+      "tobymao__sqlglot-4165",
+      "tobymao__sqlglot-3975",
+      "tobymao__sqlglot-3891",
+      "tobymao__sqlglot-4148",
+      "tobymao__sqlglot-4696",
+      "tobymao__sqlglot-4393"
+    ],
+    "resident_delta_minimum": 0.5
+  },
+  "inputs": {
+    "baseline": "/home/chiyu/workspace/agent-sched-bench/analysis/development/sqlglot-physical-state-current-baseline.json",
+    "baseline_sha256": "fa5f87a2097df6ca3c663ab4f3e413243301490f9917d0dc1af48a9650e86d6a",
+    "protocol": "/home/chiyu/workspace/agent-sched-bench/traces/experiments/sqlglot-physical-state-20260806/conditions/protocol.json",
+    "protocol_sha256": "b4ef5ce398af0c097b5c6006289460b4ee7617b20f6d8a7f002100f5f5291268",
+    "telemetry": "/home/chiyu/workspace/agent-sched-bench/traces/experiments/sqlglot-physical-state-20260806/measured/simulate_cloud_model_c1_20260806T091436284.jsonl",
+    "telemetry_sha256": "5920bb081118928d811b83406026ec407a827df88b84af7d467b17f37d2c82f6"
+  },
+  "protocol": {
+    "cpu_base": "causal Current prediction before the selected task",
+    "cpu_bucket_edges_cores": [
+      2.0,
+      4.0
+    ],
+    "cpu_decision": {
+      "actuation_p95_s": 0.09132007875,
+      "availability_pad_s": 0.05,
+      "candidate": "max(Current class, maximum completed prefix-window class)",
+      "minimum_observed_span_s": 0.4
+    },
+    "disk_bucket_edges_bytes": [
+      1048576.0,
+      104857600.0
+    ],
+    "pairing": "task counts only when the frozen contrast holds in both repetitions"
+  },
+  "schema": "sqlglot-physical-state-result-v1",
+  "status": {
+    "cpu": "development_mechanism_no_go",
+    "disk": "development_mechanism_no_go"
+  }
+}

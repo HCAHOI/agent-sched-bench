@@ -1,15 +1,20 @@
 # Task-Local Resource Prediction Research Record
 
-**Effective:** 2026-08-05
+**Effective:** 2026-08-06
 
 **Status:** the offline-agent and deterministic task-phase directions are
 closed. The parameter-free causal within-task telemetry overlay also returned
 NO-GO. The 50-task validation partition is development-exposed; the 50-task
 final partition remains unread and unauthorized. The generic linear residual
-calibrator and causal full-command outcome memory also returned NO-GO. Disk has
-a separately frozen cache-state mechanism test that is not authorized to run.
-The pytest target-overlap test also returned NO-GO; it isolated a strong
-CPU/RSS mechanism but not a Disk mechanism. Final remains closed.
+calibrator and causal full-command outcome memory also returned NO-GO. The
+controlled page-residency and same-scope CPU-prefix experiment completed with
+official NO-GO for both targets: five sub-one-second executions lacked a CPU
+label, leaving only nine jointly complete tasks, and CPU made only one helpful
+change. A post-hoc Disk-only availability check found the intended physical
+contrast in all twelve tasks, but cannot amend the frozen joint-validity gate
+or authorize final access. The pytest target-overlap test also returned NO-GO;
+it isolated a strong CPU/RSS mechanism but not a Disk mechanism. Final remains
+closed.
 Adding pip package-set overlap also returned component NO-GO: RSS passed the
 five-point gate, but latency and CPU did not. The next frozen component test
 added a parameter-free early-execution lower-bound correction and returned
@@ -412,13 +417,28 @@ measured execution. A task is valid only when its bounded discovery artifacts
 still match the frozen digests and all four measured executions have matching
 identity, zero exits, complete replay, and valid telemetry.
 
-Passing only authorizes design of a state-aware predictor; it is not itself a
-five-point accuracy result. A failure stops page-residency work without adding
-paths, changing bounds, or choosing another task sample. Preparation, 60 target
-executions, and 12 clean-image filters require 84 container starts and 12
-prepared images; it is estimated at 1--3 hours and up to roughly 60 GB before
-shared-layer deduplication. This run is not authorized yet and must wait until
-the independent PennyLane collection is finished.
+The authorized run completed on 2026-08-06. All 48 replays and 96 exec
+observations had valid telemetry, but the frozen scorer accepted only 43
+executions and nine tasks with all four conditions. Five target clauses were
+710.088--993.254 ms long, so canonical CPU availability was
+`unknown:clause_shorter_than_1s_ineligible_for_peak`; their Disk observations
+remained valid. Under the predeclared joint-validity rule, Disk therefore
+returned NO-GO despite a 24.050 ms probe p95, residency and lower-read contrasts
+in all nine complete tasks, four lower-bucket tasks, and no opposite-bucket
+task. CPU also returned NO-GO: nine prefix-valid tasks, one helpful change in
+one task, zero harmful changes, and no prefix above its final class.
+
+A post-hoc diagnostic that changed only availability accounting, not any
+measurement, found 12/12 Disk-valid tasks with residency and lower-read
+contrasts, 7/12 lower-bucket tasks, no opposite task, and a 22.167 ms probe p95.
+This is mechanism diagnosis, not an amended gate: the official result remains
+NO-GO and does not authorize a state-aware predictor or final access. Any future
+test must use genuinely fresh tasks and freeze per-target validity before
+outcomes; this sample cannot validate that amendment. The formal artifacts are:
+
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot12-physical-state-v1/result.json`
+- `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot12-physical-state-v1/rows.jsonl`
+- `traces/experiments/sqlglot-physical-state-20260806/measured/simulate_cloud_model_c1_20260806T091436284.jsonl`
 
 Do not use global `drop_caches`, reinterpret physical Disk as logical bytes,
 tune on the exposed 25/25 diagnostic, or open the final partition. Mid-execution
@@ -1123,19 +1143,20 @@ isolates the new prefix-counter mechanism against Current. A pass would
 authorize testing composition on fresh tasks, not retroactive scoring or final
 access.
 
-Passing the CPU or Disk mechanism gate is not a five-point accuracy result and
-does not open final. The full 12-task run remains unauthorized, requires 84
-container starts, is estimated at 1--3 hours and up to roughly 60 GB, and must
-wait for the active PennyLane collection. The instrumentation can be implemented
-and smoke-tested without starting a task container.
+The completed run returned CPU NO-GO. Only nine tasks had valid prefixes in all
+four executions because five sub-one-second target clauses correctly lacked a
+canonical peak-CPU value. The prefix never exceeded the final class and caused
+no harmful change, but produced only one helpful execution in task 4004 rather
+than the required three executions across three tasks. This closes the current
+same-scope CPU-prefix mechanism and does not open final.
 
 The label-free replay manifest is frozen at
 `analysis/development/sqlglot-physical-state-manifest.json`. It reproduced the
 81 eligible tasks and seed-42 selection above, and retained 171 mutating prefix
 actions (145.5632 seconds in the source traces) across the twelve tasks. All
 prefix actions use supported tools and none requires a source runtime artifact.
-The twelve base images are absent locally, so the storage and pull estimate
-above remains operative.
+The twelve base images were pulled and the prepared-image artifacts retained
+through result commit as required by the protocol.
 
 `scripts/evaluation/prepare_physical_state_task.py` is the reviewed preparation
 entrypoint. It accepts only a task ID from the canonical manifest and requires
