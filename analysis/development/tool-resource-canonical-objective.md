@@ -741,6 +741,48 @@ that does not price that risk. No real interference run, threshold tuning, or
 safety wrapper is authorized. The independently reviewed artifact is in
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-resource-admission-predictors-v1/`.
 
+### CPU and memory under-reservation calibration: frozen, pending
+
+On 2026-08-06 the advisor authorized a narrow physical calibration to resolve
+the replay's missing cost: whether allocating less CPU or memory than this
+workload uses causes measurable delay or failure. This is a mechanism test, not
+a new predictor comparison or a SQLGlot scheduling result. It reuses the
+existing Docker/cgroup-v2 AST-indexing workload over 6,964 PyTorch and
+TensorFlow source files. The workload, image (`python:3.13-slim`), source tree,
+eight workers, one burst, one-second retained-AST hold, disabled network, and
+6-GiB hard memory and swap limits are fixed. An unmeasured baseline warm-up
+precedes the formal runs.
+
+The four arms are: 8 CPU cores with no `memory.high` limit (baseline), 4 cores
+with no soft memory limit, 2 cores with no soft memory limit, and 8 cores with
+`memory.high=2 GiB`. The 2-GiB value was chosen before formal outcomes because
+the already-existing successful EAR run measured a 4.18-GiB peak cgroup working
+set. Each arm runs once in each of three blocks. Within-block order is shuffled
+with seed 42 before execution. Every run has a 180-second post-release timeout;
+timed-out containers are explicitly killed and retained as censored failures,
+not rerun.
+
+Primary latency is the workload's internal elapsed time; host release-to-finish
+wall time is a consistency check. CPU evidence is the workload-time ratio plus
+the change in cgroup `nr_throttled` and `throttled_usec`. Memory evidence is the
+workload-time ratio plus `memory.events` and reclaim/refault counters; cgroup
+peak memory is also retained. Successful runs must report identical source-file,
+parsed-file, and AST-node counts. All cgroup counters are differenced from a
+snapshot taken immediately before releasing the workload.
+
+CPU under-reservation is considered physically action-relevant only if all
+runs succeed, the median 2-core elapsed time is at least 25% above the 8-core
+baseline, and paired `throttled_usec` is higher in all three blocks. The 4-core
+arm is a prespecified secondary dose check. Memory under-reservation is
+considered physically action-relevant only if all baseline runs succeed,
+`memory.events.high` increases in every 2-GiB run, no OOM kill occurs, and
+either the median successful elapsed time is at least 10% above baseline or at
+least two of three low-memory runs reach the frozen timeout. If neither gate
+passes, this workload does not justify adding an under-reservation penalty to
+the scheduler model. Passing a gate establishes only that the omitted physical
+cost exists; it does not reopen the exposed hard-class predictor comparison or
+authorize runtime integration.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved
