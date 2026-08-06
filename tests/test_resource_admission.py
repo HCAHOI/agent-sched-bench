@@ -4,6 +4,7 @@ from scripts.evaluation.evaluate_cpu_work_admission import (
     _clause_cpu_work,
     _cpu_floor_programs,
 )
+from scripts.evaluation.evaluate_cpu_throughput_oracle import _bucket_cpu
 from scripts.evaluation.evaluate_clause_resource_classes import CommandRow, Row
 from scripts.evaluation.evaluate_resource_admission_oracle import _reservation
 from tool_resource_eval.resource_admission import (
@@ -195,3 +196,14 @@ def test_clause_cpu_work_rejects_duplicate_identity() -> None:
     assert _clause_cpu_work([clause]) == 0.5
     with pytest.raises(ValueError, match="duplicate clause CPU-work identity"):
         _clause_cpu_work([clause, dict(clause)])
+
+
+def test_cpu_throughput_target_uses_existing_request_classes() -> None:
+    assert [_bucket_cpu(value) for value in (0.0, 2.0, 2.01, 4.0, 4.01, 8.1)] == [
+        2.0,
+        2.0,
+        4.0,
+        4.0,
+        8.0,
+        8.0,
+    ]

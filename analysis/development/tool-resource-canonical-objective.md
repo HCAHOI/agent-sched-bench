@@ -899,6 +899,11 @@ validation50 programs, the same 32 seed-ordered 40-task schedules, FCFS-ready
 backfill, 8-core/16,000-MB host, and the reviewed command CPU-work mapping.
 Both compared arms use the same hindsight RSS reservation, so only CPU target
 semantics differ. Missing CPU-work or peak evidence reserves all 8 cores.
+Before either target outcome is run, the reconstructed 1,196-command identity
+must exactly match the reviewed CPU-work artifact and every seed's fixed-high
+and continuous-peak control metrics must exactly reproduce the prior admission
+artifact. The result retains each command's duration, peak CPU, RSS, delay, and
+CPU work so the paired physical inputs remain auditable.
 
 The peak-target arm maps the existing hindsight clause-composed peak CPU value
 to the deployed request classes: at most 2 cores requests 2, at most 4 requests
