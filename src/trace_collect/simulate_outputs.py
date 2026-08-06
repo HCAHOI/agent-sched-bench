@@ -372,6 +372,7 @@ def _write_prepared_resources(
         **(prepared.monitoring_policy or {}),
         "status": monitoring_status,
     }
+    summary["container_final_state"] = prepared.final_container_state
     attempt_layout.write_resources_json(
         prepared.task_output_dir,
         samples,

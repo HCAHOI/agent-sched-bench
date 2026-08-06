@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import time
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from trace_collect.simulate_outputs import (
 from trace_collect.simulate_types import (
     LLMTimingConfig,
     LoadedTraceSession,
+    PreparedContainer,
     PreparedTraceSession,
     ReplayTaskStats,
     SimulateError,
@@ -748,6 +750,112 @@ def test_resolve_prep_concurrency_preserves_default_limit() -> None:
         _resolve_prep_concurrency(-1, 4)
 
 
+def test_container_control_inspection_records_cpu_and_oom_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outputs = iter(
+        [
+            '{"NanoCpus":2000000000,"CpuShares":1024,"CpusetCpus":"0-7"}\n',
+            '{"Status":"running","Running":true,"OOMKilled":false,"ExitCode":0}\n',
+            "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\n",
+        ]
+    )
+
+    def fake_run(*_args, **_kwargs):
+        return subprocess.CompletedProcess([], 0, stdout=next(outputs), stderr="")
+
+    monkeypatch.setattr(simulator_module.subprocess, "run", fake_run)
+    assert simulator_module._inspect_container_cpu_controls(
+        container_executable="docker", container_id="container"
+    ) == {
+        "nano_cpus": 2_000_000_000,
+        "cpu_shares": 1024,
+        "cpuset_cpus": "0-7",
+    }
+    assert simulator_module._inspect_container_final_state(
+        container_executable="docker", container_id="container"
+    ) == {
+        "status": "running",
+        "running": True,
+        "oom_killed": False,
+        "exit_code": 0,
+        "memory_events": {"low": 0, "high": 0, "max": 0, "oom": 0, "oom_kill": 0},
+    }
+
+
+def test_final_container_inspection_retains_stopped_oom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(
+            [],
+            0,
+            stdout='{"Status":"exited","Running":false,"OOMKilled":true,"ExitCode":137}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr(simulator_module.subprocess, "run", fake_run)
+    assert simulator_module._inspect_container_final_state(
+        container_executable="docker", container_id="container"
+    ) == {
+        "status": "exited",
+        "running": False,
+        "oom_killed": True,
+        "exit_code": 137,
+        "memory_events": None,
+    }
+    assert len(calls) == 1
+
+
+def test_final_state_inspection_failure_still_stops_container(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    loaded = LoadedTraceSession(
+        source_trace=tmp_path / "trace.jsonl",
+        task_source=tmp_path / "tasks.json",
+        task_instance_id="task",
+        source_action_agent_id="source",
+        run_instance_id="task",
+        manifest_index=0,
+        scaffold="openclaw",
+        metadata=None,
+        summary=None,
+        task={},
+        actions=[],
+        iterations={},
+    )
+    prepared = PreparedTraceSession(
+        loaded=loaded,
+        container=PreparedContainer(
+            container_id="container",
+            container_executable="docker",
+            docker_image="image",
+            agent=None,
+            inspect_final_state=True,
+        ),
+    )
+    stopped: list[str] = []
+
+    def fail_inspection(**_kwargs):
+        raise RuntimeError("inspection failed")
+
+    def record_stop(container_id: str, *, executable: str) -> None:
+        assert executable == "docker"
+        stopped.append(container_id)
+
+    monkeypatch.setattr(
+        simulator_module, "_inspect_container_final_state", fail_inspection
+    )
+    monkeypatch.setattr(simulator_module, "stop_task_container", record_stop)
+    with pytest.raises(RuntimeError, match="inspection failed"):
+        asyncio.run(simulator_module._finalize_prepared_session(prepared))
+    assert stopped == ["container"]
+
+
 class _AbortOnlyBarrier:
     def __init__(self) -> None:
         self.aborted = False
@@ -800,11 +908,13 @@ def test_worker_wave_continues_after_container_prep_runtime_error(
     ]
     output_path = tmp_path / "out"
     finalized: list[str] = []
+    prepared_control_args: list[tuple[str, ...]] = []
 
     async def fake_prepare(
         loaded: LoadedTraceSession,
         **_kwargs,
     ) -> PreparedTraceSession:
+        prepared_control_args.append(_kwargs["container_start_extra_args"])
         task_output_dir = output_path / loaded.agent_id / "attempt_1"
         task_output_dir.mkdir(parents=True)
         prepared = PreparedTraceSession(
@@ -884,6 +994,7 @@ def test_worker_wave_continues_after_container_prep_runtime_error(
             replay_start_barrier=_ReadyBarrier(),
             replay_start_event=_SetOnlyEvent(),
             replay_start_wall_time=_SharedWallTime(),
+            container_start_extra_args=("--cpus", "2"),
         )
     )
 
@@ -904,6 +1015,7 @@ def test_worker_wave_continues_after_container_prep_runtime_error(
     assert failed_summary["status"] == "failed"
     assert failed_summary["reason"] == "container_python_unavailable"
     assert finalized == ["bad", "good"]
+    assert prepared_control_args == [("--cpus", "2"), ("--cpus", "2")]
 
 
 def test_worker_wave_finalizes_successful_preparations_after_prepare_failure(

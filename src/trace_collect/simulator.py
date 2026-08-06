@@ -1152,6 +1152,96 @@ def _inspect_container_workdir(
     return result.stdout.strip() or "/"
 
 
+def _inspect_container_cpu_controls(
+    *,
+    container_executable: str,
+    container_id: str,
+) -> dict[str, object]:
+    result = subprocess.run(
+        [
+            container_executable,
+            "inspect",
+            "--format",
+            "{{json .HostConfig}}",
+            container_id,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"docker inspect failed for {container_id[:12]} "
+            f"(returncode={result.returncode}). stdout tail:\n"
+            f"{result.stdout[-2000:]}\n--- stderr tail:\n{result.stderr[-2000:]}"
+        )
+    host_config = json.loads(result.stdout)
+    return {
+        "nano_cpus": host_config.get("NanoCpus"),
+        "cpu_shares": host_config.get("CpuShares"),
+        "cpuset_cpus": host_config.get("CpusetCpus"),
+    }
+
+
+def _inspect_container_final_state(
+    *,
+    container_executable: str,
+    container_id: str,
+) -> dict[str, object]:
+    state_result = subprocess.run(
+        [
+            container_executable,
+            "inspect",
+            "--format",
+            "{{json .State}}",
+            container_id,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    if state_result.returncode != 0:
+        raise RuntimeError(
+            f"final container inspection failed for {container_id[:12]}: "
+            f"state_rc={state_result.returncode}"
+        )
+    state = json.loads(state_result.stdout)
+    memory_events: dict[str, int] | None = None
+    if state.get("Running") is True:
+        memory_result = subprocess.run(
+            [
+                container_executable,
+                "exec",
+                container_id,
+                "cat",
+                "/sys/fs/cgroup/memory.events",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+        )
+        if memory_result.returncode != 0:
+            raise RuntimeError(
+                f"final container inspection failed for {container_id[:12]}: "
+                f"memory_rc={memory_result.returncode}"
+            )
+        memory_events = {
+            key: int(value)
+            for line in memory_result.stdout.splitlines()
+            for key, value in [line.split()]
+        }
+    return {
+        "status": state.get("Status"),
+        "running": state.get("Running"),
+        "oom_killed": state.get("OOMKilled"),
+        "exit_code": state.get("ExitCode"),
+        "memory_events": memory_events,
+    }
+
+
 def _validate_container_workdir(
     *,
     container_executable: str,
@@ -1573,10 +1663,21 @@ async def _prepare_container_session(
                 network_mode=network_mode,
             )
             recorder.container_id = container_id
+            cpu_controls = (
+                await asyncio.to_thread(
+                    _inspect_container_cpu_controls,
+                    container_executable=container_executable,
+                    container_id=container_id,
+                )
+                if start_extra_args
+                else None
+            )
             recorder.finish_phase(
                 phase,
                 extra={
                     "container_id": container_id,
+                    "start_extra_args": list(start_extra_args or ()),
+                    "cpu_controls": cpu_controls,
                 },
             )
         except (Exception, asyncio.CancelledError) as exc:
@@ -1692,6 +1793,7 @@ async def _prepare_container_session(
         agent=agent,
         fixed_image=recorder.fixed_image,
         cleanup_fixed_image=cleanup_fixed_image,
+        inspect_final_state=bool(start_extra_args),
     )
     return PreparedTraceSession(
         loaded=loaded,
@@ -1743,6 +1845,7 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
         return
     prepared.container = None
     agent_stop_error: BaseException | None = None
+    final_state_error: BaseException | None = None
     container_stop_error: BaseException | None = None
     fixed_image_cleanup_error: BaseException | None = None
     container_stopped = False
@@ -1764,6 +1867,16 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
         ctr.extra_agents.clear()
     except (Exception, asyncio.CancelledError) as exc:
         agent_stop_error = exc
+
+    if ctr.inspect_final_state:
+        try:
+            prepared.final_container_state = await asyncio.to_thread(
+                _inspect_container_final_state,
+                container_executable=ctr.container_executable,
+                container_id=ctr.container_id,
+            )
+        except (Exception, asyncio.CancelledError) as exc:
+            final_state_error = exc
 
     try:
         if ctr.cleanup_callback is not None:
@@ -1854,6 +1967,8 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
         raise agent_stop_error
     if container_stop_error is not None:
         raise container_stop_error
+    if final_state_error is not None:
+        raise final_state_error
     if fixed_image_cleanup_error is not None:
         raise fixed_image_cleanup_error
 
@@ -1990,6 +2105,7 @@ async def _prepare_replay_session(
     resource_monitoring_enabled: bool = True,
     memory_bandwidth_enabled: bool = True,
     monitoring_policy: dict[str, object] | None = None,
+    container_start_extra_args: tuple[str, ...] = (),
 ) -> PreparedTraceSession:
     prepared: PreparedTraceSession | None = None
     session_resource_monitoring_enabled = (
@@ -2034,6 +2150,10 @@ async def _prepare_replay_session(
                     prepare_kwargs["start_agent"] = False
                 if fixed_images_by_source:
                     prepare_kwargs["fixed_images_by_source"] = fixed_images_by_source
+                if container_start_extra_args:
+                    prepare_kwargs["start_extra_args"] = list(
+                        container_start_extra_args
+                    )
                 prepared = await _prepare_container_session(
                     loaded,
                     task_output_dir=task_output_dir,
@@ -2167,6 +2287,7 @@ async def _run_cloud_model_queue(
     memory_bandwidth_enabled: bool = True,
     monitoring_policy: dict[str, object] | None = None,
     cleanup_state: _ImageCleanupState | None = None,
+    container_start_extra_args: tuple[str, ...] = (),
 ) -> tuple[list[PreparedTraceSession], list[ReplayTaskStats]]:
     if concurrency < 1:
         raise ValueError("concurrency must be >= 1")
@@ -2232,6 +2353,7 @@ async def _run_cloud_model_queue(
                         resource_monitoring_enabled=resource_monitoring_enabled,
                         memory_bandwidth_enabled=memory_bandwidth_enabled,
                         monitoring_policy=monitoring_policy,
+                        container_start_extra_args=container_start_extra_args,
                     )
                 except _ReplayPreparationError as exc:
                     prepared = exc.prepared
@@ -2330,6 +2452,7 @@ async def _prepare_replay_session_with_shared_limit(
     resource_monitoring_enabled: bool,
     memory_bandwidth_enabled: bool,
     monitoring_policy: dict[str, object] | None,
+    container_start_extra_args: tuple[str, ...] = (),
 ) -> PreparedTraceSession:
     await _acquire_shared_semaphore(prep_semaphore)
     try:
@@ -2343,6 +2466,7 @@ async def _prepare_replay_session_with_shared_limit(
             resource_monitoring_enabled=resource_monitoring_enabled,
             memory_bandwidth_enabled=memory_bandwidth_enabled,
             monitoring_policy=monitoring_policy,
+            container_start_extra_args=container_start_extra_args,
         )
     finally:
         prep_semaphore.release()
@@ -2407,6 +2531,7 @@ async def _run_worker_wave_async(
     replay_start_barrier: Any,
     replay_start_event: Any,
     replay_start_wall_time: Any,
+    container_start_extra_args: tuple[str, ...] = (),
 ) -> WorkerReplayResult:
     loaded_sessions = _load_worker_trace_inputs(worker_inputs)
     prepared_sessions: list[PreparedTraceSession] = []
@@ -2432,6 +2557,7 @@ async def _run_worker_wave_async(
                     resource_monitoring_enabled=resource_monitoring_enabled,
                     memory_bandwidth_enabled=memory_bandwidth_enabled,
                     monitoring_policy=monitoring_policy,
+                    container_start_extra_args=container_start_extra_args,
                 )
                 for loaded in loaded_sessions
             ),
@@ -2499,6 +2625,7 @@ async def _run_worker_wave_async(
                 "worker_chunk_size": len(worker_inputs),
                 "replay_start_delay_s": _REPLAY_START_DELAY_S,
                 "monitoring": monitoring_policy or {},
+                "container_start_extra_args": list(container_start_extra_args),
             },
         )
         replay_zero_monotonic = await _wait_for_global_replay_start(
@@ -2576,6 +2703,7 @@ def _run_worker_wave_sync(
     replay_start_barrier: Any,
     replay_start_event: Any,
     replay_start_wall_time: Any,
+    container_start_extra_args: tuple[str, ...] = (),
 ) -> WorkerReplayResult:
     logging.basicConfig(
         level=logging.INFO,
@@ -2605,6 +2733,7 @@ def _run_worker_wave_sync(
             replay_start_barrier=replay_start_barrier,
             replay_start_event=replay_start_event,
             replay_start_wall_time=replay_start_wall_time,
+            container_start_extra_args=container_start_extra_args,
         )
     )
 
@@ -2628,6 +2757,7 @@ async def _run_cloud_model_worker_waves(
     memory_bandwidth_enabled: bool,
     monitoring_policy: dict[str, object] | None,
     cleanup_state: _ImageCleanupState | None = None,
+    container_start_extra_args: tuple[str, ...] = (),
 ) -> tuple[list[WorkerReplayResult], list[ReplayTaskStats]]:
     if workers < 1:
         raise ValueError("workers must be >= 1")
@@ -2691,6 +2821,7 @@ async def _run_cloud_model_worker_waves(
                             replay_start_barrier=replay_start_barrier,
                             replay_start_event=replay_start_event,
                             replay_start_wall_time=replay_start_wall_time,
+                            container_start_extra_args=container_start_extra_args,
                         ),
                     )
                     for worker_index, chunk in enumerate(chunks)
@@ -3279,6 +3410,7 @@ async def simulate(
     structured_output: bool = False,
     tool_resource_profile: Path | None = None,
     cleanup_images: bool = False,
+    container_start_extra_args: tuple[str, ...] = (),
 ) -> Path:
     if mode != "cloud_model":
         raise ValueError(f"Unsupported simulate mode: {mode}")
@@ -3452,6 +3584,7 @@ async def simulate(
                     "workers": workers,
                     "prep_concurrency": prep_concurrency,
                     "monitoring": monitoring_policy_dict,
+                    "container_start_extra_args": list(container_start_extra_args),
                     "tool_resource": {
                         "profile": (
                             str(tool_resource_profile.resolve())
@@ -3494,6 +3627,7 @@ async def simulate(
                 memory_bandwidth_enabled=monitoring_policy.memory_bandwidth_enabled,
                 monitoring_policy=monitoring_policy_dict,
                 cleanup_state=cleanup_state,
+                container_start_extra_args=container_start_extra_args,
             )
         else:
             worker_results, task_stats = await _run_cloud_model_worker_waves(
@@ -3514,6 +3648,7 @@ async def simulate(
                 memory_bandwidth_enabled=monitoring_policy.memory_bandwidth_enabled,
                 monitoring_policy=monitoring_policy_dict,
                 cleanup_state=cleanup_state,
+                container_start_extra_args=container_start_extra_args,
             )
             container_resource_summary = {
                 "status": "disabled",

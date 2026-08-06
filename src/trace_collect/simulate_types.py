@@ -144,6 +144,7 @@ class PreparedContainer:
     cleanup_fixed_image: bool = True
     cleanup_callback: Callable[[], None] | None = None
     extra_agents: list[Any] = dataclasses.field(default_factory=list)
+    inspect_final_state: bool = False
 
 
 @dataclass(slots=True)
@@ -159,4 +160,5 @@ class PreparedTraceSession:
     resource_monitoring_enabled: bool = True
     memory_bandwidth_enabled: bool = True
     monitoring_policy: dict[str, object] | None = None
+    final_container_state: dict[str, Any] | None = None
     runtime_artifact_root_map: dict[str, str] = dataclasses.field(default_factory=dict)
