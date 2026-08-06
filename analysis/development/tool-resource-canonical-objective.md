@@ -524,7 +524,7 @@ already-strong C100 victim policy is not the promising consumer. The reviewed
 machine-readable result is in
 `analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-kv-prediction-actionability-v1/`.
 
-### Block-aware KV oracle: frozen
+### Block-aware KV oracle: complete, no-go
 
 The positive 1.4805% SOTA result and its live-integration NO-GO remain settled.
 One final development-only upper-bound diagnostic tests whether the prior
@@ -554,6 +554,21 @@ Belady does not increase mean evicted blocks. GO authorizes only design of a
 causal approximation. NO-GO closes KV victim selection for the current
 simulator. The existing result, thresholds, and greedy-oracle interpretation
 cannot be amended by this diagnostic.
+
+The completed result remained below the frozen gate. C100 averaged 45,349
+recomputed prefix blocks, the greedy next-reuse oracle 41,255, and block-aware
+Belady 40,986. Belady reduced C100 by 4,363 blocks or 9.6201%, with a paired
+seed-bootstrap 95% interval of [-4,846.36, -3,900.12] blocks. It passed request
+identity, paired-direction, and evicted-block guardrails, but missed the 10%
+minimum by 0.380 percentage points. The threshold is unchanged.
+
+Belady recovered only 269 additional blocks, or 0.652%, beyond the greedy
+oracle. It also increased mean eviction events from 619 to 875 while reducing
+total evicted blocks, a cost not charged by the simulator. The evidence
+therefore preserves a small positive benefit from block-aware suffix handling
+but closes KV victim selection under the current action model. The reviewed
+artifact is in
+`analysis/results/tool-resource-5-3-3-3-20260804/sqlglot50-kv-block-belady-oracle-v1/`.
 
 ## 5. Development-exposure record
 
