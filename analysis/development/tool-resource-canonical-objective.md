@@ -1478,6 +1478,41 @@ cleanup failures, and zero OOM/OOM-kill. Provenance is eight compatible legacy
 pairs, the contract-v2 pair-9 preflight, and four fresh contract-v2 pairs. This
 remains exposed development evidence, not an independent confirmation.
 
+#### Frozen four-task saturated SQLGlot replay
+
+The two-task matrices leave at least four of the eight pinned host cores outside
+the hard-two aggregate quota. They therefore establish borrowing from an
+intentionally underfilled pool, not utility when admission guarantees fill the
+host. The next development test changes only concurrency: four tasks are
+admitted at two cores each, so the hard-two guarantees sum to all eight cores.
+The borrowing arm retains the same cpuset and equal CPU shares but no hard
+quota; when all four tasks are runnable, equal weights divide the host, while
+idle tasks allow others to borrow.
+
+Apply the existing PCG64 seed 20260807 shuffle to the same sorted 50 validation
+task IDs, take positions 0 through 47, and form 12 consecutive four-task
+groups. The final two tasks are unused. PCG64 seed 20260812 independently
+chooses hard-two versus burstable-two arm order per group; PCG64 seed 20260813
+supplies 10,000 group-bootstrap draws. No task, group, or arm order is selected
+from the exposed pair outcomes. Replay uses the paired-workload contract v2,
+20x non-tool timing acceleration, real tool clocks, the two-core hard quota or
+equal-weight borrowing controls, host network, and per-container resource
+monitoring. Each arm prepares four fresh containers before one common replay
+barrier. Output directories end
+`sqlglot48-quartet-cpu-borrowing-contract-v2` and refuse overwrite.
+
+Primary improvement is `(hard-two group makespan - burstable-two group
+makespan) / hard-two group makespan`. GO requires mean improvement of at least
+5%, a paired-group bootstrap lower bound above zero, and at least 9 of 12 groups
+improving. All 96 task-arm executions must preserve task/action identity,
+source-success timeout validity, requested cpuset/share/quota, telemetry and
+cleanup validity, and zero OOM/OOM-kill. Mean and p95 task completion, per-task
+paired deltas, and counts slowed by more than 10% and 25% are descriptive
+fairness measures and cannot rescue a failed primary result. The test uses
+exposed tasks and can establish only saturated action utility, not temporal
+generalization or predictor quality. Estimated wall time is three to five hours
+plus image preparation; the advisor authorized this run on 2026-08-07.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved

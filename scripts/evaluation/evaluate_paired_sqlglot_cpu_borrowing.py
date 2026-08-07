@@ -137,6 +137,22 @@ COHORTS: dict[str, dict[str, Any]] = {
         / "traces/swe-rebench/gpt-5.6-sol"
         / "sqlglot26-paired-cpu-borrowing-compatible-v2",
     },
+    "quartet48_contract_v2": {
+        "selection_start": 0,
+        "selection_count": 48,
+        "group_size": 4,
+        "arm_order_seed": 20_260_812,
+        "bootstrap_seed": 20_260_813,
+        "minimum_improving_pairs": 9,
+        "paired_workload_contract": True,
+        "schema": "sqlglot-quartet-cpu-borrowing-contract-v2",
+        "result_dir": ROOT
+        / "analysis/results/tool-resource-5-3-3-3-20260804"
+        / "sqlglot48-quartet-cpu-borrowing-contract-v2",
+        "replay_dir": ROOT
+        / "traces/swe-rebench/gpt-5.6-sol"
+        / "sqlglot48-quartet-cpu-borrowing-contract-v2",
+    },
 }
 
 
@@ -148,7 +164,13 @@ def _protocol(cohort: str = "initial24") -> dict[str, Any]:
     start = int(config["selection_start"])
     stop = start + int(config["selection_count"])
     selected = [str(value) for value in task_ids[start:stop]]
-    pairs = [selected[index : index + 2] for index in range(0, len(selected), 2)]
+    group_size = int(config.get("group_size", 2))
+    if len(selected) % group_size:
+        raise ValueError("selected task count is not divisible by group size")
+    pairs = [
+        selected[index : index + group_size]
+        for index in range(0, len(selected), group_size)
+    ]
     if "arm_orders" in config:
         arm_orders = [list(order) for order in config["arm_orders"]]
     else:
@@ -191,6 +213,9 @@ def _protocol(cohort: str = "initial24") -> dict[str, Any]:
     }
     if config.get("compatible_prefix_pairs"):
         protocol["compatible_prefix_pairs"] = int(config["compatible_prefix_pairs"])
+    if group_size != 2:
+        protocol["group_size"] = group_size
+        protocol["decision_unit"] = "group"
     return protocol
 
 
@@ -410,12 +435,13 @@ async def _run_arm(
     paired_workload_contract: bool,
 ) -> dict[str, Any]:
     arm_dir = replay_dir / f"pair_{pair:02d}" / arm
+    concurrency = len(task_ids)
     trace_file = await simulate(
         manifest=manifest,
         output_dir=arm_dir,
-        concurrency=2,
-        workers=2,
-        prep_concurrency=2,
+        concurrency=concurrency,
+        workers=concurrency,
+        prep_concurrency=concurrency,
         container_executable="docker",
         network_mode="host",
         command_timeout_s=3_600.0,
@@ -427,7 +453,7 @@ async def _run_arm(
     )
     summary_path = arm_dir / "throughput_summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    if summary.get("attempted_traces") != 2:
+    if summary.get("attempted_traces") != concurrency:
         raise AssertionError(f"invalid throughput summary for pair {pair} {arm}")
     stats = {str(item["agent_id"]): item for item in summary["tasks"]}
     if set(stats) != set(task_ids):
@@ -672,6 +698,8 @@ def _load_compatible_prefix(protocol: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _aggregate(protocol: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str, Any]:
     by_pair = {item["pair"]: item for item in runs}
+    decision_unit = str(protocol.get("decision_unit", "pair"))
+    plural = f"{decision_unit}s"
     pairs: list[dict[str, Any]] = []
     for declared in protocol["pairs"]:
         pair = declared["pair"]
@@ -692,7 +720,7 @@ def _aggregate(protocol: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str
             "pair_makespan_s"
         ]
         pair_result = {
-            "pair": pair,
+            decision_unit: pair,
             "task_ids": declared["task_ids"],
             "arm_order": declared["arm_order"],
             "hard_two_makespan_s": hard["pair_makespan_s"],
@@ -730,26 +758,71 @@ def _aggregate(protocol: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str
     gate = {
         "mean_improvement_at_least_5_percent": mean >= 0.05,
         "bootstrap_lower_above_zero": interval[0] > 0.0,
-        f"at_least_{minimum_improving}_of_{len(pairs)}_pairs_improve": (
+        f"at_least_{minimum_improving}_of_{len(pairs)}_{plural}_improve": (
             improving >= minimum_improving
         ),
         "all_validity_checks_passed": True,
     }
-    return {
+    result = {
         "schema": protocol["schema"],
         "status": "go" if all(gate.values()) else "no_go",
         "protocol": protocol,
         "comparison": {
             "mean_improvement_fraction": mean,
             "median_improvement_fraction": float(statistics.median(improvements)),
-            "improving_pairs": improving,
-            "pair_count": len(pairs),
-            "ci95_paired_pair_bootstrap": interval,
+            f"improving_{plural}": improving,
+            f"{decision_unit}_count": len(pairs),
+            f"ci95_paired_{decision_unit}_bootstrap": interval,
             "bootstrap_draws": 10_000,
             "gate": gate,
         },
-        "pairs": pairs,
+        plural: pairs,
     }
+    if protocol.get("group_size") == 4:
+        task_deltas = []
+        hard_elapsed = []
+        burst_elapsed = []
+        for group in pairs:
+            arms = {arm["arm"]: arm for arm in group["arms"]}
+            hard = {
+                str(task["agent_id"]): float(task["elapsed_s"])
+                for task in arms["hard_two"]["task_stats"]
+            }
+            burst = {
+                str(task["agent_id"]): float(task["elapsed_s"])
+                for task in arms["burstable_two"]["task_stats"]
+            }
+            if set(hard) != set(burst):
+                raise AssertionError(
+                    f"task completion identity differs for group {group['group']}"
+                )
+            for task_id in group["task_ids"]:
+                hard_s = hard[task_id]
+                burst_s = burst[task_id]
+                hard_elapsed.append(hard_s)
+                burst_elapsed.append(burst_s)
+                task_deltas.append(
+                    {
+                        "group": group["group"],
+                        "task_id": task_id,
+                        "hard_two_s": hard_s,
+                        "burstable_two_s": burst_s,
+                        "burstable_slowdown_fraction": (burst_s - hard_s) / hard_s,
+                    }
+                )
+        slowdowns = np.array(
+            [item["burstable_slowdown_fraction"] for item in task_deltas]
+        )
+        result["task_completion"] = {
+            "hard_two_mean_s": float(np.mean(hard_elapsed)),
+            "burstable_two_mean_s": float(np.mean(burst_elapsed)),
+            "hard_two_p95_s": float(np.quantile(hard_elapsed, 0.95)),
+            "burstable_two_p95_s": float(np.quantile(burst_elapsed, 0.95)),
+            "slowed_more_than_10_percent": int((slowdowns > 0.10).sum()),
+            "slowed_more_than_25_percent": int((slowdowns > 0.25).sum()),
+            "paired_task_deltas": task_deltas,
+        }
+    return result
 
 
 def _load_resume_runs(
@@ -799,10 +872,14 @@ def _load_resume_runs(
                     f"resume output path is invalid at pair {pair} {arm}"
                 )
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
-            if summary.get("attempted_traces") != 2:
+            expected_tasks = len(declared["task_ids"])
+            if summary.get("attempted_traces") != expected_tasks:
                 raise AssertionError(f"resume summary is invalid at pair {pair} {arm}")
             summary_tasks = summary.get("tasks")
-            if not isinstance(summary_tasks, list) or len(summary_tasks) != 2:
+            if (
+                not isinstance(summary_tasks, list)
+                or len(summary_tasks) != expected_tasks
+            ):
                 raise AssertionError(
                     f"resume summary tasks are invalid at pair {pair} {arm}"
                 )
@@ -836,6 +913,23 @@ def _load_resume_runs(
         ):
             raise AssertionError(f"resume action identity differs at pair {pair}")
     return runs
+
+
+def _preserve_interruption_result(
+    result_path: Path, protocol: dict[str, Any]
+) -> list[Path]:
+    preserved = sorted(result_path.parent.glob("interruption-*.json"))
+    if not result_path.exists():
+        return preserved
+    if result_path.stat().st_size:
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+        if payload.get("status") != "invalid" or payload.get("protocol") != protocol:
+            raise AssertionError("resume result is not the matching invalid run")
+    destination = result_path.parent / f"interruption-{len(preserved) + 1:02d}.json"
+    if destination.exists():
+        raise FileExistsError(f"refusing to overwrite {destination}")
+    result_path.replace(destination)
+    return [*preserved, destination]
 
 
 def _load_compatible_resume_runs(
@@ -888,12 +982,20 @@ def main() -> None:
     result_dir = Path(config["result_dir"])
     replay_dir = Path(config["replay_dir"])
     protocol = _protocol(args.cohort)
+    interruption_results: list[Path] = []
     if args.resume:
-        if args.cohort not in {"remaining26", "remaining26_compatible_v2"}:
+        if args.cohort not in {
+            "remaining26",
+            "remaining26_compatible_v2",
+            "quartet48_contract_v2",
+        }:
             raise ValueError("resume is not frozen for this cohort")
         result_path = result_dir / "result.json"
         if args.cohort == "remaining26_compatible_v2":
             runs = _load_compatible_resume_runs(protocol, result_dir, replay_dir)
+        elif args.cohort == "quartet48_contract_v2":
+            runs = _load_resume_runs(protocol, result_dir, replay_dir)
+            interruption_results = _preserve_interruption_result(result_path, protocol)
         elif not result_path.is_file() or result_path.stat().st_size != 0:
             raise FileExistsError(f"resume requires empty {result_path}")
         else:
@@ -954,6 +1056,10 @@ def main() -> None:
             result["recovery"] = {
                 "resumed_after_completed_pairs": resumed_after_pairs,
             }
+            if interruption_results:
+                result["recovery"]["interruption_results"] = [
+                    str(path) for path in interruption_results
+                ]
             if args.cohort == "remaining26":
                 result["recovery"]["reason"] = "disk_full_before_pair_4"
         (result_dir / "result.json").write_text(

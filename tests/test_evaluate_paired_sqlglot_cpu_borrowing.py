@@ -12,6 +12,7 @@ def test_frozen_cohorts_partition_validation_tasks() -> None:
     preflight = experiment._protocol("pair09_contract_v2")
     corrected = experiment._protocol("remaining26_contract_v2")
     compatible = experiment._protocol("remaining26_compatible_v2")
+    quartet = experiment._protocol("quartet48_contract_v2")
     split = json.loads(experiment.SPLIT.read_text(encoding="utf-8"))
 
     initial_ids = set(initial["selected_task_ids"])
@@ -31,6 +32,17 @@ def test_frozen_cohorts_partition_validation_tasks() -> None:
     assert preflight["paired_workload_contract"] is True
     assert corrected["paired_workload_contract"] is True
     assert compatible["paired_workload_contract"] is True
+    assert quartet["group_size"] == 4
+    assert quartet["decision_unit"] == "group"
+    assert quartet["arm_order_seed"] == 20_260_812
+    assert quartet["bootstrap_seed"] == 20_260_813
+    assert len(quartet["pairs"]) == 12
+    assert all(len(group["task_ids"]) == 4 for group in quartet["pairs"])
+    full_order = initial["selected_task_ids"] + remaining["selected_task_ids"]
+    assert [
+        task_id for group in quartet["pairs"] for task_id in group["task_ids"]
+    ] == full_order[:48]
+    assert set(quartet["selected_task_ids"]).isdisjoint(full_order[48:])
     frozen = json.loads(
         (
             experiment.ROOT
@@ -111,6 +123,10 @@ def _runs(protocol: dict, improvements: list[float]) -> list[dict]:
                     {"task_id": task_id, "replay_action_contract": {}}
                     for task_id in pair["task_ids"]
                 ],
+                "task_stats": [
+                    {"agent_id": task_id, "elapsed_s": 1.0}
+                    for task_id in pair["task_ids"]
+                ],
             },
             {
                 "arm": "burstable_two",
@@ -118,6 +134,10 @@ def _runs(protocol: dict, improvements: list[float]) -> list[dict]:
                 "action_sequences": {"task": [["agent", "tool_exec", "tool"]]},
                 "tasks": [
                     {"task_id": task_id, "replay_action_contract": {}}
+                    for task_id in pair["task_ids"]
+                ],
+                "task_stats": [
+                    {"agent_id": task_id, "elapsed_s": 1.0 - improvement}
                     for task_id in pair["task_ids"]
                 ],
             },
@@ -176,6 +196,41 @@ def test_remaining_cohort_freezes_bootstrap_and_effect_gates() -> None:
     assert not result["comparison"]["gate"]["mean_improvement_at_least_5_percent"]
     assert result["comparison"]["gate"]["bootstrap_lower_above_zero"]
     assert result["status"] == "no_go"
+
+
+def test_quartet_cohort_uses_group_gate_and_reports_task_completion() -> None:
+    protocol = experiment._protocol("quartet48_contract_v2")
+    result = experiment._aggregate(protocol, _runs(protocol, [0.1] * 9 + [0.0] * 3))
+
+    assert result["status"] == "go"
+    assert result["comparison"]["improving_groups"] == 9
+    assert result["comparison"]["group_count"] == 12
+    assert result["comparison"]["gate"]["at_least_9_of_12_groups_improve"]
+    assert len(result["groups"]) == 12
+    assert len(result["task_completion"]["paired_task_deltas"]) == 48
+    assert result["task_completion"]["slowed_more_than_10_percent"] == 0
+
+    result = experiment._aggregate(protocol, _runs(protocol, [0.1] * 8 + [0.0] * 4))
+    assert result["status"] == "no_go"
+    assert not result["comparison"]["gate"]["at_least_9_of_12_groups_improve"]
+
+
+def test_quartet_resume_preserves_invalid_result(tmp_path) -> None:
+    protocol = experiment._protocol("quartet48_contract_v2")
+    result_path = tmp_path / "result.json"
+    payload = {
+        "status": "invalid",
+        "protocol": protocol,
+        "error": {"type": "RuntimeError", "message": "interrupted"},
+        "traceback": "original traceback",
+    }
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    preserved = experiment._preserve_interruption_result(result_path, protocol)
+
+    assert not result_path.exists()
+    assert preserved == [tmp_path / "interruption-01.json"]
+    assert json.loads(preserved[0].read_text(encoding="utf-8")) == payload
 
 
 def test_timeout_gate_requires_matching_action_and_wrapper_failure(tmp_path) -> None:
