@@ -1434,6 +1434,15 @@ controls, finish telemetry and cleanup validly, and record zero OOM/OOM-kill.
 Source-recorded failures may fail again at their original ceiling. Estimated
 wall time is 45--60 minutes with no LLM calls.
 
+The preflight completed and passed every mechanism gate. Both arms emitted all
+144 source actions in the same order, with zero unexpected replay failures and
+zero source-success replay timeouts. The three recovered pytest seeds and two
+source-failed timeout exemptions were identical across arms; requested CPU
+controls, telemetry, cleanup, and zero OOM/OOM-kill all validated. Burstable-two
+finished in 1,494.735 seconds versus 1,545.686 seconds for hard-two, a 3.296%
+improvement. This one exposed pair is not an effect estimate; it authorizes the
+frozen 13-pair execution below.
+
 A pair-9 GO authorizes one fresh execution of all 13 remaining pairs in new
 directories ending `sqlglot26-paired-cpu-borrowing-contract-v2`. It retains the
 original 26 IDs, pair/arm order, 20x non-tool acceleration, CPU controls,

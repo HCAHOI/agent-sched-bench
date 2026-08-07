@@ -1,0 +1,34 @@
+{
+  "cohort": "pair09_contract_v2",
+  "selection_seed": 20260807,
+  "selection_range": [
+    40,
+    42
+  ],
+  "arm_order_seed": null,
+  "bootstrap_seed": 20260811,
+  "minimum_improving_pairs": 1,
+  "schema": "sqlglot-paired-cpu-borrowing-contract-v2-preflight",
+  "mechanism_only": true,
+  "paired_workload_contract": true,
+  "selected_task_ids": [
+    "tobymao__sqlglot-2443",
+    "tobymao__sqlglot-3230"
+  ],
+  "pairs": [
+    {
+      "pair": 9,
+      "task_ids": [
+        "tobymao__sqlglot-2443",
+        "tobymao__sqlglot-3230"
+      ],
+      "arm_order": [
+        "burstable_two",
+        "hard_two"
+      ]
+    }
+  ],
+  "source_dir": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804",
+  "task_source": "/home/chiyu/workspace/agent-sched-bench/data/swe-rebench/tasks.json",
+  "exec_timeout_floor_s": 3600
+}
