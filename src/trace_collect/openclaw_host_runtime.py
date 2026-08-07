@@ -147,9 +147,7 @@ def replay_action_failure_counts(
             else None
         )
         emitted_actions += 1
-        if source_action is None or not _action_matches_source(
-            record, source_action
-        ):
+        if source_action is None or not _action_matches_source(record, source_action):
             action_sequence_matches = False
         if not _action_failed(record):
             continue
@@ -167,8 +165,7 @@ def replay_action_failure_counts(
         replay_failed_actions=replay_failed_actions,
         unexpected_replay_failed_actions=unexpected_replay_failed_actions,
         action_sequence_matches=(
-            action_sequence_matches
-            and emitted_actions == len(source_replay_actions)
+            action_sequence_matches and emitted_actions == len(source_replay_actions)
         ),
     )
 
@@ -182,11 +179,15 @@ def _replay_execution_completed(
     source_terminal_reason: str,
     source_terminal_boundary_reached: bool,
     provider_request_sequence_matches: bool,
+    require_source_outcome_match: bool = True,
 ) -> bool:
     if (
         action_counts.emitted_actions != expected_actions
         or not action_counts.action_sequence_matches
-        or action_counts.unexpected_replay_failed_actions
+        or (
+            require_source_outcome_match
+            and action_counts.unexpected_replay_failed_actions
+        )
         or not provider_request_sequence_matches
     ):
         return False
@@ -690,6 +691,7 @@ def build_container_tools_for_agent(
     workspace: str = "/testbed",
     resource_trace: Any | None = None,
     runtime_artifact_root_map: dict[str, str] | None = None,
+    exec_timeout_floor_exempt_call_ids: set[str] | frozenset[str] = frozenset(),
 ) -> list[Any]:
     return build_container_tool_overrides(
         agent,
@@ -699,6 +701,7 @@ def build_container_tools_for_agent(
         workspace=workspace,
         resource_trace=resource_trace,
         runtime_artifact_root_map=runtime_artifact_root_map,
+        exec_timeout_floor_exempt_call_ids=exec_timeout_floor_exempt_call_ids,
     )
 
 
@@ -890,9 +893,7 @@ def _finalized_resource_status(
     try:
         finalize_error = collector.finalize(replay_execution=replay_execution)
     except BaseException as exc:
-        finalize_error = (
-            f"telemetry finalize failed: {type(exc).__name__}: {exc}"
-        )
+        finalize_error = f"telemetry finalize failed: {type(exc).__name__}: {exc}"
     if finalize_error is not None:
         return (
             {
@@ -910,9 +911,7 @@ def _finalized_resource_status(
         return (
             {
                 "telemetry_quality": telemetry_payload["telemetry_quality"],
-                "formal_completeness": telemetry_payload[
-                    "formal_completeness"
-                ],
+                "formal_completeness": telemetry_payload["formal_completeness"],
                 "call_coverage": telemetry_payload["call_coverage"],
                 "collection_validity": telemetry_payload["collection_validity"],
             },
@@ -926,10 +925,7 @@ def _finalized_resource_status(
                 "call_coverage": None,
                 "collection_validity": "invalid",
             },
-            [
-                "telemetry artifact unavailable: "
-                f"{type(exc).__name__}: {exc}"
-            ],
+            [f"telemetry artifact unavailable: {type(exc).__name__}: {exc}"],
         )
 
 
@@ -960,6 +956,16 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
     exec_timeout_floor_s = request.get("exec_timeout_floor_s")
     if exec_timeout_floor_s is not None:
         exec_timeout_floor_s = int(exec_timeout_floor_s)
+    replay_action_contract = dict(request.get("replay_action_contract") or {})
+    timeout_floor_exempt_call_ids = {
+        str(value)
+        for value in replay_action_contract.get(
+            "exec_timeout_floor_exempt_call_ids", []
+        )
+    }
+    require_source_outcome_match = bool(
+        replay_action_contract.get("require_source_outcome_match", True)
+    )
     run_instance_id = str(request["run_instance_id"])
     prompt = str(request["prompt"])
     container_workdir = str(request.get("container_workdir") or "/testbed")
@@ -969,9 +975,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
     container_pythonpath = request.get("container_pythonpath")
     if container_pythonpath is not None:
         container_pythonpath = str(container_pythonpath)
-    source_terminal_reason = str(
-        request.get("source_terminal_reason") or "completed"
-    )
+    source_terminal_reason = str(request.get("source_terminal_reason") or "completed")
 
     agent = ContainerAgent(
         container_id,
@@ -1088,6 +1092,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 runtime_artifact_root_map=dict(
                     request.get("runtime_artifact_root_map") or {}
                 ),
+                exec_timeout_floor_exempt_call_ids=(timeout_floor_exempt_call_ids),
             ),
         )
         metadata_extra = {
@@ -1098,6 +1103,10 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             "run_instance_id": run_instance_id,
             "replay_mode": "openclaw_host_worker",
             "exec_timeout_floor_s": exec_timeout_floor_s,
+            "paired_workload_contract": bool(
+                request.get("paired_workload_contract", False)
+            ),
+            "replay_action_contract": replay_action_contract,
             "tool_resource": {
                 "profile": tool_resource_profile,
                 "service_enabled": bool(tool_resource_profile),
@@ -1131,14 +1140,11 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             source_terminal_boundary_reached=(
                 provider.source_terminal_boundary_reached
             ),
-            provider_request_sequence_matches=(
-                provider.request_sequence_matches
-            ),
+            provider_request_sequence_matches=(provider.request_sequence_matches),
+            require_source_outcome_match=require_source_outcome_match,
         )
         finalize_resource_trace("completed" if success else "failed")
-        telemetry_run_status["replay_execution"] = (
-            "completed" if success else "failed"
-        )
+        telemetry_run_status["replay_execution"] = "completed" if success else "failed"
         wall_end = time.time()
         status = {
             "success": success,
@@ -1159,9 +1165,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             "action_sequence_matches": action_counts.action_sequence_matches,
             "source_success": request.get("source_success"),
             "source_terminal_reason": source_terminal_reason,
-            "provider_request_sequence_matches": (
-                provider.request_sequence_matches
-            ),
+            "provider_request_sequence_matches": (provider.request_sequence_matches),
             "telemetry_integrity_failed": (
                 telemetry_run_status["collection_validity"] == "invalid"
             ),
@@ -1189,9 +1193,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             "replay_mode": "openclaw_host_worker",
             "replay_execution": "failed",
             "telemetry_quality": telemetry_run_status["telemetry_quality"],
-            "formal_completeness": telemetry_run_status[
-                "formal_completeness"
-            ],
+            "formal_completeness": telemetry_run_status["formal_completeness"],
             "call_coverage": telemetry_run_status["call_coverage"],
             "collection_validity": telemetry_run_status["collection_validity"],
             "telemetry_integrity_failed": (
@@ -1219,13 +1221,9 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 or telemetry_run_status["collection_validity"] == "invalid"
             )
             status["telemetry_quality"] = telemetry_run_status["telemetry_quality"]
-            status["formal_completeness"] = telemetry_run_status[
-                "formal_completeness"
-            ]
+            status["formal_completeness"] = telemetry_run_status["formal_completeness"]
             status["call_coverage"] = telemetry_run_status["call_coverage"]
-            status["collection_validity"] = telemetry_run_status[
-                "collection_validity"
-            ]
+            status["collection_validity"] = telemetry_run_status["collection_validity"]
             status["telemetry_errors"] = telemetry_errors
             status_path.parent.mkdir(parents=True, exist_ok=True)
             status_path.write_text(

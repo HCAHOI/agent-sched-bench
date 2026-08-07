@@ -15,7 +15,10 @@ from typing import Any
 import numpy as np
 
 from trace_collect.simulator import simulate
-from trace_collect.simulate_openclaw import OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV
+from trace_collect.simulate_openclaw import (
+    OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV,
+    OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -61,6 +64,38 @@ COHORTS: dict[str, dict[str, Any]] = {
         / "traces/swe-rebench/gpt-5.6-sol"
         / "sqlglot26-paired-cpu-borrowing-remaining-v1",
     },
+    "pair09_contract_v2": {
+        "selection_start": 40,
+        "selection_count": 2,
+        "arm_orders": [["burstable_two", "hard_two"]],
+        "bootstrap_seed": 20_260_811,
+        "minimum_improving_pairs": 1,
+        "pair_number_offset": 8,
+        "mechanism_only": True,
+        "paired_workload_contract": True,
+        "schema": "sqlglot-paired-cpu-borrowing-contract-v2-preflight",
+        "result_dir": ROOT
+        / "analysis/results/tool-resource-5-3-3-3-20260804"
+        / "sqlglot-pair09-cpu-borrowing-contract-v2-preflight",
+        "replay_dir": ROOT
+        / "traces/swe-rebench/gpt-5.6-sol"
+        / "sqlglot-pair09-cpu-borrowing-contract-v2-preflight",
+    },
+    "remaining26_contract_v2": {
+        "selection_start": 24,
+        "selection_count": 26,
+        "arm_order_seed": 20_260_810,
+        "bootstrap_seed": 20_260_811,
+        "minimum_improving_pairs": 10,
+        "paired_workload_contract": True,
+        "schema": "sqlglot-paired-cpu-borrowing-contract-v2",
+        "result_dir": ROOT
+        / "analysis/results/tool-resource-5-3-3-3-20260804"
+        / "sqlglot26-paired-cpu-borrowing-contract-v2",
+        "replay_dir": ROOT
+        / "traces/swe-rebench/gpt-5.6-sol"
+        / "sqlglot26-paired-cpu-borrowing-contract-v2",
+    },
 }
 
 
@@ -73,12 +108,17 @@ def _protocol(cohort: str = "initial24") -> dict[str, Any]:
     stop = start + int(config["selection_count"])
     selected = [str(value) for value in task_ids[start:stop]]
     pairs = [selected[index : index + 2] for index in range(0, len(selected), 2)]
-    arm_rng = np.random.Generator(np.random.PCG64(config["arm_order_seed"]))
-    arm_orders: list[list[str]] = []
-    for _pair in pairs:
-        order = np.array(["hard_two", "burstable_two"], dtype=object)
-        arm_rng.shuffle(order)
-        arm_orders.append([str(value) for value in order])
+    if "arm_orders" in config:
+        arm_orders = [list(order) for order in config["arm_orders"]]
+    else:
+        arm_rng = np.random.Generator(np.random.PCG64(config["arm_order_seed"]))
+        arm_orders = []
+        for _pair in pairs:
+            order = np.array(["hard_two", "burstable_two"], dtype=object)
+            arm_rng.shuffle(order)
+            arm_orders.append([str(value) for value in order])
+    if len(arm_orders) != len(pairs):
+        raise ValueError("arm order count differs from pair count")
     traces = {
         task_id: SOURCE / task_id / "attempt_1" / "trace.jsonl" for task_id in selected
     }
@@ -89,14 +129,16 @@ def _protocol(cohort: str = "initial24") -> dict[str, Any]:
         "cohort": cohort,
         "selection_seed": SELECTION_SEED,
         "selection_range": [start, stop],
-        "arm_order_seed": config["arm_order_seed"],
+        "arm_order_seed": config.get("arm_order_seed"),
         "bootstrap_seed": config["bootstrap_seed"],
         "minimum_improving_pairs": config["minimum_improving_pairs"],
         "schema": config["schema"],
+        "mechanism_only": bool(config.get("mechanism_only", False)),
+        "paired_workload_contract": bool(config.get("paired_workload_contract", False)),
         "selected_task_ids": selected,
         "pairs": [
             {
-                "pair": index + 1,
+                "pair": index + 1 + int(config.get("pair_number_offset", 0)),
                 "task_ids": pair,
                 "arm_order": arm_orders[index],
             }
@@ -140,7 +182,75 @@ def _action_sequences(trace_file: Path) -> dict[str, list[list[str]]]:
     return sequences
 
 
-def _task_artifacts(arm_dir: Path, task_id: str, arm: str) -> dict[str, Any]:
+def _source_success_replay_timeout_count(
+    request: dict[str, Any], trace_path: Path
+) -> int:
+    source = [
+        action
+        for action in request["source_actions"]
+        if action.get("action_type") in {"llm_call", "tool_exec"}
+    ]
+    replay = [
+        record
+        for record in (
+            json.loads(line)
+            for line in trace_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+        if record.get("type") == "action"
+    ]
+    if len(source) != len(replay):
+        raise AssertionError("source and replay action counts differ")
+    count = 0
+    for source_action, replay_action in zip(source, replay, strict=True):
+        source_data = source_action.get("data") or {}
+        replay_data = replay_action.get("data") or {}
+        source_identity = (
+            source_action.get("action_type"),
+            source_action.get("action_id"),
+            source_data.get("tool_name"),
+            source_data.get("tool_call_id"),
+        )
+        replay_identity = (
+            replay_action.get("action_type"),
+            replay_action.get("action_id"),
+            replay_data.get("tool_name"),
+            replay_data.get("tool_call_id"),
+        )
+        if source_identity != replay_identity:
+            raise AssertionError(
+                f"source and replay action identities differ: "
+                f"{source_identity!r} != {replay_identity!r}"
+            )
+        if (
+            source_action.get("action_type") == "tool_exec"
+            and source_data.get("tool_name") == "exec"
+            and source_data.get("success") is not False
+            and replay_data.get("success") is False
+        ):
+            lines = {
+                line.strip()
+                for line in str(replay_data.get("tool_result") or "").splitlines()
+            }
+            if lines & {
+                "[timeout]",
+                "Error: [timeout]",
+                "[resource_timeout]",
+                "Error: [resource_timeout]",
+                "[resource_stall_timeout]",
+                "Error: [resource_stall_timeout]",
+            }:
+                count += 1
+    return count
+
+
+def _task_artifacts(
+    arm_dir: Path,
+    task_id: str,
+    arm: str,
+    *,
+    paired_workload_contract: bool,
+) -> dict[str, Any]:
     attempt = arm_dir / task_id / "attempt_1"
     startup_path = attempt / "container_startup.json"
     status_path = attempt / "openclaw_host_replay_status.json"
@@ -156,6 +266,14 @@ def _task_artifacts(arm_dir: Path, task_id: str, arm: str) -> dict[str, Any]:
     request = json.loads(request_path.read_text(encoding="utf-8"))
     if request.get("exec_timeout_floor_s") != EXEC_TIMEOUT_FLOOR_S:
         raise AssertionError(f"wrong timeout floor for {task_id} {arm}")
+    if request.get("paired_workload_contract") is not paired_workload_contract:
+        raise AssertionError(f"wrong replay contract for {task_id} {arm}")
+    replay_action_contract = dict(request.get("replay_action_contract") or {})
+    if (
+        paired_workload_contract
+        and replay_action_contract.get("require_source_outcome_match") is not False
+    ):
+        raise AssertionError(f"source outcome matching enabled for {task_id} {arm}")
     start_phase = next(
         phase for phase in startup["phases"] if phase["name"] == "start_task_container"
     )
@@ -173,11 +291,12 @@ def _task_artifacts(arm_dir: Path, task_id: str, arm: str) -> dict[str, Any]:
 
     required_status = {
         "success": True,
-        "unexpected_replay_failed_actions": 0,
         "missing_source_action_count": 0,
         "action_sequence_matches": True,
         "error": None,
     }
+    if not paired_workload_contract:
+        required_status["unexpected_replay_failed_actions"] = 0
     for key, expected in required_status.items():
         if status.get(key) != expected:
             raise AssertionError(
@@ -185,6 +304,13 @@ def _task_artifacts(arm_dir: Path, task_id: str, arm: str) -> dict[str, Any]:
             )
     if status.get("emitted_actions") != status.get("expected_actions"):
         raise AssertionError(f"incomplete replay for {task_id} {arm}")
+    timeout_count = _source_success_replay_timeout_count(
+        request, attempt / "openclaw_host_replay.jsonl"
+    )
+    if timeout_count:
+        raise AssertionError(
+            f"source-success replay timeout for {task_id} {arm}: {timeout_count}"
+        )
 
     summary = resources.get("summary") or {}
     if summary.get("monitoring_disabled") is not False:
@@ -219,6 +345,8 @@ def _task_artifacts(arm_dir: Path, task_id: str, arm: str) -> dict[str, Any]:
         "resource_sample_count": len(resources.get("samples") or []),
         "cpu_controls": expected_controls,
         "exec_timeout_floor_s": request["exec_timeout_floor_s"],
+        "replay_action_contract": replay_action_contract,
+        "source_success_replay_timeout_count": timeout_count,
         "final_container_state": final_state,
     }
 
@@ -230,6 +358,7 @@ async def _run_arm(
     arm: str,
     manifest: Path,
     replay_dir: Path,
+    paired_workload_contract: bool,
 ) -> dict[str, Any]:
     arm_dir = replay_dir / f"pair_{pair:02d}" / arm
     trace_file = await simulate(
@@ -262,7 +391,15 @@ async def _run_arm(
         "trace_file": str(trace_file),
         "summary_path": str(summary_path),
         "pair_makespan_s": max(float(item["elapsed_s"]) for item in stats.values()),
-        "tasks": [_task_artifacts(arm_dir, task_id, arm) for task_id in task_ids],
+        "tasks": [
+            _task_artifacts(
+                arm_dir,
+                task_id,
+                arm,
+                paired_workload_contract=paired_workload_contract,
+            )
+            for task_id in task_ids
+        ],
         "task_stats": [stats[task_id] for task_id in task_ids],
         "action_sequences": _action_sequences(trace_file),
     }
@@ -278,6 +415,14 @@ def _aggregate(protocol: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str
         burst = arms["burstable_two"]
         if hard["action_sequences"] != burst["action_sequences"]:
             raise AssertionError(f"action identity differs for pair {pair}")
+        hard_contracts = {
+            task["task_id"]: task["replay_action_contract"] for task in hard["tasks"]
+        }
+        burst_contracts = {
+            task["task_id"]: task["replay_action_contract"] for task in burst["tasks"]
+        }
+        if hard_contracts != burst_contracts:
+            raise AssertionError(f"replay contract differs for pair {pair}")
         improvement = (hard["pair_makespan_s"] - burst["pair_makespan_s"]) / hard[
             "pair_makespan_s"
         ]
@@ -301,6 +446,21 @@ def _aggregate(protocol: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str
     interval = [float(value) for value in np.quantile(draws, [0.025, 0.975])]
     improving = int((improvements > 0).sum())
     minimum_improving = int(protocol["minimum_improving_pairs"])
+    if protocol.get("mechanism_only"):
+        return {
+            "schema": protocol["schema"],
+            "status": "go",
+            "protocol": protocol,
+            "comparison": {
+                "claim": "replay_contract_validity_only",
+                "mean_improvement_fraction": mean,
+                "median_improvement_fraction": float(statistics.median(improvements)),
+                "improving_pairs": improving,
+                "pair_count": len(pairs),
+                "gate": {"all_validity_checks_passed": True},
+            },
+            "pairs": pairs,
+        }
     gate = {
         "mean_improvement_at_least_5_percent": mean >= 0.05,
         "bootstrap_lower_above_zero": interval[0] > 0.0,
@@ -398,7 +558,12 @@ def _load_resume_runs(
                     f"resume action record differs at pair {pair} {arm}"
                 )
             for task_id in declared["task_ids"]:
-                _task_artifacts(expected_dir, task_id, arm)
+                _task_artifacts(
+                    expected_dir,
+                    task_id,
+                    arm,
+                    paired_workload_contract=protocol["paired_workload_contract"],
+                )
         if (
             by_arm["hard_two"]["action_sequences"]
             != by_arm["burstable_two"]["action_sequences"]
@@ -434,6 +599,8 @@ def main() -> None:
         runs = []
     resumed_after_pairs = len(runs)
     os.environ[OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV] = str(EXEC_TIMEOUT_FLOOR_S)
+    if protocol["paired_workload_contract"]:
+        os.environ[OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV] = "1"
     try:
         for declared in protocol["pairs"][resumed_after_pairs:]:
             pair = int(declared["pair"])
@@ -451,6 +618,9 @@ def main() -> None:
                             arm=arm,
                             manifest=manifest,
                             replay_dir=replay_dir,
+                            paired_workload_contract=protocol[
+                                "paired_workload_contract"
+                            ],
                         )
                     )
                 )
@@ -487,6 +657,7 @@ def main() -> None:
         raise
     finally:
         os.environ.pop(OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV, None)
+        os.environ.pop(OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV, None)
 
 
 if __name__ == "__main__":

@@ -37,7 +37,6 @@ class FakeAgent:
         return self._responses.get(tool, self._default)
 
 
-
 def test_container_runtime_proof_captures_tool_runtime_label() -> None:
     from trace_collect.openclaw_host_runtime import (
         container_runtime_label,
@@ -94,6 +93,7 @@ def test_container_runtime_label_sanitizes_probe_output() -> None:
     assert "Shell/file tools user: unknown (uid 0)" in label
     assert "Shell/file tools `python3`: unknown" in label
 
+
 @pytest.mark.parametrize(
     "response",
     [
@@ -140,13 +140,16 @@ def test_container_exec_timeout_floor_overrides_source_timeout() -> None:
         agent=agent,
         exec_timeout=3_600,
         exec_timeout_floor=3_600,
+        exec_timeout_floor_exempt_call_ids={"source-failed"},
     )
     exec_tool = next(tool for tool in tools if tool.name == "exec")
 
     asyncio.run(exec_tool.execute(command="echo ok", timeout=600))
+    exec_tool.set_tool_call_context("source-failed", {})
+    asyncio.run(exec_tool.execute(command="echo failed as recorded", timeout=600))
 
-    assert agent.requests[0]["args"]["timeout"] == 3_600
-    assert agent.timeouts == [3_600.0]
+    assert [request["args"]["timeout"] for request in agent.requests] == [3_600, 600]
+    assert agent.timeouts == [3_600.0, 600.0]
 
 
 def test_container_and_filesystem_share_file_tool_parameter_schemas() -> None:
@@ -297,6 +300,7 @@ def test_container_tool_overrides_serialize_filesystem_and_exec_requests() -> No
     ]
     assert agent.timeouts == [600.0, 600.0, 600.0, 600.0, 12.0]
 
+
 def test_container_tool_overrides_fail_closed_for_non_container_tools() -> None:
     tools = _container_override_tools_by_name(FakeAgent())
 
@@ -308,9 +312,10 @@ def test_container_tool_overrides_fail_closed_for_non_container_tools() -> None:
         assert "container-backed tools" in result
 
 
-
 def test_container_exec_preserves_working_dir_in_container_command() -> None:
-    agent = FakeAgent({"exec": {"ok": True, "result": "/testbed/pkg\n", "returncode": 0}})
+    agent = FakeAgent(
+        {"exec": {"ok": True, "result": "/testbed/pkg\n", "returncode": 0}}
+    )
     tools = _container_override_tools_by_name(agent)
 
     result = asyncio.run(
@@ -330,7 +335,9 @@ def test_container_exec_preserves_working_dir_in_container_command() -> None:
 def test_container_list_dir_recursive_max_entries_match_replay_shim(
     tmp_path: Path,
 ) -> None:
-    agent = FakeAgent({"list_dir": {"ok": True, "result": "pkg/\npkg/sub/\npkg/app.py"}})
+    agent = FakeAgent(
+        {"list_dir": {"ok": True, "result": "pkg/\npkg/sub/\npkg/app.py"}}
+    )
     tools = _container_override_tools_by_name(agent)
 
     result = asyncio.run(

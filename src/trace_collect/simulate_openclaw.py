@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -25,6 +27,8 @@ from trace_collect.simulate_utils import (
 
 
 OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV = "OPENCLAW_REPLAY_EXEC_TIMEOUT_FLOOR_S"
+OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV = "OPENCLAW_REPLAY_PAIRED_WORKLOAD_CONTRACT"
+_PYTEST_RANDOM_SEED_RE = re.compile(r"(?m)^Using --randomly-seed=(\d+)\s*$")
 
 
 def replay_exec_timeout_floor_s() -> float | None:
@@ -35,6 +39,115 @@ def replay_exec_timeout_floor_s() -> float | None:
     if value <= 0:
         raise ValueError(f"{OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV} must be positive")
     return value
+
+
+def replay_paired_workload_contract_enabled() -> bool:
+    raw = os.environ.get(OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV)
+    if raw is None:
+        return False
+    if raw != "1":
+        raise ValueError(f"{OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV} must be 1")
+    return True
+
+
+def _seeded_pytest_command(command: str, seed: str) -> str:
+    return (
+        'export PYTEST_ADDOPTS="${PYTEST_ADDOPTS:+$PYTEST_ADDOPTS }'
+        f'--randomly-seed={seed}"; {command}'
+    )
+
+
+def _amend_exec_arguments(raw: Any, seed: str) -> Any:
+    was_json = isinstance(raw, str)
+    try:
+        arguments = json.loads(raw or "{}") if was_json else copy.deepcopy(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("pytest-randomly exec arguments are not valid JSON") from exc
+    if not isinstance(arguments, dict) or not isinstance(arguments.get("command"), str):
+        raise ValueError("pytest-randomly exec action has no command")
+    arguments["command"] = _seeded_pytest_command(arguments["command"], seed)
+    return json.dumps(arguments, ensure_ascii=False) if was_json else arguments
+
+
+def _paired_replay_actions(
+    source_actions: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Freeze source-observed pytest randomness and source-failure deadlines."""
+    seeds: dict[str, str] = {}
+    timeout_floor_exempt: list[str] = []
+    for action in source_actions:
+        data = action.get("data")
+        if (
+            action.get("action_type") != "tool_exec"
+            or not isinstance(data, dict)
+            or data.get("tool_name") != "exec"
+        ):
+            continue
+        call_id = str(data.get("tool_call_id") or "")
+        if data.get("success") is False:
+            if not call_id:
+                raise ValueError("failed source exec action has no tool_call_id")
+            timeout_floor_exempt.append(call_id)
+        found = set(
+            _PYTEST_RANDOM_SEED_RE.findall(
+                str(data.get("tool_result", data.get("result", "")) or "")
+            )
+        )
+        if not found:
+            continue
+        if not call_id or len(found) != 1:
+            raise ValueError("pytest-randomly seed is ambiguous or has no tool_call_id")
+        seeds[call_id] = found.pop()
+
+    actions = copy.deepcopy(source_actions)
+    amended_llm: set[str] = set()
+    amended_tools: set[str] = set()
+    for action in actions:
+        data = action.get("data")
+        if not isinstance(data, dict):
+            continue
+        if action.get("action_type") == "tool_exec":
+            call_id = str(data.get("tool_call_id") or "")
+            if data.get("tool_name") == "exec" and call_id in seeds:
+                data["tool_args"] = _amend_exec_arguments(
+                    data.get("tool_args", {}), seeds[call_id]
+                )
+                amended_tools.add(call_id)
+            continue
+        if action.get("action_type") != "llm_call":
+            continue
+        raw_response = data.get("raw_response")
+        choices = (
+            raw_response.get("choices") if isinstance(raw_response, dict) else None
+        )
+        for choice in choices if isinstance(choices, list) else []:
+            message = choice.get("message") if isinstance(choice, dict) else None
+            calls = message.get("tool_calls") if isinstance(message, dict) else None
+            for call in calls if isinstance(calls, list) else []:
+                function = call.get("function") if isinstance(call, dict) else None
+                call_id = str(call.get("id") or "") if isinstance(call, dict) else ""
+                if (
+                    isinstance(function, dict)
+                    and function.get("name") == "exec"
+                    and call_id in seeds
+                ):
+                    function["arguments"] = _amend_exec_arguments(
+                        function.get("arguments", {}), seeds[call_id]
+                    )
+                    amended_llm.add(call_id)
+
+    expected = set(seeds)
+    if amended_llm != expected or amended_tools != expected:
+        raise ValueError("pytest-randomly action could not be amended consistently")
+    return actions, {
+        "version": 1,
+        "pytest_random_seeds": [
+            {"tool_call_id": call_id, "seed": seeds[call_id]}
+            for call_id in sorted(seeds)
+        ],
+        "exec_timeout_floor_exempt_call_ids": sorted(timeout_floor_exempt),
+        "require_source_outcome_match": False,
+    }
 
 
 def _append_replay_record(trace_logger: TraceLogger, record: dict[str, Any]) -> None:
@@ -201,13 +314,22 @@ async def _run_openclaw_replay_session(
     if resource_enabled:
         from tool_resource.resource_protocol import RESOURCE_OPERATION_TIMEOUTS_S
 
-        resource_setup_timeout_s = RESOURCE_OPERATION_TIMEOUTS_S[
-            "AwaitTraceReady"
-        ]
+        resource_setup_timeout_s = RESOURCE_OPERATION_TIMEOUTS_S["AwaitTraceReady"]
     exec_timeout_floor_s = replay_exec_timeout_floor_s()
+    paired_workload_contract = replay_paired_workload_contract_enabled()
+    if paired_workload_contract:
+        source_actions, replay_action_contract = _paired_replay_actions(loaded.actions)
+    else:
+        source_actions = loaded.actions
+        replay_action_contract = {
+            "version": 1,
+            "pytest_random_seeds": [],
+            "exec_timeout_floor_exempt_call_ids": [],
+            "require_source_outcome_match": True,
+        }
     request = {
         "source_trace": str(loaded.source_trace),
-        "source_actions": loaded.actions,
+        "source_actions": source_actions,
         "task_prompt": prompt,
         "prompt": prompt,
         "output_trace": str(trace_file),
@@ -229,6 +351,8 @@ async def _run_openclaw_replay_session(
         },
         "command_timeout_s": command_timeout_s,
         "exec_timeout_floor_s": exec_timeout_floor_s,
+        "paired_workload_contract": paired_workload_contract,
+        "replay_action_contract": replay_action_contract,
         "tool_resource_profile": tool_resource_profile,
         "tool_resource_run_token": resource_run_token,
         "task_instance_id": loaded.task_instance_id,
@@ -241,7 +365,7 @@ async def _run_openclaw_replay_session(
         "source_terminal_reason": _source_terminal_reason(loaded),
         "expected_action_count": sum(
             1
-            for action in loaded.actions
+            for action in source_actions
             if action.get("action_type") in {"llm_call", "tool_exec"}
         ),
     }
@@ -311,10 +435,12 @@ async def _run_openclaw_replay_session(
                 replay_action_records.append(record)
             emitted_records.append(record)
 
-    action_counts = replay_action_failure_counts(loaded.actions, replay_action_records)
+    action_counts = replay_action_failure_counts(source_actions, replay_action_records)
     expected_actions = int(request["expected_action_count"])
     missing_actions = max(0, expected_actions - action_counts.emitted_actions)
-    failed_actions = action_counts.unexpected_replay_failed_actions + missing_actions
+    failed_actions = missing_actions
+    if replay_action_contract["require_source_outcome_match"]:
+        failed_actions += action_counts.unexpected_replay_failed_actions
     if (
         not action_counts.action_sequence_matches
         or worker_returncode != 0
@@ -327,9 +453,7 @@ async def _run_openclaw_replay_session(
     )
     if failed_actions and replay_execution == "completed":
         replay_execution = "failed"
-    telemetry_integrity_failed = bool(
-        status.get("telemetry_integrity_failed", False)
-    )
+    telemetry_integrity_failed = bool(status.get("telemetry_integrity_failed", False))
     telemetry_quality = status.get(
         "telemetry_quality",
         "unavailable" if resource_enabled else "ok",
@@ -373,6 +497,8 @@ async def _run_openclaw_replay_session(
         "missing_source_action_count": missing_actions,
         "action_sequence_matches": action_counts.action_sequence_matches,
         "source_terminal_reason": request["source_terminal_reason"],
+        "paired_workload_contract": paired_workload_contract,
+        "replay_action_contract": replay_action_contract,
         "worker_returncode": worker_returncode,
         "worker_stop_reason": status.get("stop_reason"),
         "worker_error": status.get("error"),

@@ -1400,14 +1400,51 @@ freeing space, the only result value read was pair 3 burstable-two makespan
 protocol and retained artifacts: task and arm order, CPU controls, 3,600-second
 floor, action identity, replay status, cleanup, and zero OOM all pass.
 
-This openly amends only execution recovery. Remove the exact unused SQLGlot
-task images, which are registry-recoverable and whose preparation is already
-outside makespan; preserve all traces and result artifacts. Resume from the
-last fully recorded pair only after requiring exact parsed protocol equality,
-three contiguous complete pairs in declared arm order, valid task artifacts,
-and identical cross-arm action sequences. Pairs 1--3 must not rerun, pair 4
-must start from a fresh container, and all original selection, arm order,
-controls, metrics, bootstrap, gates, and failure rules remain unchanged.
+The recovery implementation passed independent review and resumed from pair 4,
+but the matrix is now permanently invalid. Eight pairs completed. In pair 9's
+burstable arm, task `tobymao__sqlglot-2443` replayed a source-success full
+pytest action for 3,600.142 seconds before the replay ceiling, versus 95.966
+seconds in the source. The source used pytest-randomly seed 224069180, while
+the replay did not pin that source-observed workload order. The global floor
+would also expand each of this task's two source-recorded 600-second timeout
+actions to 3,600 seconds. There was no OOM or CPU-quota throttle in the
+burstable container. The advisor stopped the run; its partial/result artifacts
+are retained and no makespan effect is inferred from them.
+
+Before any corrected replay outcome, the following paired-workload contract is
+frozen. A trace is an action recipe, not an output oracle: non-timeout exit-code,
+network, package, cache, and test-result differences from the source are
+reported but do not invalidate execution. When an exec result contains exactly
+one `Using --randomly-seed=N` line, deterministic host code injects that same
+seed into `PYTEST_ADDOPTS` for the corresponding action in both arms. Exec
+actions already failed in the source are exempt from the 3,600-second floor and
+retain their recorded argument/default timeout; source-success exec actions
+retain the floor as a censoring safeguard. The request records every amended
+tool-call ID, seed, timeout exemption, and the disabled source-outcome-match
+gate. Action text is otherwise unchanged.
+
+The first run under this contract is the already-exposed pair 9 only:
+`tobymao__sqlglot-2443` plus `tobymao__sqlglot-3230`, burstable-two followed by
+hard-two, in new directories ending
+`sqlglot-pair09-cpu-borrowing-contract-v2-preflight`. It is a mechanism check,
+not an effect estimate. GO requires both arms to emit every source action in
+the same order, record identical action amendments, complete every
+source-success exec without a replay timeout, retain the requested CPU
+controls, finish telemetry and cleanup validly, and record zero OOM/OOM-kill.
+Source-recorded failures may fail again at their original ceiling. Estimated
+wall time is 45--60 minutes with no LLM calls.
+
+A pair-9 GO authorizes one fresh execution of all 13 remaining pairs in new
+directories ending `sqlglot26-paired-cpu-borrowing-contract-v2`. It retains the
+original 26 IDs, pair/arm order, 20x non-tool acceleration, CPU controls,
+bootstrap seed, at-least-5% mean, positive bootstrap lower bound, and at-least
+10-of-13 direction gates, but applies the contract above to every task. No pair
+is dropped or rerun. Because eight old-pipeline pairs and pair 9 have already
+been inspected, this complete matrix is descriptive development evidence, not
+confirmation. Any pair-9 preflight failure or later validity failure stops the
+branch for diagnosis. Expected full-matrix wall time is approximately five to
+seven hours, covered by the advisor's explicit authorization to keep the
+experiment running.
 
 ## 5. Development-exposure record
 

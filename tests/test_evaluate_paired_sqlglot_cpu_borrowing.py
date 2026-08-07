@@ -9,6 +9,8 @@ from scripts.evaluation import evaluate_paired_sqlglot_cpu_borrowing as experime
 def test_frozen_cohorts_partition_validation_tasks() -> None:
     initial = experiment._protocol("initial24")
     remaining = experiment._protocol("remaining26")
+    preflight = experiment._protocol("pair09_contract_v2")
+    corrected = experiment._protocol("remaining26_contract_v2")
     split = json.loads(experiment.SPLIT.read_text(encoding="utf-8"))
 
     initial_ids = set(initial["selected_task_ids"])
@@ -21,6 +23,10 @@ def test_frozen_cohorts_partition_validation_tasks() -> None:
     assert initial_ids | remaining_ids == set(split["validation"])
     assert len(initial["pairs"]) == 12
     assert len(remaining["pairs"]) == 13
+    assert preflight["pairs"] == [remaining["pairs"][8]]
+    assert corrected["pairs"] == remaining["pairs"]
+    assert preflight["paired_workload_contract"] is True
+    assert corrected["paired_workload_contract"] is True
     frozen = json.loads(
         (
             experiment.ROOT
@@ -97,11 +103,19 @@ def _runs(protocol: dict, improvements: list[float]) -> list[dict]:
                 "arm": "hard_two",
                 "pair_makespan_s": 1.0,
                 "action_sequences": {"task": [["agent", "tool_exec", "tool"]]},
+                "tasks": [
+                    {"task_id": task_id, "replay_action_contract": {}}
+                    for task_id in pair["task_ids"]
+                ],
             },
             {
                 "arm": "burstable_two",
                 "pair_makespan_s": 1.0 - improvement,
                 "action_sequences": {"task": [["agent", "tool_exec", "tool"]]},
+                "tasks": [
+                    {"task_id": task_id, "replay_action_contract": {}}
+                    for task_id in pair["task_ids"]
+                ],
             },
         ]
         runs.append({"pair": pair_number, "arms": arms})
@@ -160,6 +174,36 @@ def test_remaining_cohort_freezes_bootstrap_and_effect_gates() -> None:
     assert result["status"] == "no_go"
 
 
+def test_timeout_gate_requires_matching_action_and_wrapper_failure(tmp_path) -> None:
+    action = {
+        "type": "action",
+        "action_type": "tool_exec",
+        "action_id": "tool_1_call-a",
+        "data": {
+            "tool_name": "exec",
+            "tool_call_id": "call-a",
+            "success": True,
+        },
+    }
+    request = {"source_actions": [action]}
+    trace = tmp_path / "trace.jsonl"
+
+    def write_replay(*, success: bool, result: str, call_id: str = "call-a") -> None:
+        replay = json.loads(json.dumps(action))
+        replay["data"].update(
+            {"success": success, "tool_result": result, "tool_call_id": call_id}
+        )
+        trace.write_text(json.dumps(replay) + "\n", encoding="utf-8")
+
+    write_replay(success=True, result="[timeout]\nExit code: 124")
+    assert experiment._source_success_replay_timeout_count(request, trace) == 0
+    write_replay(success=False, result="Error: [timeout]\nExit code: 124")
+    assert experiment._source_success_replay_timeout_count(request, trace) == 1
+    write_replay(success=False, result="Error: [timeout]", call_id="call-b")
+    with pytest.raises(AssertionError, match="action identities differ"):
+        experiment._source_success_replay_timeout_count(request, trace)
+
+
 def test_resume_accepts_only_complete_frozen_pair_prefix(tmp_path, monkeypatch) -> None:
     protocol = experiment._protocol("remaining26")
     result_dir = tmp_path / "results"
@@ -171,7 +215,7 @@ def test_resume_accepts_only_complete_frozen_pair_prefix(tmp_path, monkeypatch) 
     monkeypatch.setattr(
         experiment,
         "_task_artifacts",
-        lambda arm_dir, task_id, arm: artifact_checks.append(
+        lambda arm_dir, task_id, arm, **_kwargs: artifact_checks.append(
             (str(arm_dir), task_id, arm)
         ),
     )

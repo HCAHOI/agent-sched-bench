@@ -233,6 +233,7 @@ class ContainerExecTool(_ContainerTool):
         restrict_to_workspace: bool = False,
         workspace: str = "/testbed",
         resource_trace: Any | None = None,
+        timeout_floor_exempt_call_ids: Iterable[str] = (),
     ) -> None:
         super().__init__(agent)
         self.timeout = timeout
@@ -241,6 +242,7 @@ class ContainerExecTool(_ContainerTool):
         self.path_append = path_append
         self.workspace = workspace or "/testbed"
         self._resource_trace = resource_trace
+        self._timeout_floor_exempt_call_ids = frozenset(timeout_floor_exempt_call_ids)
         self._tool_call_id: str | None = None
         self._pending_resource_token: Any | None = None
         self._pending_resource_response: dict[str, Any] | None = None
@@ -325,8 +327,13 @@ class ContainerExecTool(_ContainerTool):
                 except BaseException as exc:
                     self._record_resource_failure("safety_guard", exc)
             return replay_result
+        timeout_floor = (
+            0
+            if self._tool_call_id in self._timeout_floor_exempt_call_ids
+            else self.timeout_floor
+        )
         effective_timeout = min(
-            max(int(timeout or self.timeout), self.timeout_floor),
+            max(int(timeout or self.timeout), timeout_floor),
             self._max_timeout,
         )
         effective_command = command
@@ -403,6 +410,7 @@ def build_container_tool_overrides(
     workspace: str = "/testbed",
     resource_trace: Any | None = None,
     runtime_artifact_root_map: dict[str, str] | None = None,
+    exec_timeout_floor_exempt_call_ids: Iterable[str] = (),
 ) -> list[Tool]:
     """Return OpenClaw tool replacements backed by a task-container agent."""
 
@@ -422,6 +430,7 @@ def build_container_tool_overrides(
             restrict_to_workspace=restrict_to_workspace,
             workspace=workspace,
             resource_trace=resource_trace,
+            timeout_floor_exempt_call_ids=exec_timeout_floor_exempt_call_ids,
         ),
         *[UnsupportedReplayTool(name) for name in _UNSUPPORTED_REPLAY_TOOL_NAMES],
     ]

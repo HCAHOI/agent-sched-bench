@@ -54,7 +54,11 @@ def _write_host_trace(path: Path, task_id: str) -> Path:
                         "iteration": 0,
                         "ts_start": 1.0,
                         "ts_end": 1.0,
-                        "data": {"tool_name": "message", "success": True, "duration_ms": 0.0},
+                        "data": {
+                            "tool_name": "message",
+                            "success": True,
+                            "duration_ms": 0.0,
+                        },
                     }
                 ),
                 json.dumps({"type": "summary", "agent_id": task_id, "success": True}),
@@ -162,7 +166,11 @@ def test_simulator_rejects_missing_depends_on_task(tmp_path: Path) -> None:
     trace_path = _write_host_trace(tmp_path / "child.jsonl", "child")
     task_source = _write_tasks(
         tmp_path / "tasks.json",
-        {"instance_id": "child", "problem_statement": "child", "depends_on": ["parent"]},
+        {
+            "instance_id": "child",
+            "problem_statement": "child",
+            "depends_on": ["parent"],
+        },
     )
 
     with pytest.raises(SimulateError, match="depends on missing task ids"):
@@ -180,7 +188,11 @@ def test_simulator_rejects_self_depends_on_task(tmp_path: Path) -> None:
     trace_path = _write_host_trace(tmp_path / "task-a.jsonl", "task-a")
     task_source = _write_tasks(
         tmp_path / "tasks.json",
-        {"instance_id": "task-a", "problem_statement": "task", "depends_on": ["task-a"]},
+        {
+            "instance_id": "task-a",
+            "problem_statement": "task",
+            "depends_on": ["task-a"],
+        },
     )
 
     with pytest.raises(SimulateError, match="depends on itself"):
@@ -214,13 +226,18 @@ def test_simulator_rejects_cyclic_depends_on_tasks(tmp_path: Path) -> None:
             )
         )
 
+
 def test_simulator_outputs_depends_on_metadata(tmp_path: Path) -> None:
     trace_parent = _write_host_trace(tmp_path / "parent.jsonl", "parent")
     trace_child = _write_host_trace(tmp_path / "child.jsonl", "child")
     task_source = _write_tasks(
         tmp_path / "tasks.json",
         {"instance_id": "parent", "problem_statement": "parent"},
-        {"instance_id": "child", "problem_statement": "child", "depends_on": ["parent"]},
+        {
+            "instance_id": "child",
+            "problem_statement": "child",
+            "depends_on": ["parent"],
+        },
     )
     manifest = _write_manifest(
         tmp_path / "manifest.yaml",
@@ -257,13 +274,18 @@ def test_simulator_outputs_depends_on_metadata(tmp_path: Path) -> None:
     assert child_entry["depends_on"] == ["parent"]
     assert child_task["depends_on"] == ["parent"]
 
+
 def test_simulator_rejects_depends_on_with_multiple_workers(tmp_path: Path) -> None:
     trace_parent = _write_host_trace(tmp_path / "parent.jsonl", "parent")
     trace_child = _write_host_trace(tmp_path / "child.jsonl", "child")
     task_source = _write_tasks(
         tmp_path / "tasks.json",
         {"instance_id": "parent", "problem_statement": "parent"},
-        {"instance_id": "child", "problem_statement": "child", "depends_on": ["parent"]},
+        {
+            "instance_id": "child",
+            "problem_statement": "child",
+            "depends_on": ["parent"],
+        },
     )
     manifest = _write_manifest(
         tmp_path / "manifest.yaml",
@@ -383,7 +405,11 @@ def test_terminal_bench_trace_identity_split_loads_action_owner_actions(
     assert task_instance_id == "hydra-debug-slurm-mode"
     assert source_action_agent_id == "cli:oc-df47179e"
     assert [action["action_id"] for action in actions] == ["llm_0", "sub_tool_0"]
-    assert summary == {"type": "summary", "agent_id": "cli:oc-df47179e", "success": True}
+    assert summary == {
+        "type": "summary",
+        "agent_id": "cli:oc-df47179e",
+        "success": True,
+    }
 
 
 def test_trace_parser_rejects_ambiguous_action_owners_without_summary(
@@ -487,6 +513,7 @@ def test_simulator_rejects_task_without_docker_image(tmp_path: Path) -> None:
             )
         )
 
+
 def test_simulator_accepts_task_with_image_name(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -541,7 +568,8 @@ def test_simulator_accepts_task_with_image_name(
     from trace_collect.simulator import PreparedContainer, PreparedTraceSession
 
     class _FakeAgent:
-        async def stop(self): pass
+        async def stop(self):
+            pass
 
     async def fake_prepare(
         loaded,
@@ -567,13 +595,20 @@ def test_simulator_accepts_task_with_image_name(
     async def fake_prebuild(*_args, **_kwargs) -> dict[str, str]:
         return {}
 
-    monkeypatch.setattr("trace_collect.simulator._prepare_container_session", fake_prepare)
-    monkeypatch.setattr("trace_collect.simulator._prefetch_container_images", fake_prefetch)
-    monkeypatch.setattr("trace_collect.simulator._prebuild_sweep_fixed_images", fake_prebuild)
+    monkeypatch.setattr(
+        "trace_collect.simulator._prepare_container_session", fake_prepare
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator._prefetch_container_images", fake_prefetch
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator._prebuild_sweep_fixed_images", fake_prebuild
+    )
     monkeypatch.setattr(
         "trace_collect.simulator.stop_task_container",
         lambda *args, **kwargs: "",
     )
+
     async def _fake_exec(*a, **kw):
         return ("ok", 1.0, True)
 
@@ -622,6 +657,78 @@ def test_openclaw_replay_provider_rejects_ttft_tpot_with_replay_speed() -> None:
             llm_ttft_ms=10.0,
             llm_tpot_ms=2.0,
         )
+
+
+def test_paired_replay_contract_pins_pytest_seed_and_preserves_failed_timeout() -> None:
+    from trace_collect.simulate_openclaw import _paired_replay_actions
+
+    call_id = "call-seeded"
+    failed_id = "call-failed"
+    raw_arguments = json.dumps({"command": "python -m pytest", "timeout": 600})
+    source_actions = [
+        {
+            "action_type": "llm_call",
+            "data": {
+                "raw_response": {
+                    "choices": [
+                        {
+                            "message": {
+                                "tool_calls": [
+                                    {
+                                        "id": call_id,
+                                        "function": {
+                                            "name": "exec",
+                                            "arguments": raw_arguments,
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+        },
+        {
+            "action_type": "tool_exec",
+            "data": {
+                "tool_name": "exec",
+                "tool_call_id": call_id,
+                "tool_args": raw_arguments,
+                "tool_result": "Using --randomly-seed=12345\nExit code: 1",
+                "success": True,
+            },
+        },
+        {
+            "action_type": "tool_exec",
+            "data": {
+                "tool_name": "exec",
+                "tool_call_id": failed_id,
+                "tool_args": json.dumps({"command": "slow", "timeout": 600}),
+                "tool_result": "Error: [timeout]\nExit code: 124",
+                "success": False,
+            },
+        },
+    ]
+
+    actions, contract = _paired_replay_actions(source_actions)
+
+    amended_tool = json.loads(actions[1]["data"]["tool_args"])["command"]
+    amended_call = json.loads(
+        actions[0]["data"]["raw_response"]["choices"][0]["message"]["tool_calls"][0][
+            "function"
+        ]["arguments"]
+    )["command"]
+    assert amended_tool == amended_call
+    assert "--randomly-seed=12345" in amended_tool
+    assert json.loads(source_actions[1]["data"]["tool_args"])["command"] == (
+        "python -m pytest"
+    )
+    assert contract == {
+        "version": 1,
+        "pytest_random_seeds": [{"tool_call_id": call_id, "seed": "12345"}],
+        "exec_timeout_floor_exempt_call_ids": [failed_id],
+        "require_source_outcome_match": False,
+    }
 
 
 def test_openclaw_replay_stops_before_unrecorded_final_tool_call() -> None:
@@ -789,21 +896,27 @@ def test_failed_source_terminal_reason_comes_from_trace_shape() -> None:
             },
         }
 
-    assert _source_terminal_reason(
-        loaded(llm("error"), n_iterations=11)
-    ) == "llm_error"
-    assert _source_terminal_reason(
-        loaded({"action_type": "tool_exec"}, n_iterations=100)
-    ) == "max_iterations"
-    assert _source_terminal_reason(
-        loaded(llm("tool_calls", tool_calls=True), n_iterations=13)
-    ) == "trace_ended_before_tools"
-    assert _source_terminal_reason(
-        loaded(llm("tool_calls", tool_calls=True), n_iterations=100)
-    ) == "trace_ended_before_tools"
-    assert _source_terminal_reason(
-        loaded({"action_type": "tool_exec"}, n_iterations=13)
-    ) == "trace_ended_after_tools"
+    assert _source_terminal_reason(loaded(llm("error"), n_iterations=11)) == "llm_error"
+    assert (
+        _source_terminal_reason(loaded({"action_type": "tool_exec"}, n_iterations=100))
+        == "max_iterations"
+    )
+    assert (
+        _source_terminal_reason(
+            loaded(llm("tool_calls", tool_calls=True), n_iterations=13)
+        )
+        == "trace_ended_before_tools"
+    )
+    assert (
+        _source_terminal_reason(
+            loaded(llm("tool_calls", tool_calls=True), n_iterations=100)
+        )
+        == "trace_ended_before_tools"
+    )
+    assert (
+        _source_terminal_reason(loaded({"action_type": "tool_exec"}, n_iterations=13))
+        == "trace_ended_after_tools"
+    )
 
 
 def test_llm_replay_duration_rejects_invalid_completion_tokens() -> None:
@@ -859,7 +972,10 @@ def test_source_model_prefers_summary_and_metadata_audit_fields() -> None:
 
 
 def test_replay_failure_counts_align_expected_failures_by_order() -> None:
-    from trace_collect.openclaw_host_runtime import replay_action_failure_counts
+    from trace_collect.openclaw_host_runtime import (
+        _replay_execution_completed,
+        replay_action_failure_counts,
+    )
 
     source_actions = [
         {
@@ -897,6 +1013,19 @@ def test_replay_failure_counts_align_expected_failures_by_order() -> None:
     assert counts.replay_failed_actions == 2
     assert counts.unexpected_replay_failed_actions == 1
     assert counts.action_sequence_matches
+    completion_args = {
+        "action_counts": counts,
+        "expected_actions": 2,
+        "stop_reason": "completed",
+        "error": None,
+        "source_terminal_reason": "completed",
+        "source_terminal_boundary_reached": False,
+        "provider_request_sequence_matches": True,
+    }
+    assert not _replay_execution_completed(**completion_args)
+    assert _replay_execution_completed(
+        **completion_args, require_source_outcome_match=False
+    )
 
 
 def test_replay_failure_counts_rejects_extra_actions() -> None:
@@ -931,6 +1060,7 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
 ) -> None:
     """Container OpenClaw traces must use the host replay runner/provider for LLM calls."""
     monkeypatch.setenv("OPENCLAW_REPLAY_EXEC_TIMEOUT_FLOOR_S", "3600")
+    monkeypatch.setenv("OPENCLAW_REPLAY_PAIRED_WORKLOAD_CONTRACT", "1")
     trace_path = tmp_path / "trace.jsonl"
     trace_path.write_text(
         "\n".join(
@@ -1104,9 +1234,15 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
         launched_commands.append(list(cmd))
         return _FakeWorkerProcess(cmd)
 
-    monkeypatch.setattr("trace_collect.simulator._prepare_container_session", fake_prepare)
-    monkeypatch.setattr("trace_collect.simulator._prefetch_container_images", fake_prefetch)
-    monkeypatch.setattr("trace_collect.simulator._prebuild_sweep_fixed_images", fake_prebuild)
+    monkeypatch.setattr(
+        "trace_collect.simulator._prepare_container_session", fake_prepare
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator._prefetch_container_images", fake_prefetch
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator._prebuild_sweep_fixed_images", fake_prebuild
+    )
     monkeypatch.setattr(
         "trace_collect.simulator._sleep_and_measure",
         fail_on_simulator_side_llm_sleep,
@@ -1133,8 +1269,7 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
 
     assert trace_file.exists()
     records = [
-        json.loads(line)
-        for line in trace_file.read_text(encoding="utf-8").splitlines()
+        json.loads(line) for line in trace_file.read_text(encoding="utf-8").splitlines()
     ]
     summary = next(record for record in records if record["type"] == "summary")
     metadata = next(record for record in records if record["type"] == "trace_metadata")
@@ -1160,6 +1295,8 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
     assert request["source_action_agent_id"] == "fc_openclaw_replay"
     assert request["source_model"] == "qwen/qwen3.7-max"
     assert request["exec_timeout_floor_s"] == 3_600.0
+    assert request["paired_workload_contract"] is True
+    assert request["replay_action_contract"]["require_source_outcome_match"] is False
 
 
 def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
@@ -1403,7 +1540,9 @@ def test_terminal_bench_compose_preparation_uses_runner_env_and_cleanup(
     def fake_run(cmd, **kwargs):
         calls.append((list(cmd), kwargs))
         if cmd[:2] == ["docker", "image"]:
-            return subprocess.CompletedProcess(cmd, 0, stdout="amd64 linux\n", stderr="")
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout="amd64 linux\n", stderr=""
+            )
         if cmd[:2] == ["docker", "inspect"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="/app/src\n", stderr="")
         if cmd[:2] == ["docker", "exec"]:
@@ -1540,6 +1679,7 @@ def test_terminal_bench_compose_preparation_uses_runner_env_and_cleanup(
     assert prepared.container.python_runtime == "/usr/bin/python3"
     assert prepared.container.pythonpath is None
     assert prepared.container.workdir == "/app/src"
+
 
 def test_container_mode_trace_requires_container_executable(tmp_path: Path) -> None:
     trace_path = tmp_path / "trace.jsonl"
