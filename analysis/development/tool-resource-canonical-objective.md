@@ -1468,6 +1468,16 @@ not confirmation. Any compatibility or later validity failure stops the branch
 for diagnosis. Only the four previously uncompleted pairs incur new replay
 cost.
 
+The amended matrix completed and passed every frozen gate. Burstable-two
+reduced pair makespan by 14.490% on average and 11.636% at the median; all 13
+pairs improved, and the 10,000-draw paired-pair bootstrap interval was
+[9.049%, 22.832%]. Pair improvements ranged from 3.296% to 57.812%. Current
+code reconstructed and validated all 52 task-arm executions with zero missing
+actions, source-success replay timeouts, invalid CPU controls, telemetry or
+cleanup failures, and zero OOM/OOM-kill. Provenance is eight compatible legacy
+pairs, the contract-v2 pair-9 preflight, and four fresh contract-v2 pairs. This
+remains exposed development evidence, not an independent confirmation.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved

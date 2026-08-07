@@ -1,0 +1,191 @@
+{
+  "cohort": "remaining26_compatible_v2",
+  "selection_seed": 20260807,
+  "selection_range": [
+    24,
+    50
+  ],
+  "arm_order_seed": 20260810,
+  "bootstrap_seed": 20260811,
+  "minimum_improving_pairs": 10,
+  "schema": "sqlglot-paired-cpu-borrowing-compatible-v2",
+  "mechanism_only": false,
+  "paired_workload_contract": true,
+  "selected_task_ids": [
+    "tobymao__sqlglot-3620",
+    "tobymao__sqlglot-3333",
+    "tobymao__sqlglot-3238",
+    "tobymao__sqlglot-2439",
+    "tobymao__sqlglot-2857",
+    "tobymao__sqlglot-2739",
+    "tobymao__sqlglot-2754",
+    "tobymao__sqlglot-3284",
+    "tobymao__sqlglot-3182",
+    "tobymao__sqlglot-3394",
+    "tobymao__sqlglot-3734",
+    "tobymao__sqlglot-3440",
+    "tobymao__sqlglot-2794",
+    "tobymao__sqlglot-2619",
+    "tobymao__sqlglot-3417",
+    "tobymao__sqlglot-3515",
+    "tobymao__sqlglot-2443",
+    "tobymao__sqlglot-3230",
+    "tobymao__sqlglot-3179",
+    "tobymao__sqlglot-2337",
+    "tobymao__sqlglot-3198",
+    "tobymao__sqlglot-3566",
+    "tobymao__sqlglot-3637",
+    "tobymao__sqlglot-2822",
+    "tobymao__sqlglot-3630",
+    "tobymao__sqlglot-3204"
+  ],
+  "pairs": [
+    {
+      "pair": 1,
+      "task_ids": [
+        "tobymao__sqlglot-3620",
+        "tobymao__sqlglot-3333"
+      ],
+      "arm_order": [
+        "hard_two",
+        "burstable_two"
+      ]
+    },
+    {
+      "pair": 2,
+      "task_ids": [
+        "tobymao__sqlglot-3238",
+        "tobymao__sqlglot-2439"
+      ],
+      "arm_order": [
+        "hard_two",
+        "burstable_two"
+      ]
+    },
+    {
+      "pair": 3,
+      "task_ids": [
+        "tobymao__sqlglot-2857",
+        "tobymao__sqlglot-2739"
+      ],
+      "arm_order": [
+        "hard_two",
+        "burstable_two"
+      ]
+    },
+    {
+      "pair": 4,
+      "task_ids": [
+        "tobymao__sqlglot-2754",
+        "tobymao__sqlglot-3284"
+      ],
+      "arm_order": [
+        "hard_two",
+        "burstable_two"
+      ]
+    },
+    {
+      "pair": 5,
+      "task_ids": [
+        "tobymao__sqlglot-3182",
+        "tobymao__sqlglot-3394"
+      ],
+      "arm_order": [
+        "hard_two",
+        "burstable_two"
+      ]
+    },
+    {
+      "pair": 6,
+      "task_ids": [
+        "tobymao__sqlglot-3734",
+        "tobymao__sqlglot-3440"
+      ],
+      "arm_order": [
+        "burstable_two",
+        "hard_two"
+      ]
+    },
+    {
+      "pair": 7,
+      "task_ids": [
+        "tobymao__sqlglot-2794",
+        "tobymao__sqlglot-2619"
+      ],
+      "arm_order": [
+        "burstable_two",
+        "hard_two"
+      ]
+    },
+    {
+      "pair": 8,
+      "task_ids": [
+        "tobymao__sqlglot-3417",
+        "tobymao__sqlglot-3515"
+      ],
+      "arm_order": [
+        "hard_two",
+        "burstable_two"
+      ]
+    },
+    {
+      "pair": 9,
+      "task_ids": [
+        "tobymao__sqlglot-2443",
+        "tobymao__sqlglot-3230"
+      ],
+      "arm_order": [
+        "burstable_two",
+        "hard_two"
+      ]
+    },
+    {
+      "pair": 10,
+      "task_ids": [
+        "tobymao__sqlglot-3179",
+        "tobymao__sqlglot-2337"
+      ],
+      "arm_order": [
+        "hard_two",
+        "burstable_two"
+      ]
+    },
+    {
+      "pair": 11,
+      "task_ids": [
+        "tobymao__sqlglot-3198",
+        "tobymao__sqlglot-3566"
+      ],
+      "arm_order": [
+        "burstable_two",
+        "hard_two"
+      ]
+    },
+    {
+      "pair": 12,
+      "task_ids": [
+        "tobymao__sqlglot-3637",
+        "tobymao__sqlglot-2822"
+      ],
+      "arm_order": [
+        "burstable_two",
+        "hard_two"
+      ]
+    },
+    {
+      "pair": 13,
+      "task_ids": [
+        "tobymao__sqlglot-3630",
+        "tobymao__sqlglot-3204"
+      ],
+      "arm_order": [
+        "burstable_two",
+        "hard_two"
+      ]
+    }
+  ],
+  "source_dir": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804",
+  "task_source": "/home/chiyu/workspace/agent-sched-bench/data/swe-rebench/tasks.json",
+  "exec_timeout_floor_s": 3600,
+  "compatible_prefix_pairs": 9
+}
