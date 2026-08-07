@@ -1390,6 +1390,25 @@ diagnoses which workload phases break the effect. Neither verdict is temporal
 confirmation, because all 50 tasks and the first-cohort result were already
 development-exposed before this protocol was frozen.
 
+The run stopped for infrastructure, not workload, reasons after the first
+three pairs completed: preparing pair 4 failed with `ENOSPC` on the 503-GiB
+root filesystem. Docker held 376.8 GiB of images, 360.9 GiB unreferenced by any
+container. The exception handler also hit `ENOSPC`, leaving a zero-byte
+`result.json`; the last valid `partial.json` contains six complete arms. Before
+freeing space, the only result value read was pair 3 burstable-two makespan
+797.898 seconds. All six completed arms were then checked against the frozen
+protocol and retained artifacts: task and arm order, CPU controls, 3,600-second
+floor, action identity, replay status, cleanup, and zero OOM all pass.
+
+This openly amends only execution recovery. Remove the exact unused SQLGlot
+task images, which are registry-recoverable and whose preparation is already
+outside makespan; preserve all traces and result artifacts. Resume from the
+last fully recorded pair only after requiring exact parsed protocol equality,
+three contiguous complete pairs in declared arm order, valid task artifacts,
+and identical cross-arm action sequences. Pairs 1--3 must not rerun, pair 4
+must start from a fresh container, and all original selection, arm order,
+controls, metrics, bootstrap, gates, and failure rules remain unchanged.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved

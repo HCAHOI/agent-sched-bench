@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -157,3 +158,131 @@ def test_remaining_cohort_freezes_bootstrap_and_effect_gates() -> None:
     assert not result["comparison"]["gate"]["mean_improvement_at_least_5_percent"]
     assert result["comparison"]["gate"]["bootstrap_lower_above_zero"]
     assert result["status"] == "no_go"
+
+
+def test_resume_accepts_only_complete_frozen_pair_prefix(tmp_path, monkeypatch) -> None:
+    protocol = experiment._protocol("remaining26")
+    result_dir = tmp_path / "results"
+    replay_dir = tmp_path / "replay"
+    result_dir.mkdir()
+    (result_dir / "protocol.json").write_text(json.dumps(protocol), encoding="utf-8")
+    runs = []
+    artifact_checks = []
+    monkeypatch.setattr(
+        experiment,
+        "_task_artifacts",
+        lambda arm_dir, task_id, arm: artifact_checks.append(
+            (str(arm_dir), task_id, arm)
+        ),
+    )
+    for declared in protocol["pairs"][:3]:
+        pair = declared["pair"]
+        arms = []
+        for arm in declared["arm_order"]:
+            arm_dir = replay_dir / f"pair_{pair:02d}" / arm
+            arm_dir.mkdir(parents=True)
+            trace_file = arm_dir / "trace.jsonl"
+            trace_file.write_text(
+                "".join(
+                    json.dumps(
+                        {
+                            "type": "action",
+                            "action_type": "tool_exec",
+                            "action_id": "tool",
+                            "agent_id": task_id,
+                            "instance_id": task_id,
+                            "data": {"task_instance_id": task_id},
+                        }
+                    )
+                    + "\n"
+                    for task_id in declared["task_ids"]
+                ),
+                encoding="utf-8",
+            )
+            summary_path = arm_dir / "throughput_summary.json"
+            task_stats = [
+                {
+                    "agent_id": task_id,
+                    "failed_action_count": 0,
+                    "elapsed_s": float(index + 1),
+                }
+                for index, task_id in enumerate(declared["task_ids"])
+            ]
+            summary_path.write_text(
+                json.dumps({"attempted_traces": 2, "tasks": task_stats}) + "\n",
+                encoding="utf-8",
+            )
+            arms.append(
+                {
+                    "arm": arm,
+                    "output_dir": str(arm_dir),
+                    "trace_file": str(trace_file),
+                    "summary_path": str(summary_path),
+                    "pair_makespan_s": 2.0,
+                    "task_stats": task_stats,
+                    "action_sequences": experiment._action_sequences(trace_file),
+                }
+            )
+        runs.append({"pair": pair, "arms": arms})
+    partial = result_dir / "partial.json"
+    partial.write_text(
+        json.dumps({"protocol": protocol, "runs": runs}), encoding="utf-8"
+    )
+
+    loaded = experiment._load_resume_runs(protocol, result_dir, replay_dir)
+
+    assert len(loaded) == 3
+    assert protocol["pairs"][len(loaded)]["pair"] == 4
+    assert len(artifact_checks) == 12
+
+    (result_dir / "protocol.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(AssertionError, match="stored protocol differs"):
+        experiment._load_resume_runs(protocol, result_dir, replay_dir)
+    (result_dir / "protocol.json").write_text(json.dumps(protocol), encoding="utf-8")
+
+    original_summary_path = runs[0]["arms"][0]["summary_path"]
+    runs[0]["arms"][0]["summary_path"] = runs[0]["arms"][0]["trace_file"]
+    partial.write_text(
+        json.dumps({"protocol": protocol, "runs": runs}), encoding="utf-8"
+    )
+    with pytest.raises(AssertionError, match="output path is invalid"):
+        experiment._load_resume_runs(protocol, result_dir, replay_dir)
+    runs[0]["arms"][0]["summary_path"] = original_summary_path
+
+    runs[0]["arms"][0]["pair_makespan_s"] = 3.0
+    partial.write_text(
+        json.dumps({"protocol": protocol, "runs": runs}), encoding="utf-8"
+    )
+    with pytest.raises(AssertionError, match="makespan differs"):
+        experiment._load_resume_runs(protocol, result_dir, replay_dir)
+    runs[0]["arms"][0]["pair_makespan_s"] = 2.0
+
+    summary_path = runs[0]["arms"][0]["summary_path"]
+    failed_stats = list(runs[0]["arms"][0]["task_stats"])
+    failed_stats[0] = {**failed_stats[0], "failed_action_count": 1}
+    Path(summary_path).write_text(
+        json.dumps({"attempted_traces": 2, "tasks": failed_stats}) + "\n",
+        encoding="utf-8",
+    )
+    runs[0]["arms"][0]["task_stats"] = failed_stats
+    partial.write_text(
+        json.dumps({"protocol": protocol, "runs": runs}), encoding="utf-8"
+    )
+    with pytest.raises(AssertionError, match="summary tasks differ"):
+        experiment._load_resume_runs(protocol, result_dir, replay_dir)
+    runs[0]["arms"][0]["task_stats"] = [
+        {**failed_stats[0], "failed_action_count": 0},
+        failed_stats[1],
+    ]
+    Path(summary_path).write_text(
+        json.dumps({"attempted_traces": 2, "tasks": runs[0]["arms"][0]["task_stats"]})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    runs[0]["arms"].reverse()
+    partial.write_text(
+        json.dumps({"protocol": protocol, "runs": runs}), encoding="utf-8"
+    )
+    with pytest.raises(AssertionError, match="arm order differs"):
+        experiment._load_resume_runs(protocol, result_dir, replay_dir)

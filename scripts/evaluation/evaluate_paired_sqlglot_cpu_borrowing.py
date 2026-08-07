@@ -326,25 +326,116 @@ def _aggregate(protocol: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str
     }
 
 
+def _load_resume_runs(
+    protocol: dict[str, Any], result_dir: Path, replay_dir: Path
+) -> list[dict[str, Any]]:
+    partial_path = result_dir / "partial.json"
+    if not partial_path.is_file():
+        raise FileNotFoundError(f"resume requires {partial_path}")
+    stored_protocol_path = result_dir / "protocol.json"
+    if (
+        not stored_protocol_path.is_file()
+        or json.loads(stored_protocol_path.read_text(encoding="utf-8")) != protocol
+    ):
+        raise AssertionError("stored protocol differs from the frozen protocol")
+    payload = json.loads(partial_path.read_text(encoding="utf-8"))
+    if payload.get("protocol") != protocol:
+        raise AssertionError("resume protocol differs from the frozen protocol")
+    runs = payload.get("runs")
+    if not isinstance(runs, list) or not runs or len(runs) >= len(protocol["pairs"]):
+        raise AssertionError("resume requires a non-empty incomplete run prefix")
+
+    for declared, run in zip(protocol["pairs"][: len(runs)], runs, strict=True):
+        pair = int(declared["pair"])
+        if run.get("pair") != pair:
+            raise AssertionError(f"resume pair order differs at pair {pair}")
+        arms = run.get("arms")
+        if not isinstance(arms, list) or len(arms) != 2:
+            raise AssertionError(f"resume pair {pair} is not complete")
+        if [item.get("arm") for item in arms] != declared["arm_order"]:
+            raise AssertionError(f"resume arm order differs at pair {pair}")
+
+        by_arm = {str(item["arm"]): item for item in arms}
+        for arm, arm_data in by_arm.items():
+            expected_dir = replay_dir / f"pair_{pair:02d}" / arm
+            if Path(arm_data["output_dir"]).resolve() != expected_dir.resolve():
+                raise AssertionError(f"resume output path differs at pair {pair} {arm}")
+            trace_file = Path(arm_data["trace_file"])
+            summary_path = Path(arm_data["summary_path"])
+            if (
+                trace_file.parent.resolve() != expected_dir.resolve()
+                or not trace_file.is_file()
+                or summary_path.resolve()
+                != (expected_dir / "throughput_summary.json").resolve()
+                or not summary_path.is_file()
+            ):
+                raise AssertionError(
+                    f"resume output path is invalid at pair {pair} {arm}"
+                )
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            if summary.get("attempted_traces") != 2:
+                raise AssertionError(f"resume summary is invalid at pair {pair} {arm}")
+            summary_tasks = summary.get("tasks")
+            if not isinstance(summary_tasks, list) or len(summary_tasks) != 2:
+                raise AssertionError(
+                    f"resume summary tasks are invalid at pair {pair} {arm}"
+                )
+            stats = {str(item["agent_id"]): item for item in summary_tasks}
+            if set(stats) != set(declared["task_ids"]) or any(
+                item["failed_action_count"] for item in stats.values()
+            ):
+                raise AssertionError(
+                    f"resume summary tasks differ at pair {pair} {arm}"
+                )
+            if arm_data.get("task_stats") != summary_tasks:
+                raise AssertionError(f"resume task stats differ at pair {pair} {arm}")
+            makespan = max(float(item["elapsed_s"]) for item in stats.values())
+            if arm_data.get("pair_makespan_s") != makespan:
+                raise AssertionError(f"resume makespan differs at pair {pair} {arm}")
+            sequences = _action_sequences(trace_file)
+            if arm_data.get("action_sequences") != sequences:
+                raise AssertionError(
+                    f"resume action record differs at pair {pair} {arm}"
+                )
+            for task_id in declared["task_ids"]:
+                _task_artifacts(expected_dir, task_id, arm)
+        if (
+            by_arm["hard_two"]["action_sequences"]
+            != by_arm["burstable_two"]["action_sequences"]
+        ):
+            raise AssertionError(f"resume action identity differs at pair {pair}")
+    return runs
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cohort", choices=COHORTS, default="initial24")
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     config = COHORTS[args.cohort]
     result_dir = Path(config["result_dir"])
     replay_dir = Path(config["replay_dir"])
-    if result_dir.exists() or replay_dir.exists():
-        raise FileExistsError(f"refusing to overwrite {result_dir} or {replay_dir}")
     protocol = _protocol(args.cohort)
-    result_dir.mkdir(parents=True)
-    replay_dir.mkdir(parents=True)
-    (result_dir / "protocol.json").write_text(
-        json.dumps(protocol, indent=2) + "\n", encoding="utf-8"
-    )
-    runs: list[dict[str, Any]] = []
+    if args.resume:
+        if args.cohort != "remaining26":
+            raise ValueError("resume is frozen only for remaining26")
+        result_path = result_dir / "result.json"
+        if not result_path.is_file() or result_path.stat().st_size != 0:
+            raise FileExistsError(f"resume requires empty {result_path}")
+        runs = _load_resume_runs(protocol, result_dir, replay_dir)
+    else:
+        if result_dir.exists() or replay_dir.exists():
+            raise FileExistsError(f"refusing to overwrite {result_dir} or {replay_dir}")
+        result_dir.mkdir(parents=True)
+        replay_dir.mkdir(parents=True)
+        (result_dir / "protocol.json").write_text(
+            json.dumps(protocol, indent=2) + "\n", encoding="utf-8"
+        )
+        runs = []
+    resumed_after_pairs = len(runs)
     os.environ[OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV] = str(EXEC_TIMEOUT_FLOOR_S)
     try:
-        for declared in protocol["pairs"]:
+        for declared in protocol["pairs"][resumed_after_pairs:]:
             pair = int(declared["pair"])
             task_ids = list(declared["task_ids"])
             pair_result: dict[str, Any] = {"pair": pair, "arms": []}
@@ -368,6 +459,11 @@ def main() -> None:
                     encoding="utf-8",
                 )
         result = _aggregate(protocol, runs)
+        if args.resume:
+            result["recovery"] = {
+                "reason": "disk_full_before_pair_4",
+                "resumed_after_completed_pairs": resumed_after_pairs,
+            }
         (result_dir / "result.json").write_text(
             json.dumps(result, indent=2) + "\n", encoding="utf-8"
         )
