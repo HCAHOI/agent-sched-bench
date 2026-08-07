@@ -11,6 +11,7 @@ def test_frozen_cohorts_partition_validation_tasks() -> None:
     remaining = experiment._protocol("remaining26")
     preflight = experiment._protocol("pair09_contract_v2")
     corrected = experiment._protocol("remaining26_contract_v2")
+    compatible = experiment._protocol("remaining26_compatible_v2")
     split = json.loads(experiment.SPLIT.read_text(encoding="utf-8"))
 
     initial_ids = set(initial["selected_task_ids"])
@@ -25,8 +26,11 @@ def test_frozen_cohorts_partition_validation_tasks() -> None:
     assert len(remaining["pairs"]) == 13
     assert preflight["pairs"] == [remaining["pairs"][8]]
     assert corrected["pairs"] == remaining["pairs"]
+    assert compatible["pairs"] == remaining["pairs"]
+    assert compatible["compatible_prefix_pairs"] == 9
     assert preflight["paired_workload_contract"] is True
     assert corrected["paired_workload_contract"] is True
+    assert compatible["paired_workload_contract"] is True
     frozen = json.loads(
         (
             experiment.ROOT
@@ -202,6 +206,77 @@ def test_timeout_gate_requires_matching_action_and_wrapper_failure(tmp_path) -> 
     write_replay(success=False, result="Error: [timeout]", call_id="call-b")
     with pytest.raises(AssertionError, match="action identities differ"):
         experiment._source_success_replay_timeout_count(request, trace)
+
+
+def test_legacy_reuse_accepts_only_preserved_preexecution_failures() -> None:
+    result = (
+        "Error: Command blocked by safety guard (dangerous pattern detected)\n\n"
+        "[Analyze the error above and try a different approach.]"
+    )
+    source = [
+        {
+            "action_type": "tool_exec",
+            "data": {
+                "tool_name": "exec",
+                "tool_call_id": "call-a",
+                "success": False,
+                "tool_result": result,
+            },
+        }
+    ]
+    replay = {
+        arm: [
+            {
+                "action_type": "tool_exec",
+                "data": {
+                    "tool_name": "exec",
+                    "tool_call_id": "call-a",
+                    "success": False,
+                    "tool_result": result,
+                },
+            }
+        ]
+        for arm in ("hard_two", "burstable_two")
+    }
+
+    assert experiment._legacy_contract_compatibility(source, replay) == {
+        "pytest_seed_count": 0,
+        "preserved_preexecution_failure_count": 1,
+    }
+
+    replay["hard_two"][0]["data"]["tool_result"] = "Error: [timeout]"
+    with pytest.raises(AssertionError, match="was not preserved"):
+        experiment._legacy_contract_compatibility(source, replay)
+
+    source[0]["data"]["tool_result"] = result + "\ncommand output"
+    with pytest.raises(AssertionError, match="not a pre-execution safety rejection"):
+        experiment._legacy_contract_compatibility(source, replay)
+
+
+def test_saved_run_reconstruction_pins_replay_root(tmp_path) -> None:
+    declared = experiment._protocol("remaining26_compatible_v2")["pairs"][0]
+    stored = {
+        "pair": 1,
+        "arms": [
+            {
+                "arm": arm,
+                "output_dir": str(tmp_path / "substitute" / arm),
+                "trace_file": str(tmp_path / "substitute" / arm / "trace.jsonl"),
+                "summary_path": str(
+                    tmp_path / "substitute" / arm / "throughput_summary.json"
+                ),
+            }
+            for arm in declared["arm_order"]
+        ],
+    }
+
+    with pytest.raises(AssertionError, match="paths are invalid"):
+        experiment._reconstruct_saved_run(
+            declared,
+            stored,
+            paired_workload_contract=None,
+            expected_replay_root=tmp_path / "expected",
+        )
 
 
 def test_resume_accepts_only_complete_frozen_pair_prefix(tmp_path, monkeypatch) -> None:

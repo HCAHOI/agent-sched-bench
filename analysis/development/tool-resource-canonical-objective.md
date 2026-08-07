@@ -1443,17 +1443,30 @@ finished in 1,494.735 seconds versus 1,545.686 seconds for hard-two, a 3.296%
 improvement. This one exposed pair is not an effect estimate; it authorizes the
 frozen 13-pair execution below.
 
-A pair-9 GO authorizes one fresh execution of all 13 remaining pairs in new
-directories ending `sqlglot26-paired-cpu-borrowing-contract-v2`. It retains the
-original 26 IDs, pair/arm order, 20x non-tool acceleration, CPU controls,
-bootstrap seed, at-least-5% mean, positive bootstrap lower bound, and at-least
-10-of-13 direction gates, but applies the contract above to every task. No pair
-is dropped or rerun. Because eight old-pipeline pairs and pair 9 have already
-been inspected, this complete matrix is descriptive development evidence, not
-confirmation. Any pair-9 preflight failure or later validity failure stops the
-branch for diagnosis. Expected full-matrix wall time is approximately five to
-seven hours, covered by the advisor's explicit authorization to keep the
-experiment running.
+The initial post-preflight plan was to rerun all 13 pairs under the new
+contract. After pair 1 completed both arms, the advisor stopped that redundant
+execution and requested reuse of compatible evidence. This is an explicit
+2026-08-07 amendment made with the old pair 1--8 outcomes, the pair-9 preflight,
+and the repeated pair-1 actions visible; no pair 10--13 outcome was available.
+The interrupted repeated pair 1 is not used in the final comparison.
+
+The amended evaluation reuses old pair 1--8 only if current code reconstructs
+every task/action identity, makespan, CPU control, telemetry, cleanup, timeout,
+and OOM check from the saved artifacts. It must also establish that the new
+workload contract would recover no pytest seed in those tasks. A source-failed
+exec is compatible only when both saved arms preserve the exact source failure
+before command execution, so the changed timeout floor could not affect the
+realized workload. Pair 9 comes only from the completed contract-v2 preflight.
+Pairs 10--13 execute once under contract v2 with the original IDs, pair/arm
+order, 20x non-tool acceleration, and CPU controls. Provenance is retained per
+pair; no incompatible saved pair may be substituted or dropped.
+
+The final descriptive matrix keeps the original bootstrap seed, at-least-5%
+mean, positive bootstrap lower bound, and at-least-10-of-13 direction gates.
+Because the reused outcomes were already exposed, it is development evidence,
+not confirmation. Any compatibility or later validity failure stops the branch
+for diagnosis. Only the four previously uncompleted pairs incur new replay
+cost.
 
 ## 5. Development-exposure record
 

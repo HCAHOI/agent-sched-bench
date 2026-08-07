@@ -18,6 +18,7 @@ from trace_collect.simulator import simulate
 from trace_collect.simulate_openclaw import (
     OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV,
     OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV,
+    _paired_replay_actions,
 )
 
 
@@ -29,6 +30,30 @@ SOURCE = (
     / "sqlglot-prev100-c2-fast-requested-ebpf-20260804"
 )
 TASKS = ROOT / "data/swe-rebench/tasks.json"
+LEGACY_REMAINING_RESULT_DIR = (
+    ROOT
+    / "analysis/results/tool-resource-5-3-3-3-20260804"
+    / "sqlglot26-paired-cpu-borrowing-remaining-v1"
+)
+LEGACY_REMAINING_REPLAY_DIR = (
+    ROOT
+    / "traces/swe-rebench/gpt-5.6-sol"
+    / "sqlglot26-paired-cpu-borrowing-remaining-v1"
+)
+PAIR09_PREFLIGHT_RESULT_DIR = (
+    ROOT
+    / "analysis/results/tool-resource-5-3-3-3-20260804"
+    / "sqlglot-pair09-cpu-borrowing-contract-v2-preflight"
+)
+PAIR09_PREFLIGHT_REPLAY_DIR = (
+    ROOT
+    / "traces/swe-rebench/gpt-5.6-sol"
+    / "sqlglot-pair09-cpu-borrowing-contract-v2-preflight"
+)
+SAFETY_GUARD_REJECTION = (
+    "Error: Command blocked by safety guard (dangerous pattern detected)\n\n"
+    "[Analyze the error above and try a different approach.]"
+)
 EXEC_TIMEOUT_FLOOR_S = 3_600
 SELECTION_SEED = 20_260_807
 ARM_ARGS = {
@@ -96,6 +121,22 @@ COHORTS: dict[str, dict[str, Any]] = {
         / "traces/swe-rebench/gpt-5.6-sol"
         / "sqlglot26-paired-cpu-borrowing-contract-v2",
     },
+    "remaining26_compatible_v2": {
+        "selection_start": 24,
+        "selection_count": 26,
+        "arm_order_seed": 20_260_810,
+        "bootstrap_seed": 20_260_811,
+        "minimum_improving_pairs": 10,
+        "paired_workload_contract": True,
+        "compatible_prefix_pairs": 9,
+        "schema": "sqlglot-paired-cpu-borrowing-compatible-v2",
+        "result_dir": ROOT
+        / "analysis/results/tool-resource-5-3-3-3-20260804"
+        / "sqlglot26-paired-cpu-borrowing-compatible-v2",
+        "replay_dir": ROOT
+        / "traces/swe-rebench/gpt-5.6-sol"
+        / "sqlglot26-paired-cpu-borrowing-compatible-v2",
+    },
 }
 
 
@@ -125,7 +166,7 @@ def _protocol(cohort: str = "initial24") -> dict[str, Any]:
     missing = [str(path) for path in traces.values() if not path.is_file()]
     if missing:
         raise FileNotFoundError(f"selected source traces are missing: {missing}")
-    return {
+    protocol = {
         "cohort": cohort,
         "selection_seed": SELECTION_SEED,
         "selection_range": [start, stop],
@@ -148,6 +189,9 @@ def _protocol(cohort: str = "initial24") -> dict[str, Any]:
         "task_source": str(TASKS),
         "exec_timeout_floor_s": EXEC_TIMEOUT_FLOOR_S,
     }
+    if config.get("compatible_prefix_pairs"):
+        protocol["compatible_prefix_pairs"] = int(config["compatible_prefix_pairs"])
+    return protocol
 
 
 def _write_manifest(path: Path, task_ids: list[str]) -> None:
@@ -249,7 +293,7 @@ def _task_artifacts(
     task_id: str,
     arm: str,
     *,
-    paired_workload_contract: bool,
+    paired_workload_contract: bool | None,
 ) -> dict[str, Any]:
     attempt = arm_dir / task_id / "attempt_1"
     startup_path = attempt / "container_startup.json"
@@ -266,7 +310,12 @@ def _task_artifacts(
     request = json.loads(request_path.read_text(encoding="utf-8"))
     if request.get("exec_timeout_floor_s") != EXEC_TIMEOUT_FLOOR_S:
         raise AssertionError(f"wrong timeout floor for {task_id} {arm}")
-    if request.get("paired_workload_contract") is not paired_workload_contract:
+    if paired_workload_contract is None:
+        if "paired_workload_contract" in request:
+            raise AssertionError(
+                f"unexpected replay contract field for {task_id} {arm}"
+            )
+    elif request.get("paired_workload_contract") is not paired_workload_contract:
         raise AssertionError(f"wrong replay contract for {task_id} {arm}")
     replay_action_contract = dict(request.get("replay_action_contract") or {})
     if (
@@ -405,6 +454,222 @@ async def _run_arm(
     }
 
 
+def _legacy_contract_compatibility(
+    source_actions: list[dict[str, Any]],
+    replay_actions_by_arm: dict[str, list[dict[str, Any]]],
+) -> dict[str, int]:
+    _, contract = _paired_replay_actions(source_actions)
+    seeds = contract["pytest_random_seeds"]
+    if seeds:
+        raise AssertionError("legacy reuse contains a pytest-randomly seed")
+    failed_call_ids = set(contract["exec_timeout_floor_exempt_call_ids"])
+    source_by_call = {
+        str((action.get("data") or {}).get("tool_call_id")): action
+        for action in source_actions
+        if action.get("action_type") == "tool_exec"
+    }
+    for call_id in failed_call_ids:
+        source = source_by_call[call_id].get("data") or {}
+        source_result = str(source.get("tool_result") or "")
+        if source_result != SAFETY_GUARD_REJECTION:
+            raise AssertionError(
+                f"legacy source failure is not a pre-execution safety rejection: {call_id}"
+            )
+        for arm, replay_actions in replay_actions_by_arm.items():
+            matches = [
+                action
+                for action in replay_actions
+                if str((action.get("data") or {}).get("tool_call_id")) == call_id
+            ]
+            if len(matches) != 1:
+                raise AssertionError(
+                    f"legacy replay call identity differs for {call_id} {arm}"
+                )
+            replay = matches[0].get("data") or {}
+            if (
+                replay.get("success") is not False
+                or str(replay.get("tool_result") or "") != source_result
+            ):
+                raise AssertionError(
+                    f"legacy source failure was not preserved for {call_id} {arm}"
+                )
+    return {
+        "pytest_seed_count": 0,
+        "preserved_preexecution_failure_count": len(failed_call_ids),
+    }
+
+
+def _reconstruct_saved_run(
+    declared: dict[str, Any],
+    stored_run: dict[str, Any],
+    *,
+    paired_workload_contract: bool | None,
+    expected_replay_root: Path,
+) -> dict[str, Any]:
+    pair = int(declared["pair"])
+    stored_arms = stored_run.get("arms")
+    if (
+        stored_run.get("pair") != pair
+        or not isinstance(stored_arms, list)
+        or [item.get("arm") for item in stored_arms] != declared["arm_order"]
+    ):
+        raise AssertionError(f"saved pair {pair} identity or arm order differs")
+    arms = []
+    for stored_arm in stored_arms:
+        arm = str(stored_arm["arm"])
+        arm_dir = Path(stored_arm["output_dir"])
+        trace_file = Path(stored_arm["trace_file"])
+        summary_path = Path(stored_arm["summary_path"])
+        expected_arm_dir = expected_replay_root / f"pair_{pair:02d}" / arm
+        if (
+            arm_dir.resolve() != expected_arm_dir.resolve()
+            or trace_file.parent.resolve() != arm_dir.resolve()
+            or not trace_file.is_file()
+            or summary_path.resolve() != (arm_dir / "throughput_summary.json").resolve()
+            or not summary_path.is_file()
+        ):
+            raise AssertionError(f"saved pair {pair} {arm} paths are invalid")
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        stats = {str(item["agent_id"]): item for item in summary.get("tasks", [])}
+        if (
+            summary.get("attempted_traces") != 2
+            or set(stats) != set(declared["task_ids"])
+            or any(item["failed_action_count"] for item in stats.values())
+        ):
+            raise AssertionError(f"saved pair {pair} {arm} summary is invalid")
+        task_artifacts = [
+            _task_artifacts(
+                arm_dir,
+                task_id,
+                arm,
+                paired_workload_contract=paired_workload_contract,
+            )
+            for task_id in declared["task_ids"]
+        ]
+        for task in task_artifacts:
+            request = json.loads(
+                (
+                    Path(task["attempt_dir"]) / "openclaw_host_replay_request.json"
+                ).read_text(encoding="utf-8")
+            )
+            task_id = task["task_id"]
+            expected_source = SOURCE / task_id / "attempt_1" / "trace.jsonl"
+            if (
+                Path(request.get("source_trace", "")).resolve()
+                != expected_source.resolve()
+                or request.get("replay_speed") != 20.0
+                or request.get("task_instance_id") != task_id
+            ):
+                raise AssertionError(
+                    f"saved pair {pair} {arm} source provenance differs for {task_id}"
+                )
+        arms.append(
+            {
+                "arm": arm,
+                "output_dir": str(arm_dir),
+                "trace_file": str(trace_file),
+                "summary_path": str(summary_path),
+                "pair_makespan_s": max(
+                    float(item["elapsed_s"]) for item in stats.values()
+                ),
+                "tasks": task_artifacts,
+                "task_stats": [stats[task_id] for task_id in declared["task_ids"]],
+                "action_sequences": _action_sequences(trace_file),
+            }
+        )
+    if arms[0]["action_sequences"] != arms[1]["action_sequences"]:
+        raise AssertionError(f"saved pair {pair} action identity differs")
+    return {"pair": pair, "arms": arms}
+
+
+def _load_compatible_prefix(protocol: dict[str, Any]) -> list[dict[str, Any]]:
+    legacy = json.loads(
+        (LEGACY_REMAINING_RESULT_DIR / "partial.json").read_text(encoding="utf-8")
+    )
+    expected_legacy_protocol = _protocol("remaining26")
+    expected_legacy_protocol.pop("mechanism_only")
+    expected_legacy_protocol.pop("paired_workload_contract")
+    if legacy.get("protocol") != expected_legacy_protocol:
+        raise AssertionError("legacy source protocol differs from the frozen protocol")
+    stored_legacy = legacy.get("runs")
+    if not isinstance(stored_legacy, list) or len(stored_legacy) != 8:
+        raise AssertionError("legacy compatible prefix must contain eight pairs")
+    runs = []
+    for declared, stored in zip(protocol["pairs"][:8], stored_legacy, strict=True):
+        run = _reconstruct_saved_run(
+            declared,
+            stored,
+            paired_workload_contract=None,
+            expected_replay_root=LEGACY_REMAINING_REPLAY_DIR,
+        )
+        compatibility_by_task = {}
+        for task_id in declared["task_ids"]:
+            requests = []
+            replay_actions_by_arm = {}
+            for arm_data in run["arms"]:
+                attempt = Path(
+                    next(
+                        task["attempt_dir"]
+                        for task in arm_data["tasks"]
+                        if task["task_id"] == task_id
+                    )
+                )
+                request = json.loads(
+                    (attempt / "openclaw_host_replay_request.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                requests.append(request["source_actions"])
+                replay_actions_by_arm[arm_data["arm"]] = [
+                    record
+                    for record in (
+                        json.loads(line)
+                        for line in (attempt / "openclaw_host_replay.jsonl")
+                        .read_text(encoding="utf-8")
+                        .splitlines()
+                        if line.strip()
+                    )
+                    if record.get("type") == "action"
+                ]
+            if requests[0] != requests[1]:
+                raise AssertionError(f"saved source actions differ for {task_id}")
+            compatibility_by_task[task_id] = _legacy_contract_compatibility(
+                requests[0], replay_actions_by_arm
+            )
+        run["provenance"] = {
+            "kind": "legacy_contract_compatible",
+            "source_partial": str(LEGACY_REMAINING_RESULT_DIR / "partial.json"),
+            "compatibility_by_task": compatibility_by_task,
+        }
+        runs.append(run)
+
+    preflight = json.loads(
+        (PAIR09_PREFLIGHT_RESULT_DIR / "result.json").read_text(encoding="utf-8")
+    )
+    if (
+        preflight.get("status") != "go"
+        or preflight.get("protocol") != _protocol("pair09_contract_v2")
+        or len(preflight.get("pairs", [])) != 1
+    ):
+        raise AssertionError("pair-9 contract preflight is not a valid GO")
+    stored_pair9 = {
+        "pair": 9,
+        "arms": preflight["pairs"][0]["arms"],
+    }
+    pair9 = _reconstruct_saved_run(
+        protocol["pairs"][8],
+        stored_pair9,
+        paired_workload_contract=True,
+        expected_replay_root=PAIR09_PREFLIGHT_REPLAY_DIR,
+    )
+    pair9["provenance"] = {
+        "kind": "contract_v2_preflight",
+        "source_result": str(PAIR09_PREFLIGHT_RESULT_DIR / "result.json"),
+    }
+    runs.append(pair9)
+    return runs
+
+
 def _aggregate(protocol: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str, Any]:
     by_pair = {item["pair"]: item for item in runs}
     pairs: list[dict[str, Any]] = []
@@ -426,17 +691,18 @@ def _aggregate(protocol: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str
         improvement = (hard["pair_makespan_s"] - burst["pair_makespan_s"]) / hard[
             "pair_makespan_s"
         ]
-        pairs.append(
-            {
-                "pair": pair,
-                "task_ids": declared["task_ids"],
-                "arm_order": declared["arm_order"],
-                "hard_two_makespan_s": hard["pair_makespan_s"],
-                "burstable_two_makespan_s": burst["pair_makespan_s"],
-                "improvement_fraction": improvement,
-                "arms": by_pair[pair]["arms"],
-            }
-        )
+        pair_result = {
+            "pair": pair,
+            "task_ids": declared["task_ids"],
+            "arm_order": declared["arm_order"],
+            "hard_two_makespan_s": hard["pair_makespan_s"],
+            "burstable_two_makespan_s": burst["pair_makespan_s"],
+            "improvement_fraction": improvement,
+            "arms": by_pair[pair]["arms"],
+        }
+        if "provenance" in by_pair[pair]:
+            pair_result["provenance"] = by_pair[pair]["provenance"]
+        pairs.append(pair_result)
     improvements = np.array([item["improvement_fraction"] for item in pairs])
     rng = np.random.Generator(np.random.PCG64(protocol["bootstrap_seed"]))
     draws = improvements[
@@ -572,6 +838,47 @@ def _load_resume_runs(
     return runs
 
 
+def _load_compatible_resume_runs(
+    protocol: dict[str, Any], result_dir: Path, replay_dir: Path
+) -> list[dict[str, Any]]:
+    stored_protocol = json.loads(
+        (result_dir / "protocol.json").read_text(encoding="utf-8")
+    )
+    partial = json.loads((result_dir / "partial.json").read_text(encoding="utf-8"))
+    if stored_protocol != protocol or partial.get("protocol") != protocol:
+        raise AssertionError("compatible resume protocol differs")
+    stored_runs = partial.get("runs")
+    prefix_count = int(protocol["compatible_prefix_pairs"])
+    if (
+        not isinstance(stored_runs, list)
+        or len(stored_runs) < prefix_count
+        or len(stored_runs) >= len(protocol["pairs"])
+    ):
+        raise AssertionError("compatible resume requires an incomplete run prefix")
+    runs = _load_compatible_prefix(protocol)
+    if stored_runs[:prefix_count] != runs:
+        raise AssertionError("compatible reused prefix changed")
+    for declared, stored in zip(
+        protocol["pairs"][prefix_count : len(stored_runs)],
+        stored_runs[prefix_count:],
+        strict=True,
+    ):
+        pair = int(declared["pair"])
+        for arm_data in stored.get("arms", []):
+            expected = replay_dir / f"pair_{pair:02d}" / str(arm_data.get("arm"))
+            if Path(arm_data.get("output_dir", "")).resolve() != expected.resolve():
+                raise AssertionError(f"compatible resume path differs at pair {pair}")
+        run = _reconstruct_saved_run(
+            declared,
+            stored,
+            paired_workload_contract=True,
+            expected_replay_root=replay_dir,
+        )
+        run["provenance"] = {"kind": "fresh_contract_v2"}
+        runs.append(run)
+    return runs
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cohort", choices=COHORTS, default="initial24")
@@ -582,12 +889,15 @@ def main() -> None:
     replay_dir = Path(config["replay_dir"])
     protocol = _protocol(args.cohort)
     if args.resume:
-        if args.cohort != "remaining26":
-            raise ValueError("resume is frozen only for remaining26")
+        if args.cohort not in {"remaining26", "remaining26_compatible_v2"}:
+            raise ValueError("resume is not frozen for this cohort")
         result_path = result_dir / "result.json"
-        if not result_path.is_file() or result_path.stat().st_size != 0:
+        if args.cohort == "remaining26_compatible_v2":
+            runs = _load_compatible_resume_runs(protocol, result_dir, replay_dir)
+        elif not result_path.is_file() or result_path.stat().st_size != 0:
             raise FileExistsError(f"resume requires empty {result_path}")
-        runs = _load_resume_runs(protocol, result_dir, replay_dir)
+        else:
+            runs = _load_resume_runs(protocol, result_dir, replay_dir)
     else:
         if result_dir.exists() or replay_dir.exists():
             raise FileExistsError(f"refusing to overwrite {result_dir} or {replay_dir}")
@@ -596,7 +906,16 @@ def main() -> None:
         (result_dir / "protocol.json").write_text(
             json.dumps(protocol, indent=2) + "\n", encoding="utf-8"
         )
-        runs = []
+        runs = (
+            _load_compatible_prefix(protocol)
+            if protocol.get("compatible_prefix_pairs")
+            else []
+        )
+        if runs:
+            (result_dir / "partial.json").write_text(
+                json.dumps({"protocol": protocol, "runs": runs}, indent=2) + "\n",
+                encoding="utf-8",
+            )
     resumed_after_pairs = len(runs)
     os.environ[OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV] = str(EXEC_TIMEOUT_FLOOR_S)
     if protocol["paired_workload_contract"]:
@@ -606,6 +925,8 @@ def main() -> None:
             pair = int(declared["pair"])
             task_ids = list(declared["task_ids"])
             pair_result: dict[str, Any] = {"pair": pair, "arms": []}
+            if protocol.get("compatible_prefix_pairs"):
+                pair_result["provenance"] = {"kind": "fresh_contract_v2"}
             runs.append(pair_result)
             for arm in declared["arm_order"]:
                 manifest = result_dir / "manifests" / f"pair_{pair:02d}_{arm}.json"
@@ -631,9 +952,10 @@ def main() -> None:
         result = _aggregate(protocol, runs)
         if args.resume:
             result["recovery"] = {
-                "reason": "disk_full_before_pair_4",
                 "resumed_after_completed_pairs": resumed_after_pairs,
             }
+            if args.cohort == "remaining26":
+                result["recovery"]["reason"] = "disk_full_before_pair_4"
         (result_dir / "result.json").write_text(
             json.dumps(result, indent=2) + "\n", encoding="utf-8"
         )
