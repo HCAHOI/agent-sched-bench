@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import os
@@ -25,49 +26,73 @@ SOURCE = (
     / "sqlglot-prev100-c2-fast-requested-ebpf-20260804"
 )
 TASKS = ROOT / "data/swe-rebench/tasks.json"
-RESULT_DIR = (
-    ROOT
-    / "analysis/results/tool-resource-5-3-3-3-20260804"
-    / "sqlglot24-paired-cpu-borrowing-timeout-floor-v2"
-)
-REPLAY_DIR = (
-    ROOT
-    / "traces/swe-rebench/gpt-5.6-sol"
-    / "sqlglot24-paired-cpu-borrowing-timeout-floor-v2"
-)
 EXEC_TIMEOUT_FLOOR_S = 3_600
 SELECTION_SEED = 20_260_807
-ARM_SEED = 20_260_808
-BOOTSTRAP_SEED = 20_260_809
 ARM_ARGS = {
     "hard_two": ("--cpuset-cpus", "0-7", "--cpu-shares", "1024", "--cpus", "2"),
     "burstable_two": ("--cpuset-cpus", "0-7", "--cpu-shares", "1024"),
 }
+COHORTS: dict[str, dict[str, Any]] = {
+    "initial24": {
+        "selection_start": 0,
+        "selection_count": 24,
+        "arm_order_seed": 20_260_808,
+        "bootstrap_seed": 20_260_809,
+        "minimum_improving_pairs": 9,
+        "schema": "sqlglot-paired-cpu-borrowing-timeout-floor-v2",
+        "result_dir": ROOT
+        / "analysis/results/tool-resource-5-3-3-3-20260804"
+        / "sqlglot24-paired-cpu-borrowing-timeout-floor-v2",
+        "replay_dir": ROOT
+        / "traces/swe-rebench/gpt-5.6-sol"
+        / "sqlglot24-paired-cpu-borrowing-timeout-floor-v2",
+    },
+    "remaining26": {
+        "selection_start": 24,
+        "selection_count": 26,
+        "arm_order_seed": 20_260_810,
+        "bootstrap_seed": 20_260_811,
+        "minimum_improving_pairs": 10,
+        "schema": "sqlglot-paired-cpu-borrowing-remaining-v1",
+        "result_dir": ROOT
+        / "analysis/results/tool-resource-5-3-3-3-20260804"
+        / "sqlglot26-paired-cpu-borrowing-remaining-v1",
+        "replay_dir": ROOT
+        / "traces/swe-rebench/gpt-5.6-sol"
+        / "sqlglot26-paired-cpu-borrowing-remaining-v1",
+    },
+}
 
 
-def _protocol() -> dict[str, Any]:
+def _protocol(cohort: str = "initial24") -> dict[str, Any]:
+    config = COHORTS[cohort]
     split = json.loads(SPLIT.read_text(encoding="utf-8"))
     task_ids = np.array(sorted(split["validation"]), dtype=object)
     np.random.Generator(np.random.PCG64(SELECTION_SEED)).shuffle(task_ids)
-    selected = [str(value) for value in task_ids[:24]]
-    pairs = [selected[index : index + 2] for index in range(0, 24, 2)]
-    arm_rng = np.random.Generator(np.random.PCG64(ARM_SEED))
+    start = int(config["selection_start"])
+    stop = start + int(config["selection_count"])
+    selected = [str(value) for value in task_ids[start:stop]]
+    pairs = [selected[index : index + 2] for index in range(0, len(selected), 2)]
+    arm_rng = np.random.Generator(np.random.PCG64(config["arm_order_seed"]))
     arm_orders: list[list[str]] = []
     for _pair in pairs:
         order = np.array(["hard_two", "burstable_two"], dtype=object)
         arm_rng.shuffle(order)
         arm_orders.append([str(value) for value in order])
     traces = {
-        task_id: SOURCE / task_id / "attempt_1" / "trace.jsonl"
-        for task_id in selected
+        task_id: SOURCE / task_id / "attempt_1" / "trace.jsonl" for task_id in selected
     }
     missing = [str(path) for path in traces.values() if not path.is_file()]
     if missing:
         raise FileNotFoundError(f"selected source traces are missing: {missing}")
     return {
+        "cohort": cohort,
         "selection_seed": SELECTION_SEED,
-        "arm_order_seed": ARM_SEED,
-        "bootstrap_seed": BOOTSTRAP_SEED,
+        "selection_range": [start, stop],
+        "arm_order_seed": config["arm_order_seed"],
+        "bootstrap_seed": config["bootstrap_seed"],
+        "minimum_improving_pairs": config["minimum_improving_pairs"],
+        "schema": config["schema"],
         "selected_task_ids": selected,
         "pairs": [
             {
@@ -199,9 +224,14 @@ def _task_artifacts(arm_dir: Path, task_id: str, arm: str) -> dict[str, Any]:
 
 
 async def _run_arm(
-    *, pair: int, task_ids: list[str], arm: str, manifest: Path
+    *,
+    pair: int,
+    task_ids: list[str],
+    arm: str,
+    manifest: Path,
+    replay_dir: Path,
 ) -> dict[str, Any]:
-    arm_dir = REPLAY_DIR / f"pair_{pair:02d}" / arm
+    arm_dir = replay_dir / f"pair_{pair:02d}" / arm
     trace_file = await simulate(
         manifest=manifest,
         output_dir=arm_dir,
@@ -248,9 +278,9 @@ def _aggregate(protocol: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str
         burst = arms["burstable_two"]
         if hard["action_sequences"] != burst["action_sequences"]:
             raise AssertionError(f"action identity differs for pair {pair}")
-        improvement = (
-            hard["pair_makespan_s"] - burst["pair_makespan_s"]
-        ) / hard["pair_makespan_s"]
+        improvement = (hard["pair_makespan_s"] - burst["pair_makespan_s"]) / hard[
+            "pair_makespan_s"
+        ]
         pairs.append(
             {
                 "pair": pair,
@@ -263,19 +293,24 @@ def _aggregate(protocol: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str
             }
         )
     improvements = np.array([item["improvement_fraction"] for item in pairs])
-    rng = np.random.Generator(np.random.PCG64(BOOTSTRAP_SEED))
-    draws = improvements[rng.integers(0, len(improvements), size=(10_000, len(improvements)))].mean(axis=1)
+    rng = np.random.Generator(np.random.PCG64(protocol["bootstrap_seed"]))
+    draws = improvements[
+        rng.integers(0, len(improvements), size=(10_000, len(improvements)))
+    ].mean(axis=1)
     mean = float(improvements.mean())
     interval = [float(value) for value in np.quantile(draws, [0.025, 0.975])]
     improving = int((improvements > 0).sum())
+    minimum_improving = int(protocol["minimum_improving_pairs"])
     gate = {
         "mean_improvement_at_least_5_percent": mean >= 0.05,
         "bootstrap_lower_above_zero": interval[0] > 0.0,
-        "at_least_9_of_12_pairs_improve": improving >= 9,
+        f"at_least_{minimum_improving}_of_{len(pairs)}_pairs_improve": (
+            improving >= minimum_improving
+        ),
         "all_validity_checks_passed": True,
     }
     return {
-        "schema": "sqlglot-paired-cpu-borrowing-timeout-floor-v2",
+        "schema": protocol["schema"],
         "status": "go" if all(gate.values()) else "no_go",
         "protocol": protocol,
         "comparison": {
@@ -292,12 +327,18 @@ def _aggregate(protocol: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str
 
 
 def main() -> None:
-    if RESULT_DIR.exists() or REPLAY_DIR.exists():
-        raise FileExistsError(f"refusing to overwrite {RESULT_DIR} or {REPLAY_DIR}")
-    protocol = _protocol()
-    RESULT_DIR.mkdir(parents=True)
-    REPLAY_DIR.mkdir(parents=True)
-    (RESULT_DIR / "protocol.json").write_text(
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--cohort", choices=COHORTS, default="initial24")
+    args = parser.parse_args()
+    config = COHORTS[args.cohort]
+    result_dir = Path(config["result_dir"])
+    replay_dir = Path(config["replay_dir"])
+    if result_dir.exists() or replay_dir.exists():
+        raise FileExistsError(f"refusing to overwrite {result_dir} or {replay_dir}")
+    protocol = _protocol(args.cohort)
+    result_dir.mkdir(parents=True)
+    replay_dir.mkdir(parents=True)
+    (result_dir / "protocol.json").write_text(
         json.dumps(protocol, indent=2) + "\n", encoding="utf-8"
     )
     runs: list[dict[str, Any]] = []
@@ -309,7 +350,7 @@ def main() -> None:
             pair_result: dict[str, Any] = {"pair": pair, "arms": []}
             runs.append(pair_result)
             for arm in declared["arm_order"]:
-                manifest = RESULT_DIR / "manifests" / f"pair_{pair:02d}_{arm}.json"
+                manifest = result_dir / "manifests" / f"pair_{pair:02d}_{arm}.json"
                 _write_manifest(manifest, task_ids)
                 pair_result["arms"].append(
                     asyncio.run(
@@ -318,23 +359,24 @@ def main() -> None:
                             task_ids=task_ids,
                             arm=arm,
                             manifest=manifest,
+                            replay_dir=replay_dir,
                         )
                     )
                 )
-                (RESULT_DIR / "partial.json").write_text(
+                (result_dir / "partial.json").write_text(
                     json.dumps({"protocol": protocol, "runs": runs}, indent=2) + "\n",
                     encoding="utf-8",
                 )
         result = _aggregate(protocol, runs)
-        (RESULT_DIR / "result.json").write_text(
+        (result_dir / "result.json").write_text(
             json.dumps(result, indent=2) + "\n", encoding="utf-8"
         )
-        (RESULT_DIR / "partial.json").unlink()
+        (result_dir / "partial.json").unlink()
     except BaseException as exc:
-        (RESULT_DIR / "result.json").write_text(
+        (result_dir / "result.json").write_text(
             json.dumps(
                 {
-                    "schema": "sqlglot-paired-cpu-borrowing-timeout-floor-v2",
+                    "schema": protocol["schema"],
                     "status": "invalid",
                     "protocol": protocol,
                     "runs": runs,

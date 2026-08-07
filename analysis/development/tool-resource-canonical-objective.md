@@ -1352,6 +1352,44 @@ predictor quality, admission decisions, memory policy, or end-to-end scheduler
 utility. The next physical decision is a separately frozen fresh temporal
 SQLGlot validation, not further tuning on these tasks.
 
+#### Frozen completion of the exposed SQLGlot validation cohort
+
+A data-availability audit found no ready fresh temporal cohort. The public
+`nebius/SWE-rebench` dataset is unchanged since 2025-12-23. Its filtered split
+contains 294 SQLGlot tasks ending at 2025-04-25; the existing collections
+already include the latest 200. The 94 uncollected filtered tasks are older.
+The unfiltered test split adds 158 SQLGlot tasks, but none has a published
+Docker image and its latest additional task is from 2025-01-20. Those rows
+therefore cannot supply a later, directly replayable confirmation cohort.
+
+Before paying to construct new benchmark tasks and collect new agent traces,
+the advisor authorized the development-only robustness step already opened by
+the prior GO: complete the 50-task exposed validation cohort. Apply the
+original PCG64 seed 20260807 shuffle to the same sorted 50 validation IDs, take
+positions 24 through 49 that were not used above, and form 13 adjacent pairs.
+PCG64 seed 20260810 independently chooses each pair's arm order; PCG64 seed
+20260811 supplies the 10,000 paired-pair bootstrap draws. The 26 selected IDs
+must be disjoint from the first 24, have complete source traces, and be written
+to the frozen protocol before replay starts.
+
+Hard-two, burstable-two, the two-worker barrier, CPU controls, host network,
+20x non-tool timing acceleration, real tool clocks, resource monitoring,
+3,600-second replay timeout floor, pair makespan, failure policy, and artifact
+checks are unchanged. Output directories end
+`sqlglot26-paired-cpu-borrowing-remaining-v1` and refuse overwrite. This cohort
+passes its frozen development gate only if all 13 pairs are valid, mean
+improvement is at least 5%, the paired bootstrap lower bound is above zero,
+and at least 10 of 13 pairs improve. No invalid pair is dropped or rerun.
+
+The remaining traces contain 12,224.907 seconds of source tool execution. Two
+arms with within-pair concurrency are expected to take about four to five
+hours on this host; the run makes no LLM calls. A GO supports reporting the
+full 25-pair exposed-cohort distribution and separately costing construction
+of genuinely newer SQLGlot tasks. A NO-GO stops external collection and first
+diagnoses which workload phases break the effect. Neither verdict is temporal
+confirmation, because all 50 tasks and the first-cohort result were already
+development-exposed before this protocol was frozen.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved
