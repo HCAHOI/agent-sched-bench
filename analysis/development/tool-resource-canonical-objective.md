@@ -1323,6 +1323,35 @@ reruns an invalid pair. A clean pass may establish SQLGlot development utility
 and motivate a fresh temporal validation; it cannot validate a tuned predictor
 or open the old final partition. Failure stops this physical branch.
 
+The amended matrix completed all 12 pairs and passed the frozen development
+gate. Burstable-two reduced pair makespan by 13.651% on average and 10.266% at
+the median; 11 of 12 pairs improved, and the 10,000-draw paired-pair bootstrap
+interval was [7.053%, 22.915%]. All 48 task executions used the requested CPU
+controls, replayed identical cross-arm action sequences with zero unexpected
+failure, recorded the 3,600-second floor, completed with valid cleanup, and
+recorded zero OOM/OOM-kill events. Independent review reproduced the task and
+arm randomization, all makespans, the bootstrap, and every validity check.
+
+The timeout correction changed validity rather than the method: the pair-1
+install censored at 600.355 seconds in the invalid matrix completed in
+1,319.284 seconds under hard-two and 348.310 seconds under burstable-two. A
+second cargo action completed in 609.176 seconds under hard-two, showing that
+legitimate work above 600 seconds was not unique to that pair. Pair 1 is a
+large effect, but a post-hoc sensitivity check excluding it still gives 9.719%
+mean improvement, with 10 of 11 remaining pairs improving and a paired
+bootstrap interval of [6.077%, 13.623%]. The sole negative pair was -1.123%.
+
+The observation is therefore that fixed two-core guarantees plus
+work-conserving borrowing materially improve this exposed SQLGlot replay while
+preserving every admission. The likely mechanism is that parallel test and
+installation phases consume spare cores while low-demand or serial phases are
+neutral; individual action timings also contain cache, network, and execution-
+order effects, so they do not isolate CPU causally. This remains an openly
+amended, development-only result: it does not confirm temporal generalization,
+predictor quality, admission decisions, memory policy, or end-to-end scheduler
+utility. The next physical decision is a separately frozen fresh temporal
+SQLGlot validation, not further tuning on these tasks.
+
 ## 5. Development-exposure record
 
 - On 2026-08-06, the KV decision-unit preflight mistakenly parsed the reserved

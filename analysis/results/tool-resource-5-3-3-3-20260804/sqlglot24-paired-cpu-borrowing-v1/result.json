@@ -1,0 +1,1096 @@
+{
+  "schema": "sqlglot-paired-cpu-borrowing-v1",
+  "status": "invalid",
+  "protocol": {
+    "selection_seed": 20260807,
+    "arm_order_seed": 20260808,
+    "bootstrap_seed": 20260809,
+    "selected_task_ids": [
+      "tobymao__sqlglot-2821",
+      "tobymao__sqlglot-3699",
+      "tobymao__sqlglot-3552",
+      "tobymao__sqlglot-2412",
+      "tobymao__sqlglot-3695",
+      "tobymao__sqlglot-3401",
+      "tobymao__sqlglot-3272",
+      "tobymao__sqlglot-3339",
+      "tobymao__sqlglot-3242",
+      "tobymao__sqlglot-2935",
+      "tobymao__sqlglot-3745",
+      "tobymao__sqlglot-3765",
+      "tobymao__sqlglot-2825",
+      "tobymao__sqlglot-3329",
+      "tobymao__sqlglot-2605",
+      "tobymao__sqlglot-2507",
+      "tobymao__sqlglot-3682",
+      "tobymao__sqlglot-2461",
+      "tobymao__sqlglot-3549",
+      "tobymao__sqlglot-2576",
+      "tobymao__sqlglot-3641",
+      "tobymao__sqlglot-3150",
+      "tobymao__sqlglot-3129",
+      "tobymao__sqlglot-3650"
+    ],
+    "pairs": [
+      {
+        "pair": 1,
+        "task_ids": [
+          "tobymao__sqlglot-2821",
+          "tobymao__sqlglot-3699"
+        ],
+        "arm_order": [
+          "burstable_two",
+          "hard_two"
+        ]
+      },
+      {
+        "pair": 2,
+        "task_ids": [
+          "tobymao__sqlglot-3552",
+          "tobymao__sqlglot-2412"
+        ],
+        "arm_order": [
+          "burstable_two",
+          "hard_two"
+        ]
+      },
+      {
+        "pair": 3,
+        "task_ids": [
+          "tobymao__sqlglot-3695",
+          "tobymao__sqlglot-3401"
+        ],
+        "arm_order": [
+          "burstable_two",
+          "hard_two"
+        ]
+      },
+      {
+        "pair": 4,
+        "task_ids": [
+          "tobymao__sqlglot-3272",
+          "tobymao__sqlglot-3339"
+        ],
+        "arm_order": [
+          "burstable_two",
+          "hard_two"
+        ]
+      },
+      {
+        "pair": 5,
+        "task_ids": [
+          "tobymao__sqlglot-3242",
+          "tobymao__sqlglot-2935"
+        ],
+        "arm_order": [
+          "hard_two",
+          "burstable_two"
+        ]
+      },
+      {
+        "pair": 6,
+        "task_ids": [
+          "tobymao__sqlglot-3745",
+          "tobymao__sqlglot-3765"
+        ],
+        "arm_order": [
+          "burstable_two",
+          "hard_two"
+        ]
+      },
+      {
+        "pair": 7,
+        "task_ids": [
+          "tobymao__sqlglot-2825",
+          "tobymao__sqlglot-3329"
+        ],
+        "arm_order": [
+          "hard_two",
+          "burstable_two"
+        ]
+      },
+      {
+        "pair": 8,
+        "task_ids": [
+          "tobymao__sqlglot-2605",
+          "tobymao__sqlglot-2507"
+        ],
+        "arm_order": [
+          "burstable_two",
+          "hard_two"
+        ]
+      },
+      {
+        "pair": 9,
+        "task_ids": [
+          "tobymao__sqlglot-3682",
+          "tobymao__sqlglot-2461"
+        ],
+        "arm_order": [
+          "hard_two",
+          "burstable_two"
+        ]
+      },
+      {
+        "pair": 10,
+        "task_ids": [
+          "tobymao__sqlglot-3549",
+          "tobymao__sqlglot-2576"
+        ],
+        "arm_order": [
+          "burstable_two",
+          "hard_two"
+        ]
+      },
+      {
+        "pair": 11,
+        "task_ids": [
+          "tobymao__sqlglot-3641",
+          "tobymao__sqlglot-3150"
+        ],
+        "arm_order": [
+          "burstable_two",
+          "hard_two"
+        ]
+      },
+      {
+        "pair": 12,
+        "task_ids": [
+          "tobymao__sqlglot-3129",
+          "tobymao__sqlglot-3650"
+        ],
+        "arm_order": [
+          "hard_two",
+          "burstable_two"
+        ]
+      }
+    ],
+    "source_dir": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804",
+    "task_source": "/home/chiyu/workspace/agent-sched-bench/data/swe-rebench/tasks.json"
+  },
+  "runs": [
+    {
+      "pair": 1,
+      "arms": [
+        {
+          "arm": "burstable_two",
+          "output_dir": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot24-paired-cpu-borrowing-v1/pair_01/burstable_two",
+          "trace_file": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot24-paired-cpu-borrowing-v1/pair_01/burstable_two/simulate_cloud_model_c2_20260806T212307452.jsonl",
+          "summary_path": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot24-paired-cpu-borrowing-v1/pair_01/burstable_two/throughput_summary.json",
+          "pair_makespan_s": 774.9601485729218,
+          "tasks": [
+            {
+              "task_id": "tobymao__sqlglot-2821",
+              "attempt_dir": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot24-paired-cpu-borrowing-v1/pair_01/burstable_two/tobymao__sqlglot-2821/attempt_1",
+              "replay_status": {
+                "success": true,
+                "expected_actions": 103,
+                "emitted_actions": 103,
+                "source_failed_actions": 0,
+                "replay_failed_actions": 0,
+                "unexpected_replay_failed_actions": 0,
+                "missing_source_action_count": 0,
+                "action_sequence_matches": true
+              },
+              "resource_sample_count": 387,
+              "cpu_controls": {
+                "nano_cpus": 0,
+                "cpu_shares": 1024,
+                "cpuset_cpus": "0-7"
+              },
+              "final_container_state": {
+                "status": "running",
+                "running": true,
+                "oom_killed": false,
+                "exit_code": 0,
+                "memory_events": {
+                  "low": 0,
+                  "high": 0,
+                  "max": 0,
+                  "oom": 0,
+                  "oom_kill": 0
+                }
+              }
+            },
+            {
+              "task_id": "tobymao__sqlglot-3699",
+              "attempt_dir": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot24-paired-cpu-borrowing-v1/pair_01/burstable_two/tobymao__sqlglot-3699/attempt_1",
+              "replay_status": {
+                "success": true,
+                "expected_actions": 57,
+                "emitted_actions": 57,
+                "source_failed_actions": 0,
+                "replay_failed_actions": 0,
+                "unexpected_replay_failed_actions": 0,
+                "missing_source_action_count": 0,
+                "action_sequence_matches": true
+              },
+              "resource_sample_count": 121,
+              "cpu_controls": {
+                "nano_cpus": 0,
+                "cpu_shares": 1024,
+                "cpuset_cpus": "0-7"
+              },
+              "final_container_state": {
+                "status": "running",
+                "running": true,
+                "oom_killed": false,
+                "exit_code": 0,
+                "memory_events": {
+                  "low": 0,
+                  "high": 0,
+                  "max": 0,
+                  "oom": 0,
+                  "oom_kill": 0
+                }
+              }
+            }
+          ],
+          "task_stats": [
+            {
+              "action_count": 103,
+              "agent_id": "tobymao__sqlglot-2821",
+              "depends_on": [],
+              "elapsed_s": 774.9601485729218,
+              "failed_action_count": 0,
+              "label": null,
+              "llm_call_count": 52,
+              "manifest_index": 0,
+              "run_instance_id": "tobymao__sqlglot-2821",
+              "source_agent_id": "tobymao__sqlglot-2821",
+              "source_trace": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2821/attempt_1/trace.jsonl",
+              "success": true,
+              "tool_exec_count": 51
+            },
+            {
+              "action_count": 57,
+              "agent_id": "tobymao__sqlglot-3699",
+              "depends_on": [],
+              "elapsed_s": 240.89792561531067,
+              "failed_action_count": 0,
+              "label": null,
+              "llm_call_count": 29,
+              "manifest_index": 1,
+              "run_instance_id": "tobymao__sqlglot-3699",
+              "source_agent_id": "tobymao__sqlglot-3699",
+              "source_trace": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3699/attempt_1/trace.jsonl",
+              "success": true,
+              "tool_exec_count": 28
+            }
+          ],
+          "action_sequences": {
+            "tobymao__sqlglot-3699": [
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_0"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_0_call_sinXhBl8iamHGGzo8CkCsRos"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_1"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_1_call_jECLVc8UY94QY1MTjS93MJjZ"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_2"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_2_call_tHsBgBP2oDi29IEjD5eMHvCd"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_3"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_3_call_lKmTNQ7Xgs4ftd3fQ8UwYJkz"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_4"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_4_call_2Cw7PFdZcl5XhP51b6nDu3nU"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_5"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_5_call_4uvCWuGJj55uYxlzGSxWipE7"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_6"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_6_call_oWSrjOqTW8xWw2cnRU55f4NR"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_7"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_7_call_qFqwks2uVPLhEc0n4v7SA1T9"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_8"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_8_call_QoXBXaHQj9F0oZMz6U4ve7Ej"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_9"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_9_call_BsUoYeD7887kPYvoa9a6SYJ9"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_10"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_10_call_TKFDY0nx8AT5tpD4jedkpwlm"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_11"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_11_call_lwzDy13pO50tjXVJXzAgNMPa"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_12"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_12_call_Z16xtJiqccAuqDeMjZNAZwit"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_13"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_13_call_qOT5Xbahi5e43BpErKvBMXXl"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_14"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_14_call_z9fJkqembKA6R8zum1irr7M8"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_15"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_15_call_uliU69rMnQkzMdl2JqQWVyOe"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_16"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_16_call_7Y5C6QuEJzX0nSXHWZGfMzTl"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_17"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_17_call_TDxwzMr34T5qZHEcl4pewHWe"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_18"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_18_call_khkY0F2cwudMDk3UbEeHrDqY"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_19"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_19_call_yVFauuwBvjiFW8OngdpXWJE1"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_20"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_20_call_XeYQDjhY3ed2tcaPp4Ftgio7"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_21"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_21_call_kz7nvpQGoyNvC3Jx2MJv1jy7"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_22"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_22_call_nEmOwq46CpSZzrWz7UeF4VZu"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_23"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_23_call_IKrfdgOFET6tnn46Dk1EJGac"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_24"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_24_call_G7lp68SqE7yfh37sKLubfhJs"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_25"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_25_call_9nZV8dQxYXGQR88dKzVclMCn"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_26"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_26_call_Q3le3tfoKXpLJVo8ffSS5mWP"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_27"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "tool_exec",
+                "tool_27_call_jBSEVqzcZnXuOYyBvMFmzeCO"
+              ],
+              [
+                "tobymao__sqlglot-3699",
+                "llm_call",
+                "llm_28"
+              ]
+            ],
+            "tobymao__sqlglot-2821": [
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_0"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_0_call_8InM7zCIE1rF7vDvSmgGGBJe"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_1"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_1_call_LImc9nTIOyqz5LL4Oukxp2Gx"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_2"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_2_call_bTVFTgVur385BPXH3Kqu8bp7"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_3"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_3_call_pYzaUQTEvdFXlCyGCyxejWWv"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_4"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_4_call_ALeDtS3D8IkVkyVM6mxsCgw1"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_5"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_5_call_UAQE3ppEXDkxL9GlVzZ3oRP8"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_6"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_6_call_t8mErq60lze9V2IhI2PtqMjC"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_7"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_7_call_lcBfyqgYTRRLMMItxyhjdrvm"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_8"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_8_call_V6ifq8vxH3kqiRx4KAgZVdP8"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_9"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_9_call_lURcGifE4Wggfe41lxYBhkdp"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_10"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_10_call_XL7jaAZBDTh2xUU5H0bqr9vS"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_11"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_11_call_9q3SUaSjXmPSWOJc0B586LcN"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_12"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_12_call_Tbku4ettN1F7kmtYdixL8uV5"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_13"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_13_call_ehvwp49W6S4ea87vmGalrwte"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_14"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_14_call_rZz7OZVs53Rf96PpkLKeVe3n"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_15"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_15_call_Y4HRrWlfG2MLIsphOtN4pTiW"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_16"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_16_call_QqBRkVpaXGMBU0p7LTATWfi2"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_17"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_17_call_T5HHN69ATk4HKwuOW1MIV78g"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_18"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_18_call_6MCX4jqwOE7F820yMY45B0vE"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_19"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_19_call_2iBL3pIB4M4H1dr9XloFBt8P"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_20"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_20_call_XZSD2tNZ1moTeaabIj5Ba20n"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_21"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_21_call_AqFia72dkE4gj9voP0rCCi5A"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_22"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_22_call_6hWbYTu3AjO6JhIRXnFbr7Hq"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_23"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_23_call_FGgUws4TtiP8YzQevJWCfSrF"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_24"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_24_call_1Czunwp8GVNcidhvL4UFGCzZ"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_25"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_25_call_xxJQUNSETJcgw1HlgpQFqOZQ"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_26"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_26_call_v3lr0HlFlnaC74h3zCV08XzS"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_27"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_27_call_mJkz9LHWpWRApPd5JPUNvIKW"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_28"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_28_call_yXJs124szgU7Ookpw9n58C2k"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_29"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_29_call_IeWMEIPmKBtOu5unfJEoxwjN"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_30"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_30_call_k9LDPUa4TbgpK62RTzgrQnOM"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_31"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_31_call_bcf4TTfet5vUi2ku01bjI5Xo"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_32"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_32_call_104y4elRyLPEz4xTOQPSMFgR"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_33"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_33_call_FWsVLYOLXgHSLleFvd22noM2"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_34"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_34_call_8qCx6KU9a48M8087z2c9KbRP"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_35"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_35_call_xTSFNtbYrWgcWMWfELa3ypWK"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_36"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_36_call_zQR3KLBUaJsDAtF7Rlbktbzj"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_37"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_37_call_m8Elfq4gHHy4JPTELPvcCpZR"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_38"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_38_call_xFyVjkdvw702xHAqqqMi2bzJ"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_39"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_39_call_EIXSbYsuKliJ04W3PWmF8uae"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_40"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_40_call_zTOPj2yXImRneUAWSobqPnGW"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_41"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_41_call_frCi7PYkuQZ6NKUMVykb5yBE"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_42"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_42_call_kPHwQYSKLfTkUrox8VrI7MbC"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_43"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_43_call_xuzb7SxbGXJNiPZdxcfnSfkM"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_44"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_44_call_3wgn8Gb3z0z0CfdInlyUDF6l"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_45"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_45_call_KZZcmgNoo782uqbPeH7pz5s4"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_46"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_46_call_yfHj87xeyJO4vn5wW2L0M5Nr"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_47"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_47_call_oluPpFNPnH1qcXxdNK2tzPBM"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_48"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_48_call_SBeZFIZEV4wuRsx2ZXPkBDFM"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_49"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_49_call_oDCFIiSIWiDIQB3CTMz7X2WC"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_50"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "tool_exec",
+                "tool_50_call_JtPNaFGiQVbfmqHGyn0vFi9s"
+              ],
+              [
+                "tobymao__sqlglot-2821",
+                "llm_call",
+                "llm_51"
+              ]
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "error": {
+    "type": "AssertionError",
+    "message": "replay action failure for pair 1 hard_two"
+  },
+  "traceback": "Traceback (most recent call last):\n  File \"/home/chiyu/workspace/agent-sched-bench/scripts/evaluation/evaluate_paired_sqlglot_cpu_borrowing.py\", line 305, in main\n    asyncio.run(\n  File \"/home/chiyu/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/asyncio/runners.py\", line 195, in run\n    return runner.run(main)\n           ^^^^^^^^^^^^^^^^\n  File \"/home/chiyu/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/asyncio/runners.py\", line 118, in run\n    return self._loop.run_until_complete(task)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/chiyu/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/asyncio/base_events.py\", line 691, in run_until_complete\n    return future.result()\n           ^^^^^^^^^^^^^^^\n  File \"/home/chiyu/workspace/agent-sched-bench/scripts/evaluation/evaluate_paired_sqlglot_cpu_borrowing.py\", line 219, in _run_arm\n    raise AssertionError(f\"replay action failure for pair {pair} {arm}\")\nAssertionError: replay action failure for pair 1 hard_two\n"
+}
