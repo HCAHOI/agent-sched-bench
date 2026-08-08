@@ -292,6 +292,7 @@ def simulate_burstable_admission(
     cpu_work_core_s: Mapping[str, float],
     max_cpu_cores: Mapping[str, float],
     cpu_share_weights: Mapping[str, float] | None = None,
+    admission_priorities: Mapping[str, float] | None = None,
 ) -> dict[str, object]:
     """Replay admission requests while runnable work may borrow idle CPU."""
 
@@ -312,6 +313,8 @@ def simulate_burstable_admission(
         raise ValueError("burstable replay requires complete request and demand maps")
     if cpu_share_weights is not None and set(cpu_share_weights) != set(commands):
         raise ValueError("burstable replay requires complete CPU share weights")
+    if admission_priorities is not None and set(admission_priorities) != set(commands):
+        raise ValueError("burstable replay requires complete admission priorities")
     if not set(cpu_work_core_s) <= set(commands):
         raise ValueError("CPU work contains an unknown command")
     if any(
@@ -362,6 +365,10 @@ def simulate_burstable_admission(
     }
     if min(normalized_share_weights.values()) < 1.0 / _MAX_CPU_SHARE_RATIO:
         raise ValueError("CPU share weights exceed the supported dynamic range")
+    if admission_priorities is not None and any(
+        not math.isfinite(value) for value in admission_priorities.values()
+    ):
+        raise ValueError("admission priorities must be finite")
 
     sessions = [
         _Session(program, rank, ready_s=program.initial_delay_s)
@@ -376,6 +383,7 @@ def simulate_burstable_admission(
     reserved_rss_terms: list[float | None] = []
     served_cpu_work = 0.0
     service_by_command: dict[str, float] = {}
+    start_by_command: dict[str, float] = {}
     max_concurrent = max_modeled_cpu = max_modeled_rss = 0.0
     exposure_events = starts = 0
     exposure_commands: set[str] = set()
@@ -428,6 +436,11 @@ def simulate_burstable_admission(
                 and session.ready_s <= now_s + _EPSILON
             ),
             key=lambda item: (
+                0.0
+                if admission_priorities is None
+                else admission_priorities[
+                    item[1].program.commands[item[1].command_index].command_id
+                ],
                 item[1].ready_s,
                 item[1].seed_rank,
                 item[1].program.task_id,
@@ -461,6 +474,7 @@ def simulate_burstable_admission(
                 )
             )
             service_terms.append(None)
+            start_by_command[command.command_id] = now_s
             reserved_cpu_terms.append(None)
             reserved_rss_terms.append(None)
             used_cpu += requested_cpu
@@ -531,6 +545,7 @@ def simulate_burstable_admission(
         or any(value is None for value in reserved_cpu_terms)
         or any(value is None for value in reserved_rss_terms)
         or set(service_by_command) != set(commands)
+        or set(start_by_command) != set(commands)
     ):
         raise ValueError("burstable replay leaked reservation or CPU work")
     service_s = sum(float(value) for value in service_terms if value is not None)
@@ -559,6 +574,7 @@ def simulate_burstable_admission(
         "total_cpu_work_core_s": total_cpu_work,
         "served_cpu_work_core_s": served_cpu_work,
         "service_s_by_command": dict(sorted(service_by_command.items())),
+        "start_s_by_command": dict(sorted(start_by_command.items())),
         "contended_command_ids": sorted(contended),
         "added_service_s": service_s
         - sum(command.duration_s for command in commands.values()),

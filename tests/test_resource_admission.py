@@ -310,6 +310,115 @@ def test_burstable_rejects_numerically_unusable_share_ratio() -> None:
         )
 
 
+def test_burstable_admission_priority_reorders_ready_commands() -> None:
+    durations = {"a": 3.0, "b": 1.0, "c": 1.0}
+    programs = [
+        AdmissionProgram(
+            task_id,
+            0.0,
+            (
+                AdmissionCommand(
+                    f"{task_id}:cmd", duration, 1.0, 100.0, 0.0
+                ),
+            ),
+            0.0,
+        )
+        for task_id, duration in durations.items()
+    ]
+    reservations = {f"{task_id}:cmd": (1.0, 100.0) for task_id in durations}
+    work = {f"{task_id}:cmd": duration for task_id, duration in durations.items()}
+    demand = {f"{task_id}:cmd": 1.0 for task_id in durations}
+    kwargs = {
+        "cpu_capacity": 1.0,
+        "rss_capacity_mb": 1_000.0,
+        "requested_reservations": reservations,
+        "cpu_work_core_s": work,
+        "max_cpu_cores": demand,
+    }
+
+    baseline = simulate_burstable_admission(programs, **kwargs)
+    prioritized = simulate_burstable_admission(
+        programs,
+        **kwargs,
+        admission_priorities={"a:cmd": 2.0, "b:cmd": 0.0, "c:cmd": 1.0},
+    )
+
+    assert baseline["start_s_by_command"] == {
+        "a:cmd": 0.0,
+        "b:cmd": 3.0,
+        "c:cmd": 4.0,
+    }
+    assert prioritized["start_s_by_command"] == {
+        "a:cmd": 2.0,
+        "b:cmd": 0.0,
+        "c:cmd": 1.0,
+    }
+    assert prioritized["mean_task_completion_s"] == pytest.approx(8.0 / 3.0)
+    assert baseline["mean_task_completion_s"] == 4.0
+    assert prioritized["makespan_s"] == baseline["makespan_s"] == 5.0
+
+
+def test_burstable_priority_cannot_see_future_ready_command() -> None:
+    programs = [
+        AdmissionProgram(
+            "ready",
+            0.0,
+            (AdmissionCommand("ready:cmd", 2.0, 1.0, 100.0, 0.0),),
+            0.0,
+        ),
+        AdmissionProgram(
+            "future",
+            1.0,
+            (AdmissionCommand("future:cmd", 1.0, 1.0, 100.0, 0.0),),
+            0.0,
+        ),
+    ]
+    result = simulate_burstable_admission(
+        programs,
+        cpu_capacity=1.0,
+        rss_capacity_mb=1_000.0,
+        requested_reservations={
+            "ready:cmd": (1.0, 100.0),
+            "future:cmd": (1.0, 100.0),
+        },
+        cpu_work_core_s={"ready:cmd": 2.0, "future:cmd": 1.0},
+        max_cpu_cores={"ready:cmd": 1.0, "future:cmd": 1.0},
+        admission_priorities={"ready:cmd": 1.0, "future:cmd": 0.0},
+    )
+
+    assert result["start_s_by_command"] == {
+        "future:cmd": 2.0,
+        "ready:cmd": 0.0,
+    }
+
+
+def test_burstable_priority_requires_complete_finite_values() -> None:
+    programs = [
+        AdmissionProgram(
+            "task",
+            0.0,
+            (AdmissionCommand("task:cmd", 1.0, 1.0, 100.0, 0.0),),
+            0.0,
+        )
+    ]
+    kwargs = {
+        "cpu_capacity": 1.0,
+        "rss_capacity_mb": 1_000.0,
+        "requested_reservations": {"task:cmd": (1.0, 100.0)},
+        "cpu_work_core_s": {"task:cmd": 1.0},
+        "max_cpu_cores": {"task:cmd": 1.0},
+    }
+
+    with pytest.raises(ValueError, match="complete admission priorities"):
+        simulate_burstable_admission(programs, **kwargs, admission_priorities={})
+    with pytest.raises(ValueError, match="finite"):
+        simulate_burstable_admission(
+            programs,
+            **kwargs,
+            admission_priorities={"task:cmd": float("nan")},
+        )
+
+
 def test_reservation_sums_pipeline() -> None:
     clauses = (
         Row(
