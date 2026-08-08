@@ -171,6 +171,16 @@ and small negative effects nevertheless justify retaining equal-share
 burstable execution as the development baseline. It is not yet a production
 default and has no temporal-generalization claim.
 
+Post-hoc mechanism attribution found that group improvement tracked the hard-arm
+tail and idle-guarantee fractions (Spearman 0.734 for each). The two dominant
+groups kept nearly the same total CPU work across arms while long package builds
+used up to eight cores and shortened by 1,207 and 1,075 seconds. Current
+`BeginCall` predictions missed both carriers, and the original development set
+contained no `--force-reinstall` example, so prediction-guided task grouping is
+not authorized. The next physical gate is a rolling four-task queue with
+immediate refill; it must compare hard-two and burstable-two directly, because
+the completed replay used closed four-task batches.
+
 ## 6. Closed directions
 
 - **Lookup structure alone:** trie, lattice, generic argv, pip/pytest semantic
