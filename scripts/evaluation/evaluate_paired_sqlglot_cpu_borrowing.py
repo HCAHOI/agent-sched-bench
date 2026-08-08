@@ -6,17 +6,21 @@ from __future__ import annotations
 import argparse
 import asyncio
 from contextlib import contextmanager
+import functools
 import heapq
 import json
 import os
 from pathlib import Path
 import re
 import statistics
+import subprocess
 import traceback
 from typing import Any
 
 import numpy as np
 
+from harness.container_image_prep import normalize_image_reference
+from harness.container_runtime import image_exists_command
 from trace_collect.simulator import simulate
 from trace_collect.simulate_openclaw import (
     OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV,
@@ -52,6 +56,16 @@ PAIR09_PREFLIGHT_REPLAY_DIR = (
     ROOT
     / "traces/swe-rebench/gpt-5.6-sol"
     / "sqlglot-pair09-cpu-borrowing-contract-v2-preflight"
+)
+FRESH_FINAL48_RESULT_DIR = (
+    ROOT
+    / "analysis/results/tool-resource-5-3-3-3-20260804"
+    / "sqlglot-final48-counterbalanced-rolling-exact-v1"
+)
+FRESH_FINAL48_REPLAY_DIR = (
+    ROOT
+    / "traces/swe-rebench/gpt-5.6-sol"
+    / "sqlglot-final48-counterbalanced-rolling-exact-v1"
 )
 SAFETY_GUARD_REJECTION = (
     "Error: Command blocked by safety guard (dangerous pattern detected)\n\n"
@@ -182,12 +196,35 @@ COHORTS: dict[str, dict[str, Any]] = {
         / "traces/swe-rebench/gpt-5.6-sol"
         / "sqlglot48-rolling-cpu-borrowing-contract-v1",
     },
+    "fresh_final48_counterbalanced_v1": {
+        "preregistered_protocol": FRESH_FINAL48_RESULT_DIR / "protocol.json",
+        "result_dir": FRESH_FINAL48_RESULT_DIR,
+        "replay_dir": FRESH_FINAL48_REPLAY_DIR,
+    },
 }
 
 
 def _protocol(cohort: str = "initial24") -> dict[str, Any]:
     config = COHORTS[cohort]
     split = json.loads(SPLIT.read_text(encoding="utf-8"))
+    preregistered_path = config.get("preregistered_protocol")
+    if preregistered_path is not None:
+        protocol = json.loads(Path(preregistered_path).read_text(encoding="utf-8"))
+        if protocol.get("cohort") != cohort:
+            raise AssertionError("preregistered protocol cohort differs")
+        selected = list(protocol["selected_task_ids"])
+        excluded = set(protocol["excluded_task_ids"])
+        expected = [task_id for task_id in split["final_test"] if task_id not in excluded]
+        if selected != expected or len(selected) != len(set(selected)):
+            raise AssertionError("preregistered final-task selection differs")
+        missing = [
+            str(SOURCE / task_id / "attempt_1" / "trace.jsonl")
+            for task_id in selected
+            if not (SOURCE / task_id / "attempt_1" / "trace.jsonl").is_file()
+        ]
+        if missing:
+            raise FileNotFoundError(f"selected source traces are missing: {missing}")
+        return protocol
     task_ids = np.array(sorted(split["validation"]), dtype=object)
     np.random.Generator(np.random.PCG64(SELECTION_SEED)).shuffle(task_ids)
     start = int(config["selection_start"])
@@ -304,6 +341,46 @@ def _write_manifest(path: Path, task_ids: list[str]) -> None:
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+@functools.cache
+def _task_source_images_by_id() -> dict[str, str]:
+    tasks = json.loads(TASKS.read_text(encoding="utf-8"))
+    images: dict[str, str] = {}
+    for task in tasks:
+        task_id = str(task["instance_id"])
+        image = task.get("docker_image") or task.get("image_name")
+        if image:
+            images[task_id] = normalize_image_reference(str(image))
+    return images
+
+
+def _cached_source_images(
+    task_ids: list[str], *, container_executable: str
+) -> list[str]:
+    images_by_id = _task_source_images_by_id()
+    missing_metadata = [task_id for task_id in task_ids if task_id not in images_by_id]
+    if missing_metadata:
+        raise AssertionError(f"tasks have no source image metadata: {missing_metadata}")
+    cached = []
+    for image in dict.fromkeys(images_by_id[task_id] for task_id in task_ids):
+        probe = subprocess.run(
+            image_exists_command(image, container_executable=container_executable),
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+            check=False,
+        )
+        if probe.returncode == 0:
+            cached.append(image)
+            continue
+        error = (probe.stderr or probe.stdout or "").strip()
+        if not any(
+            marker in error.lower()
+            for marker in ("no such image", "no such object", "image not known")
+        ):
+            raise RuntimeError(f"source image probe failed for {image}: {error}")
+    return cached
 
 
 def _action_sequences(trace_file: Path) -> dict[str, list[list[str]]]:
@@ -693,6 +770,73 @@ def _source_success_replay_timeout_count(
     return count
 
 
+def _source_replay_tool_outcomes(
+    request: dict[str, Any], trace_path: Path
+) -> list[dict[str, Any]]:
+    source = [
+        action
+        for action in request["source_actions"]
+        if action.get("action_type") == "tool_exec"
+    ]
+    replay = _replay_tool_actions(trace_path)
+    if [_tool_identity(action) for action in replay] != [
+        _tool_identity(action) for action in source
+    ]:
+        raise AssertionError("source and replay tool identities differ")
+    outcomes = []
+    for source_action, replay_action in zip(source, replay, strict=True):
+        action_id, tool_name, tool_call_id = _tool_identity(source_action)
+        outcomes.append(
+            {
+                "action_id": action_id,
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+                "source": _tool_terminal_outcome(source_action),
+                "replay": _tool_terminal_outcome(replay_action),
+            }
+        )
+    return outcomes
+
+
+def _task_attempt_dir(
+    arm_dir: Path, task_id: str, *, use_latest_attempt: bool
+) -> Path:
+    instance_dir = arm_dir / task_id
+    if not use_latest_attempt:
+        return instance_dir / "attempt_1"
+    attempts = []
+    for path in instance_dir.glob("attempt_*"):
+        match = re.fullmatch(r"attempt_(\d+)", path.name)
+        if path.is_dir() and match:
+            attempts.append((int(match.group(1)), path))
+    if not attempts:
+        return instance_dir / "attempt_1"
+    return max(attempts)[1]
+
+
+def _resource_sample_action_window(
+    samples: list[dict[str, Any]], trace_path: Path
+) -> tuple[float, float, float, float]:
+    sample_epochs = [float(sample["epoch"]) for sample in samples]
+    action_bounds = [
+        (float(record["ts_start"]), float(record["ts_end"]))
+        for record in (
+            json.loads(line)
+            for line in trace_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+        if record.get("type") == "action"
+    ]
+    if not action_bounds:
+        raise AssertionError(f"replay trace has no action window: {trace_path}")
+    return (
+        min(sample_epochs),
+        max(sample_epochs),
+        min(start for start, _ in action_bounds),
+        max(end for _, end in action_bounds),
+    )
+
+
 def _task_artifacts(
     arm_dir: Path,
     task_id: str,
@@ -701,8 +845,13 @@ def _task_artifacts(
     paired_workload_contract: bool | None,
     exec_timeout_floor_s: float | None = EXEC_TIMEOUT_FLOOR_S,
     paired_workload_contract_version: int | None = None,
+    require_telemetry_integrity: bool = False,
+    telemetry_boundary_tolerance_s: float = 0.0,
+    use_latest_attempt: bool = False,
 ) -> dict[str, Any]:
-    attempt = arm_dir / task_id / "attempt_1"
+    attempt = _task_attempt_dir(
+        arm_dir, task_id, use_latest_attempt=use_latest_attempt
+    )
     startup_path = attempt / "container_startup.json"
     status_path = attempt / "openclaw_host_replay_status.json"
     resources_path = attempt / "resources.json"
@@ -790,7 +939,45 @@ def _task_artifacts(
         or memory_events.get("oom_kill", 0) != 0
     ):
         raise AssertionError(f"invalid final container state for {task_id} {arm}")
-    return {
+    samples = resources.get("samples") or []
+    monitoring = summary.get("monitoring") or {}
+    if require_telemetry_integrity and (
+        status.get("telemetry_quality") != "ok"
+        or status.get("telemetry_integrity_failed") is not False
+        or status.get("telemetry_errors") != []
+        or not samples
+        or summary.get("sample_count") != len(samples)
+        or monitoring.get("status") != "collected"
+        or monitoring.get("resource_enabled") is not True
+        or monitoring.get("per_task_resource_enabled") is not True
+    ):
+        raise AssertionError(f"invalid resource telemetry for {task_id} {arm}")
+    telemetry_window = None
+    if require_telemetry_integrity:
+        if telemetry_boundary_tolerance_s < 0:
+            raise ValueError("telemetry boundary tolerance must be non-negative")
+        try:
+            telemetry_window = _resource_sample_action_window(
+                samples, attempt / "openclaw_host_replay.jsonl"
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AssertionError(
+                f"invalid resource sample timestamps for {task_id} {arm}"
+            ) from exc
+        sample_start, sample_end, action_start, action_end = telemetry_window
+        sample_duration = sample_end - sample_start
+        if abs(float(summary.get("duration_seconds")) - sample_duration) > 1e-6:
+            raise AssertionError(
+                f"resource sample duration differs for {task_id} {arm}"
+            )
+        if (
+            sample_start > action_start + telemetry_boundary_tolerance_s
+            or sample_end < action_end - telemetry_boundary_tolerance_s
+        ):
+            raise AssertionError(
+                f"resource samples do not cover replay actions for {task_id} {arm}"
+            )
+    artifact = {
         "task_id": task_id,
         "attempt_dir": str(attempt),
         "replay_status": {
@@ -806,13 +993,31 @@ def _task_artifacts(
                 "action_sequence_matches",
             )
         },
-        "resource_sample_count": len(resources.get("samples") or []),
+        "resource_sample_count": len(samples),
         "cpu_controls": expected_controls,
         "exec_timeout_floor_s": request["exec_timeout_floor_s"],
         "replay_action_contract": replay_action_contract,
         "source_success_replay_timeout_count": timeout_count,
         "final_container_state": final_state,
     }
+    if require_telemetry_integrity:
+        assert telemetry_window is not None
+        artifact["telemetry_integrity"] = {
+            "telemetry_quality": status["telemetry_quality"],
+            "telemetry_integrity_failed": status["telemetry_integrity_failed"],
+            "telemetry_errors": status["telemetry_errors"],
+            "resource_monitoring_status": monitoring["status"],
+            "sample_epoch_start": telemetry_window[0],
+            "sample_epoch_end": telemetry_window[1],
+            "action_epoch_start": telemetry_window[2],
+            "action_epoch_end": telemetry_window[3],
+            "boundary_tolerance_s": telemetry_boundary_tolerance_s,
+        }
+    if paired_workload_contract_version == 2:
+        artifact["tool_outcomes"] = _source_replay_tool_outcomes(
+            request, attempt / "openclaw_host_replay.jsonl"
+        )
+    return artifact
 
 
 async def _run_arm(
@@ -829,10 +1034,22 @@ async def _run_arm(
     workers: int | None = None,
     makespan_source: str = "max_task_elapsed_s",
     cleanup_images: bool = False,
+    require_cold_source_images: bool = False,
+    require_telemetry_integrity: bool = False,
+    telemetry_boundary_tolerance_s: float = 0.0,
+    use_latest_attempt: bool = False,
 ) -> dict[str, Any]:
     arm_dir = replay_dir / f"pair_{pair:02d}" / arm
     concurrency = len(task_ids) if concurrency is None else concurrency
     workers = concurrency if workers is None else workers
+    if require_cold_source_images:
+        cached_before = _cached_source_images(
+            task_ids, container_executable="docker"
+        )
+        if cached_before:
+            raise AssertionError(
+                f"source images cached before arm {pair} {arm}: {cached_before}"
+            )
     trace_file = await simulate(
         manifest=manifest,
         output_dir=arm_dir,
@@ -849,6 +1066,12 @@ async def _run_arm(
         container_start_extra_args=ARM_ARGS[arm],
         cleanup_images=cleanup_images,
     )
+    if require_cold_source_images:
+        cached_after = _cached_source_images(task_ids, container_executable="docker")
+        if cached_after:
+            raise AssertionError(
+                f"source images cached after arm {pair} {arm}: {cached_after}"
+            )
     summary_path = arm_dir / "throughput_summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     if summary.get("attempted_traces") != len(task_ids):
@@ -890,6 +1113,9 @@ async def _run_arm(
                 paired_workload_contract=paired_workload_contract,
                 exec_timeout_floor_s=exec_timeout_floor_s,
                 paired_workload_contract_version=paired_workload_contract_version,
+                require_telemetry_integrity=require_telemetry_integrity,
+                telemetry_boundary_tolerance_s=telemetry_boundary_tolerance_s,
+                use_latest_attempt=use_latest_attempt,
             )
             for task_id in task_ids
         ],
@@ -1114,6 +1340,106 @@ def _load_compatible_prefix(protocol: dict[str, Any]) -> list[dict[str, Any]]:
     return runs
 
 
+def _cross_arm_outcome_quality(pairs: list[dict[str, Any]]) -> dict[str, Any]:
+    relation_counts = {
+        "same_terminal_class": 0,
+        "burstable_success_hard_failure": 0,
+        "burstable_failure_hard_success": 0,
+        "different_failure_class": 0,
+    }
+    differences = []
+    source_differences = []
+    regression_task_ids: list[str] = []
+    improvement_task_ids: list[str] = []
+    incomparable_task_ids: list[str] = []
+    for pair in pairs:
+        arms = {arm["arm"]: arm for arm in pair["arms"]}
+        arm_tasks = {
+            arm: {task["task_id"]: task for task in arm_data["tasks"]}
+            for arm, arm_data in arms.items()
+        }
+        for task_id in pair["task_ids"]:
+            hard = arm_tasks["hard_two"][task_id]["tool_outcomes"]
+            burst = arm_tasks["burstable_two"][task_id]["tool_outcomes"]
+            hard_by_identity = {
+                (row["action_id"], row["tool_name"], row["tool_call_id"]): row
+                for row in hard
+            }
+            burst_by_identity = {
+                (row["action_id"], row["tool_name"], row["tool_call_id"]): row
+                for row in burst
+            }
+            if hard_by_identity.keys() != burst_by_identity.keys():
+                raise AssertionError(f"arm tool outcomes differ for {task_id}")
+            task_relations: set[str] = set()
+            for identity, hard_row in hard_by_identity.items():
+                burst_row = burst_by_identity[identity]
+                if hard_row["source"] != burst_row["source"]:
+                    raise AssertionError(f"arm source outcomes differ for {task_id}")
+                for arm, row in (
+                    ("hard_two", hard_row),
+                    ("burstable_two", burst_row),
+                ):
+                    if row["source"]["class"] != row["replay"]["class"]:
+                        source_differences.append(
+                            {
+                                "queue": pair["queue"],
+                                "task_id": task_id,
+                                "action_id": identity[0],
+                                "tool_name": identity[1],
+                                "tool_call_id": identity[2],
+                                "arm": arm,
+                                "source": row["source"],
+                                "replay": row["replay"],
+                            }
+                        )
+                relation = _arm_outcome_relation(
+                    burst_row["replay"], hard_row["replay"]
+                )
+                relation_counts[relation] += 1
+                if relation == "same_terminal_class":
+                    continue
+                task_relations.add(relation)
+                differences.append(
+                    {
+                        "queue": pair["queue"],
+                        "task_id": task_id,
+                        "action_id": identity[0],
+                        "tool_name": identity[1],
+                        "tool_call_id": identity[2],
+                        "source": hard_row["source"],
+                        "burstable_two": burst_row["replay"],
+                        "hard_two": hard_row["replay"],
+                        "relation": relation,
+                    }
+                )
+            if "burstable_failure_hard_success" in task_relations:
+                regression_task_ids.append(task_id)
+            if "burstable_success_hard_failure" in task_relations:
+                improvement_task_ids.append(task_id)
+            if "different_failure_class" in task_relations:
+                incomparable_task_ids.append(task_id)
+    return {
+        "unit": "tool_call_terminal_class",
+        "success_classes": ["exit_zero", "tool_success"],
+        "relation_counts": relation_counts,
+        "arm_terminal_class_difference_count": len(differences),
+        "arm_terminal_class_difference_task_count": len(
+            {row["task_id"] for row in differences}
+        ),
+        "source_terminal_class_difference_count": len(source_differences),
+        "source_terminal_class_difference_task_ids": list(
+            dict.fromkeys(row["task_id"] for row in source_differences)
+        ),
+        "quality_regression_task_ids": regression_task_ids,
+        "quality_improvement_task_ids": improvement_task_ids,
+        "incomparable_task_ids": incomparable_task_ids,
+        "timing_gate_eligible": not differences and not source_differences,
+        "differences": differences,
+        "source_differences": source_differences,
+    }
+
+
 def _aggregate(protocol: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str, Any]:
     by_pair = {item["pair"]: item for item in runs}
     decision_unit = str(protocol.get("decision_unit", "pair"))
@@ -1168,7 +1494,44 @@ def _aggregate(protocol: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str
             },
             "pairs": pairs,
         }
-    if decision_unit == "queue":
+    if protocol.get("quality_gate"):
+        quality = _cross_arm_outcome_quality(pairs)
+        gate = None
+        if quality["timing_gate_eligible"]:
+            timing_gate = protocol["timing_gate"]
+            threshold = float(timing_gate["mean_improvement_at_least_fraction"])
+            minimum_improving = int(timing_gate["minimum_improving_queues"])
+            expected_queue_count = int(timing_gate["queue_count"])
+            if len(pairs) != expected_queue_count:
+                raise AssertionError("timing gate queue count differs")
+            gate = {
+                "mean_improvement_at_least_5_percent": mean >= threshold,
+                "at_least_3_of_4_queues_improve": improving >= minimum_improving,
+            }
+            status = str(
+                timing_gate["go_verdict"]
+                if all(gate.values())
+                else timing_gate["failure_verdict"]
+            )
+        else:
+            status = str(protocol["quality_gate"]["arm_difference_verdict"])
+        result = {
+            "schema": protocol["schema"],
+            "status": status,
+            "protocol": protocol,
+            "comparison": {
+                "mean_improvement_fraction": mean,
+                "median_improvement_fraction": float(
+                    statistics.median(improvements)
+                ),
+                "improving_queues": improving,
+                "queue_count": len(pairs),
+                "gate": gate,
+            },
+            "arm_outcome_quality": quality,
+            plural: pairs,
+        }
+    elif decision_unit == "queue":
         gate = {
             "makespan_improvement_at_least_5_percent": mean >= 0.05,
             "all_validity_checks_passed": True,
@@ -1283,11 +1646,11 @@ def _load_resume_runs(
     arm_level_resume = bool(protocol.get("arm_level_resume", False))
     if (
         not isinstance(runs, list)
-        or not runs
+        or (not runs and not arm_level_resume)
         or len(runs) > len(protocol["pairs"])
         or (len(runs) == len(protocol["pairs"]) and not arm_level_resume)
     ):
-        raise AssertionError("resume requires a non-empty incomplete run prefix")
+        raise AssertionError("resume requires an incomplete run prefix")
 
     for index, (declared, run) in enumerate(
         zip(protocol["pairs"][: len(runs)], runs, strict=True)
@@ -1377,13 +1740,31 @@ def _load_resume_runs(
                 raise AssertionError(
                     f"resume action record differs at pair {pair} {arm}"
                 )
+            validated_tasks = []
             for task_id in declared["task_ids"]:
-                _task_artifacts(
+                validated_tasks.append(_task_artifacts(
                     expected_dir,
                     task_id,
                     arm,
                     paired_workload_contract=protocol["paired_workload_contract"],
-                )
+                    exec_timeout_floor_s=protocol["exec_timeout_floor_s"],
+                    paired_workload_contract_version=protocol.get(
+                        "paired_workload_contract_version"
+                    ),
+                    require_telemetry_integrity=bool(
+                        (protocol.get("framework_gate") or {}).get(
+                            "telemetry_integrity_required", False
+                        )
+                    ),
+                    telemetry_boundary_tolerance_s=float(
+                        (protocol.get("framework_gate") or {}).get(
+                            "maximum_resource_sample_boundary_gap_s", 0.0
+                        )
+                    ),
+                    use_latest_attempt=bool(protocol.get("arm_level_resume", False)),
+                ))
+            if protocol.get("quality_gate"):
+                arm_data["tasks"] = validated_tasks
         if len(by_arm) == 2 and (
             by_arm["hard_two"]["action_sequences"]
             != by_arm["burstable_two"]["action_sequences"]
@@ -1450,6 +1831,68 @@ def _load_compatible_resume_runs(
     return runs
 
 
+def _resume_requested_run(
+    cohort: str,
+    protocol: dict[str, Any],
+    result_dir: Path,
+    replay_dir: Path,
+) -> tuple[list[dict[str, Any]], list[Path]]:
+    result_path = result_dir / "result.json"
+    if cohort == "remaining26_compatible_v2":
+        return _load_compatible_resume_runs(protocol, result_dir, replay_dir), []
+    if cohort in {
+        "quartet48_contract_v2",
+        "rolling48_contract_v1",
+        "fresh_final48_counterbalanced_v1",
+    }:
+        runs = _load_resume_runs(protocol, result_dir, replay_dir)
+        return runs, _preserve_interruption_result(result_path, protocol)
+    if not result_path.is_file() or result_path.stat().st_size != 0:
+        raise FileExistsError(f"resume requires empty {result_path}")
+    return _load_resume_runs(protocol, result_dir, replay_dir), []
+
+
+def _prepare_new_run_directories(
+    config: dict[str, Any], protocol: dict[str, Any]
+) -> None:
+    result_dir = Path(config["result_dir"])
+    replay_dir = Path(config["replay_dir"])
+    preregistered_path = config.get("preregistered_protocol")
+    if preregistered_path is None:
+        if result_dir.exists() or replay_dir.exists():
+            raise FileExistsError(
+                f"refusing to overwrite {result_dir} or {replay_dir}"
+            )
+        result_dir.mkdir(parents=True)
+        replay_dir.mkdir(parents=True)
+        (result_dir / "protocol.json").write_text(
+            json.dumps(protocol, indent=2) + "\n", encoding="utf-8"
+        )
+        if protocol.get("arm_level_resume"):
+            (result_dir / "partial.json").write_text(
+                json.dumps({"protocol": protocol, "runs": []}, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        return
+
+    protocol_path = Path(preregistered_path)
+    if protocol_path != result_dir / "protocol.json" or not protocol_path.is_file():
+        raise FileNotFoundError("preregistered protocol is not in the result directory")
+    unexpected = [path for path in result_dir.iterdir() if path != protocol_path]
+    if unexpected:
+        raise FileExistsError(f"unexpected preregistration artifact: {unexpected}")
+    if json.loads(protocol_path.read_text(encoding="utf-8")) != protocol:
+        raise AssertionError("preregistered protocol differs from generated protocol")
+    if replay_dir.exists():
+        raise FileExistsError(f"refusing to overwrite {replay_dir}")
+    replay_dir.mkdir(parents=True)
+    if protocol.get("arm_level_resume"):
+        (result_dir / "partial.json").write_text(
+            json.dumps({"protocol": protocol, "runs": []}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cohort", choices=COHORTS, default="initial24")
@@ -1482,26 +1925,14 @@ def main() -> None:
             "remaining26_compatible_v2",
             "quartet48_contract_v2",
             "rolling48_contract_v1",
+            "fresh_final48_counterbalanced_v1",
         }:
             raise ValueError("resume is not frozen for this cohort")
-        result_path = result_dir / "result.json"
-        if args.cohort == "remaining26_compatible_v2":
-            runs = _load_compatible_resume_runs(protocol, result_dir, replay_dir)
-        elif args.cohort in {"quartet48_contract_v2", "rolling48_contract_v1"}:
-            runs = _load_resume_runs(protocol, result_dir, replay_dir)
-            interruption_results = _preserve_interruption_result(result_path, protocol)
-        elif not result_path.is_file() or result_path.stat().st_size != 0:
-            raise FileExistsError(f"resume requires empty {result_path}")
-        else:
-            runs = _load_resume_runs(protocol, result_dir, replay_dir)
-    else:
-        if result_dir.exists() or replay_dir.exists():
-            raise FileExistsError(f"refusing to overwrite {result_dir} or {replay_dir}")
-        result_dir.mkdir(parents=True)
-        replay_dir.mkdir(parents=True)
-        (result_dir / "protocol.json").write_text(
-            json.dumps(protocol, indent=2) + "\n", encoding="utf-8"
+        runs, interruption_results = _resume_requested_run(
+            args.cohort, protocol, result_dir, replay_dir
         )
+    else:
+        _prepare_new_run_directories(config, protocol)
         runs = (
             _load_compatible_prefix(protocol)
             if protocol.get("compatible_prefix_pairs")
@@ -1555,6 +1986,25 @@ def main() -> None:
                                 "makespan_source", "max_task_elapsed_s"
                             ),
                             cleanup_images=bool(protocol.get("cleanup_images", False)),
+                            require_cold_source_images=bool(
+                                (protocol.get("framework_gate") or {}).get(
+                                    "source_images_absent_before_and_after_each_arm",
+                                    False,
+                                )
+                            ),
+                            require_telemetry_integrity=bool(
+                                (protocol.get("framework_gate") or {}).get(
+                                    "telemetry_integrity_required", False
+                                )
+                            ),
+                            telemetry_boundary_tolerance_s=float(
+                                (protocol.get("framework_gate") or {}).get(
+                                    "maximum_resource_sample_boundary_gap_s", 0.0
+                                )
+                            ),
+                            use_latest_attempt=bool(
+                                protocol.get("arm_level_resume", False)
+                            ),
                         )
                     )
                 )

@@ -7,6 +7,74 @@ import pytest
 from scripts.evaluation import evaluate_paired_sqlglot_cpu_borrowing as experiment
 
 
+def test_fresh_counterbalanced_protocol_matches_preregistration() -> None:
+    frozen_path = (
+        experiment.ROOT
+        / "analysis/results/tool-resource-5-3-3-3-20260804"
+        / "sqlglot-final48-counterbalanced-rolling-exact-v1/protocol.json"
+    )
+    frozen = json.loads(frozen_path.read_text(encoding="utf-8"))
+
+    protocol = experiment._protocol("fresh_final48_counterbalanced_v1")
+
+    assert protocol == frozen
+    assert len(protocol["selected_task_ids"]) == 48
+    assert len(protocol["pairs"]) == 4
+    assert all(len(queue["task_ids"]) == 12 for queue in protocol["pairs"])
+    assert [queue["arm_order"] for queue in protocol["pairs"]] == [
+        ["hard_two", "burstable_two"],
+        ["burstable_two", "hard_two"],
+        ["burstable_two", "hard_two"],
+        ["hard_two", "burstable_two"],
+    ]
+    assert set(protocol["selected_task_ids"]).isdisjoint(
+        protocol["excluded_task_ids"]
+    )
+    assert protocol["framework_gate"][
+        "source_images_absent_before_and_after_each_arm"
+    ]
+    assert protocol["framework_gate"][
+        "maximum_resource_sample_boundary_gap_s"
+    ] == 2.0
+    assert protocol["quality_gate"][
+        "timing_gate_requires_zero_source_terminal_class_differences"
+    ]
+
+
+def test_preregistered_result_directory_is_reused_without_overwrite(
+    tmp_path: Path,
+) -> None:
+    result_dir = tmp_path / "result"
+    replay_dir = tmp_path / "replay"
+    result_dir.mkdir()
+    protocol = {
+        "cohort": "fresh",
+        "selected_task_ids": ["task"],
+        "arm_level_resume": True,
+    }
+    protocol_path = result_dir / "protocol.json"
+    protocol_path.write_text(json.dumps(protocol), encoding="utf-8")
+    config = {
+        "result_dir": result_dir,
+        "replay_dir": replay_dir,
+        "preregistered_protocol": protocol_path,
+    }
+
+    experiment._prepare_new_run_directories(config, protocol)
+
+    assert json.loads(protocol_path.read_text(encoding="utf-8")) == protocol
+    assert json.loads((result_dir / "partial.json").read_text(encoding="utf-8")) == {
+        "protocol": protocol,
+        "runs": [],
+    }
+    assert replay_dir.is_dir()
+    (result_dir / "unexpected.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(FileExistsError, match="unexpected preregistration artifact"):
+        experiment._prepare_new_run_directories(
+            {**config, "replay_dir": tmp_path / "other-replay"}, protocol
+        )
+
+
 def test_exact_replay_environment_disables_timeout_floor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -173,6 +241,105 @@ def _runs(protocol: dict, improvements: list[float]) -> list[dict]:
     return runs
 
 
+def _fresh_quality_runs(
+    protocol: dict,
+    improvements: list[float],
+    *,
+    burstable_failure_task_id: str | None = None,
+    both_arms_source_mismatch_task_id: str | None = None,
+) -> list[dict]:
+    runs = _runs(protocol, improvements)
+    for run in runs:
+        for arm in run["arms"]:
+            for task in arm["tasks"]:
+                replay_class = (
+                    "exit_nonzero"
+                    if (
+                        arm["arm"] == "burstable_two"
+                        and task["task_id"] == burstable_failure_task_id
+                    )
+                    or task["task_id"] == both_arms_source_mismatch_task_id
+                    else "exit_zero"
+                )
+                task["tool_outcomes"] = [
+                    {
+                        "action_id": f"tool-{task['task_id']}",
+                        "tool_name": "exec",
+                        "tool_call_id": f"call-{task['task_id']}",
+                        "source": {"class": "exit_zero", "exit_code": 0},
+                        "replay": {
+                            "class": replay_class,
+                            "exit_code": 0 if replay_class == "exit_zero" else 1,
+                        },
+                    }
+                ]
+    return runs
+
+
+def test_fresh_counterbalanced_timing_gate_requires_three_queues() -> None:
+    protocol = experiment._protocol("fresh_final48_counterbalanced_v1")
+    runs = _fresh_quality_runs(protocol, [0.1, 0.1, 0.1, -0.01])
+
+    result = experiment._aggregate(protocol, runs)
+
+    assert result["status"] == "go"
+    assert result["comparison"]["mean_improvement_fraction"] == pytest.approx(
+        0.0725
+    )
+    assert result["comparison"]["improving_queues"] == 3
+    assert result["comparison"]["gate"] == {
+        "mean_improvement_at_least_5_percent": True,
+        "at_least_3_of_4_queues_improve": True,
+    }
+    assert result["arm_outcome_quality"]["arm_terminal_class_difference_count"] == 0
+    assert result["arm_outcome_quality"]["timing_gate_eligible"] is True
+
+
+def test_fresh_counterbalanced_quality_difference_is_inconclusive() -> None:
+    protocol = experiment._protocol("fresh_final48_counterbalanced_v1")
+    changed_task = protocol["selected_task_ids"][0]
+    runs = _fresh_quality_runs(
+        protocol,
+        [0.1, 0.1, 0.1, 0.1],
+        burstable_failure_task_id=changed_task,
+    )
+
+    result = experiment._aggregate(protocol, runs)
+
+    assert result["status"] == "inconclusive_quality_difference"
+    assert result["arm_outcome_quality"]["relation_counts"] == {
+        "same_terminal_class": 47,
+        "burstable_success_hard_failure": 0,
+        "burstable_failure_hard_success": 1,
+        "different_failure_class": 0,
+    }
+    assert result["arm_outcome_quality"]["quality_regression_task_ids"] == [
+        changed_task
+    ]
+    assert result["arm_outcome_quality"]["timing_gate_eligible"] is False
+    assert result["comparison"]["gate"] is None
+
+
+def test_fresh_counterbalanced_source_drift_is_inconclusive() -> None:
+    protocol = experiment._protocol("fresh_final48_counterbalanced_v1")
+    changed_task = protocol["selected_task_ids"][0]
+    runs = _fresh_quality_runs(
+        protocol,
+        [0.1, 0.1, 0.1, 0.1],
+        both_arms_source_mismatch_task_id=changed_task,
+    )
+
+    result = experiment._aggregate(protocol, runs)
+
+    quality = result["arm_outcome_quality"]
+    assert result["status"] == "inconclusive_quality_difference"
+    assert quality["arm_terminal_class_difference_count"] == 0
+    assert quality["source_terminal_class_difference_count"] == 2
+    assert quality["source_terminal_class_difference_task_ids"] == [changed_task]
+    assert quality["timing_gate_eligible"] is False
+    assert result["comparison"]["gate"] is None
+
+
 def test_remaining_cohort_requires_ten_improving_pairs() -> None:
     protocol = experiment._protocol("remaining26")
     runs = _runs(protocol, [0.1] * 10 + [0.0] * 3)
@@ -322,6 +489,15 @@ def test_rolling_arm_limits_workers_without_limiting_task_count(
         },
     )
     monkeypatch.setattr(experiment, "_action_sequences", lambda _path: {})
+    cache_probes = []
+    monkeypatch.setattr(
+        experiment,
+        "_cached_source_images",
+        lambda task_ids, *, container_executable: cache_probes.append(
+            (list(task_ids), container_executable)
+        )
+        or [],
+    )
 
     result = asyncio.run(
         experiment._run_arm(
@@ -335,6 +511,7 @@ def test_rolling_arm_limits_workers_without_limiting_task_count(
             workers=1,
             makespan_source="throughput_summary.wall_time_s",
             cleanup_images=True,
+            require_cold_source_images=True,
         )
     )
 
@@ -342,8 +519,88 @@ def test_rolling_arm_limits_workers_without_limiting_task_count(
     assert captured["workers"] == 1
     assert captured["prep_concurrency"] == 4
     assert captured["cleanup_images"] is True
+    assert cache_probes == [(task_ids, "docker"), (task_ids, "docker")]
     assert len(result["task_stats"]) == 5
     assert result["pair_makespan_s"] == 9.0
+
+
+def test_rolling_arm_rejects_source_image_left_cached_after_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    task_ids = ["task"]
+
+    async def fake_simulate(**kwargs):
+        output_dir = Path(kwargs["output_dir"])
+        output_dir.mkdir(parents=True)
+        trace_file = output_dir / "trace.jsonl"
+        trace_file.write_text("", encoding="utf-8")
+        (output_dir / "throughput_summary.json").write_text(
+            json.dumps(
+                {
+                    "attempted_traces": 1,
+                    "wall_time_s": 1.0,
+                    "concurrency": 1,
+                    "effective_concurrency": 1,
+                    "workers": 1,
+                    "scheduler_mode": "bounded_queue",
+                    "tasks": [
+                        {
+                            "agent_id": "task",
+                            "failed_action_count": 0,
+                            "elapsed_s": 1.0,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return trace_file
+
+    probes = iter([[], ["docker.io/source-image"]])
+    monkeypatch.setattr(experiment, "simulate", fake_simulate)
+    monkeypatch.setattr(
+        experiment,
+        "_cached_source_images",
+        lambda *_args, **_kwargs: next(probes),
+    )
+
+    with pytest.raises(AssertionError, match="source images cached after arm"):
+        asyncio.run(
+            experiment._run_arm(
+                pair=1,
+                task_ids=task_ids,
+                arm="hard_two",
+                manifest=tmp_path / "manifest.json",
+                replay_dir=tmp_path,
+                paired_workload_contract=True,
+                concurrency=1,
+                workers=1,
+                makespan_source="throughput_summary.wall_time_s",
+                cleanup_images=True,
+                require_cold_source_images=True,
+            )
+        )
+
+
+def test_source_image_probe_failure_is_not_treated_as_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        experiment, "_task_source_images_by_id", lambda: {"task": "docker.io/image"}
+    )
+    monkeypatch.setattr(
+        experiment.subprocess,
+        "run",
+        lambda *_args, **_kwargs: experiment.subprocess.CompletedProcess(
+            args=["docker"],
+            returncode=1,
+            stdout="",
+            stderr="Cannot connect to the Docker daemon",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="source image probe failed"):
+        experiment._cached_source_images(["task"], container_executable="docker")
 
 
 def test_quartet_resume_preserves_invalid_result(tmp_path) -> None:
@@ -394,6 +651,41 @@ def test_timeout_gate_requires_matching_action_and_wrapper_failure(tmp_path) -> 
         experiment._source_success_replay_timeout_count(request, trace)
 
 
+def test_source_replay_tool_outcomes_preserve_quality_difference(tmp_path: Path) -> None:
+    source = {
+        "type": "action",
+        "action_type": "tool_exec",
+        "action_id": "tool-1",
+        "data": {
+            "tool_name": "exec",
+            "tool_call_id": "call-1",
+            "tool_args": json.dumps({"command": "pytest", "timeout": 60}),
+            "tool_result": "ok\nExit code: 0",
+            "success": True,
+        },
+    }
+    replay = json.loads(json.dumps(source))
+    replay["data"].update(
+        {"tool_result": "failed\nExit code: 1", "success": True}
+    )
+    trace = tmp_path / "replay.jsonl"
+    trace.write_text(json.dumps(replay) + "\n", encoding="utf-8")
+
+    outcomes = experiment._source_replay_tool_outcomes(
+        {"source_actions": [source]}, trace
+    )
+
+    assert outcomes == [
+        {
+            "action_id": "tool-1",
+            "tool_name": "exec",
+            "tool_call_id": "call-1",
+            "source": {"class": "exit_zero", "exit_code": 0},
+            "replay": {"class": "exit_nonzero", "exit_code": 1},
+        }
+    ]
+
+
 def test_paired_task_artifact_retains_timeout_as_quality_outcome(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -431,6 +723,9 @@ def test_paired_task_artifact_retains_timeout_as_quality_outcome(
                 "emitted_actions": 1,
                 "expected_actions": 1,
                 "unexpected_replay_failed_actions": 0,
+                "telemetry_quality": "ok",
+                "telemetry_integrity_failed": False,
+                "telemetry_errors": [],
             }
         ),
         encoding="utf-8",
@@ -438,9 +733,19 @@ def test_paired_task_artifact_retains_timeout_as_quality_outcome(
     (attempt / "resources.json").write_text(
         json.dumps(
             {
-                "samples": [],
+                "samples": [
+                    {"timestamp": "start", "epoch": 9.0},
+                    {"timestamp": "end", "epoch": 21.0},
+                ],
                 "summary": {
+                    "sample_count": 2,
+                    "duration_seconds": 12.0,
                     "monitoring_disabled": False,
+                    "monitoring": {
+                        "status": "collected",
+                        "resource_enabled": True,
+                        "per_task_resource_enabled": True,
+                    },
                     "container_final_state": {
                         "status": "running",
                         "running": True,
@@ -461,17 +766,77 @@ def test_paired_task_artifact_retains_timeout_as_quality_outcome(
     (attempt / "openclaw_host_replay_request.json").write_text(
         json.dumps(request), encoding="utf-8"
     )
-    (attempt / "openclaw_host_replay.jsonl").write_text("", encoding="utf-8")
+    (attempt / "openclaw_host_replay.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "action",
+                "action_type": "llm_call",
+                "action_id": "llm-1",
+                "ts_start": 10.0,
+                "ts_end": 20.0,
+                "data": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(
         experiment, "_source_success_replay_timeout_count", lambda *_args: 1
     )
 
     artifact = experiment._task_artifacts(
-        tmp_path, task_id, arm, paired_workload_contract=True
+        tmp_path,
+        task_id,
+        arm,
+        paired_workload_contract=True,
+        require_telemetry_integrity=True,
     )
 
     assert artifact["source_success_replay_timeout_count"] == 1
+    assert artifact["resource_sample_count"] == 2
 
+    resources = json.loads((attempt / "resources.json").read_text(encoding="utf-8"))
+    resources["samples"] = []
+    resources["summary"]["sample_count"] = 0
+    resources["summary"]["duration_seconds"] = 0.0
+    (attempt / "resources.json").write_text(
+        json.dumps(resources), encoding="utf-8"
+    )
+    with pytest.raises(AssertionError, match="invalid resource telemetry"):
+        experiment._task_artifacts(
+            tmp_path,
+            task_id,
+            arm,
+            paired_workload_contract=True,
+            require_telemetry_integrity=True,
+        )
+
+    resources["samples"] = [
+        {"timestamp": "start", "epoch": 9.0},
+        {"timestamp": "stopped-early", "epoch": 11.0},
+    ]
+    resources["summary"]["sample_count"] = 2
+    resources["summary"]["duration_seconds"] = 2.0
+    (attempt / "resources.json").write_text(
+        json.dumps(resources), encoding="utf-8"
+    )
+    with pytest.raises(AssertionError, match="do not cover replay actions"):
+        experiment._task_artifacts(
+            tmp_path,
+            task_id,
+            arm,
+            paired_workload_contract=True,
+            require_telemetry_integrity=True,
+        )
+
+    resources["samples"] = [
+        {"timestamp": "start", "epoch": 9.0},
+        {"timestamp": "end", "epoch": 21.0},
+    ]
+    resources["summary"]["duration_seconds"] = 12.0
+    (attempt / "resources.json").write_text(
+        json.dumps(resources), encoding="utf-8"
+    )
     request["replay_action_contract"]["require_source_outcome_match"] = True
     request["paired_workload_contract"] = False
     (attempt / "openclaw_host_replay_request.json").write_text(
@@ -555,7 +920,12 @@ def test_saved_run_reconstruction_pins_replay_root(tmp_path) -> None:
 
 
 def test_resume_accepts_only_complete_frozen_pair_prefix(tmp_path, monkeypatch) -> None:
-    protocol = experiment._protocol("remaining26")
+    protocol = {
+        **experiment._protocol("remaining26"),
+        "paired_workload_contract": True,
+        "exec_timeout_floor_s": None,
+        "paired_workload_contract_version": 2,
+    }
     result_dir = tmp_path / "results"
     replay_dir = tmp_path / "replay"
     result_dir.mkdir()
@@ -566,7 +936,7 @@ def test_resume_accepts_only_complete_frozen_pair_prefix(tmp_path, monkeypatch) 
         experiment,
         "_task_artifacts",
         lambda arm_dir, task_id, arm, **_kwargs: artifact_checks.append(
-            (str(arm_dir), task_id, arm)
+            (str(arm_dir), task_id, arm, _kwargs)
         ),
     )
     for declared in protocol["pairs"][:3]:
@@ -628,6 +998,18 @@ def test_resume_accepts_only_complete_frozen_pair_prefix(tmp_path, monkeypatch) 
     assert len(loaded) == 3
     assert protocol["pairs"][len(loaded)]["pair"] == 4
     assert len(artifact_checks) == 12
+    assert all(
+        check[3]
+        == {
+            "paired_workload_contract": True,
+            "exec_timeout_floor_s": None,
+            "paired_workload_contract_version": 2,
+            "require_telemetry_integrity": False,
+            "telemetry_boundary_tolerance_s": 0.0,
+            "use_latest_attempt": False,
+        }
+        for check in artifact_checks
+    )
 
     (result_dir / "protocol.json").write_text("{}", encoding="utf-8")
     with pytest.raises(AssertionError, match="stored protocol differs"):
@@ -738,6 +1120,127 @@ def test_rolling_resume_accepts_completed_first_arm(tmp_path, monkeypatch) -> No
 
     assert loaded == [run]
     assert declared["arm_order"][len(loaded[0]["arms"]) :] == ["hard_two"]
+
+
+def test_arm_level_resume_accepts_empty_checkpoint(tmp_path: Path) -> None:
+    protocol = experiment._protocol("rolling48_contract_v1")
+    result_dir = tmp_path / "results"
+    replay_dir = tmp_path / "replay"
+    result_dir.mkdir()
+    (result_dir / "protocol.json").write_text(
+        json.dumps(protocol), encoding="utf-8"
+    )
+    (result_dir / "partial.json").write_text(
+        json.dumps({"protocol": protocol, "runs": []}), encoding="utf-8"
+    )
+
+    assert experiment._load_resume_runs(protocol, result_dir, replay_dir) == []
+
+
+def test_retry_uses_latest_attempt_directory(tmp_path: Path) -> None:
+    instance_dir = tmp_path / "task"
+    (instance_dir / "attempt_1").mkdir(parents=True)
+    (instance_dir / "attempt_2").mkdir()
+
+    assert experiment._task_attempt_dir(
+        tmp_path, "task", use_latest_attempt=True
+    ) == instance_dir / "attempt_2"
+    assert experiment._task_attempt_dir(
+        tmp_path, "task", use_latest_attempt=False
+    ) == instance_dir / "attempt_1"
+
+
+def test_quality_resume_rebuilds_task_artifacts(tmp_path, monkeypatch) -> None:
+    protocol = {
+        **experiment._protocol("rolling48_contract_v1"),
+        "quality_gate": {"unit": "tool_call_terminal_class"},
+        "framework_gate": {"telemetry_integrity_required": True},
+    }
+    result_dir = tmp_path / "results"
+    replay_dir = tmp_path / "replay"
+    result_dir.mkdir()
+    (result_dir / "protocol.json").write_text(
+        json.dumps(protocol), encoding="utf-8"
+    )
+    declared = protocol["pairs"][0]
+    arm = declared["arm_order"][0]
+    arm_dir = replay_dir / "pair_01" / arm
+    arm_dir.mkdir(parents=True)
+    trace_file = arm_dir / "trace.jsonl"
+    trace_file.write_text("", encoding="utf-8")
+    task_stats = [
+        {"agent_id": task_id, "failed_action_count": 0, "elapsed_s": 1.0}
+        for task_id in declared["task_ids"]
+    ]
+    summary_path = arm_dir / "throughput_summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "attempted_traces": 48,
+                "wall_time_s": 12.0,
+                "concurrency": 4,
+                "effective_concurrency": 4,
+                "workers": 1,
+                "scheduler_mode": "bounded_queue",
+                "tasks": task_stats,
+            }
+        ),
+        encoding="utf-8",
+    )
+    run = {
+        "pair": 1,
+        "arms": [
+            {
+                "arm": arm,
+                "output_dir": str(arm_dir),
+                "trace_file": str(trace_file),
+                "summary_path": str(summary_path),
+                "pair_makespan_s": 12.0,
+                "task_stats": task_stats,
+                "action_sequences": {},
+                "tasks": [{"task_id": "stale"}],
+            }
+        ],
+    }
+    (result_dir / "partial.json").write_text(
+        json.dumps({"protocol": protocol, "runs": [run]}), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        experiment,
+        "_task_artifacts",
+        lambda _arm_dir, task_id, _arm, **_kwargs: {
+            "task_id": task_id,
+            "tool_outcomes": [{"replay": {"class": "exit_zero"}}],
+        },
+    )
+
+    loaded = experiment._load_resume_runs(protocol, result_dir, replay_dir)
+
+    assert [
+        task["task_id"] for task in loaded[0]["arms"][0]["tasks"]
+    ] == declared["task_ids"]
+
+
+def test_fresh_resume_preserves_matching_invalid_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    protocol = {"cohort": "fresh"}
+    result_path = tmp_path / "result.json"
+    result_path.write_text(
+        json.dumps({"status": "invalid", "protocol": protocol}), encoding="utf-8"
+    )
+    expected_runs = [{"pair": 1, "arms": [{"arm": "hard_two"}]}]
+    monkeypatch.setattr(
+        experiment, "_load_resume_runs", lambda *_args: expected_runs
+    )
+
+    runs, preserved = experiment._resume_requested_run(
+        "fresh_final48_counterbalanced_v1", protocol, tmp_path, tmp_path / "replay"
+    )
+
+    assert runs == expected_runs
+    assert preserved == [tmp_path / "interruption-01.json"]
+    assert not result_path.exists()
 
 
 @pytest.mark.parametrize(
