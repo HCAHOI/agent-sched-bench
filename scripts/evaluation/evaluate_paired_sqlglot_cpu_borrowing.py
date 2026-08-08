@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import heapq
 import json
 import os
 from pathlib import Path
+import re
 import statistics
 import traceback
 from typing import Any
@@ -54,6 +56,9 @@ SAFETY_GUARD_REJECTION = (
     "Error: Command blocked by safety guard (dangerous pattern detected)\n\n"
     "[Analyze the error above and try a different approach.]"
 )
+_EXIT_CODE_RE = re.compile(r"(?:^|\n)Exit code:\s*(-?\d+)\s*(?:\n|$)")
+_TIMEOUT_MARKERS = ("[timeout]", "[resource_timeout]", "[resource_stall_timeout]")
+_OOM_RE = re.compile(r"\b(?:out of memory|oom[_ -]kill(?:ed)?)\b", re.IGNORECASE)
 EXEC_TIMEOUT_FLOOR_S = 3_600
 SELECTION_SEED = 20_260_807
 ARM_ARGS = {
@@ -279,6 +284,276 @@ def _action_sequences(trace_file: Path) -> dict[str, list[list[str]]]:
                 ]
             )
     return sequences
+
+
+def _tool_terminal_outcome(action: dict[str, Any]) -> dict[str, Any]:
+    if action.get("action_type") != "tool_exec":
+        raise ValueError("terminal outcome requires a tool_exec action")
+    data = action.get("data") or {}
+    if data.get("tool_name") != "exec":
+        return {
+            "class": "tool_success" if data.get("success") is not False else "tool_error",
+            "exit_code": None,
+        }
+    result = str(data.get("tool_result", data.get("result", "")) or "")
+    if result.strip() == SAFETY_GUARD_REJECTION.strip():
+        return {"class": "safety_rejection", "exit_code": None}
+    exit_codes = _EXIT_CODE_RE.findall(result)
+    exit_code = int(exit_codes[-1]) if exit_codes else None
+    if any(marker in result for marker in _TIMEOUT_MARKERS):
+        return {"class": "timeout", "exit_code": exit_code}
+    if exit_code == 137 and _OOM_RE.search(result):
+        return {"class": "explicit_oom", "exit_code": exit_code}
+    if exit_code is not None:
+        return {
+            "class": "exit_zero" if exit_code == 0 else "exit_nonzero",
+            "exit_code": exit_code,
+        }
+    if data.get("success") is False:
+        return {"class": "tool_error", "exit_code": None}
+    call_id = data.get("tool_call_id")
+    raise ValueError(f"exec action {call_id!r} has no terminal status")
+
+
+def _replay_tool_actions(trace_path: Path) -> list[dict[str, Any]]:
+    return [
+        record
+        for record in (
+            json.loads(line)
+            for line in trace_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    ]
+
+
+def _tool_identity(action: dict[str, Any]) -> tuple[str, str, str]:
+    data = action.get("data") or {}
+    return (
+        str(action.get("action_id")),
+        str(data.get("tool_name")),
+        str(data.get("tool_call_id")),
+    )
+
+
+def _fixed_duration_queue_makespan(
+    task_ids: list[str], durations: dict[str, float], concurrency: int
+) -> float:
+    if not task_ids:
+        return 0.0
+    if concurrency <= 0:
+        raise ValueError("queue concurrency must be positive")
+    slots = [0.0] * min(concurrency, len(task_ids))
+    for task_id in task_ids:
+        ready_s = heapq.heappop(slots)
+        heapq.heappush(slots, ready_s + float(durations[task_id]))
+    return max(slots)
+
+
+def _audit_existing_rolling_outcomes(result_path: Path) -> dict[str, Any]:
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    queues = result.get("queues") or []
+    if len(queues) != 1:
+        raise ValueError("outcome audit requires exactly one rolling queue")
+    queue = queues[0]
+    task_ids = [str(value) for value in queue["task_ids"]]
+    arms = {str(item["arm"]): item for item in queue["arms"]}
+    if set(arms) != {"burstable_two", "hard_two"}:
+        raise ValueError("outcome audit requires burstable_two and hard_two arms")
+    arm_tasks = {
+        arm: {str(item["task_id"]): item for item in arm_data["tasks"]}
+        for arm, arm_data in arms.items()
+    }
+    arm_elapsed = {
+        arm: {
+            str(item["agent_id"]): float(item["elapsed_s"])
+            for item in arm_data["task_stats"]
+        }
+        for arm, arm_data in arms.items()
+    }
+    arm_startup: dict[str, dict[str, float]] = {arm: {} for arm in arms}
+    mismatches: list[dict[str, Any]] = []
+    task_rows: list[dict[str, Any]] = []
+    tool_call_count = 0
+    stable_tool_call_count = 0
+    arm_pair_mismatch_tool_call_count = 0
+    source_clean_ids: list[str] = []
+    source_clean_outcome_stable_ids: list[str] = []
+    for task_id in task_ids:
+        attempts = {
+            arm: Path(arm_tasks[arm][task_id]["attempt_dir"]) for arm in arms
+        }
+        requests = {
+            arm: json.loads(
+                (attempt / "openclaw_host_replay_request.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            for arm, attempt in attempts.items()
+        }
+        source_actions = [
+            action
+            for action in requests["burstable_two"]["source_actions"]
+            if action.get("action_type") == "tool_exec"
+        ]
+        hard_source_actions = [
+            action
+            for action in requests["hard_two"]["source_actions"]
+            if action.get("action_type") == "tool_exec"
+        ]
+        if source_actions != hard_source_actions:
+            raise AssertionError(f"source actions differ between arms for {task_id}")
+        replay_actions = {
+            arm: _replay_tool_actions(attempt / "openclaw_host_replay.jsonl")
+            for arm, attempt in attempts.items()
+        }
+        source_identities = [_tool_identity(action) for action in source_actions]
+        for arm, actions in replay_actions.items():
+            if [_tool_identity(action) for action in actions] != source_identities:
+                raise AssertionError(f"tool action identities differ for {task_id} {arm}")
+        source_clean = all(
+            (action.get("data") or {}).get("success") is not False
+            for action in source_actions
+        )
+        if source_clean:
+            source_clean_ids.append(task_id)
+        task_mismatch_count = 0
+        task_arm_pair_mismatch_count = 0
+        for source_action, burst_action, hard_action in zip(
+            source_actions,
+            replay_actions["burstable_two"],
+            replay_actions["hard_two"],
+            strict=True,
+        ):
+            tool_call_count += 1
+            outcomes = {
+                "source": _tool_terminal_outcome(source_action),
+                "burstable_two": _tool_terminal_outcome(burst_action),
+                "hard_two": _tool_terminal_outcome(hard_action),
+            }
+            if len({item["class"] for item in outcomes.values()}) == 1:
+                stable_tool_call_count += 1
+                continue
+            task_mismatch_count += 1
+            if outcomes["burstable_two"]["class"] != outcomes["hard_two"]["class"]:
+                arm_pair_mismatch_tool_call_count += 1
+                task_arm_pair_mismatch_count += 1
+            source_data = source_action.get("data") or {}
+            mismatches.append(
+                {
+                    "task_id": task_id,
+                    "tool_call_id": str(source_data.get("tool_call_id")),
+                    "tool_name": str(source_data.get("tool_name")),
+                    **outcomes,
+                    "duration_s": {
+                        "burstable_two": float(
+                            (burst_action.get("data") or {}).get("duration_ms", 0)
+                        )
+                        / 1000.0,
+                        "hard_two": float(
+                            (hard_action.get("data") or {}).get("duration_ms", 0)
+                        )
+                        / 1000.0,
+                    },
+                    "tool_args": source_data.get("tool_args"),
+                }
+            )
+        if source_clean and task_mismatch_count == 0:
+            source_clean_outcome_stable_ids.append(task_id)
+        task_rows.append(
+            {
+                "task_id": task_id,
+                "source_clean": source_clean,
+                "tool_call_count": len(source_actions),
+                "outcome_mismatch_count": task_mismatch_count,
+                "arm_pair_outcome_mismatch_count": task_arm_pair_mismatch_count,
+            }
+        )
+        for arm, attempt in attempts.items():
+            startup = json.loads(
+                (attempt / "container_startup.json").read_text(encoding="utf-8")
+            )
+            arm_startup[arm][task_id] = float(startup["elapsed_s"])
+
+    concurrency = int(result["protocol"]["queue_concurrency"])
+
+    def schedule(include_recorded_startup: bool) -> dict[str, float]:
+        makespans = {}
+        for arm in ("burstable_two", "hard_two"):
+            durations = {
+                task_id: arm_elapsed[arm][task_id]
+                + (arm_startup[arm][task_id] if include_recorded_startup else 0.0)
+                for task_id in source_clean_outcome_stable_ids
+            }
+            makespans[arm] = _fixed_duration_queue_makespan(
+                source_clean_outcome_stable_ids, durations, concurrency
+            )
+        hard = makespans["hard_two"]
+        return {
+            "burstable_two_makespan_s": makespans["burstable_two"],
+            "hard_two_makespan_s": hard,
+            "improvement_fraction": (hard - makespans["burstable_two"]) / hard,
+        }
+
+    return {
+        "schema": "sqlglot-rolling-outcome-audit-v1",
+        "status": "diagnostic_only_no_verdict",
+        "frozen_result_status": result.get("status"),
+        "source_result": str(result_path),
+        "policy": {
+            "exact_output_match_required": False,
+            "outcome_comparison": "coarse terminal class",
+            "terminal_classes": [
+                "exit_zero",
+                "exit_nonzero",
+                "timeout",
+                "explicit_oom",
+                "safety_rejection",
+                "tool_success",
+                "tool_error",
+            ],
+            "source_clean_definition": "no source tool_exec action has success=false",
+            "diagnostic_subset": (
+                "source-clean tasks with zero source/burstable/hard terminal-class "
+                "mismatches"
+            ),
+            "recorded_startup_scope": (
+                "container_startup.json elapsed_s only; excludes artifact restore, "
+                "finalization, container stop, and image cleanup"
+            ),
+            "selection_timing": "post-hoc after rolling result exposure",
+        },
+        "counts": {
+            "task_count": len(task_ids),
+            "source_clean_task_count": len(source_clean_ids),
+            "source_failed_task_count": len(task_ids) - len(source_clean_ids),
+            "source_clean_outcome_stable_task_count": len(
+                source_clean_outcome_stable_ids
+            ),
+            "source_clean_outcome_mismatch_task_count": len(source_clean_ids)
+            - len(source_clean_outcome_stable_ids),
+            "tool_call_count": tool_call_count,
+            "outcome_stable_tool_call_count": stable_tool_call_count,
+            "outcome_mismatch_tool_call_count": len(mismatches),
+            "outcome_mismatch_task_count": sum(
+                row["outcome_mismatch_count"] > 0 for row in task_rows
+            ),
+            "arm_pair_outcome_mismatch_tool_call_count": (
+                arm_pair_mismatch_tool_call_count
+            ),
+            "arm_pair_outcome_mismatch_task_count": sum(
+                row["arm_pair_outcome_mismatch_count"] > 0 for row in task_rows
+            ),
+        },
+        "tasks": task_rows,
+        "mismatches": mismatches,
+        "source_clean_outcome_stable_fixed_duration_diagnostic": {
+            "task_count": len(source_clean_outcome_stable_ids),
+            "queue_concurrency": concurrency,
+            "execution_only": schedule(False),
+            "recorded_container_startup_plus_replay": schedule(True),
+        },
+    }
 
 
 def _source_success_replay_timeout_count(
@@ -1090,10 +1365,26 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cohort", choices=COHORTS, default="initial24")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--audit-existing-outcomes", action="store_true")
     args = parser.parse_args()
     config = COHORTS[args.cohort]
     result_dir = Path(config["result_dir"])
     replay_dir = Path(config["replay_dir"])
+    if args.audit_existing_outcomes:
+        if args.resume or args.cohort != "rolling48_contract_v1":
+            raise ValueError(
+                "existing outcome audit requires rolling48_contract_v1 without resume"
+            )
+        result_path = result_dir / "result.json"
+        audit_path = result_dir / "outcome-audit.json"
+        if audit_path.exists():
+            raise FileExistsError(f"refusing to overwrite {audit_path}")
+        audit = _audit_existing_rolling_outcomes(result_path)
+        audit_path.write_text(
+            json.dumps(audit, indent=2) + "\n", encoding="utf-8"
+        )
+        print(json.dumps({"artifact": str(audit_path), **audit["counts"]}, indent=2))
+        return
     protocol = _protocol(args.cohort)
     interruption_results: list[Path] = []
     if args.resume:

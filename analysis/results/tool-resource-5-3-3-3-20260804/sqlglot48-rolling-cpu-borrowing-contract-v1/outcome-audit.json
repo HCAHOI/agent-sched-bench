@@ -1,0 +1,544 @@
+{
+  "schema": "sqlglot-rolling-outcome-audit-v1",
+  "status": "diagnostic_only_no_verdict",
+  "frozen_result_status": "no_go",
+  "source_result": "/home/chiyu/workspace/agent-sched-bench/analysis/results/tool-resource-5-3-3-3-20260804/sqlglot48-rolling-cpu-borrowing-contract-v1/result.json",
+  "policy": {
+    "exact_output_match_required": false,
+    "outcome_comparison": "coarse terminal class",
+    "terminal_classes": [
+      "exit_zero",
+      "exit_nonzero",
+      "timeout",
+      "explicit_oom",
+      "safety_rejection",
+      "tool_success",
+      "tool_error"
+    ],
+    "source_clean_definition": "no source tool_exec action has success=false",
+    "diagnostic_subset": "source-clean tasks with zero source/burstable/hard terminal-class mismatches",
+    "recorded_startup_scope": "container_startup.json elapsed_s only; excludes artifact restore, finalization, container stop, and image cleanup",
+    "selection_timing": "post-hoc after rolling result exposure"
+  },
+  "counts": {
+    "task_count": 48,
+    "source_clean_task_count": 38,
+    "source_failed_task_count": 10,
+    "source_clean_outcome_stable_task_count": 36,
+    "source_clean_outcome_mismatch_task_count": 2,
+    "tool_call_count": 1765,
+    "outcome_stable_tool_call_count": 1758,
+    "outcome_mismatch_tool_call_count": 7,
+    "outcome_mismatch_task_count": 3,
+    "arm_pair_outcome_mismatch_tool_call_count": 4,
+    "arm_pair_outcome_mismatch_task_count": 2
+  },
+  "tasks": [
+    {
+      "task_id": "tobymao__sqlglot-2821",
+      "source_clean": true,
+      "tool_call_count": 51,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3699",
+      "source_clean": true,
+      "tool_call_count": 28,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3552",
+      "source_clean": true,
+      "tool_call_count": 31,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-2412",
+      "source_clean": true,
+      "tool_call_count": 28,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3695",
+      "source_clean": true,
+      "tool_call_count": 40,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3401",
+      "source_clean": true,
+      "tool_call_count": 33,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3272",
+      "source_clean": true,
+      "tool_call_count": 39,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3339",
+      "source_clean": true,
+      "tool_call_count": 31,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3242",
+      "source_clean": false,
+      "tool_call_count": 35,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-2935",
+      "source_clean": true,
+      "tool_call_count": 42,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3745",
+      "source_clean": false,
+      "tool_call_count": 24,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3765",
+      "source_clean": true,
+      "tool_call_count": 31,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-2825",
+      "source_clean": true,
+      "tool_call_count": 39,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3329",
+      "source_clean": false,
+      "tool_call_count": 40,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-2605",
+      "source_clean": true,
+      "tool_call_count": 42,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-2507",
+      "source_clean": true,
+      "tool_call_count": 36,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3682",
+      "source_clean": true,
+      "tool_call_count": 21,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-2461",
+      "source_clean": true,
+      "tool_call_count": 33,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3549",
+      "source_clean": true,
+      "tool_call_count": 43,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-2576",
+      "source_clean": false,
+      "tool_call_count": 36,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3641",
+      "source_clean": true,
+      "tool_call_count": 35,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3150",
+      "source_clean": false,
+      "tool_call_count": 69,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3129",
+      "source_clean": true,
+      "tool_call_count": 41,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3650",
+      "source_clean": true,
+      "tool_call_count": 36,
+      "outcome_mismatch_count": 1,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3620",
+      "source_clean": false,
+      "tool_call_count": 20,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3333",
+      "source_clean": true,
+      "tool_call_count": 45,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3238",
+      "source_clean": true,
+      "tool_call_count": 38,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-2439",
+      "source_clean": true,
+      "tool_call_count": 24,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-2857",
+      "source_clean": true,
+      "tool_call_count": 36,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-2739",
+      "source_clean": true,
+      "tool_call_count": 44,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-2754",
+      "source_clean": true,
+      "tool_call_count": 44,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3284",
+      "source_clean": true,
+      "tool_call_count": 39,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3182",
+      "source_clean": true,
+      "tool_call_count": 36,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3394",
+      "source_clean": true,
+      "tool_call_count": 33,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3734",
+      "source_clean": true,
+      "tool_call_count": 33,
+      "outcome_mismatch_count": 1,
+      "arm_pair_outcome_mismatch_count": 1
+    },
+    {
+      "task_id": "tobymao__sqlglot-3440",
+      "source_clean": true,
+      "tool_call_count": 39,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-2794",
+      "source_clean": false,
+      "tool_call_count": 48,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-2619",
+      "source_clean": true,
+      "tool_call_count": 30,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3417",
+      "source_clean": true,
+      "tool_call_count": 26,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3515",
+      "source_clean": true,
+      "tool_call_count": 34,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-2443",
+      "source_clean": false,
+      "tool_call_count": 33,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3230",
+      "source_clean": true,
+      "tool_call_count": 38,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3179",
+      "source_clean": false,
+      "tool_call_count": 49,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-2337",
+      "source_clean": false,
+      "tool_call_count": 49,
+      "outcome_mismatch_count": 5,
+      "arm_pair_outcome_mismatch_count": 3
+    },
+    {
+      "task_id": "tobymao__sqlglot-3198",
+      "source_clean": true,
+      "tool_call_count": 36,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3566",
+      "source_clean": true,
+      "tool_call_count": 32,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-3637",
+      "source_clean": true,
+      "tool_call_count": 34,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    },
+    {
+      "task_id": "tobymao__sqlglot-2822",
+      "source_clean": true,
+      "tool_call_count": 41,
+      "outcome_mismatch_count": 0,
+      "arm_pair_outcome_mismatch_count": 0
+    }
+  ],
+  "mismatches": [
+    {
+      "task_id": "tobymao__sqlglot-3650",
+      "tool_call_id": "call_7SnndIPAM2tZW3Ec7ZwLRHNR",
+      "tool_name": "exec",
+      "source": {
+        "class": "exit_nonzero",
+        "exit_code": 1
+      },
+      "burstable_two": {
+        "class": "exit_zero",
+        "exit_code": 0
+      },
+      "hard_two": {
+        "class": "exit_zero",
+        "exit_code": 0
+      },
+      "duration_s": {
+        "burstable_two": 139.2843,
+        "hard_two": 150.7886
+      },
+      "tool_args": "{\"command\": \"SQLGLOTRS_TOKENIZER=0 /opt/conda/envs/testbed/bin/python -m unittest\", \"working_dir\": \"/testbed\", \"timeout\": 600}"
+    },
+    {
+      "task_id": "tobymao__sqlglot-3734",
+      "tool_call_id": "call_WEKjaqEY8rxZ4FGnQoRc14rF",
+      "tool_name": "exec",
+      "source": {
+        "class": "exit_zero",
+        "exit_code": 0
+      },
+      "burstable_two": {
+        "class": "exit_zero",
+        "exit_code": 0
+      },
+      "hard_two": {
+        "class": "exit_nonzero",
+        "exit_code": 1
+      },
+      "duration_s": {
+        "burstable_two": 105.32130000000001,
+        "hard_two": 123.4255
+      },
+      "tool_args": "{\"command\": \"SQLGLOTRS_TOKENIZER=0 python3 -m pytest -q\", \"working_dir\": \"/testbed\", \"timeout\": 600}"
+    },
+    {
+      "task_id": "tobymao__sqlglot-2337",
+      "tool_call_id": "call_Eq0YqlIYVeQjpGbNJKu0C6yI",
+      "tool_name": "exec",
+      "source": {
+        "class": "exit_zero",
+        "exit_code": 0
+      },
+      "burstable_two": {
+        "class": "exit_zero",
+        "exit_code": 0
+      },
+      "hard_two": {
+        "class": "exit_nonzero",
+        "exit_code": 1
+      },
+      "duration_s": {
+        "burstable_two": 18.1929,
+        "hard_two": 27.9708
+      },
+      "tool_args": "{\"command\": \"/opt/conda/envs/testbed/bin/pytest -q tests/test_*.py\", \"working_dir\": \"/testbed\", \"timeout\": 600}"
+    },
+    {
+      "task_id": "tobymao__sqlglot-2337",
+      "tool_call_id": "call_j6xhQZWIsWYwZkMUh8iMA0oy",
+      "tool_name": "exec",
+      "source": {
+        "class": "timeout",
+        "exit_code": 124
+      },
+      "burstable_two": {
+        "class": "timeout",
+        "exit_code": 124
+      },
+      "hard_two": {
+        "class": "exit_nonzero",
+        "exit_code": 1
+      },
+      "duration_s": {
+        "burstable_two": 600.1332,
+        "hard_two": 57.7836
+      },
+      "tool_args": "{\"command\": \"/opt/conda/envs/testbed/bin/pytest -q tests/dataframe\", \"working_dir\": \"/testbed\", \"timeout\": 600}"
+    },
+    {
+      "task_id": "tobymao__sqlglot-2337",
+      "tool_call_id": "call_lGB41QAaBIJtTAtGVPUBw1sI",
+      "tool_name": "exec",
+      "source": {
+        "class": "exit_zero",
+        "exit_code": 0
+      },
+      "burstable_two": {
+        "class": "exit_nonzero",
+        "exit_code": 1
+      },
+      "hard_two": {
+        "class": "exit_zero",
+        "exit_code": 0
+      },
+      "duration_s": {
+        "burstable_two": 21.1124,
+        "hard_two": 4.0895
+      },
+      "tool_args": "{\"command\": \"/opt/conda/envs/testbed/bin/pytest -q tests/dataframe/unit\", \"working_dir\": \"/testbed\", \"timeout\": 600}"
+    },
+    {
+      "task_id": "tobymao__sqlglot-2337",
+      "tool_call_id": "call_iQUmSRI60Q1jKFLLScC71Y16",
+      "tool_name": "exec",
+      "source": {
+        "class": "exit_zero",
+        "exit_code": 0
+      },
+      "burstable_two": {
+        "class": "exit_nonzero",
+        "exit_code": 1
+      },
+      "hard_two": {
+        "class": "exit_nonzero",
+        "exit_code": 1
+      },
+      "duration_s": {
+        "burstable_two": 70.3758,
+        "hard_two": 85.9026
+      },
+      "tool_args": "{\"command\": \"PYSPARK_PYTHON=/opt/conda/envs/testbed/bin/python PYSPARK_DRIVER_PYTHON=/opt/conda/envs/testbed/bin/python /opt/conda/envs/testbed/bin/pytest -q tests/dataframe/integration\", \"working_dir\": \"/testbed\", \"timeout\": 600}"
+    },
+    {
+      "task_id": "tobymao__sqlglot-2337",
+      "tool_call_id": "call_nvAdVTALTmJnvomohnSpdGDH",
+      "tool_name": "exec",
+      "source": {
+        "class": "exit_zero",
+        "exit_code": 0
+      },
+      "burstable_two": {
+        "class": "exit_nonzero",
+        "exit_code": 1
+      },
+      "hard_two": {
+        "class": "exit_nonzero",
+        "exit_code": 1
+      },
+      "duration_s": {
+        "burstable_two": 84.9588,
+        "hard_two": 123.0504
+      },
+      "tool_args": "{\"command\": \"PYSPARK_PYTHON=/opt/conda/envs/testbed/bin/python PYSPARK_DRIVER_PYTHON=/opt/conda/envs/testbed/bin/python /opt/conda/envs/testbed/bin/pytest -q\", \"working_dir\": \"/testbed\", \"timeout\": 600}"
+    }
+  ],
+  "source_clean_outcome_stable_fixed_duration_diagnostic": {
+    "task_count": 36,
+    "queue_concurrency": 4,
+    "execution_only": {
+      "burstable_two_makespan_s": 4760.3288061618805,
+      "hard_two_makespan_s": 5272.61218214035,
+      "improvement_fraction": 0.09715931274325487
+    },
+    "recorded_container_startup_plus_replay": {
+      "burstable_two_makespan_s": 5809.83257116843,
+      "hard_two_makespan_s": 6085.112312993966,
+      "improvement_fraction": 0.04523823516580159
+    }
+  }
+}

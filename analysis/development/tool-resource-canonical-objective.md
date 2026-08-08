@@ -16,13 +16,14 @@ long-form research record.
 | Prediction | Keep the target-specific development SOTA below. It is exposed development evidence, not confirmation. |
 | CPU execution | **KEEP equal-share burstable execution as the current development CPU-sharing baseline.** |
 | Saturated quartet result | Frozen claim verdict is NO-GO because 8/12, not 9/12, groups improved. This is not a module-retirement decision. |
+| Rolling queue result | Frozen claim verdict is NO-GO: burstable was 3.031% slower on full queue wall time. Outcome drift and fixed arm order prevent a clean causal magnitude claim. |
 | CPU scheduling | Every subsequent CPU scheduler must compare against equal-share burstable execution unless fresh evidence supersedes it. |
 | KB representation | Raw exact/prefix/binary `ClauseResourceKB` remains Current. Trie/lattice/semantic-key replacement is closed as a contribution. |
 | Offline agent | Closed. More prompts, critics, DSLs, or generated adapters are not authorized. |
 | KV scheduling | Closed under the current CacheWise/C100 simulator and action model. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor or scheduler candidate currently authorizes production integration. |
-| Next research step | Diagnose the burstable gain from existing telemetry, then freeze a fresh action-level protocol. Do not tune on the exposed SQLGlot results. |
+| Next research step | A future CPU-sharing claim requires fresh tasks, counterbalanced arm order, and terminal-outcome validity. The exposed rolling audit is diagnostic only. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -152,6 +153,7 @@ All rows below are development-exposed.
 | Ideal burstable two-core model | 8.881% faster than hard two-core; every seed improved | Authorized physical test |
 | Two-task physical paired replay | 14.490% mean improvement; 13/13 pairs improved; CI [9.049%, 22.832%] | Positive exposed mechanism evidence |
 | Four-task saturated replay | 12.966% mean improvement; CI [2.947%, 25.527%]; 8/12 groups improved | Frozen claim NO-GO; **module decision KEEP** |
+| Rolling four-task queue | Burstable full wall time was 8,952.374 s versus 8,688.964 s hard-two, 3.031% slower | Frozen claim NO-GO; audit before any fresh protocol |
 
 ### Current CPU-sharing baseline
 
@@ -177,16 +179,28 @@ groups kept nearly the same total CPU work across arms while long package builds
 used up to eight cores and shortened by 1,207 and 1,075 seconds. Current
 `BeginCall` predictions missed both carriers, and the original development set
 contained no `--force-reinstall` example, so prediction-guided task grouping is
-not authorized. The next physical gate is a rolling four-task queue with
-immediate refill; it must compare hard-two and burstable-two directly, because
-the completed replay used closed four-task batches.
+not authorized.
 
-Before launch, that gate is frozen over the same 48 exposed tasks in one queue:
-concurrency four with the simulator's single-process bounded queue and on-demand
-image cleanup, burstable first and hard-two second, and
-`throughput_summary.wall_time_s` as makespan. GO
-requires at least 5% makespan improvement plus all existing validity checks; a
-single queue has no bootstrap interval.
+The completed rolling gate used the same 48 exposed tasks, concurrency four,
+immediate refill, and full queue wall time. Burstable was 3.031% slower despite
+reducing mean task runtime by 6.490% and p95 by 20.976%; 34/48 individual tasks
+were faster. The fixed burstable-first order also charged 1,196.7 seconds more
+aggregate recorded container-startup time to that arm. More importantly, replay
+fixed the recorded actions but physically re-executed commands: 7/1,765 tool
+calls across three tasks changed coarse terminal class between source or arms,
+including a 600-second source/burstable timeout that became a 57.8-second
+nonzero exit under hard-two. Four calls across two tasks differed directly
+between arms.
+
+A post-hoc diagnostic retained only the 36 source-clean tasks with identical
+source/burstable/hard terminal classes. Reconstructing a fixed-duration
+four-worker queue made burstable 9.716% faster for execution alone and 4.524%
+faster after adding recorded container-startup time. The latter omits artifact
+restore, finalization, container stop, and image cleanup. This is neither a
+physical rerun nor a confirmatory subset and cannot reverse the frozen NO-GO.
+It isolates the next requirements: compare coarse terminal outcomes as a
+validity condition, counterbalance arm order, and separate replay, startup, and
+the remaining lifecycle costs.
 
 ## 6. Closed directions
 
@@ -239,6 +253,8 @@ Result root:
 - Burstable model: `sqlglot50-burstable-two-core-fluid-v1/result.json`
 - Two-task physical matrix: `sqlglot26-paired-cpu-borrowing-compatible-v2/result.json`
 - Saturated four-task matrix: `sqlglot48-quartet-cpu-borrowing-contract-v2/result.json`
+- Rolling queue: `sqlglot48-rolling-cpu-borrowing-contract-v1/result.json`
+- Rolling outcome audit: `sqlglot48-rolling-cpu-borrowing-contract-v1/outcome-audit.json`
 
 Task split authority:
 `analysis/development/sqlglot-relational-task-split.json`.

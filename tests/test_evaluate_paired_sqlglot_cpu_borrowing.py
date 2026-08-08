@@ -623,3 +623,246 @@ def test_rolling_resume_accepts_completed_first_arm(tmp_path, monkeypatch) -> No
 
     assert loaded == [run]
     assert declared["arm_order"][len(loaded[0]["arms"]) :] == ["hard_two"]
+
+
+@pytest.mark.parametrize(
+    ("success", "tool_result", "expected"),
+    [
+        (True, "done\n\nExit code: 0", {"class": "exit_zero", "exit_code": 0}),
+        (
+            True,
+            "88 failed, 332 passed\n\nExit code: 1",
+            {"class": "exit_nonzero", "exit_code": 1},
+        ),
+        (
+            False,
+            "Error: [timeout]\n\nExit code: 124",
+            {"class": "timeout", "exit_code": 124},
+        ),
+        (
+            False,
+            "output\n[resource_stall_timeout]\n\nExit code: 124",
+            {"class": "timeout", "exit_code": 124},
+        ),
+        (
+            False,
+            experiment.SAFETY_GUARD_REJECTION,
+            {"class": "safety_rejection", "exit_code": None},
+        ),
+        (
+            True,
+            "Killed\n\nExit code: 137",
+            {"class": "exit_nonzero", "exit_code": 137},
+        ),
+        (
+            True,
+            "Out of memory\n\nExit code: 137",
+            {"class": "explicit_oom", "exit_code": 137},
+        ),
+    ],
+)
+def test_exec_terminal_outcome_uses_wrapper_status(
+    success: bool, tool_result: str, expected: dict
+) -> None:
+    action = {
+        "action_type": "tool_exec",
+        "data": {
+            "tool_name": "exec",
+            "tool_call_id": "call-a",
+            "success": success,
+            "tool_result": tool_result,
+        },
+    }
+
+    assert experiment._tool_terminal_outcome(action) == expected
+
+
+def test_exec_terminal_outcome_fails_closed_without_wrapper_status() -> None:
+    action = {
+        "action_type": "tool_exec",
+        "data": {
+            "tool_name": "exec",
+            "tool_call_id": "call-a",
+            "success": True,
+            "tool_result": "command output without wrapper status",
+        },
+    }
+
+    with pytest.raises(ValueError, match="has no terminal status"):
+        experiment._tool_terminal_outcome(action)
+
+
+def test_existing_outcome_audit_separates_source_clean_diagnostic(tmp_path) -> None:
+    def action(
+        task_id: str,
+        call_id: str,
+        *,
+        success: bool,
+        tool_result: str,
+        duration_s: float,
+    ) -> dict:
+        return {
+            "type": "action",
+            "action_type": "tool_exec",
+            "action_id": f"tool_1_{call_id}",
+            "agent_id": task_id,
+            "instance_id": task_id,
+            "data": {
+                "tool_name": "exec",
+                "tool_call_id": call_id,
+                "tool_args": json.dumps({"command": f"run {task_id}"}),
+                "success": success,
+                "tool_result": tool_result,
+                "duration_ms": duration_s * 1000,
+            },
+        }
+
+    clean_source = action(
+        "clean", "call-clean", success=True, tool_result="ok\nExit code: 0", duration_s=5
+    )
+    drift_source = action(
+        "drift", "call-drift", success=True, tool_result="ok\nExit code: 0", duration_s=5
+    )
+    failed_source = action(
+        "failed",
+        "call-failed",
+        success=False,
+        tool_result="Error: [timeout]\nExit code: 124",
+        duration_s=10,
+    )
+    result = {
+        "schema": "rolling",
+        "status": "no_go",
+        "protocol": {
+            "queue_concurrency": 2,
+            "pairs": [{"pair": 1, "task_ids": ["clean", "drift", "failed"]}],
+        },
+        "queues": [
+            {
+                "queue": 1,
+                "task_ids": ["clean", "drift", "failed"],
+                "arms": [],
+            }
+        ],
+    }
+    arm_specs = {
+        "burstable_two": {
+            "clean": (clean_source, 4.0, 1.0),
+            "drift": (drift_source, 4.0, 1.0),
+            "failed": (failed_source, 10.0, 1.0),
+        },
+        "hard_two": {
+            "clean": (clean_source, 6.0, 1.0),
+            "drift": (
+                action(
+                    "drift",
+                    "call-drift",
+                    success=True,
+                    tool_result="tests failed\nExit code: 1",
+                    duration_s=2,
+                ),
+                2.0,
+                1.0,
+            ),
+            "failed": (
+                action(
+                    "failed",
+                    "call-failed",
+                    success=True,
+                    tool_result="tests failed\nExit code: 1",
+                    duration_s=2,
+                ),
+                2.0,
+                1.0,
+            ),
+        },
+    }
+    for arm, tasks in arm_specs.items():
+        arm_tasks = []
+        task_stats = []
+        for task_id, (replay_action, elapsed_s, prep_s) in tasks.items():
+            attempt = tmp_path / arm / task_id / "attempt_1"
+            attempt.mkdir(parents=True)
+            source_action = {
+                "clean": clean_source,
+                "drift": drift_source,
+                "failed": failed_source,
+            }[task_id]
+            (attempt / "openclaw_host_replay_request.json").write_text(
+                json.dumps({"source_actions": [source_action]}), encoding="utf-8"
+            )
+            (attempt / "openclaw_host_replay.jsonl").write_text(
+                json.dumps(replay_action) + "\n", encoding="utf-8"
+            )
+            (attempt / "container_startup.json").write_text(
+                json.dumps({"elapsed_s": prep_s}), encoding="utf-8"
+            )
+            arm_tasks.append(
+                {
+                    "task_id": task_id,
+                    "attempt_dir": str(attempt),
+                    "replay_status": {
+                        "source_failed_actions": int(task_id == "failed")
+                    },
+                }
+            )
+            task_stats.append({"agent_id": task_id, "elapsed_s": elapsed_s})
+        result["queues"][0]["arms"].append(
+            {"arm": arm, "tasks": arm_tasks, "task_stats": task_stats}
+        )
+    result_path = tmp_path / "result.json"
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+
+    audit = experiment._audit_existing_rolling_outcomes(result_path)
+
+    assert audit["status"] == "diagnostic_only_no_verdict"
+    assert audit["frozen_result_status"] == "no_go"
+    assert audit["counts"] == {
+        "task_count": 3,
+        "source_clean_task_count": 2,
+        "source_failed_task_count": 1,
+        "source_clean_outcome_stable_task_count": 1,
+        "source_clean_outcome_mismatch_task_count": 1,
+        "tool_call_count": 3,
+        "outcome_stable_tool_call_count": 1,
+        "outcome_mismatch_tool_call_count": 2,
+        "outcome_mismatch_task_count": 2,
+        "arm_pair_outcome_mismatch_tool_call_count": 2,
+        "arm_pair_outcome_mismatch_task_count": 2,
+    }
+    assert audit["mismatches"] == [
+        {
+            "task_id": "drift",
+            "tool_call_id": "call-drift",
+            "tool_name": "exec",
+            "source": {"class": "exit_zero", "exit_code": 0},
+            "burstable_two": {"class": "exit_zero", "exit_code": 0},
+            "hard_two": {"class": "exit_nonzero", "exit_code": 1},
+            "duration_s": {"burstable_two": 5.0, "hard_two": 2.0},
+            "tool_args": json.dumps({"command": "run drift"}),
+        },
+        {
+            "task_id": "failed",
+            "tool_call_id": "call-failed",
+            "tool_name": "exec",
+            "source": {"class": "timeout", "exit_code": 124},
+            "burstable_two": {"class": "timeout", "exit_code": 124},
+            "hard_two": {"class": "exit_nonzero", "exit_code": 1},
+            "duration_s": {"burstable_two": 10.0, "hard_two": 2.0},
+            "tool_args": json.dumps({"command": "run failed"}),
+        }
+    ]
+    assert audit["source_clean_outcome_stable_fixed_duration_diagnostic"] == {
+        "task_count": 1,
+        "queue_concurrency": 2,
+        "execution_only": {
+            "burstable_two_makespan_s": 4.0,
+            "hard_two_makespan_s": 6.0,
+            "improvement_fraction": pytest.approx(1 / 3),
+        },
+        "recorded_container_startup_plus_replay": {
+            "burstable_two_makespan_s": 5.0,
+            "hard_two_makespan_s": 7.0,
+            "improvement_fraction": pytest.approx(2 / 7),
+        },
+    }
