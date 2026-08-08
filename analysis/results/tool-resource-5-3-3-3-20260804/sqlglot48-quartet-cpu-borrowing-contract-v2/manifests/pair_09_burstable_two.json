@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "defaults": {
+    "task_source": "/home/chiyu/workspace/agent-sched-bench/data/swe-rebench/tasks.json"
+  },
+  "traces": [
+    {
+      "trace": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3182/attempt_1/trace.jsonl"
+    },
+    {
+      "trace": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3394/attempt_1/trace.jsonl"
+    },
+    {
+      "trace": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3734/attempt_1/trace.jsonl"
+    },
+    {
+      "trace": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3440/attempt_1/trace.jsonl"
+    }
+  ]
+}
