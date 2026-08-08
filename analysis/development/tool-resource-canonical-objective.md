@@ -6,19 +6,18 @@
 This file is the authority for tool-resource targets, evaluation semantics,
 evidence boundaries, and scheduler-facing decisions. It intentionally omits
 superseded protocols and chronological experiment narration. Git and frozen
-artifacts retain that history; `clause-interaction-kb-plan.md` contains the
-long-form research record.
+artifacts retain that history.
 
 ## 1. Current decisions
 
 | Area | Current decision |
 |---|---|
-| Prediction | Keep the target-specific development SOTA below. It is exposed development evidence, not confirmation. |
+| Prediction | Keep the target-specific Task-Aware Command Predictor below as the selected development candidate. It is exposed evidence, not confirmation or deployed code. |
 | CPU execution | **KEEP equal-share burstable execution as the current development CPU-sharing baseline.** |
 | Saturated quartet result | Frozen claim verdict is NO-GO because 8/12, not 9/12, groups improved. This is not a module-retirement decision. |
 | Rolling queue result | **Framework-invalid and inconclusive.** The artifact mechanically recorded NO-GO, but outcome drift and fixed arm order prevent a method verdict. |
 | CPU scheduling | Every subsequent CPU scheduler must compare against equal-share burstable execution unless fresh evidence supersedes it. |
-| KB representation | Raw exact/prefix/binary `ClauseResourceKB` remains Current. Trie/lattice/semantic-key replacement is closed as a contribution. |
+| KB representation | Raw exact/prefix/binary `ClauseResourceKB` is the implemented Clause-KB baseline. Trie/lattice/semantic-key replacement is closed as a contribution. |
 | Offline agent | Closed. More prompts, critics, DSLs, or generated adapters are not authorized. |
 | KV scheduling | Closed under the current CacheWise/C100 simulator and action model. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
@@ -105,27 +104,32 @@ Compound commands compose physical values, never bucket IDs:
 Unsupported or ambiguous structure remains unavailable. Boolean OR is never a
 composition rule.
 
-## 4. Current predictor
+## 4. Prediction architectures
 
-`ClauseResourceKB` is Current. It uses raw exact argv, argv-prefix, and
-binary/global backoff with frozen public evidence and causal repository-local
-task-final updates. The trie is an implementation detail, not the research
-contribution.
+The **Clause-KB baseline** is the implemented `ClauseResourceKB`. It uses raw
+exact argv, argv-prefix, and binary/global backoff with frozen public evidence
+and causal repository-local task-final updates. The trie is an implementation
+detail, not the research contribution.
 
-The current development reference uses one common `BeginCall` decision time
-with target-specific heads:
+The **Task-Aware Command Predictor** is the selected meeting-facing development
+candidate. It uses one common `BeginCall` decision time and target-specific
+heads. Majority is the constant fit-set mode for each target.
 
-| Target | Eligible | Current | Development SOTA | Delta | Selected head |
-|---|---:|---:|---:|---:|---|
-| Latency | 1,044 | 74.904% | 79.023% | +4.119 pp | semantic work units + monotone test phase |
-| CPU | 672 | 82.887% | 87.500% | +4.613 pp | semantic work units + monotone test phase |
-| RSS | 736 | 80.978% | 87.500% | +6.522 pp | semantic work units + monotone test phase |
-| Disk | 1,008 | 82.044% | 83.829% | +1.786 pp | exact complete command |
+| Target | Eligible | Majority | Clause-KB baseline | Task-Aware Predictor | Gain vs Clause-KB | Selected head |
+|---|---:|---:|---:|---:|---:|---|
+| Latency | 1,044 | 58.429% | 74.904% | 79.023% | +4.119 pp | command-work match + repeated-test phase |
+| CPU | 672 | 82.440% | 82.887% | 87.500% | +4.613 pp | command-work match + repeated-test phase |
+| RSS | 736 | 81.250% | 80.978% | 87.500% | +6.522 pp | command-work match + repeated-test phase |
+| Disk | 1,008 | 61.012% | 82.044% | 83.829% | +1.786 pp | exact command history |
 
-Equal-weight four-target accuracy is 84.463% versus 80.203% for Current. This
-configuration was selected post-hoc on exposed validation data. Only RSS clears
-the existing five-point per-target gate; it does not authorize confirmation or
-runtime integration. Artifact:
+Equal-weight four-target accuracy is 70.783% for Majority, 80.203% for the
+Clause-KB baseline, and 84.463% for the Task-Aware Command Predictor. The
+candidate first matches complete commands, then equivalent requested pip or
+pytest work, and otherwise falls back to Clause-KB. For latency, CPU, and RSS,
+a third-or-later repeated full-suite test may only raise the predicted bucket;
+Disk uses exact command history. This configuration was selected post-hoc on
+exposed validation data. Only RSS clears the existing five-point per-target
+gate; it does not authorize confirmation or runtime integration. Artifact:
 `sqlglot50-multitarget-sota-v1/` under the result root in Section 8.
 
 Runtime ownership remains fixed:
@@ -144,9 +148,9 @@ All rows below are development-exposed.
 
 | Question | Result | Decision |
 |---|---|---|
-| CacheWise/C100 KV victim selection | SOTA improved C100 recomputation 1.481%; block-aware hindsight upper bound improved 9.620% | Closed for current simulator/action model |
+| CacheWise/C100 KV victim selection | Task-Aware Command Predictor improved C100 recomputation 1.481%; block-aware hindsight upper bound improved 9.620% | Closed for current simulator/action model |
 | CPU+RSS admission oracle | Hindsight reservations reduced mean makespan 10.868% | Action space exists |
-| Peak-class predictor admission | SOTA was 9.630% slower than Current and both created many unverifiable capacity exposures | Direct hard-class admission closed |
+| Peak-class predictor admission | Task-Aware Command Predictor was 9.630% slower than Clause-KB and both created many unverifiable capacity exposures | Direct hard-class admission closed |
 | Physical under-reservation | 2 cores were 3.928x slower than 8; 2 GiB `memory.high` did not finish within 3,600 s versus 18.493 s baseline | Under-reservation cost is real and must be charged |
 | CPU-throughput target oracle | Throughput class reduced peak-class makespan 19.03% | Target has hindsight headroom |
 | Static two-core request | 8.452% mean regret versus throughput oracle | Prediction or feedback still has headroom |
@@ -156,7 +160,7 @@ All rows below are development-exposed.
 | Rolling four-task queue | Burstable full wall time was 8,952.374 s versus 8,688.964 s hard-two, 3.031% slower | Framework-invalid; neither confirms nor rejects burstable |
 | Exact-tool ABBA diagnostic | Four SQLGlot 3734 runs preserved all 67 actions and all 33 tool-call terminal classes; descriptive burstable wall time was 4.697% lower | Framework repair works on this task; no method verdict |
 
-### Current CPU-sharing baseline
+### CPU-sharing baseline
 
 The saturated replay admitted four tasks with two-core guarantees, filling the
 eight-core host. Hard-two enforced each two-core quota. Burstable-two retained
@@ -177,7 +181,7 @@ default and has no temporal-generalization claim.
 Post-hoc mechanism attribution found that group improvement tracked the hard-arm
 tail and idle-guarantee fractions (Spearman 0.734 for each). The two dominant
 groups kept nearly the same total CPU work across arms while long package builds
-used up to eight cores and shortened by 1,207 and 1,075 seconds. Current
+used up to eight cores and shortened by 1,207 and 1,075 seconds. Clause-KB
 `BeginCall` predictions missed both carriers, and the original development set
 contained no `--force-reinstall` example, so prediction-guided task grouping is
 not authorized.
@@ -263,7 +267,7 @@ signal, action, or fresh workload may motivate a separately frozen protocol.
 Result root:
 `analysis/results/tool-resource-5-3-3-3-20260804/`
 
-- Current predictor: `sqlglot50-multitarget-sota-v1/result.json`
+- Clause-KB baseline and Task-Aware Command Predictor: `sqlglot50-multitarget-sota-v1/result.json`
 - CPU+RSS oracle: `sqlglot100-resource-admission-oracle-v1/result.json`
 - Predictor admission: `sqlglot50-resource-admission-predictors-v1/result.json`
 - Under-reservation calibration: `resource-underreservation-calibration-v1/result.json`
@@ -294,7 +298,8 @@ Unavailable hard predictions count as incorrect.
 Short-null resource policy = Low only when explicitly marked and <500 ms.
 Causal visibility = observation end before query start, after task settlement.
 Compound commands = physical sequential/pipeline composition, never Boolean OR.
-Current = unchanged raw exact/prefix/binary control.
+Clause-KB baseline = unchanged raw exact/prefix/binary control.
+Task-Aware Command Predictor = selected development candidate, not deployed.
 Equal-share burstable CPU execution = retained development scheduling baseline.
 Protocol NO-GO != permission to delete a retained baseline.
 No result-dependent tuning, hindsight state, or dataset-specific outcome rule.
