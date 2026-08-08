@@ -13,16 +13,18 @@ artifacts retain that history.
 | Area | Current decision |
 |---|---|
 | Prediction | Keep the target-specific Task-Aware Command Predictor below as the selected development candidate. It is exposed evidence, not confirmation or deployed code. |
-| CPU execution | **KEEP equal-share burstable execution as the current development CPU-sharing baseline.** |
+| Runtime feedback | **KEEP causal command-level eBPF feedback as the current promising resource-action candidate.** It is counterfactual development evidence, not an integrated scheduler. |
+| CPU execution | Keep equal-share burstable execution as the simple physical CPU-sharing baseline, not as a proven method. |
 | Saturated quartet result | Frozen claim verdict is NO-GO because 8/12, not 9/12, groups improved. This is not a module-retirement decision. |
-| Rolling queue result | **Framework-invalid and inconclusive.** The artifact mechanically recorded NO-GO, but outcome drift and fixed arm order prevent a method verdict. |
-| CPU scheduling | Every subsequent CPU scheduler must compare against equal-share burstable execution unless fresh evidence supersedes it. |
+| Fresh counterbalanced queue | **Inconclusive because 7/1,818 paired tool calls changed terminal class.** Timing-only improvement was 0.929% with 2/4 queues improving, below the frozen gate even before the quality failure. |
+| Prediction contribution to feedback | Not established. Task-Aware seeding did not improve the frozen reservation/service operating point over feedback alone. |
+| CPU scheduling | A physical reservation-aware admission test must compare feedback against fixed-eight and equal-share burstable controls. |
 | KB representation | Raw exact/prefix/binary `ClauseResourceKB` is the implemented Clause-KB baseline. Trie/lattice/semantic-key replacement is closed as a contribution. |
 | Offline agent | Closed. More prompts, critics, DSLs, or generated adapters are not authorized. |
 | KV scheduling | Closed under the current CacheWise/C100 simulator and action model. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
-| Runtime integration | No predictor or scheduler candidate currently authorizes production integration. |
-| Next research step | Exact-source replay now passes a one-task ABBA diagnostic; a CPU-sharing claim still requires a fresh counterbalanced rolling experiment with quality and complete lifecycle accounting. |
+| Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
+| Next research step | Test whether feedback-released reservation changes physical admission and queue completion on development-exposed workloads; consume fresh evidence only after that mechanism works. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -159,72 +161,45 @@ All rows below are development-exposed.
 | Four-task saturated replay | 12.966% mean improvement; CI [2.947%, 25.527%]; 8/12 groups improved | Frozen claim NO-GO; **module decision KEEP** |
 | Rolling four-task queue | Burstable full wall time was 8,952.374 s versus 8,688.964 s hard-two, 3.031% slower | Framework-invalid; neither confirms nor rejects burstable |
 | Exact-tool ABBA diagnostic | Four SQLGlot 3734 runs preserved all 67 actions and all 33 tool-call terminal classes; descriptive burstable wall time was 4.697% lower | Framework repair works on this task; no method verdict |
+| Fresh 48-task counterbalanced queue | 7/1,818 paired calls changed terminal class; timing-only mean was +0.929%, with 2/4 queues improving | Inconclusive on quality; timing-only result also misses the 5% and 3/4 gate |
+| Prediction-seeded feedback | Feedback alone reduced reservation 37.076% at 1.032% service inflation; Task-Aware seeding changed this to 37.635% and 1.274% | Feedback promising; incremental prediction gate failed |
+| Cross-repository feedback | On 259 SWE100/277 tasks, reservation fell 45.010% at 1.543% service inflation; task-bootstrap intervals were [38.286%, 50.959%] and [1.256%, 1.820%] | Development GO for causal feedback; physical scheduling utility untested |
+| Prediction-weighted CPU shares | Task-Aware reduced mean completion by 0.0056%; a true-demand oracle reduced it by only 0.0527% | Closed: recorded-duration floor leaves no useful share-allocation headroom |
+| Ready-queue priority | Exact-duration aging oracle reduced mean completion 3.991% with 0.301% makespan cost | Below the frozen 5% gate; retain only as a diagnosed tradeoff |
 
-### CPU-sharing baseline
+### Current CPU action frontier
 
-The saturated replay admitted four tasks with two-core guarantees, filling the
-eight-core host. Hard-two enforced each two-core quota. Burstable-two retained
-the same cpuset and equal shares but removed the hard quota.
+Equal-share burstable execution remains the simplest physical baseline: tasks
+retain equal two-core guarantees but may borrow idle CPU. The two-task result
+was positive; the saturated four-task claim missed its direction gate by one
+group. The older rolling result was framework-invalid because outcome and
+lifecycle drift were not part of its validity check.
 
-Burstable-two reduced mean task completion from 572.915 to 517.502 seconds
-and p95 from 1,868.606 to 1,116.854 seconds. Two of 48 tasks slowed by more than
-10%; none slowed by more than 25%. All 96 task-arm executions preserved actions
-and CPU controls with zero source-success timeout or OOM; a post-run audit found
-none of the 96 containers remaining.
+The repaired 48-task experiment used four disjoint 12-task queues, immediate
+refill, counterbalanced arm order, exact source tool calls, complete lifecycle
+timing, and explicit terminal-class quality checks. Seven of 1,818 paired calls
+still changed terminal class across arms, involving five tasks, so timing was
+ineligible. Descriptively, burstable changed queue wall time by -16.575%,
++18.855%, -5.281%, and +6.716%: mean +0.929%, median +0.717%, and only two
+queues improved. The first two burstable arms also overlapped unquantified
+offline host work; the generated result and run note forbid post-hoc correction.
+Thus burstable remains a control, not a supported scheduling claim.
 
-The frozen direction gate missed by one group, so the artifact remains NO-GO
-for a claim of consistent group-level improvement. The large positive effects
-and small negative effects nevertheless justify retaining equal-share
-burstable execution as the development baseline. It is not yet a production
-default and has no temporal-generalization claim.
+The strongest current action is instead causal command-level feedback. Each
+command begins at eight cores; after the first complete 0.5-second eBPF/cgroup
+sample, demand maps to a 2, 4, or 8-core page and can update causally. On the
+SQLGlot development set, feedback alone reduced reserved CPU-core-seconds by
+37.076% at 1.032% service inflation. Seeding it with Clause-KB or Task-Aware
+predictions did not pass the incremental gate.
 
-Post-hoc mechanism attribution found that group improvement tracked the hard-arm
-tail and idle-guarantee fractions (Spearman 0.734 for each). The two dominant
-groups kept nearly the same total CPU work across arms while long package builds
-used up to eight cores and shortened by 1,207 and 1,075 seconds. Clause-KB
-`BeginCall` predictions missed both carriers, and the original development set
-contained no `--force-reinstall` example, so prediction-guided task grouping is
-not authorized.
-
-The completed rolling gate used the same 48 exposed tasks, concurrency four,
-immediate refill, and full queue wall time. Burstable was 3.031% slower despite
-reducing mean task runtime by 6.490% and p95 by 20.976%; 34/48 individual tasks
-were faster. The fixed burstable-first order also charged 1,196.7 seconds more
-aggregate recorded container-startup time to that arm. More importantly, replay
-fixed the recorded actions but physically re-executed commands: 7/1,765 tool
-calls across three tasks changed coarse terminal class between source or arms,
-including a 600-second source/burstable timeout that became a 57.8-second
-nonzero exit under hard-two. Four calls across two tasks differed directly
-between arms.
-
-The original `result.json` therefore retains its mechanically produced
-`status: no_go`, but the 2026-08-08 validity amendment supersedes that as a
-scientific interpretation. The experiment is inconclusive because its
-`all_validity_checks_passed` field omitted material outcome and lifecycle
-validity dimensions. It is not negative evidence about burstable CPU sharing.
-
-A post-hoc diagnostic retained only the 36 source-clean tasks with identical
-source/burstable/hard terminal classes. Reconstructing a fixed-duration
-four-worker queue made burstable 9.716% faster for execution alone and 4.524%
-faster after adding recorded container-startup time. The latter omits artifact
-restore, finalization, container stop, and image cleanup. This is neither a
-physical rerun nor a confirmatory subset and supplies no method verdict. It
-instead diagnoses why the original gate is not interpretable. The next
-protocol must preserve tool calls exactly, treat outcome differences as quality
-rather than filter them away, counterbalance arm order, and separate replay,
-startup, and the remaining lifecycle costs.
-
-The exact-source contract was then exercised on the post-hoc SQLGlot 3734
-mismatch in hard-burst-burst-hard order, with two repetitions per arm. Every
-run preserved the original 67 actions and completed with the same terminal
-class as the source for all 33 tool calls. The target full-suite pytest exited
-zero in all four runs, so the old hard-arm nonzero exit did not recur. Mean
-recorded wall time was 274.677 seconds hard and 261.776 seconds burstable, a
-descriptive 4.697% difference. This validates the repaired replay contract for
-the task and shows that the prior quality mismatch was not a deterministic
-effect of hard CPU control alone. Because the task was selected after seeing
-the mismatch and has only two repetitions per arm, it supplies no scheduler
-verdict or population estimate.
+Without changing the policy, the SWE100/277 generality run covered 259 valid
+tasks, 205 repositories, and 8,237 exec commands. Feedback reduced reservation
+45.010% at 1.543% service inflation; both corpora independently passed the
+frozen gate. Of 258 tasks with exec work, 244 reduced reservation. This is a
+counterfactual per-command result, not a concurrent physical scheduler: it
+shows broad signal and a viable operating point, but not that released capacity
+improves queue completion. The next experiment must connect those causal page
+updates to actual admission and charge controller/collector cost.
 
 ## 6. Closed directions
 
@@ -249,10 +224,11 @@ signal, action, or fresh workload may motivate a separately frozen protocol.
 
 - The original SQLGlot100, the 50-task validation partition, and every result
   summarized here are development-exposed.
-- The nominal final50 resource labels and traces were not scored, but collector
-  metadata for two final tasks was accidentally read. That partition is no
-  longer untouched confirmation evidence and remains unauthorized absent an
-  explicit new protocol.
+- The nominal SQLGlot final partition is now fully development-exposed: 48
+  tasks were consumed by the counterbalanced physical replay, and two older
+  tasks had already appeared in result artifacts.
+- SWE100 and SWE277 are development-exposed. Their feedback result tests
+  cross-repository breadth but is not confirmation.
 - Existing SQLGlot tasks end at 2025-04-25; no ready newer public SQLGlot image
   cohort was found.
 - Confirmation requires genuinely fresh tasks, a new time period, or another
@@ -281,6 +257,11 @@ Result root:
 - Rolling outcome audit: `sqlglot48-rolling-cpu-borrowing-contract-v1/outcome-audit.json`
 - Rolling validity amendment: `sqlglot48-rolling-cpu-borrowing-contract-v1/validity-amendment.json`
 - Exact-tool repeatability diagnostic: `sqlglot3734-exact-tool-abba-diagnostic-v1/result.json`
+- Fresh counterbalanced physical replay: `sqlglot-final48-counterbalanced-rolling-exact-v1/result.json`
+- Physical replay interference record: `sqlglot-final48-counterbalanced-rolling-exact-v1/run-notes.json`
+- Prediction-seeded CPU feedback: `sqlglot50-prediction-seeded-cpu-feedback-v1/result.json`
+- Prediction-weighted CPU shares: `sqlglot50-prediction-weighted-cpu-shares-v1/result.json`
+- SWE100/277 feedback generality: `swe100-277-cpu-feedback-generality-v1/result.json`
 
 Task split authority:
 `analysis/development/sqlglot-relational-task-split.json`.
@@ -300,7 +281,8 @@ Causal visibility = observation end before query start, after task settlement.
 Compound commands = physical sequential/pipeline composition, never Boolean OR.
 Clause-KB baseline = unchanged raw exact/prefix/binary control.
 Task-Aware Command Predictor = selected development candidate, not deployed.
-Equal-share burstable CPU execution = retained development scheduling baseline.
+Causal eBPF feedback = promising resource-action candidate, not integrated.
+Equal-share burstable CPU execution = retained physical control baseline.
 Protocol NO-GO != permission to delete a retained baseline.
 No result-dependent tuning, hindsight state, or dataset-specific outcome rule.
 No new collection, runtime integration, or scheduler claim without a separate
