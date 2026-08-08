@@ -1,0 +1,16 @@
+{
+  "schema": "physical-replay-run-notes-v1",
+  "evidence_status": "development_diagnostic_only",
+  "known_host_interference": {
+    "present": true,
+    "host_cpu_count": 8,
+    "affected_arms": [
+      "pair_01/burstable_two",
+      "pair_02/burstable_two"
+    ],
+    "observation": "Offline scheduling simulations, tests, and trace hashing overlapped portions of these arms before the shared eight-core host was recognized as a confounder.",
+    "overlap_duration_quantified": false,
+    "expected_direction": "Bias burstable wall time upward.",
+    "interpretation": "Do not use individual queue timing as confirmatory evidence or attempt a post-hoc correction. The generated result is independently timing-ineligible because terminal classes differ, and its timing-only aggregate is below the frozen gate."
+  }
+}

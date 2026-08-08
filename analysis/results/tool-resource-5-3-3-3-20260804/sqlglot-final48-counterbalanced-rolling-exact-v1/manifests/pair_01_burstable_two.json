@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "defaults": {
+    "task_source": "/home/chiyu/workspace/agent-sched-bench/data/swe-rebench/tasks.json"
+  },
+  "traces": [
+    {
+      "trace": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3045/attempt_1/trace.jsonl"
+    },
+    {
+      "trace": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3392/attempt_1/trace.jsonl"
+    },
+    {
+      "trace": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2521/attempt_1/trace.jsonl"
+    },
+    {
+      "trace": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3612/attempt_1/trace.jsonl"
+    },
+    {
+      "trace": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2800/attempt_1/trace.jsonl"
+    },
+    {
+      "trace": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2295/attempt_1/trace.jsonl"
+    },
+    {
+      "trace": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3627/attempt_1/trace.jsonl"
+    },
+    {
+      "trace": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3436/attempt_1/trace.jsonl"
+    },
+    {
+      "trace": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3470/attempt_1/trace.jsonl"
+    },
+    {
+      "trace": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2499/attempt_1/trace.jsonl"
+    },
+    {
+      "trace": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3548/attempt_1/trace.jsonl"
+    },
+    {
+      "trace": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3160/attempt_1/trace.jsonl"
+    }
+  ]
+}

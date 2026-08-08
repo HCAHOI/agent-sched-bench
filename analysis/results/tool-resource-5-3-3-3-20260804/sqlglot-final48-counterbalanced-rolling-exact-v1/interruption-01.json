@@ -1,0 +1,238 @@
+{
+  "schema": "sqlglot-final48-counterbalanced-rolling-exact-v1",
+  "status": "invalid",
+  "protocol": {
+    "cohort": "fresh_final48_counterbalanced_v1",
+    "schema": "sqlglot-final48-counterbalanced-rolling-exact-v1",
+    "frozen_at": "2026-08-08",
+    "evidence_status": "preregistered_before_any_selected_task_outcome_read",
+    "pre_outcome_review_corrections": [
+      "Require telemetry status plus non-empty resource samples for every task-arm.",
+      "Require every selected source image to be absent before and after each arm.",
+      "Rebuild task-level quality artifacts from disk when resuming.",
+      "Preserve invalid or absent fresh-run result state during arm-level resume.",
+      "Disable the timing gate when either arm differs from the source terminal class.",
+      "Permit an empty arm-level checkpoint and select the latest attempt after retrying an interrupted arm.",
+      "Require resource samples to cover the replay action window within a frozen two-second boundary tolerance.",
+      "Treat Docker image-probe errors as invalid rather than as evidence that an image is absent."
+    ],
+    "selection_seed": null,
+    "selection_range": [
+      0,
+      48
+    ],
+    "selection_partition": "final_test",
+    "selection_rule": "preserve the previously frozen final_test order and exclude the two task units already present in older SWE result artifacts",
+    "excluded_task_ids": [
+      "tobymao__sqlglot-3255",
+      "tobymao__sqlglot-2659"
+    ],
+    "arm_order_seed": null,
+    "bootstrap_seed": 20260816,
+    "minimum_improving_pairs": 3,
+    "mechanism_only": false,
+    "paired_workload_contract": true,
+    "paired_workload_contract_version": 2,
+    "exec_timeout_floor_s": null,
+    "selected_task_ids": [
+      "tobymao__sqlglot-3045",
+      "tobymao__sqlglot-3392",
+      "tobymao__sqlglot-2521",
+      "tobymao__sqlglot-3612",
+      "tobymao__sqlglot-2800",
+      "tobymao__sqlglot-2295",
+      "tobymao__sqlglot-3627",
+      "tobymao__sqlglot-3436",
+      "tobymao__sqlglot-3470",
+      "tobymao__sqlglot-2499",
+      "tobymao__sqlglot-3548",
+      "tobymao__sqlglot-3160",
+      "tobymao__sqlglot-3330",
+      "tobymao__sqlglot-2297",
+      "tobymao__sqlglot-3478",
+      "tobymao__sqlglot-3352",
+      "tobymao__sqlglot-3425",
+      "tobymao__sqlglot-2296",
+      "tobymao__sqlglot-2306",
+      "tobymao__sqlglot-3376",
+      "tobymao__sqlglot-3720",
+      "tobymao__sqlglot-3533",
+      "tobymao__sqlglot-3111",
+      "tobymao__sqlglot-2450",
+      "tobymao__sqlglot-3621",
+      "tobymao__sqlglot-3418",
+      "tobymao__sqlglot-2591",
+      "tobymao__sqlglot-3191",
+      "tobymao__sqlglot-3201",
+      "tobymao__sqlglot-3652",
+      "tobymao__sqlglot-2305",
+      "tobymao__sqlglot-2358",
+      "tobymao__sqlglot-3290",
+      "tobymao__sqlglot-3605",
+      "tobymao__sqlglot-3252",
+      "tobymao__sqlglot-3756",
+      "tobymao__sqlglot-3547",
+      "tobymao__sqlglot-2432",
+      "tobymao__sqlglot-3689",
+      "tobymao__sqlglot-3696",
+      "tobymao__sqlglot-3166",
+      "tobymao__sqlglot-3367",
+      "tobymao__sqlglot-3477",
+      "tobymao__sqlglot-2658",
+      "tobymao__sqlglot-3731",
+      "tobymao__sqlglot-2529",
+      "tobymao__sqlglot-3701",
+      "tobymao__sqlglot-3426"
+    ],
+    "pairs": [
+      {
+        "pair": 1,
+        "task_ids": [
+          "tobymao__sqlglot-3045",
+          "tobymao__sqlglot-3392",
+          "tobymao__sqlglot-2521",
+          "tobymao__sqlglot-3612",
+          "tobymao__sqlglot-2800",
+          "tobymao__sqlglot-2295",
+          "tobymao__sqlglot-3627",
+          "tobymao__sqlglot-3436",
+          "tobymao__sqlglot-3470",
+          "tobymao__sqlglot-2499",
+          "tobymao__sqlglot-3548",
+          "tobymao__sqlglot-3160"
+        ],
+        "arm_order": [
+          "hard_two",
+          "burstable_two"
+        ]
+      },
+      {
+        "pair": 2,
+        "task_ids": [
+          "tobymao__sqlglot-3330",
+          "tobymao__sqlglot-2297",
+          "tobymao__sqlglot-3478",
+          "tobymao__sqlglot-3352",
+          "tobymao__sqlglot-3425",
+          "tobymao__sqlglot-2296",
+          "tobymao__sqlglot-2306",
+          "tobymao__sqlglot-3376",
+          "tobymao__sqlglot-3720",
+          "tobymao__sqlglot-3533",
+          "tobymao__sqlglot-3111",
+          "tobymao__sqlglot-2450"
+        ],
+        "arm_order": [
+          "burstable_two",
+          "hard_two"
+        ]
+      },
+      {
+        "pair": 3,
+        "task_ids": [
+          "tobymao__sqlglot-3621",
+          "tobymao__sqlglot-3418",
+          "tobymao__sqlglot-2591",
+          "tobymao__sqlglot-3191",
+          "tobymao__sqlglot-3201",
+          "tobymao__sqlglot-3652",
+          "tobymao__sqlglot-2305",
+          "tobymao__sqlglot-2358",
+          "tobymao__sqlglot-3290",
+          "tobymao__sqlglot-3605",
+          "tobymao__sqlglot-3252",
+          "tobymao__sqlglot-3756"
+        ],
+        "arm_order": [
+          "burstable_two",
+          "hard_two"
+        ]
+      },
+      {
+        "pair": 4,
+        "task_ids": [
+          "tobymao__sqlglot-3547",
+          "tobymao__sqlglot-2432",
+          "tobymao__sqlglot-3689",
+          "tobymao__sqlglot-3696",
+          "tobymao__sqlglot-3166",
+          "tobymao__sqlglot-3367",
+          "tobymao__sqlglot-3477",
+          "tobymao__sqlglot-2658",
+          "tobymao__sqlglot-3731",
+          "tobymao__sqlglot-2529",
+          "tobymao__sqlglot-3701",
+          "tobymao__sqlglot-3426"
+        ],
+        "arm_order": [
+          "hard_two",
+          "burstable_two"
+        ]
+      }
+    ],
+    "source_dir": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804",
+    "task_source": "/home/chiyu/workspace/agent-sched-bench/data/swe-rebench/tasks.json",
+    "group_size": 12,
+    "decision_unit": "queue",
+    "queue_concurrency": 4,
+    "queue_workers": 1,
+    "immediate_refill": true,
+    "cleanup_images": true,
+    "arm_level_resume": true,
+    "unfinished_arm_retry_policy": "rerun the full uncheckpointed arm in place and validate the highest numbered attempt for every task",
+    "makespan_source": "throughput_summary.wall_time_s",
+    "lifecycle_scope": "from after skipped global image prefetch/prebuild through on-demand image pull, container preparation, replay, finalization, stop, and per-task source-image removal",
+    "framework_gate": {
+      "exact_source_actions_required": true,
+      "exact_tool_calls_required": true,
+      "complete_action_sequence_required": true,
+      "cpu_controls_required": true,
+      "oom_forbidden": true,
+      "telemetry_integrity_required": true,
+      "maximum_resource_sample_boundary_gap_s": 2.0,
+      "source_images_absent_before_and_after_each_arm": true,
+      "failure_verdict": "invalid_no_method_verdict"
+    },
+    "quality_gate": {
+      "unit": "tool_call_terminal_class",
+      "success_classes": [
+        "exit_zero",
+        "tool_success"
+      ],
+      "timing_gate_requires_zero_arm_terminal_class_differences": true,
+      "timing_gate_requires_zero_source_terminal_class_differences": true,
+      "arm_difference_verdict": "inconclusive_quality_difference",
+      "outcome_drift_is_not_framework_failure": true
+    },
+    "timing_gate": {
+      "primary_measure": "throughput_summary.wall_time_s",
+      "mean_improvement_at_least_fraction": 0.05,
+      "minimum_improving_queues": 3,
+      "queue_count": 4,
+      "go_verdict": "go",
+      "failure_verdict": "no_go"
+    },
+    "structural_preflight": {
+      "selected_trace_count": 48,
+      "missing_trace_count": 0,
+      "selected_source_images_cached_before_freeze": 0,
+      "selected_outcomes_read_before_freeze": false
+    },
+    "cost_estimate": {
+      "basis": "The exposed 48-task rolling replay required 17641.34 seconds across two arms; four 12-task queues execute the same 96 task-arm replays plus bounded queue setup.",
+      "expected_wall_hours": "5-6",
+      "authorization": "Human approved launch after the estimate on 2026-08-08."
+    }
+  },
+  "runs": [
+    {
+      "pair": 1,
+      "arms": []
+    }
+  ],
+  "error": {
+    "type": "AssertionError",
+    "message": "source images cached before arm 1 hard_two: ['docker.io/swerebench/sweb.eval.x86_64.tobymao_1776_sqlglot-2800', 'docker.io/swerebench/sweb.eval.x86_64.tobymao_1776_sqlglot-2499']"
+  },
+  "traceback": "Traceback (most recent call last):\n  File \"/home/chiyu/workspace/agent-sched-bench/scripts/evaluation/evaluate_paired_sqlglot_cpu_borrowing.py\", line 1967, in main\n    asyncio.run(\n  File \"/home/chiyu/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/asyncio/runners.py\", line 195, in run\n    return runner.run(main)\n           ^^^^^^^^^^^^^^^^\n  File \"/home/chiyu/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/asyncio/runners.py\", line 118, in run\n    return self._loop.run_until_complete(task)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/chiyu/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/asyncio/base_events.py\", line 691, in run_until_complete\n    return future.result()\n           ^^^^^^^^^^^^^^^\n  File \"/home/chiyu/workspace/agent-sched-bench/scripts/evaluation/evaluate_paired_sqlglot_cpu_borrowing.py\", line 1050, in _run_arm\n    raise AssertionError(\nAssertionError: source images cached before arm 1 hard_two: ['docker.io/swerebench/sweb.eval.x86_64.tobymao_1776_sqlglot-2800', 'docker.io/swerebench/sweb.eval.x86_64.tobymao_1776_sqlglot-2499']\n"
+}
