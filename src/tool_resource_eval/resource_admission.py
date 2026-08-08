@@ -293,6 +293,7 @@ def simulate_burstable_admission(
     max_cpu_cores: Mapping[str, float],
     cpu_share_weights: Mapping[str, float] | None = None,
     admission_priorities: Mapping[str, float] | None = None,
+    age_admission_priorities: bool = False,
 ) -> dict[str, object]:
     """Replay admission requests while runnable work may borrow idle CPU."""
 
@@ -315,6 +316,8 @@ def simulate_burstable_admission(
         raise ValueError("burstable replay requires complete CPU share weights")
     if admission_priorities is not None and set(admission_priorities) != set(commands):
         raise ValueError("burstable replay requires complete admission priorities")
+    if age_admission_priorities and admission_priorities is None:
+        raise ValueError("priority aging requires admission priorities")
     if not set(cpu_work_core_s) <= set(commands):
         raise ValueError("CPU work contains an unknown command")
     if any(
@@ -438,9 +441,12 @@ def simulate_burstable_admission(
             key=lambda item: (
                 0.0
                 if admission_priorities is None
-                else admission_priorities[
-                    item[1].program.commands[item[1].command_index].command_id
-                ],
+                else (
+                    admission_priorities[
+                        item[1].program.commands[item[1].command_index].command_id
+                    ]
+                    + (item[1].ready_s if age_admission_priorities else 0.0)
+                ),
                 item[1].ready_s,
                 item[1].seed_rank,
                 item[1].program.task_id,

@@ -411,12 +411,62 @@ def test_burstable_priority_requires_complete_finite_values() -> None:
 
     with pytest.raises(ValueError, match="complete admission priorities"):
         simulate_burstable_admission(programs, **kwargs, admission_priorities={})
+    with pytest.raises(ValueError, match="priority aging"):
+        simulate_burstable_admission(
+            programs,
+            **kwargs,
+            age_admission_priorities=True,
+        )
     with pytest.raises(ValueError, match="finite"):
         simulate_burstable_admission(
             programs,
             **kwargs,
             admission_priorities={"task:cmd": float("nan")},
         )
+
+
+def test_burstable_priority_aging_bounds_short_job_overtaking() -> None:
+    specs = {
+        "long": (0.0, 3.0),
+        "short0": (0.0, 1.0),
+        "short1": (1.0, 1.0),
+        "short2": (2.0, 1.0),
+        "short3": (3.0, 1.0),
+    }
+    programs = [
+        AdmissionProgram(
+            task_id,
+            ready_s,
+            (AdmissionCommand(f"{task_id}:cmd", duration, 1.0, 100.0, 0.0),),
+            0.0,
+        )
+        for task_id, (ready_s, duration) in specs.items()
+    ]
+    command_ids = {f"{task_id}:cmd" for task_id in specs}
+    kwargs = {
+        "cpu_capacity": 1.0,
+        "rss_capacity_mb": 1_000.0,
+        "requested_reservations": {cid: (1.0, 100.0) for cid in command_ids},
+        "cpu_work_core_s": {
+            f"{task_id}:cmd": duration
+            for task_id, (_ready_s, duration) in specs.items()
+        },
+        "max_cpu_cores": {cid: 1.0 for cid in command_ids},
+        "admission_priorities": {
+            f"{task_id}:cmd": duration
+            for task_id, (_ready_s, duration) in specs.items()
+        },
+    }
+
+    pure = simulate_burstable_admission(programs, **kwargs)
+    aged = simulate_burstable_admission(
+        programs,
+        **kwargs,
+        age_admission_priorities=True,
+    )
+
+    assert pure["start_s_by_command"]["long:cmd"] == 4.0
+    assert aged["start_s_by_command"]["long:cmd"] == 2.0
 
 
 def test_reservation_sums_pipeline() -> None:
