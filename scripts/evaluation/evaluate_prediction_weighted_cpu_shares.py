@@ -300,16 +300,20 @@ def run() -> dict[str, Any]:
             )
             for arm, arm_weights in weights.items()
         }
-        identities = {
-            (
-                int(metrics["command_count"]),
-                float(metrics["total_cpu_work_core_s"]),
-                float(metrics["served_cpu_work_core_s"]),
+        reference = arm_results["equal_share"]
+        if any(
+            int(metrics["command_count"]) != int(reference["command_count"])
+            or any(
+                not math.isclose(
+                    float(metrics[key]),
+                    float(reference[key]),
+                    rel_tol=1e-12,
+                    abs_tol=1e-6,
+                )
+                for key in ("total_cpu_work_core_s", "served_cpu_work_core_s")
             )
+            or bool(metrics["capacity_violation"])
             for metrics in arm_results.values()
-        }
-        if len(identities) != 1 or any(
-            bool(metrics["capacity_violation"]) for metrics in arm_results.values()
         ):
             raise ValueError("CPU-share arms differ in commands, work, or capacity")
         equal_service = arm_results["equal_share"]["service_s_by_command"]
