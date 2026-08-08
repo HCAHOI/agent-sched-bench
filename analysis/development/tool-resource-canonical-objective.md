@@ -16,14 +16,14 @@ long-form research record.
 | Prediction | Keep the target-specific development SOTA below. It is exposed development evidence, not confirmation. |
 | CPU execution | **KEEP equal-share burstable execution as the current development CPU-sharing baseline.** |
 | Saturated quartet result | Frozen claim verdict is NO-GO because 8/12, not 9/12, groups improved. This is not a module-retirement decision. |
-| Rolling queue result | Frozen claim verdict is NO-GO: burstable was 3.031% slower on full queue wall time. Outcome drift and fixed arm order prevent a clean causal magnitude claim. |
+| Rolling queue result | **Framework-invalid and inconclusive.** The artifact mechanically recorded NO-GO, but outcome drift and fixed arm order prevent a method verdict. |
 | CPU scheduling | Every subsequent CPU scheduler must compare against equal-share burstable execution unless fresh evidence supersedes it. |
 | KB representation | Raw exact/prefix/binary `ClauseResourceKB` remains Current. Trie/lattice/semantic-key replacement is closed as a contribution. |
 | Offline agent | Closed. More prompts, critics, DSLs, or generated adapters are not authorized. |
 | KV scheduling | Closed under the current CacheWise/C100 simulator and action model. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor or scheduler candidate currently authorizes production integration. |
-| Next research step | A future CPU-sharing claim requires fresh tasks, counterbalanced arm order, and terminal-outcome validity. The exposed rolling audit is diagnostic only. |
+| Next research step | A future CPU-sharing claim requires exact source tool calls, outcome-quality accounting, counterbalanced arm order, and complete lifecycle timing. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -153,7 +153,7 @@ All rows below are development-exposed.
 | Ideal burstable two-core model | 8.881% faster than hard two-core; every seed improved | Authorized physical test |
 | Two-task physical paired replay | 14.490% mean improvement; 13/13 pairs improved; CI [9.049%, 22.832%] | Positive exposed mechanism evidence |
 | Four-task saturated replay | 12.966% mean improvement; CI [2.947%, 25.527%]; 8/12 groups improved | Frozen claim NO-GO; **module decision KEEP** |
-| Rolling four-task queue | Burstable full wall time was 8,952.374 s versus 8,688.964 s hard-two, 3.031% slower | Frozen claim NO-GO; audit before any fresh protocol |
+| Rolling four-task queue | Burstable full wall time was 8,952.374 s versus 8,688.964 s hard-two, 3.031% slower | Framework-invalid; neither confirms nor rejects burstable |
 
 ### Current CPU-sharing baseline
 
@@ -192,15 +192,22 @@ including a 600-second source/burstable timeout that became a 57.8-second
 nonzero exit under hard-two. Four calls across two tasks differed directly
 between arms.
 
+The original `result.json` therefore retains its mechanically produced
+`status: no_go`, but the 2026-08-08 validity amendment supersedes that as a
+scientific interpretation. The experiment is inconclusive because its
+`all_validity_checks_passed` field omitted material outcome and lifecycle
+validity dimensions. It is not negative evidence about burstable CPU sharing.
+
 A post-hoc diagnostic retained only the 36 source-clean tasks with identical
 source/burstable/hard terminal classes. Reconstructing a fixed-duration
 four-worker queue made burstable 9.716% faster for execution alone and 4.524%
 faster after adding recorded container-startup time. The latter omits artifact
 restore, finalization, container stop, and image cleanup. This is neither a
-physical rerun nor a confirmatory subset and cannot reverse the frozen NO-GO.
-It isolates the next requirements: compare coarse terminal outcomes as a
-validity condition, counterbalance arm order, and separate replay, startup, and
-the remaining lifecycle costs.
+physical rerun nor a confirmatory subset and supplies no method verdict. It
+instead diagnoses why the original gate is not interpretable. The next
+protocol must preserve tool calls exactly, treat outcome differences as quality
+rather than filter them away, counterbalance arm order, and separate replay,
+startup, and the remaining lifecycle costs.
 
 ## 6. Closed directions
 
@@ -255,6 +262,7 @@ Result root:
 - Saturated four-task matrix: `sqlglot48-quartet-cpu-borrowing-contract-v2/result.json`
 - Rolling queue: `sqlglot48-rolling-cpu-borrowing-contract-v1/result.json`
 - Rolling outcome audit: `sqlglot48-rolling-cpu-borrowing-contract-v1/outcome-audit.json`
+- Rolling validity amendment: `sqlglot48-rolling-cpu-borrowing-contract-v1/validity-amendment.json`
 
 Task split authority:
 `analysis/development/sqlglot-relational-task-split.json`.

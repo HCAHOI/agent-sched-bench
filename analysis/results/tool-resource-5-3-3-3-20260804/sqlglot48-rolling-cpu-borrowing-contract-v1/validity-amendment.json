@@ -1,0 +1,64 @@
+{
+  "schema": "sqlglot-rolling-validity-amendment-v1",
+  "effective_date": "2026-08-08",
+  "amends": "result.json",
+  "original_artifact_status": "no_go",
+  "amendment_timing": "post_hoc_after_result_and_outcome_audit",
+  "scientific_status": "inconclusive_framework_invalid",
+  "method_decision": "do_not_reject_burstable_cpu_sharing",
+  "reason": "The original validity gate did not test terminal-outcome equivalence or isolate arm-order-dependent lifecycle cost, so its makespan comparison cannot identify the CPU-sharing effect.",
+  "validity_failures": [
+    {
+      "kind": "terminal_outcome_drift",
+      "evidence": {
+        "tool_call_count": 1765,
+        "source_or_arm_mismatch_tool_call_count": 7,
+        "source_or_arm_mismatch_task_count": 3,
+        "direct_arm_mismatch_tool_call_count": 4,
+        "direct_arm_mismatch_task_count": 2,
+        "critical_tail_task_id": "tobymao__sqlglot-2337",
+        "critical_tail_tool_call_id": "call_j6xhQZWIsWYwZkMUh8iMA0oy",
+        "burstable_timeout_s": 600.1332,
+        "hard_nonzero_exit_s": 57.7836,
+        "duration_difference_s": 542.3496
+      }
+    },
+    {
+      "kind": "fixed_arm_order_startup_confound",
+      "evidence": {
+        "arm_order": [
+          "burstable_two",
+          "hard_two"
+        ],
+        "burstable_recorded_container_startup_sum_s": 5312.572379,
+        "hard_recorded_container_startup_sum_s": 4115.856855,
+        "difference_s": 1196.715524
+      }
+    },
+    {
+      "kind": "incomplete_lifecycle_attribution",
+      "evidence": {
+        "post_hoc_diagnostic_includes": [
+          "recorded container startup",
+          "replay execution"
+        ],
+        "post_hoc_diagnostic_excludes": [
+          "runtime artifact restore",
+          "finalization",
+          "container stop",
+          "image cleanup"
+        ]
+      }
+    }
+  ],
+  "preserved_evidence": {
+    "burstable_full_queue_wall_time_s": 8952.374032360036,
+    "hard_full_queue_wall_time_s": 8688.96378115844,
+    "observed_burstable_improvement_fraction": -0.030315496512114293,
+    "burstable_mean_task_runtime_improvement_fraction": 0.06491191788617846,
+    "burstable_p95_task_runtime_improvement_fraction": 0.20976940324437793,
+    "individual_tasks_faster_under_burstable": 34,
+    "task_count": 48
+  },
+  "interpretation": "The measurements remain factual development evidence, but the rolling experiment neither confirms nor rejects burstable CPU sharing. A valid rerun must preserve tool calls, measure outcome quality, counterbalance order, and account for the complete lifecycle before applying an effect-size gate."
+}
