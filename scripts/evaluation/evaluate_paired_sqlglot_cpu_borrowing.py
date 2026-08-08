@@ -161,6 +161,7 @@ COHORTS: dict[str, dict[str, Any]] = {
         "queue_workers": 1,
         "decision_unit": "queue",
         "immediate_refill": True,
+        "cleanup_images": True,
         "arm_level_resume": True,
         "makespan_source": "throughput_summary.wall_time_s",
         "arm_orders": [["burstable_two", "hard_two"]],
@@ -242,6 +243,7 @@ def _protocol(cohort: str = "initial24") -> dict[str, Any]:
         protocol["queue_concurrency"] = int(config["queue_concurrency"])
         protocol["queue_workers"] = int(config["queue_workers"])
         protocol["immediate_refill"] = bool(config["immediate_refill"])
+        protocol["cleanup_images"] = bool(config["cleanup_images"])
         protocol["arm_level_resume"] = bool(config["arm_level_resume"])
         protocol["makespan_source"] = str(config["makespan_source"])
     return protocol
@@ -464,6 +466,7 @@ async def _run_arm(
     concurrency: int | None = None,
     workers: int | None = None,
     makespan_source: str = "max_task_elapsed_s",
+    cleanup_images: bool = False,
 ) -> dict[str, Any]:
     arm_dir = replay_dir / f"pair_{pair:02d}" / arm
     concurrency = len(task_ids) if concurrency is None else concurrency
@@ -482,6 +485,7 @@ async def _run_arm(
         pmu_monitoring="off",
         memory_bandwidth_monitoring="off",
         container_start_extra_args=ARM_ARGS[arm],
+        cleanup_images=cleanup_images,
     )
     summary_path = arm_dir / "throughput_summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -1165,6 +1169,7 @@ def main() -> None:
                             makespan_source=protocol.get(
                                 "makespan_source", "max_task_elapsed_s"
                             ),
+                            cleanup_images=bool(protocol.get("cleanup_images", False)),
                         )
                     )
                 )

@@ -182,8 +182,9 @@ immediate refill; it must compare hard-two and burstable-two directly, because
 the completed replay used closed four-task batches.
 
 Before launch, that gate is frozen over the same 48 exposed tasks in one queue:
-concurrency four with the simulator's single-process bounded queue, burstable
-first and hard-two second, and `throughput_summary.wall_time_s` as makespan. GO
+concurrency four with the simulator's single-process bounded queue and on-demand
+image cleanup, burstable first and hard-two second, and
+`throughput_summary.wall_time_s` as makespan. GO
 requires at least 5% makespan improvement plus all existing validity checks; a
 single queue has no bootstrap interval.
 

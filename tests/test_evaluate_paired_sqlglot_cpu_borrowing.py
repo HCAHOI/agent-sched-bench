@@ -226,6 +226,7 @@ def test_rolling_queue_freezes_concurrency_order_and_effect_gate() -> None:
     assert protocol["queue_workers"] == 1
     assert protocol["decision_unit"] == "queue"
     assert protocol["immediate_refill"] is True
+    assert protocol["cleanup_images"] is True
     assert protocol["makespan_source"] == "throughput_summary.wall_time_s"
     assert len(protocol["pairs"]) == 1
     assert protocol["pairs"][0]["arm_order"] == ["burstable_two", "hard_two"]
@@ -307,12 +308,14 @@ def test_rolling_arm_limits_workers_without_limiting_task_count(
             concurrency=4,
             workers=1,
             makespan_source="throughput_summary.wall_time_s",
+            cleanup_images=True,
         )
     )
 
     assert captured["concurrency"] == 4
     assert captured["workers"] == 1
     assert captured["prep_concurrency"] == 4
+    assert captured["cleanup_images"] is True
     assert len(result["task_stats"]) == 5
     assert result["pair_makespan_s"] == 9.0
 
