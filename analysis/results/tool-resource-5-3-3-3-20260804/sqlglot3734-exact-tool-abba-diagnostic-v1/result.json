@@ -1,0 +1,99 @@
+{
+  "schema": "sqlglot-exact-tool-outcome-repeatability-result-v1",
+  "status": "diagnostic_complete_no_method_verdict",
+  "protocol": "protocol.json",
+  "task_id": "tobymao__sqlglot-3734",
+  "selection_timing": "post_hoc_after_rolling48_outcome_audit",
+  "framework_validity": {
+    "valid_run_count": 4,
+    "run_count": 4,
+    "source_action_count_per_run": 67,
+    "tool_call_count_per_run": 33,
+    "all_requests_equal_original_source_actions": true,
+    "all_exact_tool_sequences": true,
+    "all_action_sequences_complete": true,
+    "all_failed_action_counts_zero": true,
+    "all_telemetry_integrity_failed_false": true,
+    "clause_telemetry": "not_requested",
+    "exec_timeout_floor_s": null,
+    "paired_workload_contract_version": 2
+  },
+  "quality": {
+    "target_tool_call_id": "call_WEKjaqEY8rxZ4FGnQoRc14rF",
+    "target_command": "SQLGLOTRS_TOKENIZER=0 python3 -m pytest -q",
+    "success_classes": [
+      "exit_zero",
+      "tool_success"
+    ],
+    "target_outcomes_in_abba_order": [
+      "exit_zero",
+      "exit_zero",
+      "exit_zero",
+      "exit_zero"
+    ],
+    "source_terminal_class_mismatch_count_by_run": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "cross_run_terminal_class_difference_count": 0,
+    "cross_run_terminal_class_comparison_tool_calls": 33,
+    "prior_rolling_observation": {
+      "burstable_two": "exit_zero",
+      "hard_two": "exit_nonzero",
+      "artifact": "../sqlglot48-rolling-cpu-borrowing-contract-v1/outcome-audit.json"
+    }
+  },
+  "runs": [
+    {
+      "run": 1,
+      "arm": "hard_two",
+      "output_dir": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot3734-exact-tool-abba-diagnostic-v1/run_01_hard_two",
+      "throughput_wall_time_s": 279.97259545186535,
+      "task_elapsed_s": 264.9362041950226,
+      "target_duration_s": 109.4211,
+      "target_terminal_class": "exit_zero"
+    },
+    {
+      "run": 2,
+      "arm": "burstable_two",
+      "output_dir": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot3734-exact-tool-abba-diagnostic-v1/run_02_burstable_two",
+      "throughput_wall_time_s": 259.72139901295304,
+      "task_elapsed_s": 244.9507350921631,
+      "target_duration_s": 95.4477,
+      "target_terminal_class": "exit_zero"
+    },
+    {
+      "run": 3,
+      "arm": "burstable_two",
+      "output_dir": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot3734-exact-tool-abba-diagnostic-v1/run_03_burstable_two",
+      "throughput_wall_time_s": 263.8313668426126,
+      "task_elapsed_s": 250.81108903884888,
+      "target_duration_s": 95.7003,
+      "target_terminal_class": "exit_zero"
+    },
+    {
+      "run": 4,
+      "arm": "hard_two",
+      "output_dir": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot3734-exact-tool-abba-diagnostic-v1/run_04_hard_two",
+      "throughput_wall_time_s": 269.3815652951598,
+      "task_elapsed_s": 254.95543003082275,
+      "target_duration_s": 99.1873,
+      "target_terminal_class": "exit_zero"
+    }
+  ],
+  "descriptive_timing": {
+    "hard_two_mean_throughput_wall_time_s": 274.6770803735126,
+    "burstable_two_mean_throughput_wall_time_s": 261.77638292778283,
+    "burstable_improvement_fraction": 0.046966777964099024,
+    "total_measured_throughput_wall_time_s": 1072.9069266025908,
+    "claim_limit": "Post-hoc one-task diagnostic with two repetitions per arm; no uncertainty interval or method gate is valid."
+  },
+  "interpretation": {
+    "observation": "All four exact-source ABBA replays matched the source terminal class on every tool call. The prior hard-arm failure on the target pytest call did not recur.",
+    "inference": "The prior hard-versus-burstable quality mismatch is not a deterministic consequence of the hard CPU control alone. Queue interference, temporal environment, or workload nondeterminism remain possible causes.",
+    "method_decision": "Do not reject or accept burstable CPU sharing from this diagnostic.",
+    "next_requirement": "A method verdict requires a fresh counterbalanced rolling experiment with exact source tools, quality outcomes reported separately, and complete lifecycle timing."
+  }
+}

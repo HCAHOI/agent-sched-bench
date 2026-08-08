@@ -23,7 +23,7 @@ long-form research record.
 | KV scheduling | Closed under the current CacheWise/C100 simulator and action model. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor or scheduler candidate currently authorizes production integration. |
-| Next research step | A future CPU-sharing claim requires exact source tool calls, outcome-quality accounting, counterbalanced arm order, and complete lifecycle timing. |
+| Next research step | Exact-source replay now passes a one-task ABBA diagnostic; a CPU-sharing claim still requires a fresh counterbalanced rolling experiment with quality and complete lifecycle accounting. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -154,6 +154,7 @@ All rows below are development-exposed.
 | Two-task physical paired replay | 14.490% mean improvement; 13/13 pairs improved; CI [9.049%, 22.832%] | Positive exposed mechanism evidence |
 | Four-task saturated replay | 12.966% mean improvement; CI [2.947%, 25.527%]; 8/12 groups improved | Frozen claim NO-GO; **module decision KEEP** |
 | Rolling four-task queue | Burstable full wall time was 8,952.374 s versus 8,688.964 s hard-two, 3.031% slower | Framework-invalid; neither confirms nor rejects burstable |
+| Exact-tool ABBA diagnostic | Four SQLGlot 3734 runs preserved all 67 actions and all 33 tool-call terminal classes; descriptive burstable wall time was 4.697% lower | Framework repair works on this task; no method verdict |
 
 ### Current CPU-sharing baseline
 
@@ -209,6 +210,18 @@ protocol must preserve tool calls exactly, treat outcome differences as quality
 rather than filter them away, counterbalance arm order, and separate replay,
 startup, and the remaining lifecycle costs.
 
+The exact-source contract was then exercised on the post-hoc SQLGlot 3734
+mismatch in hard-burst-burst-hard order, with two repetitions per arm. Every
+run preserved the original 67 actions and completed with the same terminal
+class as the source for all 33 tool calls. The target full-suite pytest exited
+zero in all four runs, so the old hard-arm nonzero exit did not recur. Mean
+recorded wall time was 274.677 seconds hard and 261.776 seconds burstable, a
+descriptive 4.697% difference. This validates the repaired replay contract for
+the task and shows that the prior quality mismatch was not a deterministic
+effect of hard CPU control alone. Because the task was selected after seeing
+the mismatch and has only two repetitions per arm, it supplies no scheduler
+verdict or population estimate.
+
 ## 6. Closed directions
 
 - **Lookup structure alone:** trie, lattice, generic argv, pip/pytest semantic
@@ -263,6 +276,7 @@ Result root:
 - Rolling queue: `sqlglot48-rolling-cpu-borrowing-contract-v1/result.json`
 - Rolling outcome audit: `sqlglot48-rolling-cpu-borrowing-contract-v1/outcome-audit.json`
 - Rolling validity amendment: `sqlglot48-rolling-cpu-borrowing-contract-v1/validity-amendment.json`
+- Exact-tool repeatability diagnostic: `sqlglot3734-exact-tool-abba-diagnostic-v1/result.json`
 
 Task split authority:
 `analysis/development/sqlglot-relational-task-split.json`.
