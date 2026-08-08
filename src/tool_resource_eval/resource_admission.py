@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import math
 import statistics
 
 
 _EPSILON = 1e-9
+_MAX_CPU_SHARE_RATIO = 1e12
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,7 @@ class _BurstRunning:
     floor_end_s: float
     requested_cpu_cores: float
     requested_rss_mb: float
+    cpu_share_weight: float
     max_cpu_cores: float
     remaining_cpu_work_core_s: float
 
@@ -260,17 +263,17 @@ def _weighted_cpu_allocations(
     allocations = {index: 0.0 for index in range(len(running))}
     remaining_capacity = cpu_capacity
     while active:
-        total_weight = sum(running[index].requested_cpu_cores for index in active)
+        total_weight = sum(running[index].cpu_share_weight for index in active)
         scale = remaining_capacity / total_weight
         capped = {
             index
             for index in active
             if running[index].max_cpu_cores
-            <= running[index].requested_cpu_cores * scale + _EPSILON
+            <= running[index].cpu_share_weight * scale + _EPSILON
         }
         if not capped:
             for index in active:
-                allocations[index] = running[index].requested_cpu_cores * scale
+                allocations[index] = running[index].cpu_share_weight * scale
             break
         for index in capped:
             allocation = running[index].max_cpu_cores
@@ -288,6 +291,7 @@ def simulate_burstable_admission(
     requested_reservations: Mapping[str, tuple[float, float]],
     cpu_work_core_s: Mapping[str, float],
     max_cpu_cores: Mapping[str, float],
+    cpu_share_weights: Mapping[str, float] | None = None,
 ) -> dict[str, object]:
     """Replay admission requests while runnable work may borrow idle CPU."""
 
@@ -306,6 +310,8 @@ def simulate_burstable_admission(
         commands
     ):
         raise ValueError("burstable replay requires complete request and demand maps")
+    if cpu_share_weights is not None and set(cpu_share_weights) != set(commands):
+        raise ValueError("burstable replay requires complete CPU share weights")
     if not set(cpu_work_core_s) <= set(commands):
         raise ValueError("CPU work contains an unknown command")
     if any(
@@ -324,7 +330,12 @@ def simulate_burstable_admission(
         requested_cpu, requested_rss = requested_reservations[command_id]
         demand = max_cpu_cores[command_id]
         work = cpu_work_core_s.get(command_id, 0.0)
-        values = (requested_cpu, requested_rss, demand, work)
+        share_weight = (
+            requested_cpu
+            if cpu_share_weights is None
+            else cpu_share_weights[command_id]
+        )
+        values = (requested_cpu, requested_rss, demand, work, share_weight)
         if any(value < 0.0 for value in values):
             raise ValueError("burstable requests, demand, and work must be non-negative")
         if (
@@ -332,8 +343,25 @@ def simulate_burstable_admission(
             or requested_cpu > demand + _EPSILON
             or demand > cpu_capacity + _EPSILON
             or requested_rss > rss_capacity_mb + _EPSILON
+            or not math.isfinite(share_weight)
+            or share_weight <= 0.0
         ):
             raise ValueError(f"invalid burstable request or demand: {command_id}")
+    raw_share_weights = {
+        command_id: (
+            requested_reservations[command_id][0]
+            if cpu_share_weights is None
+            else cpu_share_weights[command_id]
+        )
+        for command_id in commands
+    }
+    max_share_weight = max(raw_share_weights.values())
+    normalized_share_weights = {
+        command_id: value / max_share_weight
+        for command_id, value in raw_share_weights.items()
+    }
+    if min(normalized_share_weights.values()) < 1.0 / _MAX_CPU_SHARE_RATIO:
+        raise ValueError("CPU share weights exceed the supported dynamic range")
 
     sessions = [
         _Session(program, rank, ready_s=program.initial_delay_s)
@@ -347,6 +375,7 @@ def simulate_burstable_admission(
     reserved_cpu_terms: list[float | None] = []
     reserved_rss_terms: list[float | None] = []
     served_cpu_work = 0.0
+    service_by_command: dict[str, float] = {}
     max_concurrent = max_modeled_cpu = max_modeled_rss = 0.0
     exposure_events = starts = 0
     exposure_commands: set[str] = set()
@@ -373,6 +402,7 @@ def simulate_burstable_admission(
             if abs(duration_s - item.command.duration_s) <= _EPSILON:
                 duration_s = item.command.duration_s
             service_terms[item.start_index] = duration_s
+            service_by_command[item.command.command_id] = duration_s
             reserved_cpu_terms[item.start_index] = (
                 item.requested_cpu_cores * duration_s
             )
@@ -406,6 +436,7 @@ def simulate_burstable_admission(
         for index, session in ready:
             command = session.program.commands[session.command_index]
             requested_cpu, requested_rss = requested_reservations[command.command_id]
+            share_weight = normalized_share_weights[command.command_id]
             if (
                 used_cpu + requested_cpu > cpu_capacity + _EPSILON
                 or used_rss + requested_rss > rss_capacity_mb + _EPSILON
@@ -424,6 +455,7 @@ def simulate_burstable_admission(
                     now_s + command.duration_s,
                     requested_cpu,
                     requested_rss,
+                    share_weight,
                     max_cpu_cores[command.command_id],
                     work,
                 )
@@ -498,6 +530,7 @@ def simulate_burstable_admission(
         or any(value is None for value in service_terms)
         or any(value is None for value in reserved_cpu_terms)
         or any(value is None for value in reserved_rss_terms)
+        or set(service_by_command) != set(commands)
     ):
         raise ValueError("burstable replay leaked reservation or CPU work")
     service_s = sum(float(value) for value in service_terms if value is not None)
@@ -525,6 +558,7 @@ def simulate_burstable_admission(
         "max_modeled_rss_demand_mb": max_modeled_rss,
         "total_cpu_work_core_s": total_cpu_work,
         "served_cpu_work_core_s": served_cpu_work,
+        "service_s_by_command": dict(sorted(service_by_command.items())),
         "contended_command_ids": sorted(contended),
         "added_service_s": service_s
         - sum(command.duration_s for command in commands.values()),

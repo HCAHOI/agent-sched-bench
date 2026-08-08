@@ -196,6 +196,120 @@ def test_burstable_exposure_excludes_work_completed_before_wall_floor() -> None:
     assert result["modeled_capacity_exposure_events"] == 0
 
 
+def test_burstable_share_weights_change_completion_order_not_admission() -> None:
+    programs = [
+        AdmissionProgram(
+            task_id,
+            0.0,
+            (AdmissionCommand(f"{task_id}:cmd", 1.0, 4.0, 100.0, 0.0),),
+            0.0,
+        )
+        for task_id in ("a", "b")
+    ]
+    reservations = {
+        "a:cmd": (2.0, 100.0),
+        "b:cmd": (2.0, 100.0),
+    }
+    work = {"a:cmd": 4.0, "b:cmd": 4.0}
+    demand = {"a:cmd": 4.0, "b:cmd": 4.0}
+
+    equal = simulate_burstable_admission(
+        programs,
+        cpu_capacity=4.0,
+        rss_capacity_mb=1_000.0,
+        requested_reservations=reservations,
+        cpu_work_core_s=work,
+        max_cpu_cores=demand,
+    )
+    weighted = simulate_burstable_admission(
+        programs,
+        cpu_capacity=4.0,
+        rss_capacity_mb=1_000.0,
+        requested_reservations=reservations,
+        cpu_work_core_s=work,
+        max_cpu_cores=demand,
+        cpu_share_weights={"a:cmd": 1.0, "b:cmd": 3.0},
+    )
+    scaled_equal = [
+        simulate_burstable_admission(
+            programs,
+            cpu_capacity=4.0,
+            rss_capacity_mb=1_000.0,
+            requested_reservations=reservations,
+            cpu_work_core_s=work,
+            max_cpu_cores=demand,
+            cpu_share_weights={"a:cmd": scale, "b:cmd": scale},
+        )
+        for scale in (5.0, 1e-320, 1e308)
+    ]
+
+    assert weighted["makespan_s"] == equal["makespan_s"] == 2.0
+    assert weighted["mean_task_completion_s"] < equal["mean_task_completion_s"]
+    assert weighted["max_concurrent_commands"] == equal["max_concurrent_commands"]
+    assert weighted["service_s_by_command"] == pytest.approx(
+        {"a:cmd": 2.0, "b:cmd": 4.0 / 3.0}
+    )
+    assert all(
+        result["service_s_by_command"] == equal["service_s_by_command"]
+        for result in scaled_equal
+    )
+
+
+def test_burstable_default_shares_follow_unequal_requests() -> None:
+    programs = [
+        AdmissionProgram(
+            task_id,
+            0.0,
+            (AdmissionCommand(f"{task_id}:cmd", 1.0, 4.0, 100.0, 0.0),),
+            0.0,
+        )
+        for task_id in ("a", "b")
+    ]
+    reservations = {"a:cmd": (1.0, 100.0), "b:cmd": (3.0, 100.0)}
+    kwargs = {
+        "cpu_capacity": 4.0,
+        "rss_capacity_mb": 1_000.0,
+        "requested_reservations": reservations,
+        "cpu_work_core_s": {"a:cmd": 4.0, "b:cmd": 4.0},
+        "max_cpu_cores": {"a:cmd": 4.0, "b:cmd": 4.0},
+    }
+
+    default = simulate_burstable_admission(programs, **kwargs)
+    equal = simulate_burstable_admission(
+        programs,
+        **kwargs,
+        cpu_share_weights={"a:cmd": 1.0, "b:cmd": 1.0},
+    )
+
+    assert default["mean_task_completion_s"] == pytest.approx(5.0 / 3.0)
+    assert equal["mean_task_completion_s"] == 2.0
+
+
+def test_burstable_rejects_numerically_unusable_share_ratio() -> None:
+    programs = [
+        AdmissionProgram(
+            task_id,
+            0.0,
+            (AdmissionCommand(f"{task_id}:cmd", 1.0, 4.0, 100.0, 0.0),),
+            0.0,
+        )
+        for task_id in ("a", "b")
+    ]
+    with pytest.raises(ValueError, match="dynamic range"):
+        simulate_burstable_admission(
+            programs,
+            cpu_capacity=4.0,
+            rss_capacity_mb=1_000.0,
+            requested_reservations={
+                "a:cmd": (2.0, 100.0),
+                "b:cmd": (2.0, 100.0),
+            },
+            cpu_work_core_s={"a:cmd": 4.0, "b:cmd": 4.0},
+            max_cpu_cores={"a:cmd": 4.0, "b:cmd": 4.0},
+            cpu_share_weights={"a:cmd": 1e-300, "b:cmd": 1e300},
+        )
+
+
 def test_reservation_sums_pipeline() -> None:
     clauses = (
         Row(
