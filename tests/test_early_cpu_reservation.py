@@ -7,6 +7,7 @@ from tool_resource_eval.early_cpu_reservation import (
     SAMPLE_AVAILABILITY_PAD_S,
     action_row,
     feedback_action_row,
+    model_cpu_page_policy,
 )
 
 
@@ -157,3 +158,52 @@ def test_feedback_caps_counter_quantization_above_cpu_opportunity() -> None:
     assert row["clipped_samples"] == 1
     assert row["clipped_cpu_core_s"] == pytest.approx(0.01)
     assert row["raw_timeline_cpu_core_s"] - row["timeline_cpu_core_s"] == pytest.approx(0.01)
+
+
+def test_prediction_sets_initial_page_before_feedback_takes_over() -> None:
+    feedback, reason = model_cpu_page_policy(
+        _action(), initial_page=2, feedback=True
+    )
+    static, _ = model_cpu_page_policy(_action(), initial_page=2, feedback=False)
+
+    assert reason == "eligible"
+    assert "2" in feedback["request_counts"]
+    assert feedback["feedback_updates"] > 0
+    assert static["request_counts"] == {"2": 5}
+    assert static["feedback_updates"] == 0
+
+
+def test_prediction_still_controls_commands_too_short_for_feedback() -> None:
+    predicted, reason = model_cpu_page_policy(
+        _action(sample_dt=0.45), initial_page=2, feedback=True
+    )
+    fixed, _ = model_cpu_page_policy(
+        _action(sample_dt=0.45), initial_page=8, feedback=True
+    )
+
+    assert reason == "no_full_decision_sample"
+    assert predicted["feedback_updates"] == 0
+    assert predicted["reserved_cpu_core_s"] < fixed["reserved_cpu_core_s"]
+    assert predicted["service_s"] > fixed["service_s"]
+
+    with pytest.raises(ValueError, match="initial CPU page"):
+        model_cpu_page_policy(_action(), initial_page=1, feedback=True)
+
+
+def test_prediction_feedback_acts_before_throttled_source_interval_finishes() -> None:
+    action = _action(duration=1.0)
+    action["data"]["resource_timeline"]["samples"] = [
+        {
+            "offset_s": offset,
+            "dt_s": 0.5,
+            "cpu_core_s": 4.0,
+            "cpu_quota_cores": 8,
+        }
+        for offset in (0.5, 1.0)
+    ]
+
+    result, reason = model_cpu_page_policy(action, initial_page=2, feedback=True)
+
+    assert reason == "eligible"
+    assert result["service_s"] == pytest.approx(1.48099, abs=1e-5)
+    assert result["feedback_updates"] == 2

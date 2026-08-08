@@ -150,6 +150,135 @@ def _modeled_interval(
     return duration_s, reserved_core_s, throttled
 
 
+def model_cpu_page_policy(
+    action: dict[str, Any], *, initial_page: int, feedback: bool
+) -> tuple[dict[str, Any], str]:
+    """Model a BeginCall CPU page followed by the existing interval controller."""
+
+    if initial_page not in THROUGHPUT_CPU_PAGES:
+        raise ValueError("initial CPU page must be 2, 4, or 8 cores")
+    data = action.get("data")
+    start = _number(action.get("ts_start"))
+    end = _number(action.get("ts_end"))
+    if (
+        not isinstance(data, dict)
+        or data.get("tool_name") != "exec"
+        or start is None
+        or end is None
+        or end <= start
+    ):
+        raise ValueError("CPU page policy requires a timed exec action")
+    duration = end - start
+    timeline = valid_resource_timeline(data.get("resource_timeline"))
+    interval = _number(timeline.get("sample_interval_s")) if timeline else None
+    samples = timeline.get("samples") if timeline else None
+    if (
+        interval is None
+        or not math.isclose(interval, SAMPLE_INTERVAL_S, abs_tol=1e-9)
+        or not isinstance(samples, list)
+    ):
+        return {
+            "service_s": duration,
+            "reserved_cpu_core_s": CONTROL_PAGE * duration,
+            "added_service_s": 0.0,
+            "request_counts": {str(CONTROL_PAGE): 1},
+            "throttled_samples": 0,
+            "feedback_updates": 0,
+        }, "no_valid_timeline"
+
+    parsed: list[tuple[float, float]] = []
+    for sample in samples:
+        if not isinstance(sample, dict):
+            raise ValueError("resource timeline contains a non-object sample")
+        dt = _number(sample.get("dt_s"))
+        cpu = _number(sample.get("cpu_core_s"))
+        quota = _number(sample.get("cpu_quota_cores"))
+        if dt is None or dt <= 0.0 or cpu is None or quota is None or quota <= 0.0:
+            raise ValueError("resource timeline sample lacks CPU work or duration")
+        if not math.isclose(quota, CONTROL_PAGE, abs_tol=1e-9):
+            raise ValueError("CPU page source timeline was not collected at eight cores")
+        parsed.append((dt, min(cpu, quota * dt)))
+    if not parsed:
+        raise ValueError("valid resource timeline has no samples")
+    residual = duration - sum(dt for dt, _cpu in parsed)
+    if residual < -SAMPLE_AVAILABILITY_PAD_S or residual > SAMPLE_AVAILABILITY_PAD_S:
+        raise ValueError("resource timeline does not cover the exec duration")
+    residual = max(0.0, residual)
+    first_full = next(
+        (index for index, (dt, _cpu) in enumerate(parsed) if dt >= SAMPLE_INTERVAL_S),
+        None,
+    )
+
+    profiles = [(dt, cpu / dt) for dt, cpu in parsed]
+    if residual:
+        profiles.append((residual, 0.0))
+    feedback_enabled = feedback and first_full is not None
+    current = initial_page
+    pending: int | None = None
+    pending_at = math.inf
+    next_observation = SAMPLE_INTERVAL_S if feedback_enabled else math.inf
+    profile_index = 0
+    profile_remaining = profiles[0][0]
+    wall = reserved = observed_cpu = 0.0
+    observed_throttling = False
+    throttled_samples = feedback_updates = 0
+    counts: Counter[int] = Counter()
+    while profile_index < len(profiles):
+        rate = profiles[profile_index][1]
+        progress_rate = 1.0 if rate <= current else current / rate
+        source_done_in = profile_remaining / progress_rate
+        step = min(
+            source_done_in,
+            pending_at - wall,
+            next_observation - wall,
+        )
+        if step < -1e-12:
+            raise ValueError("CPU feedback event order moved backwards")
+        step = max(0.0, step)
+        source_progress = step * progress_rate
+        profile_remaining -= source_progress
+        cpu_rate = min(rate, float(current))
+        observed_cpu += cpu_rate * step
+        observed_throttling |= rate > current + 1e-12
+        reserved += current * step
+        counts[current] += step > 0.0
+        wall += step
+
+        if profile_remaining <= 1e-12:
+            profile_index += 1
+            if profile_index < len(profiles):
+                profile_remaining = profiles[profile_index][0]
+        if pending is not None and pending_at <= wall + 1e-12:
+            current = pending
+            pending = None
+            pending_at = math.inf
+        if (
+            feedback_enabled
+            and profile_index < len(profiles)
+            and next_observation <= wall + 1e-12
+        ):
+            pending = (
+                CONTROL_PAGE
+                if observed_throttling
+                else _page(observed_cpu / SAMPLE_INTERVAL_S)
+            )
+            pending_at = wall + CPU_UPDATE_DELAY_S
+            next_observation += SAMPLE_INTERVAL_S
+            throttled_samples += observed_throttling
+            feedback_updates += 1
+            observed_cpu = 0.0
+            observed_throttling = False
+    throttled_samples += observed_throttling
+    return {
+        "service_s": wall,
+        "reserved_cpu_core_s": reserved,
+        "added_service_s": wall - duration,
+        "request_counts": {str(key): value for key, value in sorted(counts.items())},
+        "throttled_samples": throttled_samples,
+        "feedback_updates": feedback_updates,
+    }, "eligible" if first_full is not None else "no_full_decision_sample"
+
+
 def feedback_action_row(action: dict[str, Any]) -> tuple[dict[str, Any], str]:
     """Model fixed, probe-then-two, and one-interval CPU feedback actions."""
 
