@@ -1,0 +1,77 @@
+{
+  "schema": "sqlglot-exact-tool-outcome-repeatability-v1",
+  "status": "frozen_before_replay",
+  "frozen_at": "2026-08-08",
+  "purpose": "Post-hoc framework diagnosis only; this experiment cannot accept or reject CPU borrowing.",
+  "question": "Under exact source tool calls, is the previously observed terminal-outcome difference reproducible across repeated hard and burstable CPU controls?",
+  "selection": {
+    "task_id": "tobymao__sqlglot-3734",
+    "selection_timing": "post_hoc_after_rolling48_outcome_audit",
+    "reason": "The source and burstable replay exited zero while the hard replay exited nonzero on call_WEKjaqEY8rxZ4FGnQoRc14rF; unlike task 2337, its prior paired replay did not amend any source action.",
+    "claim_limit": "Mechanism diagnosis only; no population estimate."
+  },
+  "source": {
+    "trace": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3734/attempt_1/trace.jsonl",
+    "task_source": "/home/chiyu/workspace/agent-sched-bench/data/swe-rebench/tasks.json",
+    "target_tool_call_id": "call_WEKjaqEY8rxZ4FGnQoRc14rF",
+    "target_command": "SQLGLOTRS_TOKENIZER=0 python3 -m pytest -q",
+    "exec_call_count": 22,
+    "exec_calls_with_explicit_timeout": 22
+  },
+  "replay": {
+    "order": [
+      "hard_two",
+      "burstable_two",
+      "burstable_two",
+      "hard_two"
+    ],
+    "sequential": true,
+    "paired_workload_contract_version": 2,
+    "tool_args_policy": "exact_source",
+    "exec_timeout_floor_s": null,
+    "command_timeout_fallback_s": 3600,
+    "replay_speed": 20.0,
+    "concurrency": 1,
+    "workers": 1,
+    "prep_concurrency": 1,
+    "network_mode": "host",
+    "resource_monitoring": "on",
+    "pmu_monitoring": "off",
+    "memory_bandwidth_monitoring": "off",
+    "cleanup_images": false,
+    "cpu_controls": {
+      "hard_two": [
+        "--cpuset-cpus",
+        "0-7",
+        "--cpu-shares",
+        "1024",
+        "--cpus",
+        "2"
+      ],
+      "burstable_two": [
+        "--cpuset-cpus",
+        "0-7",
+        "--cpu-shares",
+        "1024"
+      ]
+    }
+  },
+  "interpretation": {
+    "framework_validity": "Every run must complete all source actions with exact action_id, tool_call_id, and tool_args; telemetry must be valid. A violation invalidates that run only and is not a scheduler verdict.",
+    "quality_unit": "tool_call terminal class",
+    "success_classes": [
+      "exit_zero",
+      "tool_success"
+    ],
+    "within_arm_flip": "Direct evidence that identical-arm terminal outcomes are not deterministic under this replay environment.",
+    "stable_arm_difference": "Preliminary evidence that CPU control can alter workload quality for this task; it requires a fresh task-level validation before a general claim.",
+    "all_same": "The old mismatch is not reproduced; two repeats per arm are insufficient to establish determinism.",
+    "verdict": "no_method_verdict"
+  },
+  "cost_estimate": {
+    "basis": "Prior replay elapsed times were 276.98 seconds burstable and 305.40 seconds hard.",
+    "estimated_replay_minutes": 19.4,
+    "expected_wall_minutes_including_preparation": "20-25",
+    "stop_condition": "Stop and diagnose if a run exceeds 15 minutes, exact-tool validation fails, telemetry is invalid, or host memory becomes abnormal."
+  }
+}

@@ -7,6 +7,32 @@ import pytest
 from scripts.evaluation import evaluate_paired_sqlglot_cpu_borrowing as experiment
 
 
+def test_exact_replay_environment_disables_timeout_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(experiment.OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV, "old-floor")
+    monkeypatch.setenv(experiment.OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV, "old-contract")
+    protocol = {
+        "paired_workload_contract": True,
+        "paired_workload_contract_version": 2,
+        "exec_timeout_floor_s": None,
+    }
+
+    with experiment._replay_environment(protocol):
+        assert experiment.OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV not in experiment.os.environ
+        assert (
+            experiment.os.environ[experiment.OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV]
+            == "2"
+        )
+
+    assert experiment.os.environ[experiment.OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV] == (
+        "old-floor"
+    )
+    assert experiment.os.environ[experiment.OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV] == (
+        "old-contract"
+    )
+
+
 def test_frozen_cohorts_partition_validation_tasks() -> None:
     initial = experiment._protocol("initial24")
     remaining = experiment._protocol("remaining26")
@@ -366,6 +392,95 @@ def test_timeout_gate_requires_matching_action_and_wrapper_failure(tmp_path) -> 
     write_replay(success=False, result="Error: [timeout]", call_id="call-b")
     with pytest.raises(AssertionError, match="action identities differ"):
         experiment._source_success_replay_timeout_count(request, trace)
+
+
+def test_paired_task_artifact_retains_timeout_as_quality_outcome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    task_id = "task"
+    arm = "hard_two"
+    attempt = tmp_path / task_id / "attempt_1"
+    attempt.mkdir(parents=True)
+    (attempt / "container_startup.json").write_text(
+        json.dumps(
+            {
+                "status": "success",
+                "phases": [
+                    {
+                        "name": "start_task_container",
+                        "status": "success",
+                        "start_extra_args": list(experiment.ARM_ARGS[arm]),
+                        "cpu_controls": {
+                            "nano_cpus": 2_000_000_000,
+                            "cpu_shares": 1024,
+                            "cpuset_cpus": "0-7",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (attempt / "openclaw_host_replay_status.json").write_text(
+        json.dumps(
+            {
+                "success": True,
+                "missing_source_action_count": 0,
+                "action_sequence_matches": True,
+                "error": None,
+                "emitted_actions": 1,
+                "expected_actions": 1,
+                "unexpected_replay_failed_actions": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (attempt / "resources.json").write_text(
+        json.dumps(
+            {
+                "samples": [],
+                "summary": {
+                    "monitoring_disabled": False,
+                    "container_final_state": {
+                        "status": "running",
+                        "running": True,
+                        "oom_killed": False,
+                        "exit_code": 0,
+                        "memory_events": {"oom": 0, "oom_kill": 0},
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    request = {
+        "exec_timeout_floor_s": experiment.EXEC_TIMEOUT_FLOOR_S,
+        "paired_workload_contract": True,
+        "replay_action_contract": {"require_source_outcome_match": False},
+    }
+    (attempt / "openclaw_host_replay_request.json").write_text(
+        json.dumps(request), encoding="utf-8"
+    )
+    (attempt / "openclaw_host_replay.jsonl").write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        experiment, "_source_success_replay_timeout_count", lambda *_args: 1
+    )
+
+    artifact = experiment._task_artifacts(
+        tmp_path, task_id, arm, paired_workload_contract=True
+    )
+
+    assert artifact["source_success_replay_timeout_count"] == 1
+
+    request["replay_action_contract"]["require_source_outcome_match"] = True
+    request["paired_workload_contract"] = False
+    (attempt / "openclaw_host_replay_request.json").write_text(
+        json.dumps(request), encoding="utf-8"
+    )
+    with pytest.raises(AssertionError, match="source-success replay timeout"):
+        experiment._task_artifacts(
+            tmp_path, task_id, arm, paired_workload_contract=False
+        )
 
 
 def test_legacy_reuse_accepts_only_preserved_preexecution_failures() -> None:
@@ -852,6 +967,18 @@ def test_existing_outcome_audit_separates_source_clean_diagnostic(tmp_path) -> N
             "tool_args": json.dumps({"command": "run failed"}),
         }
     ]
+    assert audit["arm_outcome_quality"] == {
+        "unit": "tool_call",
+        "success_classes": ["exit_zero", "tool_success"],
+        "relation_counts": {
+            "same_terminal_class": 1,
+            "burstable_success_hard_failure": 1,
+            "burstable_failure_hard_success": 0,
+            "different_failure_class": 1,
+        },
+        "burstable_quality_regression_count": 0,
+        "selection_timing": "post-hoc descriptive audit",
+    }
     assert audit["source_clean_outcome_stable_fixed_duration_diagnostic"] == {
         "task_count": 1,
         "queue_concurrency": 2,

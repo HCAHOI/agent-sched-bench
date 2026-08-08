@@ -10,7 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from harness.trace_logger import TraceLogger
-from trace_collect.openclaw_host_runtime import replay_action_failure_counts
+from trace_collect.openclaw_host_runtime import (
+    replay_action_failure_counts,
+    replay_framework_failure_count,
+)
 from trace_collect.simulate_outputs import _make_task_stats, _make_trace_summary
 from trace_collect.simulate_types import (
     LLMTimingConfig,
@@ -41,13 +44,17 @@ def replay_exec_timeout_floor_s() -> float | None:
     return value
 
 
-def replay_paired_workload_contract_enabled() -> bool:
+def replay_paired_workload_contract_version() -> int | None:
     raw = os.environ.get(OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV)
     if raw is None:
-        return False
-    if raw != "1":
-        raise ValueError(f"{OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV} must be 1")
-    return True
+        return None
+    if raw not in {"1", "2"}:
+        raise ValueError(f"{OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV} must be 1 or 2")
+    return int(raw)
+
+
+def replay_paired_workload_contract_enabled() -> bool:
+    return replay_paired_workload_contract_version() is not None
 
 
 def _seeded_pytest_command(command: str, seed: str) -> str:
@@ -71,8 +78,21 @@ def _amend_exec_arguments(raw: Any, seed: str) -> Any:
 
 def _paired_replay_actions(
     source_actions: list[dict[str, Any]],
+    *,
+    contract_version: int = 1,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Freeze source-observed pytest randomness and source-failure deadlines."""
+    """Apply the selected paired-replay action contract."""
+    if contract_version not in {1, 2}:
+        raise ValueError(f"unsupported paired replay contract: {contract_version}")
+    if contract_version == 2:
+        return copy.deepcopy(source_actions), {
+            "version": 2,
+            "tool_args_policy": "exact_source",
+            "exec_timeout_policy": "source_tool_args",
+            "require_exact_tool_calls": True,
+            "require_source_outcome_match": False,
+        }
+
     seeds: dict[str, str] = {}
     timeout_floor_exempt: list[str] = []
     for action in source_actions:
@@ -316,9 +336,16 @@ async def _run_openclaw_replay_session(
 
         resource_setup_timeout_s = RESOURCE_OPERATION_TIMEOUTS_S["AwaitTraceReady"]
     exec_timeout_floor_s = replay_exec_timeout_floor_s()
-    paired_workload_contract = replay_paired_workload_contract_enabled()
+    paired_workload_contract_version = replay_paired_workload_contract_version()
+    paired_workload_contract = paired_workload_contract_version is not None
     if paired_workload_contract:
-        source_actions, replay_action_contract = _paired_replay_actions(loaded.actions)
+        assert paired_workload_contract_version is not None
+        if paired_workload_contract_version == 2 and exec_timeout_floor_s is not None:
+            raise ValueError("paired replay contract 2 forbids an exec timeout floor")
+        source_actions, replay_action_contract = _paired_replay_actions(
+            loaded.actions,
+            contract_version=paired_workload_contract_version,
+        )
     else:
         source_actions = loaded.actions
         replay_action_contract = {
@@ -352,6 +379,7 @@ async def _run_openclaw_replay_session(
         "command_timeout_s": command_timeout_s,
         "exec_timeout_floor_s": exec_timeout_floor_s,
         "paired_workload_contract": paired_workload_contract,
+        "paired_workload_contract_version": paired_workload_contract_version,
         "replay_action_contract": replay_action_contract,
         "tool_resource_profile": tool_resource_profile,
         "tool_resource_run_token": resource_run_token,
@@ -435,17 +463,23 @@ async def _run_openclaw_replay_session(
                 replay_action_records.append(record)
             emitted_records.append(record)
 
-    action_counts = replay_action_failure_counts(source_actions, replay_action_records)
+    action_counts = replay_action_failure_counts(
+        source_actions,
+        replay_action_records,
+        require_exact_tool_calls=bool(
+            replay_action_contract.get("require_exact_tool_calls", False)
+        ),
+    )
     expected_actions = int(request["expected_action_count"])
     missing_actions = max(0, expected_actions - action_counts.emitted_actions)
-    failed_actions = missing_actions
-    if replay_action_contract["require_source_outcome_match"]:
-        failed_actions += action_counts.unexpected_replay_failed_actions
-    if (
-        not action_counts.action_sequence_matches
-        or worker_returncode != 0
-        or status.get("success") is not True
-    ):
+    failed_actions = replay_framework_failure_count(
+        action_counts,
+        missing_actions=missing_actions,
+        require_source_outcome_match=bool(
+            replay_action_contract["require_source_outcome_match"]
+        ),
+    )
+    if worker_returncode != 0 or status.get("success") is not True:
         failed_actions = max(1, failed_actions)
     replay_execution = status.get(
         "replay_execution",

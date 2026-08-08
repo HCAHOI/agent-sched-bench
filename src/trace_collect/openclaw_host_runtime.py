@@ -106,12 +106,24 @@ def _resource_expected_calls(
 def _action_matches_source(
     replay_record: dict[str, Any],
     source_action: dict[str, Any],
+    *,
+    require_exact_tool_calls: bool = False,
 ) -> bool:
     if replay_record.get("action_type") != source_action.get("action_type"):
         return False
     replay_tool = _tool_name(replay_record)
     source_tool = _tool_name(source_action)
-    return replay_tool == source_tool
+    if replay_tool != source_tool:
+        return False
+    if not require_exact_tool_calls or source_action.get("action_type") != "tool_exec":
+        return True
+    replay_data = replay_record.get("data") or {}
+    source_data = source_action.get("data") or {}
+    return (
+        replay_record.get("action_id") == source_action.get("action_id")
+        and replay_data.get("tool_call_id") == source_data.get("tool_call_id")
+        and replay_data.get("tool_args") == source_data.get("tool_args")
+    )
 
 
 def _action_failed(record: dict[str, Any]) -> bool:
@@ -122,6 +134,8 @@ def _action_failed(record: dict[str, Any]) -> bool:
 def replay_action_failure_counts(
     source_actions: list[dict[str, Any]],
     replay_records: list[dict[str, Any]],
+    *,
+    require_exact_tool_calls: bool = False,
 ) -> ReplayActionFailureCounts:
     """Compare replay failures against source actions aligned by replay order.
 
@@ -147,14 +161,22 @@ def replay_action_failure_counts(
             else None
         )
         emitted_actions += 1
-        if source_action is None or not _action_matches_source(record, source_action):
+        if source_action is None or not _action_matches_source(
+            record,
+            source_action,
+            require_exact_tool_calls=require_exact_tool_calls,
+        ):
             action_sequence_matches = False
         if not _action_failed(record):
             continue
         replay_failed_actions += 1
         if (
             source_action is None
-            or not _action_matches_source(record, source_action)
+            or not _action_matches_source(
+                record,
+                source_action,
+                require_exact_tool_calls=require_exact_tool_calls,
+            )
             or not _action_failed(source_action)
         ):
             unexpected_replay_failed_actions += 1
@@ -168,6 +190,21 @@ def replay_action_failure_counts(
             action_sequence_matches and emitted_actions == len(source_replay_actions)
         ),
     )
+
+
+def replay_framework_failure_count(
+    action_counts: ReplayActionFailureCounts,
+    *,
+    missing_actions: int,
+    require_source_outcome_match: bool,
+) -> int:
+    """Count structural failures, plus outcome drift only when required."""
+    failed_actions = missing_actions
+    if require_source_outcome_match:
+        failed_actions += action_counts.unexpected_replay_failed_actions
+    if not action_counts.action_sequence_matches:
+        failed_actions = max(1, failed_actions)
+    return failed_actions
 
 
 def _replay_execution_completed(
@@ -874,15 +911,25 @@ def _update_trace_metadata(trace_path: Path, extra: dict[str, Any]) -> None:
 def _worker_trace_action_counts(
     trace_path: Path,
     source_actions: list[dict[str, Any]],
+    *,
+    require_exact_tool_calls: bool = False,
 ) -> ReplayActionFailureCounts:
     if not trace_path.exists():
-        return replay_action_failure_counts(source_actions, [])
+        return replay_action_failure_counts(
+            source_actions,
+            [],
+            require_exact_tool_calls=require_exact_tool_calls,
+        )
     records = [
         json.loads(line)
         for line in trace_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    return replay_action_failure_counts(source_actions, records)
+    return replay_action_failure_counts(
+        source_actions,
+        records,
+        require_exact_tool_calls=require_exact_tool_calls,
+    )
 
 
 def _finalized_resource_status(
@@ -965,6 +1012,9 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
     }
     require_source_outcome_match = bool(
         replay_action_contract.get("require_source_outcome_match", True)
+    )
+    require_exact_tool_calls = bool(
+        replay_action_contract.get("require_exact_tool_calls", False)
     )
     run_instance_id = str(request["run_instance_id"])
     prompt = str(request["prompt"])
@@ -1127,10 +1177,18 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
         )
         _update_trace_metadata(output_trace, metadata_extra)
         sleep_records = [record.to_dict() for record in provider.sleep_records]
-        action_counts = _worker_trace_action_counts(output_trace, source_actions)
+        action_counts = _worker_trace_action_counts(
+            output_trace,
+            source_actions,
+            require_exact_tool_calls=require_exact_tool_calls,
+        )
         expected_actions = int(request.get("expected_action_count") or 0)
         missing_actions = max(0, expected_actions - action_counts.emitted_actions)
-        failed_actions = action_counts.unexpected_replay_failed_actions
+        failed_actions = replay_framework_failure_count(
+            action_counts,
+            missing_actions=missing_actions,
+            require_source_outcome_match=require_source_outcome_match,
+        )
         success = _replay_execution_completed(
             action_counts=action_counts,
             expected_actions=expected_actions,

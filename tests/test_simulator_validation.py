@@ -731,6 +731,153 @@ def test_paired_replay_contract_pins_pytest_seed_and_preserves_failed_timeout() 
     }
 
 
+def test_paired_replay_contract_v2_preserves_source_tool_arguments() -> None:
+    from trace_collect.simulate_openclaw import _paired_replay_actions
+
+    call_id = "call-seeded"
+    raw_arguments = json.dumps({"command": "python -m pytest", "timeout": 600})
+    source_actions = [
+        {
+            "action_type": "llm_call",
+            "data": {
+                "raw_response": {
+                    "choices": [
+                        {
+                            "message": {
+                                "tool_calls": [
+                                    {
+                                        "id": call_id,
+                                        "function": {
+                                            "name": "exec",
+                                            "arguments": raw_arguments,
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+        },
+        {
+            "action_type": "tool_exec",
+            "data": {
+                "tool_name": "exec",
+                "tool_call_id": call_id,
+                "tool_args": raw_arguments,
+                "tool_result": (
+                    "Using --randomly-seed=12345 then --randomly-seed=67890\n"
+                    "Exit code: 0"
+                ),
+                "success": True,
+            },
+        },
+    ]
+
+    actions, contract = _paired_replay_actions(source_actions, contract_version=2)
+
+    assert actions == source_actions
+    assert actions is not source_actions
+    assert contract == {
+        "version": 2,
+        "tool_args_policy": "exact_source",
+        "exec_timeout_policy": "source_tool_args",
+        "require_exact_tool_calls": True,
+        "require_source_outcome_match": False,
+    }
+
+
+def test_paired_replay_contract_version_selects_exact_source_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trace_collect.simulate_openclaw import (
+        replay_paired_workload_contract_version,
+    )
+
+    monkeypatch.setenv("OPENCLAW_REPLAY_PAIRED_WORKLOAD_CONTRACT", "2")
+
+    assert replay_paired_workload_contract_version() == 2
+
+
+def test_replay_exact_tool_contract_rejects_argument_changes() -> None:
+    from trace_collect.openclaw_host_runtime import replay_action_failure_counts
+
+    source = [
+        {
+            "type": "action",
+            "action_type": "tool_exec",
+            "action_id": "tool-1",
+            "data": {
+                "tool_name": "exec",
+                "tool_call_id": "call-1",
+                "tool_args": '{"command":"true"}',
+                "success": True,
+            },
+        }
+    ]
+    replay = [
+        {
+            "type": "action",
+            "action_type": "tool_exec",
+            "action_id": "tool-1",
+            "data": {
+                "tool_name": "exec",
+                "tool_call_id": "call-1",
+                "tool_args": '{"command":"false"}',
+                "success": True,
+            },
+        }
+    ]
+
+    counts = replay_action_failure_counts(
+        source, replay, require_exact_tool_calls=True
+    )
+
+    assert not counts.action_sequence_matches
+
+
+def test_worker_trace_applies_exact_tool_contract(tmp_path: Path) -> None:
+    from trace_collect.openclaw_host_runtime import _worker_trace_action_counts
+
+    source = [
+        {
+            "type": "action",
+            "action_type": "tool_exec",
+            "action_id": "tool-1",
+            "data": {
+                "tool_name": "exec",
+                "tool_call_id": "call-1",
+                "tool_args": '{"command":"true"}',
+                "success": True,
+            },
+        }
+    ]
+    trace = tmp_path / "replay.jsonl"
+    trace.write_text(
+        json.dumps(
+            {
+                "type": "action",
+                "action_type": "tool_exec",
+                "action_id": "tool-1",
+                "data": {
+                    "tool_name": "exec",
+                    "tool_call_id": "call-1",
+                    "tool_args": '{"command":"false"}',
+                    "success": True,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    counts = _worker_trace_action_counts(
+        trace, source, require_exact_tool_calls=True
+    )
+
+    assert not counts.action_sequence_matches
+
+
 def test_openclaw_replay_stops_before_unrecorded_final_tool_call() -> None:
     from trace_collect.openclaw_host_runtime import (
         OpenClawReplayProvider,
@@ -1052,6 +1199,28 @@ def test_replay_failure_counts_rejects_extra_actions() -> None:
     assert counts.emitted_actions == 2
     assert not counts.action_sequence_matches
     assert not wrong_tool.action_sequence_matches
+
+
+def test_allowed_outcome_drift_is_not_a_framework_failure() -> None:
+    from trace_collect.openclaw_host_runtime import (
+        ReplayActionFailureCounts,
+        replay_framework_failure_count,
+    )
+
+    counts = ReplayActionFailureCounts(
+        emitted_actions=1,
+        source_failed_actions=0,
+        replay_failed_actions=1,
+        unexpected_replay_failed_actions=1,
+        action_sequence_matches=True,
+    )
+
+    assert replay_framework_failure_count(
+        counts, missing_actions=0, require_source_outcome_match=False
+    ) == 0
+    assert replay_framework_failure_count(
+        counts, missing_actions=0, require_source_outcome_match=True
+    ) == 1
 
 
 def test_openclaw_container_mode_replays_llm_via_host_replay_runner(

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import contextmanager
 import heapq
 import json
 import os
@@ -237,8 +238,14 @@ def _protocol(cohort: str = "initial24") -> dict[str, Any]:
         ],
         "source_dir": str(SOURCE),
         "task_source": str(TASKS),
-        "exec_timeout_floor_s": EXEC_TIMEOUT_FLOOR_S,
+        "exec_timeout_floor_s": config.get(
+            "exec_timeout_floor_s", EXEC_TIMEOUT_FLOOR_S
+        ),
     }
+    if "paired_workload_contract_version" in config:
+        protocol["paired_workload_contract_version"] = int(
+            config["paired_workload_contract_version"]
+        )
     if config.get("compatible_prefix_pairs"):
         protocol["compatible_prefix_pairs"] = int(config["compatible_prefix_pairs"])
     if group_size != 2:
@@ -252,6 +259,38 @@ def _protocol(cohort: str = "initial24") -> dict[str, Any]:
         protocol["arm_level_resume"] = bool(config["arm_level_resume"])
         protocol["makespan_source"] = str(config["makespan_source"])
     return protocol
+
+
+@contextmanager
+def _replay_environment(protocol: dict[str, Any]):
+    keys = (
+        OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV,
+        OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV,
+    )
+    previous = {key: os.environ.get(key) for key in keys}
+    floor = protocol["exec_timeout_floor_s"]
+    paired = bool(protocol["paired_workload_contract"])
+    version = int(protocol.get("paired_workload_contract_version", 1))
+    if not paired and "paired_workload_contract_version" in protocol:
+        raise ValueError("unpaired replay cannot select a paired contract version")
+    if paired and version == 2 and floor is not None:
+        raise ValueError("paired replay contract 2 forbids an exec timeout floor")
+    try:
+        if floor is None:
+            os.environ.pop(OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV, None)
+        else:
+            os.environ[OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV] = str(floor)
+        if paired:
+            os.environ[OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV] = str(version)
+        else:
+            os.environ.pop(OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV, None)
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def _write_manifest(path: Path, task_ids: list[str]) -> None:
@@ -350,6 +389,23 @@ def _fixed_duration_queue_makespan(
     return max(slots)
 
 
+def _arm_outcome_relation(
+    burstable: dict[str, Any], hard: dict[str, Any]
+) -> str:
+    burstable_class = str(burstable["class"])
+    hard_class = str(hard["class"])
+    if burstable_class == hard_class:
+        return "same_terminal_class"
+    success_classes = {"exit_zero", "tool_success"}
+    burstable_succeeded = burstable_class in success_classes
+    hard_succeeded = hard_class in success_classes
+    if burstable_succeeded and not hard_succeeded:
+        return "burstable_success_hard_failure"
+    if hard_succeeded and not burstable_succeeded:
+        return "burstable_failure_hard_success"
+    return "different_failure_class"
+
+
 def _audit_existing_rolling_outcomes(result_path: Path) -> dict[str, Any]:
     result = json.loads(result_path.read_text(encoding="utf-8"))
     queues = result.get("queues") or []
@@ -377,6 +433,12 @@ def _audit_existing_rolling_outcomes(result_path: Path) -> dict[str, Any]:
     tool_call_count = 0
     stable_tool_call_count = 0
     arm_pair_mismatch_tool_call_count = 0
+    arm_outcome_relation_counts = {
+        "same_terminal_class": 0,
+        "burstable_success_hard_failure": 0,
+        "burstable_failure_hard_success": 0,
+        "different_failure_class": 0,
+    }
     source_clean_ids: list[str] = []
     source_clean_outcome_stable_ids: list[str] = []
     for task_id in task_ids:
@@ -431,6 +493,10 @@ def _audit_existing_rolling_outcomes(result_path: Path) -> dict[str, Any]:
                 "burstable_two": _tool_terminal_outcome(burst_action),
                 "hard_two": _tool_terminal_outcome(hard_action),
             }
+            relation = _arm_outcome_relation(
+                outcomes["burstable_two"], outcomes["hard_two"]
+            )
+            arm_outcome_relation_counts[relation] += 1
             if len({item["class"] for item in outcomes.values()}) == 1:
                 stable_tool_call_count += 1
                 continue
@@ -547,6 +613,15 @@ def _audit_existing_rolling_outcomes(result_path: Path) -> dict[str, Any]:
         },
         "tasks": task_rows,
         "mismatches": mismatches,
+        "arm_outcome_quality": {
+            "unit": "tool_call",
+            "success_classes": ["exit_zero", "tool_success"],
+            "relation_counts": arm_outcome_relation_counts,
+            "burstable_quality_regression_count": arm_outcome_relation_counts[
+                "burstable_failure_hard_success"
+            ],
+            "selection_timing": "post-hoc descriptive audit",
+        },
         "source_clean_outcome_stable_fixed_duration_diagnostic": {
             "task_count": len(source_clean_outcome_stable_ids),
             "queue_concurrency": concurrency,
@@ -624,6 +699,8 @@ def _task_artifacts(
     arm: str,
     *,
     paired_workload_contract: bool | None,
+    exec_timeout_floor_s: float | None = EXEC_TIMEOUT_FLOOR_S,
+    paired_workload_contract_version: int | None = None,
 ) -> dict[str, Any]:
     attempt = arm_dir / task_id / "attempt_1"
     startup_path = attempt / "container_startup.json"
@@ -638,7 +715,7 @@ def _task_artifacts(
     status = json.loads(status_path.read_text(encoding="utf-8"))
     resources = json.loads(resources_path.read_text(encoding="utf-8"))
     request = json.loads(request_path.read_text(encoding="utf-8"))
-    if request.get("exec_timeout_floor_s") != EXEC_TIMEOUT_FLOOR_S:
+    if request.get("exec_timeout_floor_s") != exec_timeout_floor_s:
         raise AssertionError(f"wrong timeout floor for {task_id} {arm}")
     if paired_workload_contract is None:
         if "paired_workload_contract" in request:
@@ -647,6 +724,12 @@ def _task_artifacts(
             )
     elif request.get("paired_workload_contract") is not paired_workload_contract:
         raise AssertionError(f"wrong replay contract for {task_id} {arm}")
+    if (
+        paired_workload_contract_version is not None
+        and request.get("paired_workload_contract_version")
+        != paired_workload_contract_version
+    ):
+        raise AssertionError(f"wrong replay contract version for {task_id} {arm}")
     replay_action_contract = dict(request.get("replay_action_contract") or {})
     if (
         paired_workload_contract
@@ -686,7 +769,9 @@ def _task_artifacts(
     timeout_count = _source_success_replay_timeout_count(
         request, attempt / "openclaw_host_replay.jsonl"
     )
-    if timeout_count:
+    if timeout_count and replay_action_contract.get(
+        "require_source_outcome_match", True
+    ):
         raise AssertionError(
             f"source-success replay timeout for {task_id} {arm}: {timeout_count}"
         )
@@ -738,6 +823,8 @@ async def _run_arm(
     manifest: Path,
     replay_dir: Path,
     paired_workload_contract: bool,
+    exec_timeout_floor_s: float | None = EXEC_TIMEOUT_FLOOR_S,
+    paired_workload_contract_version: int | None = None,
     concurrency: int | None = None,
     workers: int | None = None,
     makespan_source: str = "max_task_elapsed_s",
@@ -801,6 +888,8 @@ async def _run_arm(
                 task_id,
                 arm,
                 paired_workload_contract=paired_workload_contract,
+                exec_timeout_floor_s=exec_timeout_floor_s,
+                paired_workload_contract_version=paired_workload_contract_version,
             )
             for task_id in task_ids
         ],
@@ -1425,9 +1514,8 @@ def main() -> None:
             )
     resumed_after_pairs = sum(len(run["arms"]) == 2 for run in runs)
     resumed_after_arms = sum(len(run["arms"]) for run in runs)
-    os.environ[OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV] = str(EXEC_TIMEOUT_FLOOR_S)
-    if protocol["paired_workload_contract"]:
-        os.environ[OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV] = "1"
+    replay_environment = _replay_environment(protocol)
+    replay_environment.__enter__()
     try:
         for index, declared in enumerate(protocol["pairs"]):
             pair = int(declared["pair"])
@@ -1455,6 +1543,12 @@ def main() -> None:
                             paired_workload_contract=protocol[
                                 "paired_workload_contract"
                             ],
+                            exec_timeout_floor_s=protocol[
+                                "exec_timeout_floor_s"
+                            ],
+                            paired_workload_contract_version=protocol.get(
+                                "paired_workload_contract_version"
+                            ),
                             concurrency=protocol.get("queue_concurrency"),
                             workers=protocol.get("queue_workers"),
                             makespan_source=protocol.get(
@@ -1502,8 +1596,7 @@ def main() -> None:
         )
         raise
     finally:
-        os.environ.pop(OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV, None)
-        os.environ.pop(OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV, None)
+        replay_environment.__exit__(None, None, None)
 
 
 if __name__ == "__main__":
