@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 
@@ -213,6 +214,107 @@ def test_quartet_cohort_uses_group_gate_and_reports_task_completion() -> None:
     result = experiment._aggregate(protocol, _runs(protocol, [0.1] * 8 + [0.0] * 4))
     assert result["status"] == "no_go"
     assert not result["comparison"]["gate"]["at_least_9_of_12_groups_improve"]
+
+
+def test_rolling_queue_freezes_concurrency_order_and_effect_gate() -> None:
+    protocol = experiment._protocol("rolling48_contract_v1")
+    quartet = experiment._protocol("quartet48_contract_v2")
+
+    assert protocol["selected_task_ids"] == quartet["selected_task_ids"]
+    assert protocol["group_size"] == 48
+    assert protocol["queue_concurrency"] == 4
+    assert protocol["queue_workers"] == 1
+    assert protocol["decision_unit"] == "queue"
+    assert protocol["immediate_refill"] is True
+    assert protocol["makespan_source"] == "throughput_summary.wall_time_s"
+    assert len(protocol["pairs"]) == 1
+    assert protocol["pairs"][0]["arm_order"] == ["burstable_two", "hard_two"]
+
+    result = experiment._aggregate(protocol, _runs(protocol, [0.05]))
+    assert result["status"] == "go"
+    assert result["comparison"]["queue_count"] == 1
+    assert result["comparison"]["makespan_improvement_fraction"] == pytest.approx(
+        0.05
+    )
+    assert result["comparison"]["gate"] == {
+        "makespan_improvement_at_least_5_percent": True,
+        "all_validity_checks_passed": True,
+    }
+    assert "bootstrap_draws" not in result["comparison"]
+    assert len(result["task_runtime"]["paired_task_deltas"]) == 48
+
+    result = experiment._aggregate(protocol, _runs(protocol, [0.049999]))
+    assert result["status"] == "no_go"
+    assert not result["comparison"]["gate"][
+        "makespan_improvement_at_least_5_percent"
+    ]
+
+
+def test_rolling_arm_limits_workers_without_limiting_task_count(
+    tmp_path, monkeypatch
+) -> None:
+    task_ids = [f"task-{index}" for index in range(5)]
+    captured = {}
+
+    async def fake_simulate(**kwargs):
+        captured.update(kwargs)
+        output_dir = Path(kwargs["output_dir"])
+        output_dir.mkdir(parents=True)
+        trace_file = output_dir / "trace.jsonl"
+        trace_file.write_text("", encoding="utf-8")
+        (output_dir / "throughput_summary.json").write_text(
+            json.dumps(
+                {
+                    "attempted_traces": len(task_ids),
+                    "wall_time_s": 9.0,
+                    "concurrency": 4,
+                    "effective_concurrency": 4,
+                    "workers": 1,
+                    "scheduler_mode": "bounded_queue",
+                    "tasks": [
+                        {
+                            "agent_id": task_id,
+                            "failed_action_count": 0,
+                            "elapsed_s": float(index + 1),
+                        }
+                        for index, task_id in enumerate(task_ids)
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return trace_file
+
+    monkeypatch.setattr(experiment, "simulate", fake_simulate)
+    monkeypatch.setattr(
+        experiment,
+        "_task_artifacts",
+        lambda _arm_dir, task_id, _arm, **_kwargs: {
+            "task_id": task_id,
+            "replay_action_contract": {},
+        },
+    )
+    monkeypatch.setattr(experiment, "_action_sequences", lambda _path: {})
+
+    result = asyncio.run(
+        experiment._run_arm(
+            pair=1,
+            task_ids=task_ids,
+            arm="burstable_two",
+            manifest=tmp_path / "manifest.json",
+            replay_dir=tmp_path,
+            paired_workload_contract=True,
+            concurrency=4,
+            workers=1,
+            makespan_source="throughput_summary.wall_time_s",
+        )
+    )
+
+    assert captured["concurrency"] == 4
+    assert captured["workers"] == 1
+    assert captured["prep_concurrency"] == 4
+    assert len(result["task_stats"]) == 5
+    assert result["pair_makespan_s"] == 9.0
 
 
 def test_quartet_resume_preserves_invalid_result(tmp_path) -> None:
@@ -460,3 +562,61 @@ def test_resume_accepts_only_complete_frozen_pair_prefix(tmp_path, monkeypatch) 
     )
     with pytest.raises(AssertionError, match="arm order differs"):
         experiment._load_resume_runs(protocol, result_dir, replay_dir)
+
+
+def test_rolling_resume_accepts_completed_first_arm(tmp_path, monkeypatch) -> None:
+    protocol = experiment._protocol("rolling48_contract_v1")
+    result_dir = tmp_path / "results"
+    replay_dir = tmp_path / "replay"
+    result_dir.mkdir()
+    (result_dir / "protocol.json").write_text(
+        json.dumps(protocol), encoding="utf-8"
+    )
+    declared = protocol["pairs"][0]
+    arm = declared["arm_order"][0]
+    arm_dir = replay_dir / "pair_01" / arm
+    arm_dir.mkdir(parents=True)
+    trace_file = arm_dir / "trace.jsonl"
+    trace_file.write_text("", encoding="utf-8")
+    task_stats = [
+        {"agent_id": task_id, "failed_action_count": 0, "elapsed_s": 1.0}
+        for task_id in declared["task_ids"]
+    ]
+    summary_path = arm_dir / "throughput_summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "attempted_traces": 48,
+                "wall_time_s": 12.0,
+                "concurrency": 4,
+                "effective_concurrency": 4,
+                "workers": 1,
+                "scheduler_mode": "bounded_queue",
+                "tasks": list(reversed(task_stats)),
+            }
+        ),
+        encoding="utf-8",
+    )
+    run = {
+        "pair": 1,
+        "arms": [
+            {
+                "arm": arm,
+                "output_dir": str(arm_dir),
+                "trace_file": str(trace_file),
+                "summary_path": str(summary_path),
+                "pair_makespan_s": 12.0,
+                "task_stats": task_stats,
+                "action_sequences": {},
+            }
+        ],
+    }
+    (result_dir / "partial.json").write_text(
+        json.dumps({"protocol": protocol, "runs": [run]}), encoding="utf-8"
+    )
+    monkeypatch.setattr(experiment, "_task_artifacts", lambda *_args, **_kwargs: {})
+
+    loaded = experiment._load_resume_runs(protocol, result_dir, replay_dir)
+
+    assert loaded == [run]
+    assert declared["arm_order"][len(loaded[0]["arms"]) :] == ["hard_two"]

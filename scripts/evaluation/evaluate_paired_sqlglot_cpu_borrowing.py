@@ -153,6 +153,28 @@ COHORTS: dict[str, dict[str, Any]] = {
         / "traces/swe-rebench/gpt-5.6-sol"
         / "sqlglot48-quartet-cpu-borrowing-contract-v2",
     },
+    "rolling48_contract_v1": {
+        "selection_start": 0,
+        "selection_count": 48,
+        "group_size": 48,
+        "queue_concurrency": 4,
+        "queue_workers": 1,
+        "decision_unit": "queue",
+        "immediate_refill": True,
+        "arm_level_resume": True,
+        "makespan_source": "throughput_summary.wall_time_s",
+        "arm_orders": [["burstable_two", "hard_two"]],
+        "bootstrap_seed": 20_260_814,
+        "minimum_improving_pairs": 1,
+        "paired_workload_contract": True,
+        "schema": "sqlglot-rolling-cpu-borrowing-contract-v1",
+        "result_dir": ROOT
+        / "analysis/results/tool-resource-5-3-3-3-20260804"
+        / "sqlglot48-rolling-cpu-borrowing-contract-v1",
+        "replay_dir": ROOT
+        / "traces/swe-rebench/gpt-5.6-sol"
+        / "sqlglot48-rolling-cpu-borrowing-contract-v1",
+    },
 }
 
 
@@ -215,7 +237,13 @@ def _protocol(cohort: str = "initial24") -> dict[str, Any]:
         protocol["compatible_prefix_pairs"] = int(config["compatible_prefix_pairs"])
     if group_size != 2:
         protocol["group_size"] = group_size
-        protocol["decision_unit"] = "group"
+        protocol["decision_unit"] = str(config.get("decision_unit", "group"))
+    if "queue_concurrency" in config:
+        protocol["queue_concurrency"] = int(config["queue_concurrency"])
+        protocol["queue_workers"] = int(config["queue_workers"])
+        protocol["immediate_refill"] = bool(config["immediate_refill"])
+        protocol["arm_level_resume"] = bool(config["arm_level_resume"])
+        protocol["makespan_source"] = str(config["makespan_source"])
     return protocol
 
 
@@ -433,14 +461,18 @@ async def _run_arm(
     manifest: Path,
     replay_dir: Path,
     paired_workload_contract: bool,
+    concurrency: int | None = None,
+    workers: int | None = None,
+    makespan_source: str = "max_task_elapsed_s",
 ) -> dict[str, Any]:
     arm_dir = replay_dir / f"pair_{pair:02d}" / arm
-    concurrency = len(task_ids)
+    concurrency = len(task_ids) if concurrency is None else concurrency
+    workers = concurrency if workers is None else workers
     trace_file = await simulate(
         manifest=manifest,
         output_dir=arm_dir,
         concurrency=concurrency,
-        workers=concurrency,
+        workers=workers,
         prep_concurrency=concurrency,
         container_executable="docker",
         network_mode="host",
@@ -453,19 +485,37 @@ async def _run_arm(
     )
     summary_path = arm_dir / "throughput_summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    if summary.get("attempted_traces") != concurrency:
+    if summary.get("attempted_traces") != len(task_ids):
         raise AssertionError(f"invalid throughput summary for pair {pair} {arm}")
     stats = {str(item["agent_id"]): item for item in summary["tasks"]}
     if set(stats) != set(task_ids):
         raise AssertionError(f"wrong tasks for pair {pair} {arm}")
     if any(item["failed_action_count"] for item in stats.values()):
         raise AssertionError(f"replay action failure for pair {pair} {arm}")
+    if makespan_source == "throughput_summary.wall_time_s":
+        expected_summary = {
+            "concurrency": concurrency,
+            "effective_concurrency": min(concurrency, len(task_ids)),
+            "workers": workers,
+            "scheduler_mode": "bounded_queue",
+        }
+        for key, expected in expected_summary.items():
+            if summary.get(key) != expected:
+                raise AssertionError(
+                    f"wrong rolling queue summary for {pair} {arm}: "
+                    f"{key}={summary.get(key)!r}"
+                )
+        makespan_s = float(summary["wall_time_s"])
+    elif makespan_source == "max_task_elapsed_s":
+        makespan_s = max(float(item["elapsed_s"]) for item in stats.values())
+    else:
+        raise ValueError(f"unsupported makespan source: {makespan_source}")
     return {
         "arm": arm,
         "output_dir": str(arm_dir),
         "trace_file": str(trace_file),
         "summary_path": str(summary_path),
-        "pair_makespan_s": max(float(item["elapsed_s"]) for item in stats.values()),
+        "pair_makespan_s": makespan_s,
         "tasks": [
             _task_artifacts(
                 arm_dir,
@@ -732,12 +782,7 @@ def _aggregate(protocol: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str
             pair_result["provenance"] = by_pair[pair]["provenance"]
         pairs.append(pair_result)
     improvements = np.array([item["improvement_fraction"] for item in pairs])
-    rng = np.random.Generator(np.random.PCG64(protocol["bootstrap_seed"]))
-    draws = improvements[
-        rng.integers(0, len(improvements), size=(10_000, len(improvements)))
-    ].mean(axis=1)
     mean = float(improvements.mean())
-    interval = [float(value) for value in np.quantile(draws, [0.025, 0.975])]
     improving = int((improvements > 0).sum())
     minimum_improving = int(protocol["minimum_improving_pairs"])
     if protocol.get("mechanism_only"):
@@ -755,30 +800,54 @@ def _aggregate(protocol: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str
             },
             "pairs": pairs,
         }
-    gate = {
-        "mean_improvement_at_least_5_percent": mean >= 0.05,
-        "bootstrap_lower_above_zero": interval[0] > 0.0,
-        f"at_least_{minimum_improving}_of_{len(pairs)}_{plural}_improve": (
-            improving >= minimum_improving
-        ),
-        "all_validity_checks_passed": True,
-    }
-    result = {
-        "schema": protocol["schema"],
-        "status": "go" if all(gate.values()) else "no_go",
-        "protocol": protocol,
-        "comparison": {
-            "mean_improvement_fraction": mean,
-            "median_improvement_fraction": float(statistics.median(improvements)),
-            f"improving_{plural}": improving,
-            f"{decision_unit}_count": len(pairs),
-            f"ci95_paired_{decision_unit}_bootstrap": interval,
-            "bootstrap_draws": 10_000,
-            "gate": gate,
-        },
-        plural: pairs,
-    }
-    if protocol.get("group_size") == 4:
+    if decision_unit == "queue":
+        gate = {
+            "makespan_improvement_at_least_5_percent": mean >= 0.05,
+            "all_validity_checks_passed": True,
+        }
+        result = {
+            "schema": protocol["schema"],
+            "status": "go" if all(gate.values()) else "no_go",
+            "protocol": protocol,
+            "comparison": {
+                "makespan_improvement_fraction": mean,
+                "queue_count": len(pairs),
+                "gate": gate,
+            },
+            plural: pairs,
+        }
+    else:
+        rng = np.random.Generator(np.random.PCG64(protocol["bootstrap_seed"]))
+        draws = improvements[
+            rng.integers(0, len(improvements), size=(10_000, len(improvements)))
+        ].mean(axis=1)
+        interval = [float(value) for value in np.quantile(draws, [0.025, 0.975])]
+        gate = {
+            "mean_improvement_at_least_5_percent": mean >= 0.05,
+            "bootstrap_lower_above_zero": interval[0] > 0.0,
+            f"at_least_{minimum_improving}_of_{len(pairs)}_{plural}_improve": (
+                improving >= minimum_improving
+            ),
+            "all_validity_checks_passed": True,
+        }
+        result = {
+            "schema": protocol["schema"],
+            "status": "go" if all(gate.values()) else "no_go",
+            "protocol": protocol,
+            "comparison": {
+                "mean_improvement_fraction": mean,
+                "median_improvement_fraction": float(
+                    statistics.median(improvements)
+                ),
+                f"improving_{plural}": improving,
+                f"{decision_unit}_count": len(pairs),
+                f"ci95_paired_{decision_unit}_bootstrap": interval,
+                "bootstrap_draws": 10_000,
+                "gate": gate,
+            },
+            plural: pairs,
+        }
+    if int(protocol.get("group_size", 2)) > 2:
         task_deltas = []
         hard_elapsed = []
         burst_elapsed = []
@@ -794,7 +863,8 @@ def _aggregate(protocol: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str
             }
             if set(hard) != set(burst):
                 raise AssertionError(
-                    f"task completion identity differs for group {group['group']}"
+                    f"task completion identity differs for {decision_unit} "
+                    f"{group[decision_unit]}"
                 )
             for task_id in group["task_ids"]:
                 hard_s = hard[task_id]
@@ -803,7 +873,7 @@ def _aggregate(protocol: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str
                 burst_elapsed.append(burst_s)
                 task_deltas.append(
                     {
-                        "group": group["group"],
+                        decision_unit: group[decision_unit],
                         "task_id": task_id,
                         "hard_two_s": hard_s,
                         "burstable_two_s": burst_s,
@@ -813,7 +883,8 @@ def _aggregate(protocol: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str
         slowdowns = np.array(
             [item["burstable_slowdown_fraction"] for item in task_deltas]
         )
-        result["task_completion"] = {
+        task_metric = "task_runtime" if decision_unit == "queue" else "task_completion"
+        result[task_metric] = {
             "hard_two_mean_s": float(np.mean(hard_elapsed)),
             "burstable_two_mean_s": float(np.mean(burst_elapsed)),
             "hard_two_p95_s": float(np.quantile(hard_elapsed, 0.95)),
@@ -841,17 +912,28 @@ def _load_resume_runs(
     if payload.get("protocol") != protocol:
         raise AssertionError("resume protocol differs from the frozen protocol")
     runs = payload.get("runs")
-    if not isinstance(runs, list) or not runs or len(runs) >= len(protocol["pairs"]):
+    arm_level_resume = bool(protocol.get("arm_level_resume", False))
+    if (
+        not isinstance(runs, list)
+        or not runs
+        or len(runs) > len(protocol["pairs"])
+        or (len(runs) == len(protocol["pairs"]) and not arm_level_resume)
+    ):
         raise AssertionError("resume requires a non-empty incomplete run prefix")
 
-    for declared, run in zip(protocol["pairs"][: len(runs)], runs, strict=True):
+    for index, (declared, run) in enumerate(
+        zip(protocol["pairs"][: len(runs)], runs, strict=True)
+    ):
         pair = int(declared["pair"])
         if run.get("pair") != pair:
             raise AssertionError(f"resume pair order differs at pair {pair}")
         arms = run.get("arms")
-        if not isinstance(arms, list) or len(arms) != 2:
+        partial_last_arm = (
+            arm_level_resume and index == len(runs) - 1 and len(arms or []) == 1
+        )
+        if not isinstance(arms, list) or (len(arms) != 2 and not partial_last_arm):
             raise AssertionError(f"resume pair {pair} is not complete")
-        if [item.get("arm") for item in arms] != declared["arm_order"]:
+        if [item.get("arm") for item in arms] != declared["arm_order"][: len(arms)]:
             raise AssertionError(f"resume arm order differs at pair {pair}")
 
         by_arm = {str(item["arm"]): item for item in arms}
@@ -890,9 +972,36 @@ def _load_resume_runs(
                 raise AssertionError(
                     f"resume summary tasks differ at pair {pair} {arm}"
                 )
-            if arm_data.get("task_stats") != summary_tasks:
+            stored_task_stats = arm_data.get("task_stats")
+            if (
+                not isinstance(stored_task_stats, list)
+                or len(stored_task_stats) != expected_tasks
+                or {
+                    str(item["agent_id"]): item for item in stored_task_stats
+                }
+                != stats
+            ):
                 raise AssertionError(f"resume task stats differ at pair {pair} {arm}")
-            makespan = max(float(item["elapsed_s"]) for item in stats.values())
+            if protocol.get("makespan_source") == "throughput_summary.wall_time_s":
+                expected_summary = {
+                    "concurrency": protocol["queue_concurrency"],
+                    "effective_concurrency": min(
+                        protocol["queue_concurrency"], expected_tasks
+                    ),
+                    "workers": protocol["queue_workers"],
+                    "scheduler_mode": "bounded_queue",
+                }
+                for key, expected in expected_summary.items():
+                    if summary.get(key) != expected:
+                        raise AssertionError(
+                            f"resume queue summary differs at pair {pair} {arm}: "
+                            f"{key}={summary.get(key)!r}"
+                        )
+                makespan = float(summary["wall_time_s"])
+            else:
+                makespan = max(
+                    float(item["elapsed_s"]) for item in stats.values()
+                )
             if arm_data.get("pair_makespan_s") != makespan:
                 raise AssertionError(f"resume makespan differs at pair {pair} {arm}")
             sequences = _action_sequences(trace_file)
@@ -907,7 +1016,7 @@ def _load_resume_runs(
                     arm,
                     paired_workload_contract=protocol["paired_workload_contract"],
                 )
-        if (
+        if len(by_arm) == 2 and (
             by_arm["hard_two"]["action_sequences"]
             != by_arm["burstable_two"]["action_sequences"]
         ):
@@ -988,12 +1097,13 @@ def main() -> None:
             "remaining26",
             "remaining26_compatible_v2",
             "quartet48_contract_v2",
+            "rolling48_contract_v1",
         }:
             raise ValueError("resume is not frozen for this cohort")
         result_path = result_dir / "result.json"
         if args.cohort == "remaining26_compatible_v2":
             runs = _load_compatible_resume_runs(protocol, result_dir, replay_dir)
-        elif args.cohort == "quartet48_contract_v2":
+        elif args.cohort in {"quartet48_contract_v2", "rolling48_contract_v1"}:
             runs = _load_resume_runs(protocol, result_dir, replay_dir)
             interruption_results = _preserve_interruption_result(result_path, protocol)
         elif not result_path.is_file() or result_path.stat().st_size != 0:
@@ -1018,19 +1128,25 @@ def main() -> None:
                 json.dumps({"protocol": protocol, "runs": runs}, indent=2) + "\n",
                 encoding="utf-8",
             )
-    resumed_after_pairs = len(runs)
+    resumed_after_pairs = sum(len(run["arms"]) == 2 for run in runs)
+    resumed_after_arms = sum(len(run["arms"]) for run in runs)
     os.environ[OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV] = str(EXEC_TIMEOUT_FLOOR_S)
     if protocol["paired_workload_contract"]:
         os.environ[OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV] = "1"
     try:
-        for declared in protocol["pairs"][resumed_after_pairs:]:
+        for index, declared in enumerate(protocol["pairs"]):
             pair = int(declared["pair"])
             task_ids = list(declared["task_ids"])
-            pair_result: dict[str, Any] = {"pair": pair, "arms": []}
-            if protocol.get("compatible_prefix_pairs"):
-                pair_result["provenance"] = {"kind": "fresh_contract_v2"}
-            runs.append(pair_result)
-            for arm in declared["arm_order"]:
+            if index < len(runs):
+                pair_result = runs[index]
+                if len(pair_result["arms"]) == 2:
+                    continue
+            else:
+                pair_result = {"pair": pair, "arms": []}
+                if protocol.get("compatible_prefix_pairs"):
+                    pair_result["provenance"] = {"kind": "fresh_contract_v2"}
+                runs.append(pair_result)
+            for arm in declared["arm_order"][len(pair_result["arms"]) :]:
                 manifest = result_dir / "manifests" / f"pair_{pair:02d}_{arm}.json"
                 _write_manifest(manifest, task_ids)
                 pair_result["arms"].append(
@@ -1044,6 +1160,11 @@ def main() -> None:
                             paired_workload_contract=protocol[
                                 "paired_workload_contract"
                             ],
+                            concurrency=protocol.get("queue_concurrency"),
+                            workers=protocol.get("queue_workers"),
+                            makespan_source=protocol.get(
+                                "makespan_source", "max_task_elapsed_s"
+                            ),
                         )
                     )
                 )
@@ -1055,6 +1176,7 @@ def main() -> None:
         if args.resume:
             result["recovery"] = {
                 "resumed_after_completed_pairs": resumed_after_pairs,
+                "resumed_after_completed_arms": resumed_after_arms,
             }
             if interruption_results:
                 result["recovery"]["interruption_results"] = [
