@@ -20,11 +20,11 @@ artifacts retain that history.
 | Prediction contribution to feedback | Not established. Task-Aware seeding did not improve the frozen reservation/service operating point over feedback alone. |
 | CPU scheduling | Short-null handling reduced conservative exposure counts about 78%, but Clause-KB and Task-Aware still produced 2,638 and 2,702 confirmed exposure events. Both hard-RSS safety arms remain closed on exposed SQLGlot; the prediction-free action ceiling is retained. |
 | KB representation | Raw exact/prefix/binary `ClauseResourceKB` is the implemented Clause-KB baseline. Trie/lattice/semantic-key replacement is closed as a contribution. |
-| Offline agent | Closed. More prompts, critics, DSLs, or generated adapters are not authorized. |
+| Offline tool knowledge | Trace-conditioned rule generation remains closed. An advisor-authorized, docs-only semantic compiler is open for design and preflight: one bounded generation per tool, no trace/outcome inputs, no runtime LM, and no action claim without an observable state plus a physical oracle gate. |
 | KV scheduling | Closed under the current CacheWise/C100 simulator and action model. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
-| Next research step | Leave CPU-idle as an exposed action ceiling. Any revisit needs a genuinely different causal safety signal or compound-RSS target; do not add another null exception, threshold, or reservation rule on exposed SQLGlot. |
+| Next research step | Test whether versioned tool documentation can supply reusable command semantics on several dense same-repository cohorts. Keep EAR's elastic CPU/RSS control unchanged. Before implementing any scheduler, require a separate action-specific oracle showing that an observable pre-execution state can change a real decision and improve end-to-end utility. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -289,9 +289,12 @@ Do not add another exception on this exposed cohort.
 
 - **Lookup structure alone:** trie, lattice, generic argv, pip/pytest semantic
   keys, and command-state variants changed too few action-relevant decisions.
-- **Offline agent:** generated Python, relational spans, bounded regex, and a
-  typed catalog found no resource-separating state. The final finite-choice arm
-  removed arbitrary code and still returned no useful contrast.
+- **Trace-conditioned offline agent:** generated Python, relational spans,
+  bounded regex, and a typed catalog found no resource-separating state. The
+  final finite-choice arm removed arbitrary code and still returned no useful
+  contrast. This result is not weakened or repaired. The newly authorized
+  question uses only versioned public documentation to describe argument
+  semantics; it cannot inspect traces, labels, task state, or tool results.
 - **Task-local last-value state:** repeated command load alternates; a causal
   overlay creates one-command lag rather than stable state.
 - **Continuous latency survival:** most apparent gain came from the elapsed-time
@@ -387,6 +390,9 @@ CPU-idle FCFS backfill = exposed action headroom, not deployable RSS safety.
 Static hard-RSS CPU-idle admission = closed on exposed SQLGlot.
 Protocol NO-GO != permission to delete a retained baseline.
 No result-dependent tuning, hindsight state, or dataset-specific outcome rule.
+Offline LM input = versioned public tool docs and --help only; zero runtime LM.
+Documentation supplies representation, never an action or measured cost.
+Scheduler work requires observable pre-execution state and a physical oracle.
 No new collection, runtime integration, or scheduler claim without a separate
 approved protocol.
 ```
