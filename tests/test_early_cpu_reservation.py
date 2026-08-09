@@ -6,6 +6,7 @@ from tool_resource_eval.early_cpu_reservation import (
     CPU_UPDATE_P95_S,
     SAMPLE_AVAILABILITY_PAD_S,
     action_row,
+    cpu_work_profile,
     feedback_action_row,
     model_cpu_page_policy,
 )
@@ -61,6 +62,33 @@ def test_oracle_uses_smallest_page_covering_future_demand() -> None:
     assert row["oracle_page_cores"] == 4
     assert row["false_shrink"] is False
     assert row["saved_reserved_core_s"] == pytest.approx(4 * row["remaining_s"])
+
+
+def test_cpu_work_profile_preserves_duration_and_clips_work() -> None:
+    action = _action(duration=2.02)
+    action["data"]["resource_timeline"]["samples"][0]["cpu_core_s"] = 4.01
+
+    profile = cpu_work_profile(action)
+
+    assert profile is not None
+    assert sum(dt for dt, _cpu in profile) == pytest.approx(2.02)
+    assert profile[0][1] == pytest.approx(4.0)
+    assert profile[-1] == pytest.approx((0.02, 0.0))
+
+
+def test_cpu_work_profile_returns_none_without_valid_timeline() -> None:
+    action = _action()
+    del action["data"]["resource_timeline"]
+
+    assert cpu_work_profile(action) is None
+
+
+def test_cpu_work_profile_rejects_non_eight_core_source() -> None:
+    action = _action()
+    action["data"]["resource_timeline"]["samples"][0]["cpu_quota_cores"] = 4
+
+    with pytest.raises(ValueError, match="not collected at eight cores"):
+        cpu_work_profile(action)
 
 
 def test_oracle_requires_a_full_post_actuation_interval() -> None:

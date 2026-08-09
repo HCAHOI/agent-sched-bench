@@ -150,6 +150,55 @@ def _modeled_interval(
     return duration_s, reserved_core_s, throttled
 
 
+def cpu_work_profile(
+    action: dict[str, Any],
+) -> tuple[tuple[float, float], ...] | None:
+    """Return the clipped eight-core CPU work profile for one timed exec."""
+
+    data = action.get("data")
+    start = _number(action.get("ts_start"))
+    end = _number(action.get("ts_end"))
+    if (
+        not isinstance(data, dict)
+        or data.get("tool_name") != "exec"
+        or start is None
+        or end is None
+        or end <= start
+    ):
+        raise ValueError("CPU work profile requires a timed exec action")
+    duration = end - start
+    timeline = valid_resource_timeline(data.get("resource_timeline"))
+    interval = _number(timeline.get("sample_interval_s")) if timeline else None
+    samples = timeline.get("samples") if timeline else None
+    if (
+        interval is None
+        or not math.isclose(interval, SAMPLE_INTERVAL_S, abs_tol=1e-9)
+        or not isinstance(samples, list)
+    ):
+        return None
+
+    profile: list[tuple[float, float]] = []
+    for sample in samples:
+        if not isinstance(sample, dict):
+            raise ValueError("resource timeline contains a non-object sample")
+        dt = _number(sample.get("dt_s"))
+        cpu = _number(sample.get("cpu_core_s"))
+        quota = _number(sample.get("cpu_quota_cores"))
+        if dt is None or dt <= 0.0 or cpu is None or quota is None or quota <= 0.0:
+            raise ValueError("resource timeline sample lacks CPU work or duration")
+        if not math.isclose(quota, CONTROL_PAGE, abs_tol=1e-9):
+            raise ValueError("CPU page source timeline was not collected at eight cores")
+        profile.append((dt, min(cpu, quota * dt)))
+    if not profile:
+        raise ValueError("valid resource timeline has no samples")
+    residual = duration - sum(dt for dt, _cpu in profile)
+    if residual < -SAMPLE_AVAILABILITY_PAD_S or residual > SAMPLE_AVAILABILITY_PAD_S:
+        raise ValueError("resource timeline does not cover the exec duration")
+    if residual > 0.0:
+        profile.append((residual, 0.0))
+    return tuple(profile)
+
+
 def model_cpu_page_policy(
     action: dict[str, Any], *, initial_page: int, feedback: bool
 ) -> tuple[dict[str, Any], str]:
@@ -169,14 +218,8 @@ def model_cpu_page_policy(
     ):
         raise ValueError("CPU page policy requires a timed exec action")
     duration = end - start
-    timeline = valid_resource_timeline(data.get("resource_timeline"))
-    interval = _number(timeline.get("sample_interval_s")) if timeline else None
-    samples = timeline.get("samples") if timeline else None
-    if (
-        interval is None
-        or not math.isclose(interval, SAMPLE_INTERVAL_S, abs_tol=1e-9)
-        or not isinstance(samples, list)
-    ):
+    profile = cpu_work_profile(action)
+    if profile is None:
         return {
             "service_s": duration,
             "reserved_cpu_core_s": CONTROL_PAGE * duration,
@@ -186,32 +229,12 @@ def model_cpu_page_policy(
             "feedback_updates": 0,
         }, "no_valid_timeline"
 
-    parsed: list[tuple[float, float]] = []
-    for sample in samples:
-        if not isinstance(sample, dict):
-            raise ValueError("resource timeline contains a non-object sample")
-        dt = _number(sample.get("dt_s"))
-        cpu = _number(sample.get("cpu_core_s"))
-        quota = _number(sample.get("cpu_quota_cores"))
-        if dt is None or dt <= 0.0 or cpu is None or quota is None or quota <= 0.0:
-            raise ValueError("resource timeline sample lacks CPU work or duration")
-        if not math.isclose(quota, CONTROL_PAGE, abs_tol=1e-9):
-            raise ValueError("CPU page source timeline was not collected at eight cores")
-        parsed.append((dt, min(cpu, quota * dt)))
-    if not parsed:
-        raise ValueError("valid resource timeline has no samples")
-    residual = duration - sum(dt for dt, _cpu in parsed)
-    if residual < -SAMPLE_AVAILABILITY_PAD_S or residual > SAMPLE_AVAILABILITY_PAD_S:
-        raise ValueError("resource timeline does not cover the exec duration")
-    residual = max(0.0, residual)
     first_full = next(
-        (index for index, (dt, _cpu) in enumerate(parsed) if dt >= SAMPLE_INTERVAL_S),
+        (index for index, (dt, _cpu) in enumerate(profile) if dt >= SAMPLE_INTERVAL_S),
         None,
     )
 
-    profiles = [(dt, cpu / dt) for dt, cpu in parsed]
-    if residual:
-        profiles.append((residual, 0.0))
+    profiles = [(dt, cpu / dt) for dt, cpu in profile]
     feedback_enabled = feedback and first_full is not None
     current = initial_page
     pending: int | None = None

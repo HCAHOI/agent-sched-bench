@@ -64,6 +64,24 @@ class _BurstRunning:
     remaining_cpu_work_core_s: float
 
 
+@dataclass
+class _FeedbackRunning:
+    session_index: int
+    command: AdmissionCommand
+    start_s: float
+    requested_cpu_cores: float
+    requested_rss_mb: float
+    profile: tuple[tuple[float, float], ...] | None
+    profile_index: int
+    profile_remaining_s: float
+    finish_s: float
+    next_observation_s: float
+    pending_page: float | None = None
+    pending_at_s: float = math.inf
+    observed_cpu_core_s: float = 0.0
+    observed_throttling: bool = False
+
+
 def simulate_admission(
     programs: list[AdmissionProgram],
     *,
@@ -249,6 +267,364 @@ def simulate_admission(
         "modeled_capacity_exposure_command_ids": sorted(exposure_commands),
         "max_modeled_cpu_demand_cores": max_modeled_cpu,
         "max_modeled_rss_demand_mb": max_modeled_rss,
+    }
+
+
+def simulate_feedback_admission(
+    programs: list[AdmissionProgram],
+    *,
+    cpu_capacity: float,
+    rss_capacity_mb: float,
+    requested_reservations: Mapping[str, tuple[float, float]],
+    cpu_work_profiles: Mapping[str, tuple[tuple[float, float], ...]],
+    feedback: bool,
+    sample_interval_s: float,
+    update_delay_s: float,
+    cpu_pages: tuple[float, ...],
+) -> dict[str, object]:
+    """Replay hard CPU reservations with causal per-command feedback."""
+
+    if (
+        not programs
+        or cpu_capacity <= 0.0
+        or rss_capacity_mb <= 0.0
+        or sample_interval_s <= 0.0
+        or update_delay_s < 0.0
+    ):
+        raise ValueError("feedback admission requires positive capacities and timing")
+    if (
+        not cpu_pages
+        or tuple(sorted(cpu_pages)) != cpu_pages
+        or len(set(cpu_pages)) != len(cpu_pages)
+        or cpu_pages[-1] > cpu_capacity + _EPSILON
+        or any(page <= 0.0 or not math.isfinite(page) for page in cpu_pages)
+    ):
+        raise ValueError("feedback admission requires ordered positive CPU pages")
+    if any(not program.commands for program in programs):
+        raise ValueError("every admission program must contain an exec command")
+    commands = {
+        command.command_id: command
+        for program in programs
+        for command in program.commands
+    }
+    if len(commands) != sum(len(program.commands) for program in programs):
+        raise ValueError("command identities must be unique")
+    if set(requested_reservations) != set(commands):
+        raise ValueError("feedback admission requires complete reservations")
+    if not set(cpu_work_profiles) <= set(commands):
+        raise ValueError("CPU work profile contains an unknown command")
+    if any(
+        value < 0.0 or not math.isfinite(value)
+        for program in programs
+        for value in (program.initial_delay_s, program.tail_s)
+    ) or any(
+        command.duration_s <= 0.0
+        or command.cpu_cores < 0.0
+        or command.rss_mb < 0.0
+        or command.delay_after_s < 0.0
+        or not all(
+            math.isfinite(value)
+            for value in (
+                command.duration_s,
+                command.cpu_cores,
+                command.rss_mb,
+                command.delay_after_s,
+            )
+        )
+        for command in commands.values()
+    ):
+        raise ValueError("feedback admission requires finite non-negative inputs")
+    for command_id, command in commands.items():
+        requested_cpu, requested_rss = requested_reservations[command_id]
+        if (
+            requested_cpu not in cpu_pages
+            or requested_rss < 0.0
+            or requested_rss > rss_capacity_mb + _EPSILON
+            or not math.isfinite(requested_rss)
+        ):
+            raise ValueError(f"invalid feedback reservation: {command_id}")
+        profile = cpu_work_profiles.get(command_id)
+        if profile is None:
+            continue
+        if not profile or any(
+            dt <= 0.0
+            or cpu < 0.0
+            or not math.isfinite(dt)
+            or not math.isfinite(cpu)
+            or cpu > cpu_capacity * dt + _EPSILON
+            for dt, cpu in profile
+        ):
+            raise ValueError(f"invalid CPU work profile: {command_id}")
+        profile_duration = sum(dt for dt, _cpu in profile)
+        if not math.isclose(
+            profile_duration, command.duration_s, rel_tol=1e-9, abs_tol=1e-7
+        ):
+            raise ValueError(f"CPU work profile duration differs: {command_id}")
+
+    sessions = [
+        _Session(program, rank, ready_s=program.initial_delay_s)
+        for rank, program in enumerate(programs)
+    ]
+    now_s = min(session.ready_s for session in sessions)
+    running: list[_FeedbackRunning] = []
+    used_cpu = used_rss = 0.0
+    queue_s = reserved_cpu_s = reserved_rss_mb_s = 0.0
+    feedback_updates = shrinks = expansions = denied_expansions = 0
+    starts = max_concurrent = 0
+    capacity_violation = False
+    overlapped: set[str] = set()
+    service_by_command: dict[str, float] = {}
+    start_by_command: dict[str, float] = {}
+
+    def running_key(item: _FeedbackRunning) -> tuple[float, int, str]:
+        session = sessions[item.session_index]
+        return session.ready_s, session.seed_rank, session.program.task_id
+
+    while running or any(
+        session.command_index < len(session.program.commands) for session in sessions
+    ):
+        completed = sorted(
+            (
+                item
+                for item in running
+                if (
+                    item.profile is None
+                    and item.finish_s <= now_s + _EPSILON
+                )
+                or (
+                    item.profile is not None
+                    and item.profile_index >= len(item.profile)
+                )
+            ),
+            key=running_key,
+        )
+        for item in completed:
+            running.remove(item)
+            used_cpu -= item.requested_cpu_cores
+            used_rss -= item.requested_rss_mb
+            service_by_command[item.command.command_id] = now_s - item.start_s
+            session = sessions[item.session_index]
+            session.running = False
+            session.command_index += 1
+            if session.command_index == len(session.program.commands):
+                session.completion_s = now_s + session.program.tail_s
+            else:
+                session.ready_s = now_s + item.command.delay_after_s
+
+        due_updates = sorted(
+            (
+                item
+                for item in running
+                if item.pending_page is not None
+                and item.pending_at_s <= now_s + _EPSILON
+            ),
+            key=running_key,
+        )
+        shrinking = [
+            item
+            for item in due_updates
+            if float(item.pending_page) < item.requested_cpu_cores - _EPSILON
+        ]
+        expanding = [
+            item
+            for item in due_updates
+            if float(item.pending_page) > item.requested_cpu_cores + _EPSILON
+        ]
+        unchanged = [
+            item
+            for item in due_updates
+            if item not in shrinking and item not in expanding
+        ]
+        for item in shrinking:
+            target = float(item.pending_page)
+            used_cpu -= item.requested_cpu_cores - target
+            item.requested_cpu_cores = target
+            item.pending_page = None
+            item.pending_at_s = math.inf
+            shrinks += 1
+        for item in expanding:
+            target = float(item.pending_page)
+            added = target - item.requested_cpu_cores
+            if used_cpu + added <= cpu_capacity + _EPSILON:
+                used_cpu += added
+                item.requested_cpu_cores = target
+                expansions += 1
+            else:
+                denied_expansions += 1
+            item.pending_page = None
+            item.pending_at_s = math.inf
+        for item in unchanged:
+            item.pending_page = None
+            item.pending_at_s = math.inf
+
+        for item in sorted(running, key=running_key):
+            if item.next_observation_s > now_s + _EPSILON:
+                continue
+            target = (
+                cpu_pages[-1]
+                if item.observed_throttling
+                else next(
+                    page
+                    for page in cpu_pages
+                    if page
+                    >= item.observed_cpu_core_s / sample_interval_s - _EPSILON
+                )
+            )
+            item.pending_page = target
+            item.pending_at_s = now_s + update_delay_s
+            item.next_observation_s += sample_interval_s
+            item.observed_cpu_core_s = 0.0
+            item.observed_throttling = False
+            feedback_updates += 1
+
+        ready = sorted(
+            (
+                (index, session)
+                for index, session in enumerate(sessions)
+                if not session.running
+                and session.command_index < len(session.program.commands)
+                and session.ready_s <= now_s + _EPSILON
+            ),
+            key=lambda item: (
+                item[1].ready_s,
+                item[1].seed_rank,
+                item[1].program.task_id,
+            ),
+        )
+        for index, session in ready:
+            command = session.program.commands[session.command_index]
+            requested_cpu, requested_rss = requested_reservations[command.command_id]
+            if (
+                used_cpu + requested_cpu > cpu_capacity + _EPSILON
+                or used_rss + requested_rss > rss_capacity_mb + _EPSILON
+            ):
+                continue
+            profile = cpu_work_profiles.get(command.command_id)
+            if running:
+                overlapped.add(command.command_id)
+            queue_s += max(0.0, now_s - session.ready_s)
+            start_by_command[command.command_id] = now_s
+            running.append(
+                _FeedbackRunning(
+                    session_index=index,
+                    command=command,
+                    start_s=now_s,
+                    requested_cpu_cores=requested_cpu,
+                    requested_rss_mb=requested_rss,
+                    profile=profile,
+                    profile_index=0,
+                    profile_remaining_s=(
+                        profile[0][0] if profile is not None else 0.0
+                    ),
+                    finish_s=now_s + command.duration_s,
+                    next_observation_s=(
+                        now_s + sample_interval_s
+                        if feedback and profile is not None
+                        else math.inf
+                    ),
+                )
+            )
+            used_cpu += requested_cpu
+            used_rss += requested_rss
+            session.running = True
+            starts += 1
+            max_concurrent = max(max_concurrent, len(running))
+            capacity_violation |= (
+                used_cpu > cpu_capacity + _EPSILON
+                or used_rss > rss_capacity_mb + _EPSILON
+            )
+
+        if not running and all(
+            session.command_index == len(session.program.commands)
+            for session in sessions
+        ):
+            break
+
+        future: list[float] = []
+        for item in running:
+            if item.profile is None:
+                future.append(item.finish_s)
+            else:
+                dt, cpu = item.profile[item.profile_index]
+                rate = cpu / dt
+                progress_rate = (
+                    1.0
+                    if rate <= item.requested_cpu_cores
+                    else item.requested_cpu_cores / rate
+                )
+                future.append(now_s + item.profile_remaining_s / progress_rate)
+                if item.next_observation_s < math.inf:
+                    future.append(item.next_observation_s)
+                if item.pending_at_s < math.inf:
+                    future.append(item.pending_at_s)
+        future.extend(
+            session.ready_s
+            for session in sessions
+            if not session.running
+            and session.command_index < len(session.program.commands)
+            and session.ready_s > now_s + _EPSILON
+        )
+        if not future:
+            raise ValueError("ready command cannot fit the empty feedback pool")
+        next_s = min(value for value in future if value > now_s + _EPSILON)
+        elapsed_s = next_s - now_s
+        reserved_cpu_s += sum(
+            item.requested_cpu_cores * elapsed_s for item in running
+        )
+        reserved_rss_mb_s += sum(
+            item.requested_rss_mb * elapsed_s for item in running
+        )
+        for item in running:
+            if item.profile is None:
+                continue
+            dt, cpu = item.profile[item.profile_index]
+            rate = cpu / dt
+            served_rate = min(rate, item.requested_cpu_cores)
+            progress_rate = 1.0 if rate <= item.requested_cpu_cores else served_rate / rate
+            item.profile_remaining_s -= elapsed_s * progress_rate
+            if item.next_observation_s < math.inf:
+                item.observed_cpu_core_s += served_rate * elapsed_s
+                item.observed_throttling |= (
+                    elapsed_s > 0.0 and rate > item.requested_cpu_cores + _EPSILON
+                )
+            if item.profile_remaining_s <= _EPSILON:
+                item.profile_index += 1
+                if item.profile_index < len(item.profile):
+                    item.profile_remaining_s = item.profile[item.profile_index][0]
+        now_s = next_s
+
+    completion = [session.completion_s for session in sessions]
+    if any(value is None for value in completion):
+        raise ValueError("feedback admission ended before every task completed")
+    if (
+        abs(used_cpu) > _EPSILON
+        or abs(used_rss) > _EPSILON
+        or set(service_by_command) != set(commands)
+        or set(start_by_command) != set(commands)
+    ):
+        raise ValueError("feedback admission leaked a reservation")
+    completion_s = [float(value) for value in completion if value is not None]
+    service_s = sum(service_by_command.values())
+    recorded_service_s = sum(command.duration_s for command in commands.values())
+    return {
+        "command_count": starts,
+        "total_command_service_s": service_s,
+        "recorded_command_service_s": recorded_service_s,
+        "added_service_s": service_s - recorded_service_s,
+        "makespan_s": max(completion_s),
+        "mean_task_completion_s": statistics.fmean(completion_s),
+        "total_command_queue_s": queue_s,
+        "reserved_cpu_core_s": reserved_cpu_s,
+        "reserved_rss_mb_s": reserved_rss_mb_s,
+        "max_concurrent_commands": max_concurrent,
+        "overlapped_command_ids": sorted(overlapped),
+        "capacity_violation": capacity_violation,
+        "feedback_updates": feedback_updates,
+        "reservation_shrinks": shrinks,
+        "reservation_expansions": expansions,
+        "denied_expansions": denied_expansions,
+        "service_s_by_command": dict(sorted(service_by_command.items())),
+        "start_s_by_command": dict(sorted(start_by_command.items())),
     }
 
 

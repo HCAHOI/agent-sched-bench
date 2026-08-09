@@ -5,6 +5,12 @@ from scripts.evaluation.evaluate_cpu_work_admission import (
     _cpu_floor_programs,
 )
 from scripts.evaluation.evaluate_cpu_throughput_oracle import _bucket_cpu
+from scripts.evaluation.evaluate_cpu_feedback_admission import (
+    _assert_frozen_protocol,
+    _file_identities,
+    _gate,
+    _mean_relative_reduction,
+)
 from scripts.evaluation.evaluate_clause_resource_classes import CommandRow, Row
 from scripts.evaluation.evaluate_resource_admission_oracle import _reservation
 from tool_resource_eval.resource_admission import (
@@ -12,6 +18,7 @@ from tool_resource_eval.resource_admission import (
     AdmissionProgram,
     simulate_admission,
     simulate_burstable_admission,
+    simulate_feedback_admission,
 )
 
 
@@ -44,6 +51,146 @@ def test_admission_packs_safe_commands_and_serializes_fixed_high() -> None:
     assert packed["makespan_s"] == 10.0
     assert packed["overlapped_command_ids"] == ["b:0"]
     assert not packed["capacity_violation"]
+
+
+def test_feedback_shrink_admits_a_waiting_command() -> None:
+    programs = [
+        AdmissionProgram(
+            "a",
+            0.0,
+            (AdmissionCommand("a", 3.0, 1.0, 100.0, 0.0),),
+            0.0,
+        ),
+        AdmissionProgram(
+            "b",
+            0.0,
+            (AdmissionCommand("b", 1.0, 1.0, 100.0, 0.0),),
+            0.0,
+        ),
+    ]
+    kwargs = {
+        "cpu_capacity": 8.0,
+        "rss_capacity_mb": 1_000.0,
+        "requested_reservations": {"a": (8.0, 100.0), "b": (4.0, 100.0)},
+        "cpu_work_profiles": {
+            "a": ((0.5, 0.5),) * 6,
+        },
+        "sample_interval_s": 0.5,
+        "update_delay_s": 0.1,
+        "cpu_pages": (2.0, 4.0, 8.0),
+    }
+
+    static = simulate_feedback_admission(programs, **kwargs, feedback=False)
+    feedback = simulate_feedback_admission(programs, **kwargs, feedback=True)
+
+    assert static["start_s_by_command"]["b"] == 3.0
+    assert feedback["start_s_by_command"]["b"] == pytest.approx(0.6)
+    assert feedback["mean_task_completion_s"] < static["mean_task_completion_s"]
+    assert feedback["total_command_queue_s"] < static["total_command_queue_s"]
+    assert feedback["reservation_shrinks"] == 1
+
+
+def test_feedback_denies_expansion_that_exceeds_capacity() -> None:
+    programs = [
+        AdmissionProgram(
+            task_id,
+            0.0,
+            (AdmissionCommand(task_id, 1.0, 6.0, 100.0, 0.0),),
+            0.0,
+        )
+        for task_id in ("a", "b")
+    ]
+
+    result = simulate_feedback_admission(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=1_000.0,
+        requested_reservations={"a": (4.0, 100.0), "b": (4.0, 100.0)},
+        cpu_work_profiles={
+            "a": ((0.5, 3.0), (0.5, 3.0)),
+            "b": ((0.5, 3.0), (0.5, 3.0)),
+        },
+        feedback=True,
+        sample_interval_s=0.5,
+        update_delay_s=0.1,
+        cpu_pages=(2.0, 4.0, 8.0),
+    )
+
+    assert result["denied_expansions"] >= 2
+    assert result["reservation_expansions"] == 0
+    assert not result["capacity_violation"]
+
+
+def test_feedback_without_profile_matches_static_service() -> None:
+    programs = [_program("a"), _program("b")]
+    kwargs = {
+        "cpu_capacity": 8.0,
+        "rss_capacity_mb": 16_000.0,
+        "requested_reservations": {"a:0": (4.0, 500.0), "b:0": (4.0, 500.0)},
+        "cpu_work_profiles": {},
+        "sample_interval_s": 0.5,
+        "update_delay_s": 0.1,
+        "cpu_pages": (2.0, 4.0, 8.0),
+    }
+
+    static = simulate_feedback_admission(programs, **kwargs, feedback=False)
+    feedback = simulate_feedback_admission(programs, **kwargs, feedback=True)
+
+    assert feedback == static
+
+
+def test_feedback_admission_gate_requires_every_frozen_condition() -> None:
+    passing = _gate(
+        relative_mean_completion_reduction=0.05,
+        paired_bootstrap_high=-1e-9,
+        service_inflation=0.05,
+        capacity_violation=False,
+    )
+
+    assert passing["go"]
+    assert not _gate(0.049, -1e-9, 0.05, False)["go"]
+    assert not _gate(0.05, 0.0, 0.05, False)["go"]
+    assert not _gate(0.05, -1e-9, 0.051, False)["go"]
+    assert not _gate(0.05, -1e-9, 0.05, True)["go"]
+
+
+def test_feedback_admission_averages_per_order_relative_reductions() -> None:
+    rows = [
+        {
+            "arms": {
+                "task_aware_static": {"mean_task_completion_s": 100.0},
+                "task_aware_feedback": {"mean_task_completion_s": 96.0},
+            }
+        },
+        {
+            "arms": {
+                "task_aware_static": {"mean_task_completion_s": 10.0},
+                "task_aware_feedback": {"mean_task_completion_s": 9.0},
+            }
+        },
+    ]
+
+    assert _mean_relative_reduction(rows) == pytest.approx(0.07)
+
+
+def test_feedback_admission_rejects_protocol_constant_drift() -> None:
+    _assert_frozen_protocol(40, tuple(range(32)), 8.0, 16_000.0)
+
+    with pytest.raises(ValueError, match="frozen protocol constants changed"):
+        _assert_frozen_protocol(39, tuple(range(32)), 8.0, 16_000.0)
+
+
+def test_feedback_admission_keeps_same_named_input_identities(tmp_path) -> None:
+    first = tmp_path / "first" / "rows.jsonl"
+    second = tmp_path / "second" / "rows.jsonl"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    first.write_text("first\n")
+    second.write_text("second\n")
+
+    identities = _file_identities((first, second))
+
+    assert set(identities) == {str(first.resolve()), str(second.resolve())}
 
 
 def test_admission_rejects_zero_duration_overlap() -> None:
