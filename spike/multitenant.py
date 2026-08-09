@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import statistics
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from random import Random
@@ -170,6 +171,84 @@ class TraceProgram:
     turns: tuple[TraceTurn, ...]
     source_llm_call_count: int | None = None
     omitted_terminal_llm_calls: int = 0
+
+
+def prepare_llama_chat_messages(
+    messages: Sequence[dict[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    """Adapt OpenAI parallel tool calls to Llama's single-call template."""
+    prepared: list[dict[str, Any]] = []
+    index = 0
+    while index < len(messages):
+        message = deepcopy(messages[index])
+        calls = message.get("tool_calls")
+        if calls is None:
+            if message.get("role") == "tool":
+                raise ValueError("orphan tool result")
+            prepared.append(message)
+            index += 1
+            continue
+        if message.get("role") != "assistant":
+            raise ValueError("tool_calls are allowed only on assistant messages")
+        if not isinstance(calls, list) or not calls:
+            raise ValueError("tool_calls must be a non-empty list")
+        normalized: list[dict[str, Any]] = []
+        for call in calls:
+            if not isinstance(call, dict) or not isinstance(call.get("id"), str):
+                raise ValueError("each tool call requires a string id")
+            function = call.get("function")
+            if not isinstance(function, dict):
+                raise ValueError("each tool call requires a function object")
+            if not isinstance(function.get("name"), str):
+                raise ValueError("each tool call requires a string function name")
+            arguments = function.get("arguments")
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError as error:
+                    raise ValueError("tool call arguments must be JSON") from error
+            if not isinstance(arguments, dict):
+                raise ValueError("tool call arguments must decode to an object")
+            call["function"] = {**function, "arguments": arguments}
+            normalized.append(call)
+
+        results = messages[index + 1 : index + 1 + len(normalized)]
+        if len(results) != len(normalized):
+            raise ValueError(
+                "parallel tool calls require matching adjacent tool results"
+            )
+        by_id: dict[str, dict[str, Any]] = {}
+        for result in results:
+            if not isinstance(result, dict):
+                raise ValueError(
+                    "parallel tool calls require matching adjacent tool results"
+                )
+            result_id = result.get("tool_call_id")
+            if (
+                result.get("role") != "tool"
+                or not isinstance(result_id, str)
+                or result_id in by_id
+            ):
+                raise ValueError(
+                    "parallel tool calls require matching adjacent tool results"
+                )
+            by_id[result_id] = result
+        call_ids = [call["id"] for call in normalized]
+        if len(by_id) != len(normalized) or set(by_id) != set(call_ids):
+            raise ValueError(
+                "parallel tool calls require matching adjacent tool results"
+            )
+        if len(normalized) == 1:
+            message["tool_calls"] = normalized
+            prepared.extend((message, deepcopy(by_id[normalized[0]["id"]])))
+            index += 2
+            continue
+        for call in normalized:
+            single = deepcopy(message)
+            single["tool_calls"] = [call]
+            prepared.extend((single, deepcopy(by_id[call["id"]])))
+        index += 1 + len(normalized)
+    return tuple(prepared)
 
 
 @dataclass(frozen=True)
@@ -640,5 +719,6 @@ __all__ = [
     "load_prefill_cost_profile",
     "load_trace_programs",
     "policy_provenance",
+    "prepare_llama_chat_messages",
     "validate_serving_cell",
 ]

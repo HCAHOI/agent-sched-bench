@@ -320,6 +320,16 @@ layout are unchanged, but both physical artifacts are remeasured under the
 exact corrected model identifier before evaluation. No gate or data split
 changes.
 
+**2026-08-09 transcript amendment, before replay outcome access.** The
+Instruct template then rejected source histories containing parallel tool
+calls; the evaluator had scored one task and still emitted no result. A shared
+offline/live adapter now preserves every call and matching adjacent result in
+source order, parses JSON argument strings into the object form required by
+the official template, and serializes each parallel group as consecutive
+single-call/result pairs. Malformed or incomplete groups fail closed. This is
+a deterministic model-interface correction; no gate, split, timing decision,
+or tool-event order changes.
+
 **Frozen arms.** Timing is fixed 5-second deadline versus the existing robust
 command clock fitted only on the 50 profile tasks. Restore is reactive at the
 next LLM arrival versus the existing exact pre-restore stopping rule fitted on

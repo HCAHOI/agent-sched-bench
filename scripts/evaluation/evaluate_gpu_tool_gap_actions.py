@@ -20,7 +20,12 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from spike.multitenant import ToolSpan, TraceProgram, load_trace_programs  # noqa: E402
+from spike.multitenant import (  # noqa: E402
+    ToolSpan,
+    TraceProgram,
+    load_trace_programs,
+    prepare_llama_chat_messages,
+)
 from tool_time.command import (  # noqa: E402
     make_row_command_prefix_keys,
     shell_command_heads,
@@ -510,7 +515,9 @@ def main() -> None:
         for turn_index, turn in enumerate(program.turns[:gap_turn_count]):
             prompt_tokens = len(
                 tokenizer.apply_chat_template(
-                    list(turn.messages), tokenize=True, add_generation_prompt=True
+                    prepare_llama_chat_messages(turn.messages),
+                    tokenize=True,
+                    add_generation_prompt=True,
                 )
             )
             retained_tokens = max(0, (prompt_tokens - 1) // block_size) * block_size

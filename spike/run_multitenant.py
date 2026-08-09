@@ -31,6 +31,7 @@ from spike.multitenant import (
     load_prefill_cost_profile,
     load_trace_programs,
     policy_provenance,
+    prepare_llama_chat_messages,
     validate_serving_cell,
 )
 from spike.trigger_table import load_trigger_table
@@ -393,7 +394,9 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
             for turn_index, turn in enumerate(program.turns[:turn_limit]):
                 request_id = f"{args.policy}:{program_index}:{turn_index}"
                 token_ids = tokenizer.apply_chat_template(
-                    list(turn.messages), tokenize=True, add_generation_prompt=True
+                    prepare_llama_chat_messages(turn.messages),
+                    tokenize=True,
+                    add_generation_prompt=True,
                 )
                 max_tokens = turn.completion_tokens
                 if max_tokens <= 0:

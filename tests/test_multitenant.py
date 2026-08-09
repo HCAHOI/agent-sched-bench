@@ -26,6 +26,7 @@ from spike.multitenant import (
     continuum_ttl_ms,
     load_prefill_cost_profile,
     load_trace_programs,
+    prepare_llama_chat_messages,
 )
 from spike.run_multitenant import (
     _load_config,
@@ -87,6 +88,128 @@ def test_continuum_tool_signature_uses_shell_command_head() -> None:
         tools=(ToolSpan("read_file", "", 0.0, 1.0),),
     )
     assert native.tool_signature == "read_file"
+
+
+def test_llama_chat_adapter_serializes_parallel_calls_without_losing_results() -> None:
+    messages = (
+        {"role": "user", "content": "inspect both"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "a",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": '{"path":"a.py"}'},
+                },
+                {
+                    "id": "b",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": '{"path":"b.py"}'},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "b", "content": "B"},
+        {"role": "tool", "tool_call_id": "a", "content": "A"},
+    )
+
+    prepared = prepare_llama_chat_messages(messages)
+
+    assert [message["role"] for message in prepared] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "tool",
+    ]
+    assert [prepared[index]["tool_calls"][0]["id"] for index in (1, 3)] == [
+        "a",
+        "b",
+    ]
+    assert [prepared[index]["tool_call_id"] for index in (2, 4)] == ["a", "b"]
+    assert prepared[1]["tool_calls"][0]["function"]["arguments"] == {"path": "a.py"}
+    assert messages[1]["tool_calls"][0]["function"]["arguments"] == ('{"path":"a.py"}')
+
+
+def test_llama_chat_adapter_rejects_missing_parallel_result() -> None:
+    messages = (
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "a", "function": {"name": "x", "arguments": "{}"}},
+                {"id": "b", "function": {"name": "x", "arguments": "{}"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "a", "content": "A"},
+    )
+
+    with pytest.raises(ValueError, match="matching adjacent tool results"):
+        prepare_llama_chat_messages(messages)
+
+
+@pytest.mark.parametrize(
+    ("messages", "error"),
+    [
+        (
+            (
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "a", "function": {"name": "x", "arguments": "{}"}}
+                    ],
+                },
+            ),
+            "matching adjacent tool results",
+        ),
+        (
+            (
+                {
+                    "role": "user",
+                    "content": "bad",
+                    "tool_calls": [
+                        {"id": "a", "function": {"name": "x", "arguments": "{}"}}
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "a", "content": "A"},
+            ),
+            "assistant messages",
+        ),
+        (
+            (
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "a", "function": {"arguments": "{}"}}
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "a", "content": "A"},
+            ),
+            "string function name",
+        ),
+        (
+            (
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "a", "function": {"name": "x", "arguments": "{}"}}
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "a", "content": "A"},
+                {"role": "tool", "tool_call_id": "b", "content": "B"},
+            ),
+            "orphan tool result",
+        ),
+    ],
+)
+def test_llama_chat_adapter_rejects_malformed_or_incomplete_single_groups(
+    messages: tuple[dict[str, object], ...], error: str
+) -> None:
+    with pytest.raises(ValueError, match=error):
+        prepare_llama_chat_messages(messages)
 
 
 def test_continuum_priority_orders_preempted_then_ttl_then_program() -> None:
