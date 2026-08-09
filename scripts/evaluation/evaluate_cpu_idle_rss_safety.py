@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from dataclasses import replace
 import json
 import math
 from pathlib import Path
@@ -55,6 +56,7 @@ from tool_resource_eval.resource_admission import (  # noqa: E402
 
 
 VERSION = "cpu-idle-rss-safety-v1"
+SHORT_NULL_VERSION = "cpu-idle-short-null-v1"
 ARMS = (
     "serial8",
     "oracle_rss_fcfs",
@@ -67,6 +69,19 @@ MINIMUM_GAIN_OVER_CLAUSE = 0.01
 MAXIMUM_SERVICE_INFLATION = 0.05
 MAXIMUM_MAKESPAN_REGRESSION = 0.01
 PROTOCOL = _ROOT / "analysis/development/cpu-idle-rss-safety-protocol.md"
+SHORT_NULL_PROTOCOL = (
+    _ROOT / "analysis/development/cpu-idle-short-null-amendment.md"
+)
+SOURCE_POLICIES = ("conservative", "short-null-low")
+SHORT_NULL_RSS_MB = 500.0
+SHORT_NULL_MAX_LATENCY_MS = 500.0
+SHORT_NULL_REASON = "unknown:insufficient_rss_samples"
+
+
+def _protocol_for(source_policy: str) -> Path:
+    if source_policy not in SOURCE_POLICIES:
+        raise ValueError(f"unknown RSS source policy: {source_policy}")
+    return PROTOCOL if source_policy == "conservative" else SHORT_NULL_PROTOCOL
 
 
 def _gate(
@@ -105,6 +120,38 @@ def _gate(
     return gate
 
 
+def _short_null_gate(
+    *,
+    candidate_reduction: float,
+    oracle_reduction: float,
+    bootstrap_high: float,
+    service_inflation: float,
+    makespan_regression: float,
+    exposure_events: int,
+    violation: bool,
+) -> dict[str, bool]:
+    gate = {
+        "candidate_reduction_at_least_5_percent": (
+            candidate_reduction >= MINIMUM_CANDIDATE_REDUCTION
+        ),
+        "captures_at_least_half_oracle_reduction": (
+            oracle_reduction > 0.0
+            and candidate_reduction >= MINIMUM_ORACLE_CAPTURE * oracle_reduction
+        ),
+        "paired_order_bootstrap_upper_below_zero": bootstrap_high < 0.0,
+        "service_inflation_at_most_5_percent": (
+            service_inflation <= MAXIMUM_SERVICE_INFLATION
+        ),
+        "makespan_regression_at_most_1_percent": (
+            makespan_regression <= MAXIMUM_MAKESPAN_REGRESSION
+        ),
+        "zero_confirmed_source_rss_exposures": exposure_events == 0,
+        "zero_capacity_or_work_violations": not violation,
+    }
+    gate["go"] = all(gate.values())
+    return gate
+
+
 def _mean_metrics(schedule_results: list[dict[str, Any]]) -> dict[str, Any]:
     metrics = (
         "command_count",
@@ -119,6 +166,8 @@ def _mean_metrics(schedule_results: list[dict[str, Any]]) -> dict[str, Any]:
         "max_modeled_rss_demand_mb",
         "modeled_capacity_exposure_events",
         "modeled_capacity_exposure_commands",
+        "rss_unverified_overlap_events",
+        "rss_unverified_overlap_commands",
         "max_concurrent_commands",
         "normal_starts",
         "speculative_starts",
@@ -153,7 +202,63 @@ def _arm_specs(
     }
 
 
-def run(*, seeds: tuple[int, ...] = SEEDS) -> dict[str, Any]:
+def _short_null_command_rows(
+    command_rows: dict[tuple[str, str], Any],
+    traces: dict[str, Path],
+) -> tuple[dict[tuple[str, str], Any], set[str], dict[str, int]]:
+    adjusted = dict(command_rows)
+    visited: set[tuple[str, str]] = set()
+    imputed_ids: set[str] = set()
+    imputed_clauses = 0
+    for task_id, trace in traces.items():
+        artifact = json.loads(
+            (trace.parent / "resource_observations.json").read_text(encoding="utf-8")
+        )
+        for call in artifact.get("calls", []):
+            call_id = call.get("tool_call_id")
+            key = (task_id, call_id)
+            if key not in command_rows:
+                continue
+            if key in visited:
+                raise ValueError(f"duplicate source call: {key}")
+            raw_clauses = call.get("clauses")
+            row = command_rows[key]
+            if not isinstance(raw_clauses, list) or len(raw_clauses) != len(row.clauses):
+                raise ValueError(f"short-null source clauses differ: {key}")
+            clauses = []
+            for clause, raw_clause in zip(row.clauses, raw_clauses, strict=True):
+                if (
+                    not isinstance(raw_clause, dict)
+                    or raw_clause.get("bin") != clause.bin
+                    or tuple(raw_clause.get("argv", ())) != clause.argv
+                ):
+                    raise ValueError(f"short-null clause identity differs: {key}")
+                availability = raw_clause.get("availability", {})
+                if (
+                    clause.sampled_peak_rss_mb is None
+                    and clause.latency_ms < SHORT_NULL_MAX_LATENCY_MS
+                    and availability.get("memory") == SHORT_NULL_REASON
+                ):
+                    clause = replace(clause, sampled_peak_rss_mb=SHORT_NULL_RSS_MB)
+                    imputed_ids.add(f"{task_id}:{call_id}")
+                    imputed_clauses += 1
+                clauses.append(clause)
+            adjusted[key] = replace(row, clauses=tuple(clauses))
+            visited.add(key)
+    if visited != set(command_rows):
+        raise ValueError("short-null source rows differ from validation commands")
+    return adjusted, imputed_ids, {
+        "imputed_clauses": imputed_clauses,
+        "imputed_commands": len(imputed_ids),
+    }
+
+
+def run(
+    *,
+    seeds: tuple[int, ...] = SEEDS,
+    source_policy: str = "conservative",
+) -> dict[str, Any]:
+    _protocol_for(source_policy)
     if not seeds or not set(seeds) <= set(SEEDS):
         raise ValueError("RSS-safety smoke seeds must belong to frozen orders")
     validation_ids = list(json.loads(SPLIT.read_text(encoding="utf-8"))["validation"])
@@ -163,12 +268,19 @@ def run(*, seeds: tuple[int, ...] = SEEDS) -> dict[str, Any]:
         validation_ids
     )
     command_rows, raw_counts, traces = _validation_commands(validation_ids)
+    imputed_ids: set[str] = set()
+    imputation = {"imputed_clauses": 0, "imputed_commands": 0}
+    source_rows = command_rows
+    if source_policy == "short-null-low":
+        source_rows, imputed_ids, imputation = _short_null_command_rows(
+            command_rows, traces
+        )
     source_counts: Counter[str] = Counter()
     programs: dict[str, AdmissionProgram] = {
         task_id: _program(
             task_id,
             traces[task_id],
-            command_rows,
+            source_rows,
             raw_counts,
             source_counts,
         )
@@ -206,6 +318,7 @@ def run(*, seeds: tuple[int, ...] = SEEDS) -> dict[str, Any]:
     schedule_results: list[dict[str, Any]] = []
     violation = False
     exposure_totals = {arm: 0 for arm in ARMS}
+    unverified_overlap_totals = {arm: 0 for arm in ARMS}
     for seed in seeds:
         selected = sorted(programs)
         np.random.default_rng(seed).shuffle(selected)
@@ -229,6 +342,7 @@ def run(*, seeds: tuple[int, ...] = SEEDS) -> dict[str, Any]:
                 rss_reservations={
                     command_id: rss[command_id] for command_id in selected_ids
                 },
+                rss_unverified_command_ids=imputed_ids & selected_ids,
                 selection=selection,
             )
             for arm, (selection, eligible, rss) in arm_specs.items()
@@ -248,8 +362,14 @@ def run(*, seeds: tuple[int, ...] = SEEDS) -> dict[str, Any]:
             arm["modeled_capacity_exposure_commands"] = len(
                 arm["modeled_capacity_exposure_command_ids"]
             )
+            arm["rss_unverified_overlap_commands"] = len(
+                arm["rss_unverified_overlap_command_ids"]
+            )
             exposure_totals[arm_name] += int(
                 arm["modeled_capacity_exposure_events"]
+            )
+            unverified_overlap_totals[arm_name] += int(
+                arm["rss_unverified_overlap_events"]
             )
             violation |= bool(
                 arm["capacity_violation"]
@@ -262,6 +382,7 @@ def run(*, seeds: tuple[int, ...] = SEEDS) -> dict[str, Any]:
                 )
             )
             arm.pop("modeled_capacity_exposure_command_ids")
+            arm.pop("rss_unverified_overlap_command_ids")
             arm.pop("speculative_start_ids")
             arm.pop("service_s_by_command")
             arm.pop("start_s_by_command")
@@ -282,16 +403,60 @@ def run(*, seeds: tuple[int, ...] = SEEDS) -> dict[str, Any]:
         )
     }
     task = comparisons["task_aware"]
-    gate = _gate(
-        candidate_reduction=task["mean_per_order_relative_reduction"],
-        oracle_reduction=comparisons["oracle"]["mean_per_order_relative_reduction"],
-        clause_reduction=comparisons["clause_kb"]["mean_per_order_relative_reduction"],
-        bootstrap_high=task["ci95_paired_seed_bootstrap"][1],
-        service_inflation=task["candidate_service_inflation"],
-        makespan_regression=task["makespan_regression"],
-        exposure_events=exposure_totals["task_aware_rss_fcfs"],
-        violation=violation,
-    )
+    if source_policy == "conservative":
+        gate: dict[str, Any] = _gate(
+            candidate_reduction=task["mean_per_order_relative_reduction"],
+            oracle_reduction=comparisons["oracle"][
+                "mean_per_order_relative_reduction"
+            ],
+            clause_reduction=comparisons["clause_kb"][
+                "mean_per_order_relative_reduction"
+            ],
+            bootstrap_high=task["ci95_paired_seed_bootstrap"][1],
+            service_inflation=task["candidate_service_inflation"],
+            makespan_regression=task["makespan_regression"],
+            exposure_events=exposure_totals["task_aware_rss_fcfs"],
+            violation=violation,
+        )
+        selected_arm = None
+    else:
+        amended_gates = {
+            name: _short_null_gate(
+                candidate_reduction=comparisons[name][
+                    "mean_per_order_relative_reduction"
+                ],
+                oracle_reduction=comparisons["oracle"][
+                    "mean_per_order_relative_reduction"
+                ],
+                bootstrap_high=comparisons[name][
+                    "ci95_paired_seed_bootstrap"
+                ][1],
+                service_inflation=comparisons[name]["candidate_service_inflation"],
+                makespan_regression=comparisons[name]["makespan_regression"],
+                exposure_events=exposure_totals[arm],
+                violation=violation,
+            )
+            for name, arm in (
+                ("clause_kb", "clause_kb_rss_fcfs"),
+                ("task_aware", "task_aware_rss_fcfs"),
+            )
+        }
+        passing = [name for name, values in amended_gates.items() if values["go"]]
+        selected_arm = (
+            max(
+                passing,
+                key=lambda name: comparisons[name][
+                    "mean_per_order_relative_reduction"
+                ],
+            )
+            if passing
+            else None
+        )
+        gate = {
+            "go": selected_arm is not None,
+            "selected_arm": selected_arm,
+            "arms": amended_gates,
+        }
     integrity = {
         "all_arms_use_identical_commands_and_source_work": all(
             len(
@@ -326,15 +491,24 @@ def run(*, seeds: tuple[int, ...] = SEEDS) -> dict[str, Any]:
         raise ValueError(f"RSS-safety integrity failure: {integrity}")
 
     return {
-        "schema": VERSION,
+        "schema": VERSION if source_policy == "conservative" else SHORT_NULL_VERSION,
         "status": (
-            "development_go_to_physical_cpu_idle_calibration"
-            if gate["go"]
-            else "development_stop_predictor_backed_cpu_idle"
+            (
+                "development_go_to_short_null_memory_calibration"
+                if gate["go"]
+                else "development_stop_short_null_cpu_idle"
+            )
+            if source_policy == "short-null-low"
+            else (
+                "development_go_to_physical_cpu_idle_calibration"
+                if gate["go"]
+                else "development_stop_predictor_backed_cpu_idle"
+            )
         ),
         "claim_bearing": False,
         "protocol": {
             "task_pool": "development-exposed SQLGlot validation50",
+            "source_policy": source_policy,
             "load": LOAD,
             "seeds": list(seeds),
             "cpu_capacity": CPU_CAPACITY,
@@ -344,9 +518,17 @@ def run(*, seeds: tuple[int, ...] = SEEDS) -> dict[str, Any]:
             "cpu_execution": "strict normal priority; speculation uses residual CPU",
             "minimum_candidate_reduction": MINIMUM_CANDIDATE_REDUCTION,
             "minimum_oracle_capture": MINIMUM_ORACLE_CAPTURE,
-            "minimum_gain_over_clause": MINIMUM_GAIN_OVER_CLAUSE,
             "maximum_service_inflation": MAXIMUM_SERVICE_INFLATION,
             "maximum_makespan_regression": MAXIMUM_MAKESPAN_REGRESSION,
+            **(
+                {"minimum_gain_over_clause": MINIMUM_GAIN_OVER_CLAUSE}
+                if source_policy == "conservative"
+                else {
+                    "short_null_max_latency_ms": SHORT_NULL_MAX_LATENCY_MS,
+                    "short_null_rss_mb": SHORT_NULL_RSS_MB,
+                    "short_null_reason": SHORT_NULL_REASON,
+                }
+            ),
         },
         "coverage": {
             "tasks": len(programs),
@@ -359,6 +541,7 @@ def run(*, seeds: tuple[int, ...] = SEEDS) -> dict[str, Any]:
             ),
             "prediction": prediction_coverage,
             "telemetry_reservation_sources": dict(sorted(source_counts.items())),
+            "short_null_imputation": imputation,
         },
         "source_files": _source_identities(traces),
         "prediction_input_files": _file_identities(
@@ -367,23 +550,29 @@ def run(*, seeds: tuple[int, ...] = SEEDS) -> dict[str, Any]:
         "mean_metrics": means,
         "comparisons": comparisons,
         "source_rss_exposure_events": exposure_totals,
+        "short_null_unverified_overlap_events": unverified_overlap_totals,
         "gate": gate,
         "integrity": integrity,
         "schedule_results": schedule_results,
         "limitations": [
             "All tasks, predictions, and outcomes are development-exposed.",
             "Strict CPU priority is an optimistic ceiling for cgroup cpu.idle.",
-            "Unavailable source RSS is conservatively modeled as 16,000 MB.",
+            (
+                "Short insufficient-sample nulls are imputed to 500 MB but remain physically unverified."
+                if source_policy == "short-null-low"
+                else "Unavailable source RSS is conservatively modeled as 16,000 MB."
+            ),
             "Disk and network contention receive no modeled performance benefit.",
             "CPU work is uniform within each source telemetry interval.",
         ],
     }
 
 
-def _require_clean_committed_inputs() -> None:
+def _require_clean_committed_inputs(source_policy: str) -> None:
+    protocol = _protocol_for(source_policy)
     paths = (
         Path(__file__).resolve(),
-        PROTOCOL.resolve(),
+        protocol.resolve(),
         SPLIT.resolve(),
         FIT_ROWS.resolve(),
         PHASE_ROWS.resolve(),
@@ -411,14 +600,20 @@ def _require_clean_committed_inputs() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument(
+        "--source-policy",
+        choices=SOURCE_POLICIES,
+        default="conservative",
+    )
     args = parser.parse_args()
     if args.out_dir.exists():
         raise FileExistsError("output directory already exists")
-    _require_clean_committed_inputs()
-    result = run()
+    _require_clean_committed_inputs(args.source_policy)
+    result = run(source_policy=args.source_policy)
+    protocol = _protocol_for(args.source_policy)
     result["inputs"] = {
         "split": str(SPLIT.resolve()),
-        "protocol": str(PROTOCOL.resolve()),
+        "protocol": str(protocol.resolve()),
         "git_sha": subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=_ROOT,

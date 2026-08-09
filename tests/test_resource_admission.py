@@ -1,4 +1,8 @@
+import json
+
 import pytest
+
+import scripts.evaluation.evaluate_cpu_idle_rss_safety as idle_rss_safety
 
 from scripts.evaluation.evaluate_cpu_idle_backfill_oracle import (
     ACTION_MINIMUM_REDUCTION,
@@ -482,6 +486,37 @@ def test_idle_backfill_separates_predicted_fit_from_source_rss_exposure() -> Non
     assert result["max_modeled_rss_demand_mb"] == 1_800.0
 
 
+def test_idle_backfill_reports_overlap_involving_unverified_rss() -> None:
+    programs = [
+        AdmissionProgram(
+            task_id,
+            0.0,
+            (AdmissionCommand(task_id, 1.0, 4.0, 500.0, 0.0),),
+            0.0,
+        )
+        for task_id in ("normal", "speculative")
+    ]
+
+    result = simulate_idle_backfill(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=1_000.0,
+        cpu_work_profiles={
+            "normal": ((1.0, 4.0),),
+            "speculative": ((1.0, 4.0),),
+        },
+        speculative_eligible_command_ids={"normal", "speculative"},
+        rss_unverified_command_ids={"normal"},
+        selection="fcfs",
+    )
+
+    assert result["rss_unverified_overlap_events"] == 1
+    assert result["rss_unverified_overlap_command_ids"] == [
+        "normal",
+        "speculative",
+    ]
+
+
 def test_idle_backfill_guard_covers_split_and_profile_definitions() -> None:
     names = {path.name for path in _idle_backfill_committed_input_paths()}
 
@@ -550,6 +585,188 @@ def test_idle_rss_evaluator_locks_arms_and_protocol() -> None:
     assert arm_specs["oracle_rss_fcfs"][2]["unavailable"] == 16_000.0
 
 
+def test_short_null_policy_imputes_only_strictly_short_insufficient_samples(
+    tmp_path,
+) -> None:
+    clauses = (
+        Row("task", "repo", 0, "measured", ("measured",), 100.0, 1.0, 700.0, 0.0),
+        Row("task", "repo", 0, "short", ("short",), 499.0, None, None, 0.0),
+        Row("task", "repo", 0, "boundary", ("boundary",), 500.0, None, None, 0.0),
+        Row("task", "repo", 0, "missing", ("missing",), 100.0, None, None, 0.0),
+    )
+    command_rows = {
+        ("task", "call"): CommandRow(
+            "task", "repo", 0, 0, "call", "commands", 500.0, clauses
+        )
+    }
+    attempt = tmp_path / "attempt_1"
+    attempt.mkdir()
+    trace = attempt / "trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+    (attempt / "resource_observations.json").write_text(
+        json.dumps(
+            {
+                "calls": [
+                    {
+                        "tool_call_id": "call",
+                        "clauses": [
+                            {
+                                "bin": "measured",
+                                "argv": ["measured"],
+                                "availability": {"memory": "ok"},
+                            },
+                            {
+                                "bin": "short",
+                                "argv": ["short"],
+                                "availability": {
+                                    "memory": "unknown:insufficient_rss_samples"
+                                }
+                            },
+                            {
+                                "bin": "boundary",
+                                "argv": ["boundary"],
+                                "availability": {
+                                    "memory": "unknown:insufficient_rss_samples"
+                                }
+                            },
+                            {
+                                "bin": "missing",
+                                "argv": ["missing"],
+                                "availability": {
+                                    "memory": "unknown:missing_rss_profile"
+                                }
+                            },
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    adjusted, imputed_ids, metadata = idle_rss_safety._short_null_command_rows(
+        command_rows, {"task": trace}
+    )
+
+    assert [clause.sampled_peak_rss_mb for clause in adjusted[("task", "call")].clauses] == [
+        700.0,
+        500.0,
+        None,
+        None,
+    ]
+    assert imputed_ids == {"task:call"}
+    assert metadata == {"imputed_clauses": 1, "imputed_commands": 1}
+
+
+def test_short_null_policy_rejects_equal_length_clause_reordering(tmp_path) -> None:
+    clauses = (
+        Row("task", "repo", 0, "first", ("first",), 100.0, None, None, 0.0),
+        Row("task", "repo", 0, "second", ("second",), 100.0, None, None, 0.0),
+    )
+    command_rows = {
+        ("task", "call"): CommandRow(
+            "task", "repo", 0, 0, "call", "first; second", 200.0, clauses
+        )
+    }
+    attempt = tmp_path / "attempt_1"
+    attempt.mkdir()
+    trace = attempt / "trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+    (attempt / "resource_observations.json").write_text(
+        json.dumps(
+            {
+                "calls": [
+                    {
+                        "tool_call_id": "call",
+                        "clauses": [
+                            {
+                                "bin": "second",
+                                "argv": ["second"],
+                                "availability": {
+                                    "memory": "unknown:insufficient_rss_samples"
+                                },
+                            },
+                            {
+                                "bin": "first",
+                                "argv": ["first"],
+                                "availability": {
+                                    "memory": "unknown:insufficient_rss_samples"
+                                },
+                            },
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="identity differs"):
+        idle_rss_safety._short_null_command_rows(
+            command_rows, {"task": trace}
+        )
+
+
+def test_short_null_policy_composes_imputed_pipeline_rss(tmp_path) -> None:
+    clauses = tuple(
+        Row(
+            "task",
+            "repo",
+            0,
+            name,
+            (name,),
+            100.0,
+            None,
+            None,
+            0.0,
+            in_pipe=True,
+            pipeline_position=position,
+        )
+        for position, name in enumerate(("left", "right"))
+    )
+    command_rows = {
+        ("task", "call"): CommandRow(
+            "task", "repo", 0, 0, "call", "left | right", 100.0, clauses
+        )
+    }
+    attempt = tmp_path / "attempt_1"
+    attempt.mkdir()
+    trace = attempt / "trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+    (attempt / "resource_observations.json").write_text(
+        json.dumps(
+            {
+                "calls": [
+                    {
+                        "tool_call_id": "call",
+                        "clauses": [
+                            {
+                                "bin": name,
+                                "argv": [name],
+                                "availability": {
+                                    "memory": "unknown:insufficient_rss_samples"
+                                },
+                            }
+                            for name in ("left", "right")
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    adjusted, _imputed_ids, _metadata = idle_rss_safety._short_null_command_rows(
+        command_rows, {"task": trace}
+    )
+
+    assert _reservation(adjusted[("task", "call")]) == (
+        8.0,
+        1_000.0,
+        "cpu_null_target_fallback",
+    )
+
+
 def test_idle_rss_gate_requires_utility_contribution_and_safety() -> None:
     passing = _idle_rss_gate(
         candidate_reduction=0.08,
@@ -585,6 +802,58 @@ def test_idle_rss_gate_requires_utility_contribution_and_safety() -> None:
         }
         values[field] = value
         assert not _idle_rss_gate(**values)["go"]
+
+
+def test_short_null_gate_requires_every_absolute_condition() -> None:
+    passing = idle_rss_safety._short_null_gate(
+        candidate_reduction=0.08,
+        oracle_reduction=0.14,
+        bootstrap_high=-1.0,
+        service_inflation=0.05,
+        makespan_regression=0.01,
+        exposure_events=0,
+        violation=False,
+    )
+    assert passing["go"]
+    assert idle_rss_safety.SHORT_NULL_VERSION == "cpu-idle-short-null-v1"
+    assert idle_rss_safety.SHORT_NULL_PROTOCOL.name == (
+        "cpu-idle-short-null-amendment.md"
+    )
+
+    for field, value in (
+        ("candidate_reduction", 0.049),
+        ("oracle_reduction", 0.17),
+        ("bootstrap_high", 0.0),
+        ("service_inflation", 0.051),
+        ("makespan_regression", 0.011),
+        ("exposure_events", 1),
+        ("violation", True),
+    ):
+        values = {
+            "candidate_reduction": 0.08,
+            "oracle_reduction": 0.14,
+            "bootstrap_high": -1.0,
+            "service_inflation": 0.05,
+            "makespan_regression": 0.01,
+            "exposure_events": 0,
+            "violation": False,
+        }
+        values[field] = value
+        assert not idle_rss_safety._short_null_gate(**values)["go"]
+
+
+def test_short_null_evaluator_rejects_unknown_source_policy() -> None:
+    with pytest.raises(ValueError, match="source policy"):
+        idle_rss_safety.run(seeds=(0,), source_policy="unknown")
+
+
+def test_rss_safety_source_policy_selects_its_frozen_protocol() -> None:
+    assert idle_rss_safety._protocol_for("conservative") == (
+        idle_rss_safety.PROTOCOL
+    )
+    assert idle_rss_safety._protocol_for("short-null-low") == (
+        idle_rss_safety.SHORT_NULL_PROTOCOL
+    )
 
 
 def test_feedback_admission_gate_requires_every_frozen_condition() -> None:

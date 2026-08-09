@@ -290,6 +290,7 @@ def simulate_idle_backfill(
     cpu_work_profiles: Mapping[str, tuple[tuple[float, float], ...]],
     speculative_eligible_command_ids: set[str],
     rss_reservations: Mapping[str, float] | None = None,
+    rss_unverified_command_ids: set[str] | None = None,
     selection: str,
 ) -> dict[str, object]:
     """Replay one normal command plus one strict-idle-priority backfill."""
@@ -311,6 +312,9 @@ def simulate_idle_backfill(
         raise ValueError("idle backfill requires complete CPU work profiles")
     if not speculative_eligible_command_ids <= set(commands):
         raise ValueError("idle backfill eligibility contains an unknown command")
+    unverified_ids = set(rss_unverified_command_ids or ())
+    if not unverified_ids <= set(commands):
+        raise ValueError("idle backfill RSS uncertainty contains an unknown command")
     reservation_by_id = (
         {command_id: command.rss_mb for command_id, command in commands.items()}
         if rss_reservations is None
@@ -377,6 +381,8 @@ def simulate_idle_backfill(
     capacity_violation = physical_capacity_violation = False
     exposure_events = 0
     exposure_commands: set[str] = set()
+    unverified_overlap_events = 0
+    unverified_overlap_commands: set[str] = set()
     max_modeled_rss = 0.0
     service_by_command: dict[str, float] = {}
     start_by_command: dict[str, float] = {}
@@ -401,6 +407,7 @@ def simulate_idle_backfill(
     def start(index: int, *, speculative: bool) -> None:
         nonlocal used_rss, modeled_rss, queue_s, normal_starts
         nonlocal speculative_starts, exposure_events, max_modeled_rss
+        nonlocal unverified_overlap_events
         session = sessions[index]
         command = session.program.commands[session.command_index]
         profile = cpu_work_profiles[command.command_id]
@@ -422,6 +429,13 @@ def simulate_idle_backfill(
         if modeled_rss > rss_capacity_mb + _EPSILON:
             exposure_events += 1
             exposure_commands.add(command.command_id)
+        if len(running) > 1 and any(
+            item.command.command_id in unverified_ids for item in running
+        ):
+            unverified_overlap_events += 1
+            unverified_overlap_commands.update(
+                item.command.command_id for item in running
+            )
         queue_s += max(0.0, now_s - session.ready_s)
         start_by_command[command.command_id] = now_s
         if speculative:
@@ -611,6 +625,8 @@ def simulate_idle_backfill(
         "modeled_capacity_exposure_events": exposure_events,
         "modeled_capacity_exposure_command_ids": sorted(exposure_commands),
         "max_modeled_rss_demand_mb": max_modeled_rss,
+        "rss_unverified_overlap_events": unverified_overlap_events,
+        "rss_unverified_overlap_command_ids": sorted(unverified_overlap_commands),
         "speculative_start_ids": speculative_start_ids,
         "service_s_by_command": dict(sorted(service_by_command.items())),
         "start_s_by_command": dict(sorted(start_by_command.items())),
