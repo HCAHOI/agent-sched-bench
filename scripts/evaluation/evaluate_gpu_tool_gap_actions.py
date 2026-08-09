@@ -193,6 +193,21 @@ def _task_ids(value: str | list[str]) -> list[str]:
     return ids
 
 
+def _validate_task_counts(
+    workload: dict[str, Any], replay_task_ids: set[str], profile_task_ids: set[str]
+) -> None:
+    expected_replay = int(workload["expected_task_count"])
+    expected_profile = int(workload["expected_profile_task_count"])
+    if len(replay_task_ids) != expected_replay:
+        raise ValueError(
+            f"expected {expected_replay} replay tasks, got {len(replay_task_ids)}"
+        )
+    if len(profile_task_ids) != expected_profile:
+        raise ValueError(
+            f"expected {expected_profile} profile tasks, got {len(profile_task_ids)}"
+        )
+
+
 def _sample_id(program: TraceProgram, turn_index: int, tool_index: int) -> str:
     return f"{program.task_id}::turn={turn_index}::tool={tool_index}"
 
@@ -334,8 +349,13 @@ def _summarize(rows: Sequence[dict[str, Any]], arm: str) -> dict[str, Any]:
     return {
         "gap_count": len(values),
         "offload_count": sum(bool(row["offloaded"]) for row in values),
-        "prerestore_count": sum(
+        "prerestore_plan_count": sum(
             row["prerestore_start_ms"] is not None for row in values
+        ),
+        "prerestore_fired_count": sum(
+            float(row["hidden_reload_ms"]) > 0.0
+            or float(row["wasted_reload_ms"]) > 0.0
+            for row in values
         ),
         "released_gib_s": math.fsum(float(row["released_gib_s"]) for row in values),
         "critical_path_stall_ms": math.fsum(
@@ -471,6 +491,7 @@ def main() -> None:
     )
     replay_task_ids = {program.task_id for program in replay_programs}
     profile_task_ids = {program.task_id for program in profile_programs}
+    _validate_task_counts(workload, replay_task_ids, profile_task_ids)
     if replay_task_ids & profile_task_ids:
         raise ValueError("profile and replay tasks must be disjoint")
     profile_rows = _latency_rows(profile_programs)

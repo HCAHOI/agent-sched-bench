@@ -23,10 +23,10 @@ artifacts retain that history.
 | Offline tool knowledge | Trace-conditioned generation remains closed. The frozen docs-only v1 protocol also stops before fresh collection: only `make` produced a valid specification, and its SQLGlot arm never formed a non-exact contrast. This is an uninformative protocol result, not evidence that documentation semantics cannot work. |
 | Manual tool semantics | **KEEP only the pytest candidate-routing question.** A hindsight selector over existing causal candidates improved full-cohort four-target accuracy by 1.941 points for pytest, but 93/118 corrections merely restored Clause-KB; adding more pytest rules is not supported. pip missed the frozen contrast gate and its perfect-tool ceiling was only 0.392 points, so deprioritize pip-specific work. |
 | KV victim selection | Closed under the current CacheWise/C100 simulator and action model. |
-| GPU tool-gap action | **OPEN under the separately frozen protocol in Section 5.1.** It asks when to offload one finished agent's prompt KV during a causally observed tool call, not which C100 block to evict. |
+| GPU tool-gap action | The profile-only early clock and pre-restore are closed by the Section 5.1 offline gate. The fixed five-second causal deadline remains an action baseline with untested live scheduling headroom; Section 5.2 isolates that action from prediction. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
-| Next research step | Connect prediction/observation to an action. First evaluate the frozen GPU tool-gap retention protocol in Section 5.1. In parallel, admit a new CPU experiment only if it uses an observable signal and an action not already closed in Sections 5–6. The pytest router remains a prediction-only fallback, not the active action contribution. |
+| Next research step | Run the Section 5.2 live `keep` versus `deadline/reactive` A/B only after its action-causality instrumentation passes a bounded smoke. Do not implement the failed robust clock or pre-restore. Admit a new CPU experiment only if it supplies the missing causal RSS-safety signal or a genuinely different action. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -359,6 +359,81 @@ versus deadline/reactive, preserve outputs and terminal status, and not worsen
 p99 TTFT by more than 5%. Fresh confirmation remains required for a paper
 claim.
 
+**Result and decision.** The formal artifact contains 50 profile tasks, 277
+disjoint replay tasks, 13,406 tool calls, and 12,771 scored gaps. The robust
+clock released 116.507 additional GiB-seconds over deadline/reactive, but added
+1,290.791 ms of critical-path stall; it changed 90 tasks but failed the
+no-higher-stall gate. Deadline and robust pre-restore changed only 16 tasks and
+hid 110.962 ms, respectively 0.118% and 0.116% of reactive reload stall, far
+below the five-percent gate. The 621/625 reported plans produced only 27 actual
+starts; two partially hid reload and 25 completed too early under the frozen
+conservative accounting. All four gates are NO-GO, so the live 2x2 is not
+implemented. Artifact:
+`analysis/results/gpu-tool-gap-actions-a100-instruct-20260809/result.json`.
+
+The mechanism is a narrow-boundary failure, not absence of an action. Robust
+timing moved 166 already-triggering gaps slightly earlier and added five
+offloads near the five-second boundary. The earlier long calls gained capacity,
+but the five boundary mistakes paid enough D2H/H2D stall to dominate. In
+contrast, deadline/reactive itself offloaded 644 gaps across 218 tasks and
+released 37,151.024 GiB-seconds at 94,231.430 ms total transfer stall. That
+absolute value motivates the separately frozen action-existence test below;
+it does not rescue either failed predictive increment.
+
+### 5.2 Frozen live action-existence A/B
+
+**Question.** Under real A100 memory pressure, does the causal observation
+"this revealed tool call has survived five seconds" create useful scheduling
+capacity, independent of the failed profile clock and pre-restore?
+
+**Arms and workload.** Compare `keep` against `deadline/reactive` on the full
+277-task development-exposed workload, seed 0, load 8, Llama-3.1-8B-Instruct,
+and the measured A100-80GB staged-transfer path. `keep` retains complete prompt
+blocks until the next turn. `deadline/reactive` starts D2H only after a
+causally revealed tool call survives the fixed 5,000 ms deadline and restores
+at the next request. No robust clock, pre-restore, Continuum, ThunderAgent,
+task subset, changed tool timing, or outcome-based task order is allowed.
+
+The primary order is fixed ABBA: `keep`, `deadline`, `deadline`, `keep`. Each
+cell replays all 277 programs in the same manifest order. This is 1,108
+program-cell executions, 9,805,672 completion tokens, and a 2.965-hour
+recorded-gap lower bound before generation and prefill. A bounded action-positive
+smoke may use subset flags solely to validate plumbing and estimate wall time;
+its timing is never evidence.
+
+**Action-causality evidence.** Every cell records exact request/program joins,
+output tokens and terminal status. The deadline arm additionally records
+monotonic D2H/H2D start and completion, the exact old-prefix blocks freed and
+free-pool delta, and every newly admitted request's allocated block IDs. A
+causal reuse exists only when an owner's blocks-free event precedes a different
+program's admission, the block-ID sets intersect, and that admission precedes
+the owner's restore start. Transfer completion alone is not capacity reuse.
+
+**GO/NO-GO gate.** Pair the first `deadline` cell with the preceding first
+`keep` cell and the second `deadline` cell with the following second `keep`
+cell. All four cells must complete with identical request sets, input prompts,
+output token IDs, finish reasons, and program terminal status. Each deadline
+repetition independently requires at least 20 distinct owner programs with a
+causal block-reuse event; counts are never pooled across repetitions.
+
+For each deadline repetition, define the affected co-tenant cohort as the
+distinct admitted request keys `(program_index, turn_index)` appearing in its
+causal reuse events. The paired keep cohort is exactly those same request keys
+in that repetition's paired keep cell, regardless of whether keep records an
+admission event. Compute p99 by the repository's existing linear-interpolation
+percentile. In each pair separately, deadline must not exceed 1.05 times keep
+for either all-request p99 TTFT or affected-cohort p99 TTFT.
+
+Average each program's JCT across the two repetitions of its arm, then compute
+the mean paired program delta. Deadline must reduce that mean by at least 5%
+relative to keep, and its mean JCT must be lower in each of the two repetition
+pairs separately. Report absolute JCT, TTFT, transfers, bytes,
+freed/reused block-time, reuse owners and affected request keys, plus every
+per-repetition delta. Any failed validity, per-repetition action-causality,
+effect, direction, or tail gate stops this action without threshold or
+task-selection changes. This remains development evidence; a paper claim
+requires fresh confirmation.
+
 ## 6. Closed directions
 
 - **Lookup structure alone:** trie, lattice, generic argv, pip/pytest semantic
@@ -392,6 +467,9 @@ claim.
   SQLGlot.
 - **KV victim selection:** C100 already removes most LRU recomputation, leaving
   insufficient predictor headroom in the current model.
+- **Profile-guided GPU tool-gap timing:** the robust clock increased aggregate
+  stall, and pre-restore changed too few tasks while hiding about 0.12% of
+  reactive stall. Do not implement or tune those arms on exposed replay data.
 
 Closed means do not tune or retry on the exposed SQLGlot tasks. A genuinely new
 signal, action, or fresh workload may motivate a separately frozen protocol.
@@ -443,6 +521,8 @@ Result root:
 - CPU-idle backfill oracle: `sqlglot50-cpu-idle-backfill-oracle-v1/result.json`
 - CPU-idle predicted RSS safety: `sqlglot50-cpu-idle-rss-safety-v1/result.json`
 - CPU-idle short-null sensitivity: `sqlglot50-cpu-idle-short-null-v1/result.json`
+- GPU tool-gap offline gate:
+  `../gpu-tool-gap-actions-a100-instruct-20260809/result.json`
 
 Docs-only compiler development artifact:
 `analysis/results/offline-tool-semantics-sqlglot-v1/result.json`.

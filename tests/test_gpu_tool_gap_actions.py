@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import pytest
 
+import scripts.evaluation.evaluate_gpu_tool_gap_actions as gpu_actions
 from scripts.evaluation.evaluate_gpu_tool_gap_actions import (
     TransferPoint,
+    _summarize,
     choose_transfer_point,
     score_gap_action,
 )
@@ -117,3 +119,43 @@ def test_gap_action_never_fires_after_the_next_turn_arrives() -> None:
 
     assert result["offloaded"] is False
     assert result["critical_path_stall_ms"] == 0.0
+
+
+def test_summary_distinguishes_planned_from_fired_prerestores() -> None:
+    tool = ToolSpan("exec", "pytest", 0.0, 10_000.0)
+    late = score_gap_action(
+        gap_ms=10_000.0,
+        tools=(tool,),
+        triggers_ms=(5000.0,),
+        prerestore_starts_ms=(12_000.0,),
+        size_gib=1.0,
+        swap_out_ms=100.0,
+        swap_in_ms=50.0,
+    )
+    fired = score_gap_action(
+        gap_ms=10_000.0,
+        tools=(tool,),
+        triggers_ms=(5000.0,),
+        prerestore_starts_ms=(9975.0,),
+        size_gib=1.0,
+        swap_out_ms=100.0,
+        swap_in_ms=50.0,
+    )
+
+    summary = _summarize(
+        [{"arms": {"candidate": late}}, {"arms": {"candidate": fired}}],
+        "candidate",
+    )
+
+    assert summary["prerestore_plan_count"] == 2
+    assert summary["prerestore_fired_count"] == 1
+
+
+def test_task_counts_fail_closed_against_configured_replay_and_profile_sizes() -> None:
+    workload = {"expected_task_count": 2, "expected_profile_task_count": 1}
+
+    gpu_actions._validate_task_counts(workload, {"r1", "r2"}, {"p1"})
+    with pytest.raises(ValueError, match="expected 2 replay tasks"):
+        gpu_actions._validate_task_counts(workload, {"r1"}, {"p1"})
+    with pytest.raises(ValueError, match="expected 1 profile tasks"):
+        gpu_actions._validate_task_counts(workload, {"r1", "r2"}, set())

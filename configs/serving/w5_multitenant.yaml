@@ -52,4 +52,5 @@ workloads:
     profile_trace_root: traces/swe-rebench/qwen3.7-max/20260624T162037
     task_ids_file: analysis/serving/w5-multitenant/inputs/swe-rebench-fresh277-task-ids.txt
     expected_task_count: 277
+    expected_profile_task_count: 50
     deadline_ms: 5000.0
