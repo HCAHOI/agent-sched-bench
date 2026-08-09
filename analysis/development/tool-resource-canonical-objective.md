@@ -14,17 +14,17 @@ artifacts retain that history.
 |---|---|
 | Prediction | Keep the target-specific Task-Aware Command Predictor below as the selected development candidate. It is exposed evidence, not confirmation or deployed code. |
 | Runtime feedback | **KEEP causal command-level eBPF feedback as a measured mechanism and control.** Neither tested admission action passed its frozen utility gate, so it is not a runtime scheduler candidate. |
-| CPU execution | Keep equal-share burstable execution as a physical control. Strict-priority CPU-idle backfill is the strongest development action candidate, but still uses hindsight RSS safety and an optimistic `cpu.idle` model. |
+| CPU execution | Keep equal-share burstable execution as a physical control. Strict-priority CPU-idle backfill retains exposed action headroom, but neither tested hard-RSS predictor established safe admission, so physical `cpu.idle` calibration is not authorized. |
 | Saturated quartet result | Frozen claim verdict is NO-GO because 8/12, not 9/12, groups improved. This is not a module-retirement decision. |
 | Fresh counterbalanced queue | **Inconclusive because 7/1,818 paired tool calls changed terminal class.** Timing-only improvement was 0.929% with 2/4 queues improving, below the frozen gate even before the quality failure. |
 | Prediction contribution to feedback | Not established. Task-Aware seeding did not improve the frozen reservation/service operating point over feedback alone. |
-| CPU scheduling | CPU-idle FCFS backfill passed its action gate: completion improved 14.620% in all 32 orders, makespan improved 17.226%, and service inflation was 3.073%. Hindsight shortest selection added no value, so ordering prediction is closed. |
+| CPU scheduling | Hindsight-safe CPU-idle FCFS improved completion 14.620%. Task-Aware RSS admission improved completion 25.984% but created 12,439 conservative source-RSS exposures and was 7.408 points worse than Clause-KB; hard-RSS safety and candidate ordering are closed on exposed SQLGlot. |
 | KB representation | Raw exact/prefix/binary `ClauseResourceKB` is the implemented Clause-KB baseline. Trie/lattice/semantic-key replacement is closed as a contribution. |
 | Offline agent | Closed. More prompts, critics, DSLs, or generated adapters are not authorized. |
 | KV scheduling | Closed under the current CacheWise/C100 simulator and action model. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
-| Next research step | Replace CPU-idle backfill's hindsight RSS-fit control with the already frozen Clause-KB and Task-Aware RSS hard predictions, preserving FCFS order. Only a safe predictor arm can authorize physical `cpu.idle` calibration. |
+| Next research step | Audit RSS observability before another scheduler experiment: determine whether existing telemetry provides a causal memory signal for short/null commands. The current short-null Low label supports classification but cannot certify physical overlap safety. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -168,6 +168,7 @@ All rows below are development-exposed.
 | Feedback admission with CPU borrowing | Mean per-order task completion improved 1.982%; 27/32 orders improved and the paired absolute-delta interval was [-278.536, -133.809] s. By ratio of means, queue fell 2.140%, service fell 0.877%, but makespan rose 0.917% | Frozen gate failed: effect was below 5% and service inflation was 7.352%; stop before PSI calibration |
 | CPU-idle FCFS backfill | Versus Serial-8, mean per-order completion improved 14.620%; all 32 orders improved, makespan improved 17.226%, and service inflation was 3.073% | Action gate passed under strict-priority CPU and hindsight RSS safety; requires causal RSS safety and physical calibration |
 | CPU-idle shortest-safe selection | Hindsight shortest selection changed completion by -0.137% versus FCFS; 17/32 orders improved and the paired interval [-51.549, 70.048] s crossed zero | Ordering predictor has no headroom; do not build a latency/shortest selector |
+| CPU-idle predicted RSS safety | Task-Aware improved completion 25.984% in 32/32 orders at 4.561% service inflation, but had 12,439 source-RSS exposures; Clause-KB improved 33.392% with 12,390 exposures | Frozen gate failed; do not calibrate physical `cpu.idle` or tune hard-RSS admission on exposed SQLGlot |
 | Prediction-weighted CPU shares | Task-Aware reduced mean completion by 0.0056%; a true-demand oracle reduced it by only 0.0527% | Closed: recorded-duration floor leaves no useful share-allocation headroom |
 | Ready-queue priority | Exact-duration aging oracle reduced mean completion 3.991% with 0.301% makespan cost | Below the frozen 5% gate; retain only as a diagnosed tradeoff |
 
@@ -248,11 +249,30 @@ seconds. By ratio of means, makespan improved 17.226% and service inflation was
 
 Candidate ordering is not the missing predictor consumer. Hindsight shortest
 RSS-safe selection was 0.137% worse than FCFS on mean per-order completion;
-only 17/32 orders improved and its paired interval crossed zero. The retained
-action still depends on hindsight RSS eligibility for 516/1,196 commands and
-models kernel idle priority optimistically. The only authorized predictor test
-is therefore causal RSS safety with FCFS order unchanged. Do not tune ranking,
-add speculative slots, or claim deployability from the oracle replay.
+only 17/32 orders improved and its paired interval crossed zero.
+
+Replacing hindsight fit with frozen hard-RSS predictions increased overlap but
+did not establish safety. Task-Aware improved mean completion 25.984% in all 32
+orders, with a paired absolute-delta interval of [-3702.319, -3437.197]
+seconds, 10.525% lower makespan, and 4.561% service inflation. It nevertheless
+created 12,439 conservative source-RSS capacity exposures. Clause-KB was also
+unsafe, with 12,390 exposures, and improved completion more: 33.392%. Thus
+Task-Aware failed both the zero-exposure gate and its required one-point
+incremental contribution. CPU work and predicted capacity were valid in every
+arm; the failure is RSS evidence and action quality, not replay integrity.
+
+The safety failure is dominated by a mismatch between prediction labels and
+physical evidence. Source RSS is unavailable for 680/1,196 commands. Of the
+527 commands with explicit CPU-and-RSS null targets, 450 last under 500 ms and
+therefore legitimately enter the prediction objective as imputed Low, while
+the safety replay must conservatively treat their unknown physical RSS as 16
+GB. Both predictors reserved below 16 GB for all 527; static
+under-reservation affected 642 Clause-KB and 629 Task-Aware commands. This does
+not prove those short commands physically use 16 GB. It proves that bucket
+accuracy under the
+short-null policy cannot certify their overlap safety. Do not tune the
+predictor, fallback, or gate on this exposed result. First determine whether a
+causal measured RSS or pressure signal can cover this observability gap.
 
 ## 6. Closed directions
 
@@ -274,6 +294,10 @@ add speculative slots, or claim deployability from the oracle replay.
 - **CPU-idle candidate ordering:** exact-duration hindsight selection did not
   improve FCFS idle backfill. Do not build a latency/shortest selector on the
   exposed SQLGlot tasks.
+- **Static hard-RSS CPU-idle safety:** both frozen predictors created thousands
+  of conservative source-RSS exposures, and Task-Aware reduced utility versus
+  Clause-KB. Do not tune reservations or relax null handling on exposed
+  SQLGlot.
 - **KV victim selection:** C100 already removes most LRU recomputation, leaving
   insufficient predictor headroom in the current model.
 
@@ -325,6 +349,7 @@ Result root:
 - Dynamic hard-page feedback admission: `sqlglot50-cpu-feedback-admission-v1/result.json`
 - Feedback admission with CPU borrowing: `sqlglot50-cpu-feedback-borrowing-v1/result.json`
 - CPU-idle backfill oracle: `sqlglot50-cpu-idle-backfill-oracle-v1/result.json`
+- CPU-idle predicted RSS safety: `sqlglot50-cpu-idle-rss-safety-v1/result.json`
 
 Task split authority:
 `analysis/development/sqlglot-relational-task-split.json`.
@@ -346,7 +371,8 @@ Clause-KB baseline = unchanged raw exact/prefix/binary control.
 Task-Aware Command Predictor = selected development candidate, not deployed.
 Causal eBPF feedback = retained measured mechanism/control, not integrated.
 Equal-share burstable CPU execution = retained physical control baseline.
-CPU-idle FCFS backfill = promising exposed action with hindsight RSS safety.
+CPU-idle FCFS backfill = exposed action headroom, not deployable RSS safety.
+Static hard-RSS CPU-idle admission = closed on exposed SQLGlot.
 Protocol NO-GO != permission to delete a retained baseline.
 No result-dependent tuning, hindsight state, or dataset-specific outcome rule.
 No new collection, runtime integration, or scheduler claim without a separate
