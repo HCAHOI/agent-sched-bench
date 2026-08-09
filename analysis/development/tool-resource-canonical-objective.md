@@ -14,17 +14,17 @@ artifacts retain that history.
 |---|---|
 | Prediction | Keep the target-specific Task-Aware Command Predictor below as the selected development candidate. It is exposed evidence, not confirmation or deployed code. |
 | Runtime feedback | **KEEP causal command-level eBPF feedback as a measured mechanism and control.** Neither tested admission action passed its frozen utility gate, so it is not a runtime scheduler candidate. |
-| CPU execution | Keep equal-share burstable execution as the simple physical CPU-sharing baseline, not as a proven method. |
+| CPU execution | Keep equal-share burstable execution as a physical control. Strict-priority CPU-idle backfill is the strongest development action candidate, but still uses hindsight RSS safety and an optimistic `cpu.idle` model. |
 | Saturated quartet result | Frozen claim verdict is NO-GO because 8/12, not 9/12, groups improved. This is not a module-retirement decision. |
 | Fresh counterbalanced queue | **Inconclusive because 7/1,818 paired tool calls changed terminal class.** Timing-only improvement was 0.929% with 2/4 queues improving, below the frozen gate even before the quality failure. |
 | Prediction contribution to feedback | Not established. Task-Aware seeding did not improve the frozen reservation/service operating point over feedback alone. |
-| CPU scheduling | Stop feedback-driven page admission on exposed SQLGlot. Hard pages improved completion 6.584% but inflated service 12.936%; work-conserving borrowing improved it only 1.982%, inflated service 7.352%, and worsened makespan 0.917%. Keep both as evidence and controls. |
+| CPU scheduling | CPU-idle FCFS backfill passed its action gate: completion improved 14.620% in all 32 orders, makespan improved 17.226%, and service inflation was 3.073%. Hindsight shortest selection added no value, so ordering prediction is closed. |
 | KB representation | Raw exact/prefix/binary `ClauseResourceKB` is the implemented Clause-KB baseline. Trie/lattice/semantic-key replacement is closed as a contribution. |
 | Offline agent | Closed. More prompts, critics, DSLs, or generated adapters are not authorized. |
 | KV scheduling | Closed under the current CacheWise/C100 simulator and action model. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
-| Next research step | Do not calibrate PSI or tune feedback pages: the ideal backlog ceiling already missed both effect and service gates. Any next scheduler study needs a different action with pre-measured oracle headroom; otherwise prioritize fresh confirmation of the selected predictor. |
+| Next research step | Replace CPU-idle backfill's hindsight RSS-fit control with the already frozen Clause-KB and Task-Aware RSS hard predictions, preserving FCFS order. Only a safe predictor arm can authorize physical `cpu.idle` calibration. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -166,6 +166,8 @@ All rows below are development-exposed.
 | Cross-repository feedback | On 259 SWE100/277 tasks, reservation fell 45.010% at 1.543% service inflation; task-bootstrap intervals were [38.286%, 50.959%] and [1.256%, 1.820%] | Development GO for causal feedback; physical scheduling utility untested |
 | Hard-page feedback admission | Versus static Task-Aware requests, mean per-order task completion improved 6.584%; all 32 orders improved, queue time fell 6.702%, and makespan fell 6.810% by ratio of means | Positive admission mechanism; frozen physical-advance gate failed because service inflation was 12.936%, above 5% |
 | Feedback admission with CPU borrowing | Mean per-order task completion improved 1.982%; 27/32 orders improved and the paired absolute-delta interval was [-278.536, -133.809] s. By ratio of means, queue fell 2.140%, service fell 0.877%, but makespan rose 0.917% | Frozen gate failed: effect was below 5% and service inflation was 7.352%; stop before PSI calibration |
+| CPU-idle FCFS backfill | Versus Serial-8, mean per-order completion improved 14.620%; all 32 orders improved, makespan improved 17.226%, and service inflation was 3.073% | Action gate passed under strict-priority CPU and hindsight RSS safety; requires causal RSS safety and physical calibration |
+| CPU-idle shortest-safe selection | Hindsight shortest selection changed completion by -0.137% versus FCFS; 17/32 orders improved and the paired interval [-51.549, 70.048] s crossed zero | Ordering predictor has no headroom; do not build a latency/shortest selector |
 | Prediction-weighted CPU shares | Task-Aware reduced mean completion by 0.0056%; a true-demand oracle reduced it by only 0.0527% | Closed: recorded-duration floor leaves no useful share-allocation headroom |
 | Ready-queue priority | Exact-duration aging oracle reduced mean completion 3.991% with 0.301% makespan cost | Below the frozen 5% gate; retain only as a diagnosed tradeoff |
 
@@ -236,6 +238,22 @@ physical contention cost. The simulation used an ideal causal backlog bit, so
 a real PSI signal cannot rescue this frozen hypothesis. Do not run PSI
 calibration, physical replay, or post-hoc page tuning from this result.
 
+Strict-priority CPU-idle backfill tested a different action: one normal command
+had first claim on all eight cores, while one speculative command used only
+residual CPU. With a shared hindsight RSS-fit filter, prediction-free FCFS
+backfill improved mean per-order task completion 14.620%; all 32 orders
+improved and the paired absolute-delta interval was [-2127.184, -1870.621]
+seconds. By ratio of means, makespan improved 17.226% and service inflation was
+3.073%. CPU work was conserved and no modeled capacity violation occurred.
+
+Candidate ordering is not the missing predictor consumer. Hindsight shortest
+RSS-safe selection was 0.137% worse than FCFS on mean per-order completion;
+only 17/32 orders improved and its paired interval crossed zero. The retained
+action still depends on hindsight RSS eligibility for 516/1,196 commands and
+models kernel idle priority optimistically. The only authorized predictor test
+is therefore causal RSS safety with FCFS order unchanged. Do not tune ranking,
+add speculative slots, or claim deployability from the oracle replay.
+
 ## 6. Closed directions
 
 - **Lookup structure alone:** trie, lattice, generic argv, pip/pytest semantic
@@ -253,6 +271,9 @@ calibration, physical replay, or post-hoc page tuning from this result.
   work-conserving pages failed both effect and service-cost gates. Retain the
   causal feedback implementation as evidence and a control, but do not tune
   this action on exposed SQLGlot.
+- **CPU-idle candidate ordering:** exact-duration hindsight selection did not
+  improve FCFS idle backfill. Do not build a latency/shortest selector on the
+  exposed SQLGlot tasks.
 - **KV victim selection:** C100 already removes most LRU recomputation, leaving
   insufficient predictor headroom in the current model.
 
@@ -303,6 +324,7 @@ Result root:
 - SWE100/277 feedback generality: `swe100-277-cpu-feedback-generality-v1/result.json`
 - Dynamic hard-page feedback admission: `sqlglot50-cpu-feedback-admission-v1/result.json`
 - Feedback admission with CPU borrowing: `sqlglot50-cpu-feedback-borrowing-v1/result.json`
+- CPU-idle backfill oracle: `sqlglot50-cpu-idle-backfill-oracle-v1/result.json`
 
 Task split authority:
 `analysis/development/sqlglot-relational-task-split.json`.
@@ -324,6 +346,7 @@ Clause-KB baseline = unchanged raw exact/prefix/binary control.
 Task-Aware Command Predictor = selected development candidate, not deployed.
 Causal eBPF feedback = retained measured mechanism/control, not integrated.
 Equal-share burstable CPU execution = retained physical control baseline.
+CPU-idle FCFS backfill = promising exposed action with hindsight RSS safety.
 Protocol NO-GO != permission to delete a retained baseline.
 No result-dependent tuning, hindsight state, or dataset-specific outcome rule.
 No new collection, runtime integration, or scheduler claim without a separate
