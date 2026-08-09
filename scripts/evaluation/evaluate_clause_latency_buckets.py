@@ -18,7 +18,7 @@ import time
 import tracemalloc
 from bisect import bisect_right
 from collections import Counter, defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -251,8 +251,12 @@ class _InteractionPosetKB:
     def __init__(
         self,
         stable_subcommands: frozenset[tuple[str, str]] = frozenset(),
+        *,
+        feature_builder: Callable[[str, Sequence[str]], InteractionFeatureSet]
+        | None = None,
     ) -> None:
         self.stable_subcommands = stable_subcommands
+        self._feature_builder = feature_builder
         self._next_observation_id = 0
         self._exact: dict[
             tuple[str, tuple[str, ...]], list[_InteractionObservation]
@@ -261,21 +265,29 @@ class _InteractionPosetKB:
             str, dict[frozenset[str], list[_InteractionObservation]]
         ] = defaultdict(lambda: defaultdict(list))
 
+    def feature_set(
+        self, row: Row | _InteractionQueryClause
+    ) -> InteractionFeatureSet:
+        if self._feature_builder is not None:
+            return self._feature_builder(row.bin, row.argv)
+        return _interaction_feature_set(
+            row.bin,
+            row.argv,
+            self.stable_subcommands,
+        )
+
     def observe(self, rows: Sequence[Row]) -> None:
         for row in rows:
+            feature_set = self.feature_set(row)
             observation = _InteractionObservation(
                 observation_id=self._next_observation_id,
                 task_id=row.task_id,
                 row=row,
-                feature_set=_interaction_feature_set(
-                    row.bin,
-                    row.argv,
-                    self.stable_subcommands,
-                ),
+                feature_set=feature_set,
             )
             self._next_observation_id += 1
             self._exact[(row.bin, row.argv[1:])].append(observation)
-            self._nodes[row.bin][observation.feature_set.features].append(observation)
+            self._nodes[feature_set.bin][feature_set.features].append(observation)
 
     def query(self, row: Row | _InteractionQueryClause) -> _PosetMatch:
         exact = tuple(self._exact.get((row.bin, row.argv[1:]), ()))
@@ -285,17 +297,13 @@ class _InteractionPosetKB:
                 observations=exact,
                 frontier=frozenset(),
             )
-        query = _interaction_feature_set(
-            row.bin,
-            row.argv,
-            self.stable_subcommands,
-        ).features
-        nodes = self._nodes.get(row.bin, {})
-        frontier = _maximal_intersections(query, tuple(nodes))
+        query = self.feature_set(row)
+        nodes = self._nodes.get(query.bin, {})
+        frontier = _maximal_intersections(query.features, tuple(nodes))
         selected = tuple(
             observation
             for node, observations in nodes.items()
-            if query & node in frontier
+            if query.features & node in frontier
             for observation in observations
         )
         if len({item.observation_id for item in selected}) != len(selected):
@@ -1347,11 +1355,15 @@ def _candidate_clause_evidence(
             else f"subset_kernel_k{kb.order}"
         )
         exact = match.exact
-    query_features = _interaction_feature_set(
-        row.bin,
-        row.argv,
-        kb.stable_subcommands,
-    ).features
+    query_features = (
+        kb.feature_set(row).features
+        if isinstance(kb, _InteractionPosetKB)
+        else _interaction_feature_set(
+            row.bin,
+            row.argv,
+            kb.stable_subcommands,
+        ).features
+    )
     shared_counts = tuple(
         len(query_features & observation.feature_set.features)
         for observation in observations
@@ -1604,11 +1616,7 @@ def _poset_resource_evidence(
     if len(local_values) != len(observations):
         raise AssertionError("resource-specific poset contains unavailable evidence")
     task_ids = frozenset(observation.task_id for observation in observations)
-    query_features = _interaction_feature_set(
-        row.bin,
-        row.argv,
-        kb.stable_subcommands,
-    ).features
+    query_features = kb.feature_set(row).features
     shared_counts = tuple(
         len(query_features & observation.feature_set.features)
         for observation in observations

@@ -17,6 +17,7 @@ from scripts.evaluation.classify_full_test_states import (
 from scripts.evaluation.evaluate_clause_latency_buckets import (
     _EpisodicSubsetKB,
     _InteractionPosetKB,
+    InteractionFeatureSet,
     PipExecEvent,
     ScoredRow,
     _argmax_bucket,
@@ -211,6 +212,42 @@ def test_interaction_poset_features_and_maximal_frontier() -> None:
     assert [item.row for item in match.observations] == history[1:]
     assert len({item.observation_id for item in match.observations}) == 2
     assert poset.query(history[1]).observations[0].row == history[1]
+
+
+def test_interaction_poset_can_share_a_canonical_feature_scope() -> None:
+    def row(task: int, bin_: str, argv: tuple[str, ...]) -> Row:
+        return Row(
+            task_id=f"owner__repo-{task}",
+            repo="owner__repo",
+            manifest_index=task - 1,
+            bin=bin_,
+            argv=argv,
+            latency_ms=100.0,
+            peak_cpu_cores=None,
+            sampled_peak_rss_mb=None,
+            disk_read_write_bytes_total=None,
+        )
+
+    history = row(1, "pytest", ("pytest", "-q", "tests/a.py"))
+    query = row(2, "python", ("python", "-m", "pytest", "-q", "tests/b.py"))
+    generic = _InteractionPosetKB()
+    generic.observe([history])
+    assert generic.query(query).observations == ()
+
+    def pytest_features(bin_: str, argv: tuple[str, ...]) -> InteractionFeatureSet:
+        del bin_
+        tail = argv[3:] if argv[1:3] == ("-m", "pytest") else argv[1:]
+        return InteractionFeatureSet(
+            bin="pytest:run",
+            features=frozenset({f"token:{token}" for token in tail}),
+        )
+
+    canonical = _InteractionPosetKB(feature_builder=pytest_features)
+    canonical.observe([history])
+    match = canonical.query(query)
+    assert match.exact is False
+    assert [item.row for item in match.observations] == [history]
+    assert canonical.query(history).exact is True
 
 
 def test_episodic_subset_kernel_matches_explicit_subsets() -> None:
