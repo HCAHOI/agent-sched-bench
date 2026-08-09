@@ -1,6 +1,6 @@
 # Tool-Resource Prediction — Canonical Objective and Lock
 
-**Effective:** 2026-08-08
+**Effective:** 2026-08-09
 **Scope:** current contract and decisions only
 
 This file is the authority for tool-resource targets, evaluation semantics,
@@ -13,18 +13,18 @@ artifacts retain that history.
 | Area | Current decision |
 |---|---|
 | Prediction | Keep the target-specific Task-Aware Command Predictor below as the selected development candidate. It is exposed evidence, not confirmation or deployed code. |
-| Runtime feedback | **KEEP causal command-level eBPF feedback as the current promising resource-action candidate.** It is counterfactual development evidence, not an integrated scheduler. |
+| Runtime feedback | **KEEP causal command-level eBPF feedback.** It improved modeled admission completion, but hard CPU pages still exceeded the frozen service-cost budget. |
 | CPU execution | Keep equal-share burstable execution as the simple physical CPU-sharing baseline, not as a proven method. |
 | Saturated quartet result | Frozen claim verdict is NO-GO because 8/12, not 9/12, groups improved. This is not a module-retirement decision. |
 | Fresh counterbalanced queue | **Inconclusive because 7/1,818 paired tool calls changed terminal class.** Timing-only improvement was 0.929% with 2/4 queues improving, below the frozen gate even before the quality failure. |
 | Prediction contribution to feedback | Not established. Task-Aware seeding did not improve the frozen reservation/service operating point over feedback alone. |
-| CPU scheduling | A physical reservation-aware admission test must compare feedback against fixed-eight and equal-share burstable controls. |
+| CPU scheduling | Do not run the hard-page physical admission test: its frozen event replay improved completion 6.584% but incurred 12.936% service inflation. Keep the positive mechanism evidence. |
 | KB representation | Raw exact/prefix/binary `ClauseResourceKB` is the implemented Clause-KB baseline. Trie/lattice/semantic-key replacement is closed as a contribution. |
 | Offline agent | Closed. More prompts, critics, DSLs, or generated adapters are not authorized. |
 | KV scheduling | Closed under the current CacheWise/C100 simulator and action model. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
-| Next research step | Test whether feedback-released reservation changes physical admission and queue completion on development-exposed workloads; consume fresh evidence only after that mechanism works. |
+| Next research step | Test feedback-driven logical admission over work-conserving CPU borrowing, so a denied reservation expansion does not become a hard throughput cap. Freeze this new action model before evaluation. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -164,6 +164,7 @@ All rows below are development-exposed.
 | Fresh 48-task counterbalanced queue | 7/1,818 paired calls changed terminal class; timing-only mean was +0.929%, with 2/4 queues improving | Inconclusive on quality; timing-only result also misses the 5% and 3/4 gate |
 | Prediction-seeded feedback | Feedback alone reduced reservation 37.076% at 1.032% service inflation; Task-Aware seeding changed this to 37.635% and 1.274% | Feedback promising; incremental prediction gate failed |
 | Cross-repository feedback | On 259 SWE100/277 tasks, reservation fell 45.010% at 1.543% service inflation; task-bootstrap intervals were [38.286%, 50.959%] and [1.256%, 1.820%] | Development GO for causal feedback; physical scheduling utility untested |
+| Hard-page feedback admission | Versus static Task-Aware requests, mean per-order task completion improved 6.584%; all 32 orders improved, queue time fell 6.702%, and makespan fell 6.810% by ratio of means | Positive admission mechanism; frozen physical-advance gate failed because service inflation was 12.936%, above 5% |
 | Prediction-weighted CPU shares | Task-Aware reduced mean completion by 0.0056%; a true-demand oracle reduced it by only 0.0527% | Closed: recorded-duration floor leaves no useful share-allocation headroom |
 | Ready-queue priority | Exact-duration aging oracle reduced mean completion 3.991% with 0.301% makespan cost | Below the frozen 5% gate; retain only as a diagnosed tradeoff |
 
@@ -197,9 +198,26 @@ tasks, 205 repositories, and 8,237 exec commands. Feedback reduced reservation
 45.010% at 1.543% service inflation; both corpora independently passed the
 frozen gate. Of 258 tasks with exec work, 244 reduced reservation. This is a
 counterfactual per-command result, not a concurrent physical scheduler: it
-shows broad signal and a viable operating point, but not that released capacity
-improves queue completion. The next experiment must connect those causal page
-updates to actual admission and charge controller/collector cost.
+shows broad signal and a viable operating point.
+
+The frozen dynamic-admission replay connected those page updates to an
+eight-core FCFS-ready queue over the 50 exposed SQLGlot tasks. Relative to
+static Task-Aware reservations, feedback improved mean per-order task
+completion 6.584%; all 32 fixed workload orders improved and the paired
+order-bootstrap interval for the absolute delta was [-857.949, -626.791]
+seconds. By ratio of means, queue time fell 6.702%, makespan fell 6.810%,
+service time fell 9.354%, and reserved CPU-core-seconds fell 30.171%.
+
+The physical-advance gate nevertheless failed: candidate service remained
+12.936% above recorded eight-core service, versus the frozen 5% ceiling. This
+failure was consistent across orders (minimum inflation 7.921%). The mechanism
+diagnosis is expansion pressure, not absent admission benefit: 82.030% of
+expansion attempts were denied by the saturated hard-reservation pool, while
+feedback recovered 47.393% of the static predictor's service overhead. A hard
+page therefore turns capacity-accounting contention into throughput loss. The
+next action must preserve feedback-driven admission decisions while allowing
+work-conserving CPU borrowing; the current result does not authorize a hard-cap
+physical replay or runtime integration.
 
 ## 6. Closed directions
 
@@ -262,6 +280,7 @@ Result root:
 - Prediction-seeded CPU feedback: `sqlglot50-prediction-seeded-cpu-feedback-v1/result.json`
 - Prediction-weighted CPU shares: `sqlglot50-prediction-weighted-cpu-shares-v1/result.json`
 - SWE100/277 feedback generality: `swe100-277-cpu-feedback-generality-v1/result.json`
+- Dynamic hard-page feedback admission: `sqlglot50-cpu-feedback-admission-v1/result.json`
 
 Task split authority:
 `analysis/development/sqlglot-relational-task-split.json`.
