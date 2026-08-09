@@ -26,13 +26,18 @@ network behavior, resource labels, or action utility.
 ## Offline compiler
 
 Each supported tool receives at most one schema-constrained LM generation from
-its exact-version official synopsis, option reference, examples, and `--help`.
+its selected-version official synopsis, option reference, examples, and
+`--help`.
 The LM cannot read commands, traces, task or repository identifiers, outputs,
 resource labels, prediction errors, or existing generated specifications.
 The frozen budget is at most 64,000 input tokens and 64 KiB of JSON per tool;
 record model/version, temperature, token usage, wall time, and source snapshots.
 A label-blind census selects one documented tool version per tool before
-generation; other versions fail closed to Clause-KB.
+generation. Fresh collections record the actual binary version before the
+agent starts; versions that do not exactly match fail closed to Clause-KB.
+Historical SQLGlot traces do not contain a reliable binary-version probe, so
+their one allowed development run is explicitly version-unverified and cannot
+support the portability claim.
 
 The output is a small JSON `ToolSpec`. It may express only:
 
@@ -71,7 +76,9 @@ comparisons with Clause-KB and Task-Aware measure deployment value. Evaluation
 uses the canonical latency 5-class and CPU/RSS/Disk 3-class command targets.
 Report per-tool results, equal-weight four-target accuracy, severe
 underprediction, changed-command helpful/harmful counts, and causal cold-start
-curves after 5, 10, 20, and 40 settled tasks.
+curves after 5, 10, 20, and 40 settled tasks. A checkpoint is reported only
+when the frozen stream contains a subsequently scored task; otherwise it is
+`N/A`, never extrapolated or replaced.
 
 Existing SQLGlot traces are development-only. Before any new outcome access,
 freeze exact task IDs from metadata:
@@ -83,6 +90,14 @@ freeze exact task IDs from metadata:
   and 33 untouched final tasks;
 - tox: optional predeclared long-load stress case only after a separate smoke
   and cost estimate; it cannot rescue a failed confirmation.
+
+The one SQLGlot development run uses a frozen 100-task causal warm-up followed
+by the other 100 tasks. It may reject the method but cannot confirm it. New
+collection is attempted only if documentation semantics improve equal-weight
+four-target accuracy over the generic partial order, helpful changes exceed
+harmful changes, severe underprediction does not worsen, and gains span more
+than one task. No prompt, schema, tool list, support rule, or matcher changes
+follow that result.
 
 The validation gate requires the task-cluster-bootstrap 95% lower bound for the
 equal-weight accuracy difference against generic partial order to exceed zero,
