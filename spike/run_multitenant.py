@@ -157,11 +157,20 @@ def _gpu_sample() -> dict[str, Any]:
 
 
 def _runtime_device() -> tuple[str, str]:
-    import torch
-
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is required for the multi-tenant GPU run")
-    return platform.node(), torch.cuda.get_device_name(0)
+    proc = subprocess.run(
+        [
+            "nvidia-smi",
+            "--query-gpu=name",
+            "--format=csv,noheader",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    devices = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    if len(devices) != 1:
+        raise RuntimeError("multi-tenant GPU run requires exactly one visible GPU")
+    return platform.node(), devices[0]
 
 
 async def _sample_gpu(stop: asyncio.Event, interval_s: float) -> list[dict[str, Any]]:
