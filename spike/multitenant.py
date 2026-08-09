@@ -34,7 +34,9 @@ from trace_collect.trace_data import TraceData
 _CONTINUUM_HISTORY_THRESHOLD = 100  # Continuum §4.2, arXiv:2511.02230v6.
 _THUNDERAGENT_BUFFER_TOKENS = 100  # backend/state.py at reference commit below.
 _THUNDERAGENT_REFERENCE_COMMIT = "7ddc8610270e56d3b109eed8796b3a4360fc67c9"
-_POLICY_NAMES = frozenset({"keep", "deadline", "ours", "continuum", "thunderagent"})
+_POLICY_NAMES = frozenset(
+    {"cache", "keep", "deadline", "ours", "continuum", "thunderagent"}
+)
 PREFILL_COST_SCHEMA_VERSION = 1
 
 
@@ -605,6 +607,8 @@ def build_retention_plan(
         raise ValueError("deadline_ms must be > 0")
     tools = turn.tools or (ToolSpan("__no_tool__", "", 0.0, 0.0),)
 
+    if policy == "cache":
+        return None
     if policy == "keep":
         return RetentionPlan(
             policy,

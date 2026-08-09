@@ -11,9 +11,7 @@ import yaml
 
 
 def _module():
-    return importlib.import_module(
-        "scripts.evaluation.evaluate_gpu_keep_deadline_live"
-    )
+    return importlib.import_module("scripts.evaluation.evaluate_gpu_keep_deadline_live")
 
 
 def test_causal_reuse_requires_free_admission_restore_order_and_block_overlap() -> None:
@@ -109,7 +107,9 @@ def test_output_parity_rejects_a_changed_generated_token() -> None:
                 "finish_reason": "length",
             }
         ],
-        "programs": [{"program_index": 0, "task_id": "t0", "status": "replayed_complete"}],
+        "programs": [
+            {"program_index": 0, "task_id": "t0", "status": "replayed_complete"}
+        ],
     }
     changed = {
         "requests": [
@@ -156,6 +156,7 @@ def test_frozen_cells_reject_a_different_replay_root() -> None:
                 "config": copy.deepcopy(config),
                 "workload": copy.deepcopy(workload),
                 "replay_task_ids": task_ids,
+                "requests": [],
                 "programs": [
                     {"program_index": number, "task_id": task_id}
                     for number, task_id in enumerate(task_ids)
@@ -171,6 +172,60 @@ def test_frozen_cells_reject_a_different_replay_root() -> None:
     module.validate_frozen_cells(cells)
     cells[1]["workload"]["replay_trace_root"] = "traces/other"
     with pytest.raises(ValueError, match="workload"):
+        module.validate_frozen_cells(cells)
+
+
+def test_frozen_cells_accept_stock_cache_as_the_baseline() -> None:
+    module = _module()
+    config = yaml.safe_load(Path("configs/serving/w5_multitenant.yaml").read_text())
+    workload = next(
+        row
+        for row in config["workloads"]
+        if row["name"] == "swe-rebench-277-development-exposed"
+    )
+    task_ids = Path(workload["task_ids_file"]).read_text().splitlines()
+    base = dt.datetime(2026, 8, 9, tzinfo=dt.timezone.utc)
+    cells = []
+    for index, policy in enumerate(("cache", "deadline", "deadline", "cache")):
+        cells.append(
+            {
+                "status": "complete",
+                "policy": policy,
+                "load": 32,
+                "program_count": 277,
+                "request_count": 13_048,
+                "limit_programs": None,
+                "max_turns": None,
+                "git_sha": module._git_sha(),
+                "vllm_version": "0.11.2",
+                "runtime": {
+                    "host_name": "0091-dsm2-sma100-prxmx70124",
+                    "device_name": "NVIDIA A100 80GB PCIe",
+                },
+                "config": copy.deepcopy(config),
+                "workload": copy.deepcopy(workload),
+                "replay_task_ids": task_ids,
+                "requests": [],
+                "programs": [
+                    {"program_index": number, "task_id": task_id}
+                    for number, task_id in enumerate(task_ids)
+                ],
+                "transfers": [],
+                "cell_started_at": (base + dt.timedelta(minutes=2 * index)).isoformat(),
+                "cell_finished_at": (
+                    base + dt.timedelta(minutes=2 * index + 1)
+                ).isoformat(),
+            }
+        )
+
+    module.validate_frozen_cells(cells, baseline_policy="cache")
+
+    cells[0]["requests"] = [{"retention_plan": {"policy": "cache"}}]
+    with pytest.raises(ValueError, match="retention plan"):
+        module.validate_frozen_cells(cells, baseline_policy="cache")
+    cells[0]["requests"] = []
+
+    with pytest.raises(ValueError, match="keep/deadline"):
         module.validate_frozen_cells(cells)
 
 
@@ -193,4 +248,34 @@ def test_vllm_011_request_metrics_use_state_stats_timestamps(monkeypatch) -> Non
         "prefill_ms": 500.0,
         "ttft_ms": 1500.0,
         "latency_ms": 5000.0,
+    }
+
+
+def test_invalid_live_cells_are_not_reported_as_method_no_go(monkeypatch) -> None:
+    module = _module()
+    monkeypatch.setattr(
+        module,
+        "validate_frozen_cells",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("invalid cell")),
+    )
+    monkeypatch.setattr(module, "causal_reuse_events", lambda _cell: [])
+    cell = {
+        "requests": [{"program_index": 0, "turn_index": 0, "ttft_ms": 1.0}],
+        "programs": [
+            {
+                "program_index": 0,
+                "task_id": "task-0",
+                "status": "replayed_complete",
+                "jct_ms": 1.0,
+            }
+        ],
+        "transfers": [],
+    }
+
+    result = module.evaluate(cell, cell, cell, cell, baseline_policy="cache")
+
+    assert result["status"] == "invalid"
+    assert result["validity"] == {
+        "output_parity": False,
+        "error": "invalid cell",
     }

@@ -100,6 +100,27 @@ def test_keep_retains_finished_prefix_until_the_next_turn() -> None:
     assert plan.source == "keep_until_next_turn"
 
 
+def test_cache_uses_stock_evictable_prefix_cache() -> None:
+    assert build_retention_plan("cache", _turn(), deadline_ms=5000.0) is None
+
+
+def test_cache_finish_does_not_delay_vllm_block_free() -> None:
+    from spike.vllm_connector.gpu import SelectiveOffloadConnector
+
+    connector = object.__new__(SelectiveOffloadConnector)
+    connector._retention_spec = lambda _: {
+        "program_id": "program:0",
+        "policy": "cache",
+        "action": None,
+        "final": False,
+    }
+
+    assert connector.request_finished(SimpleNamespace(request_id="cache:0:0"), [1]) == (
+        False,
+        None,
+    )
+
+
 def test_llama_chat_adapter_serializes_parallel_calls_without_losing_results() -> None:
     messages = (
         {"role": "user", "content": "inspect both"},
@@ -191,9 +212,7 @@ def test_llama_chat_adapter_rejects_missing_parallel_result() -> None:
                 {
                     "role": "assistant",
                     "content": "",
-                    "tool_calls": [
-                        {"id": "a", "function": {"arguments": "{}"}}
-                    ],
+                    "tool_calls": [{"id": "a", "function": {"arguments": "{}"}}],
                 },
                 {"role": "tool", "tool_call_id": "a", "content": "A"},
             ),
@@ -739,9 +758,10 @@ def test_w5_task_inputs_match_owned_manifest() -> None:
         for path in owned_paths:
             assert path.parent == inputs_dir
             entry = entries[path.name]
-            assert len(path.read_text(encoding="utf-8").splitlines()) == entry[
-                "task_count"
-            ]
+            assert (
+                len(path.read_text(encoding="utf-8").splitlines())
+                == entry["task_count"]
+            )
 
 
 def test_fresh277_is_marked_development_exposed() -> None:
@@ -759,9 +779,7 @@ def test_final_rejects_development_exposed_workload(
     config_path.write_text(
         json.dumps(
             {
-                "workloads": [
-                    {"name": "spent", "corpus_role": "development_exposed"}
-                ],
+                "workloads": [{"name": "spent", "corpus_role": "development_exposed"}],
                 "policies": ["deadline"],
                 "load_levels": [2],
             }

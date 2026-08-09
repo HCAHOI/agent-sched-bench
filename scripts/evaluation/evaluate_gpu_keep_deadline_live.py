@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate the frozen live keep-versus-deadline A/B."""
+"""Evaluate the frozen live baseline-versus-deadline A/B."""
 
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ from spike.vllm_connector import percentile  # noqa: E402
 
 
 RequestKey = tuple[int, int]
-_POLICIES = ("keep", "deadline", "deadline", "keep")
 _MODEL = "meta-llama/Llama-3.1-8B-Instruct"
 _DEVICE = "NVIDIA A100 80GB PCIe"
 _WORKLOAD = "swe-rebench-277-development-exposed"
@@ -84,9 +83,14 @@ def validate_output_parity(
             raise ValueError(f"output parity mismatch at program {key}")
 
 
-def validate_frozen_cells(cells: Sequence[dict[str, Any]]) -> None:
+def validate_frozen_cells(
+    cells: Sequence[dict[str, Any]], *, baseline_policy: str = "keep"
+) -> None:
     if len(cells) != 4:
         raise ValueError("frozen live evaluation requires four ABBA cells")
+    if baseline_policy not in {"cache", "keep"}:
+        raise ValueError("baseline policy must be cache or keep")
+    policies = (baseline_policy, "deadline", "deadline", baseline_policy)
     first = cells[0]
     expected_serving = {
         "model": _MODEL,
@@ -105,11 +109,13 @@ def validate_frozen_cells(cells: Sequence[dict[str, Any]]) -> None:
     }
     current_sha = _git_sha()
     expected_task_ids = _TASK_IDS_FILE.read_text(encoding="utf-8").splitlines()
-    for cell, policy in zip(cells, _POLICIES, strict=True):
+    for cell, policy in zip(cells, policies, strict=True):
         if cell["status"] != "complete":
             raise ValueError("live cell is not complete")
         if cell["policy"] != policy or int(cell["load"]) != 32:
-            raise ValueError("live cells must use frozen keep/deadline ABBA at load 32")
+            raise ValueError(
+                f"live cells must use frozen {baseline_policy}/deadline ABBA at load 32"
+            )
         if int(cell["program_count"]) != 277 or int(cell["request_count"]) != 13_048:
             raise ValueError("live cell does not contain the frozen full workload")
         if cell["limit_programs"] is not None or cell["max_turns"] is not None:
@@ -146,12 +152,13 @@ def validate_frozen_cells(cells: Sequence[dict[str, Any]]) -> None:
         } != set(expected_task_ids):
             raise ValueError("live cell task IDs differ from the frozen manifest")
 
-    for keep in (cells[0], cells[3]):
-        if any(
-            row.get("phase") in {"retention_offload", "retention_restore"}
-            for row in keep["transfers"]
+    for baseline in (cells[0], cells[3]):
+        if any("bytes_moved" in row for row in baseline["transfers"]):
+            raise ValueError("baseline cell unexpectedly transferred retained KV")
+        if baseline_policy == "cache" and any(
+            row.get("retention_plan") is not None for row in baseline["requests"]
         ):
-            raise ValueError("keep cell unexpectedly transferred retained KV")
+            raise ValueError("cache baseline unexpectedly produced a retention plan")
 
     intervals = [
         (
@@ -176,9 +183,7 @@ def causal_reuse_events(cell: dict[str, Any]) -> list[dict[str, Any]]:
     scheduler_events = cell["retention_events"]
     restores = [row for row in transfers if row.get("phase") == "retention_restore"]
     frees = [
-        row
-        for row in scheduler_events
-        if row.get("phase") == "retention_blocks_freed"
+        row for row in scheduler_events if row.get("phase") == "retention_blocks_freed"
     ]
     admissions = [
         row
@@ -224,7 +229,10 @@ def causal_reuse_events(cell: dict[str, Any]) -> list[dict[str, Any]]:
         for admitted in admissions:
             admitted_at = float(admitted["monotonic_s"])
             request_id = str(admitted["request_id"])
-            if not freed_at < admitted_at < restore_started or request_id not in requests:
+            if (
+                not freed_at < admitted_at < restore_started
+                or request_id not in requests
+            ):
                 continue
             admitted_request = requests[request_id]
             admitted_key = _request_key(admitted_request)
@@ -296,50 +304,52 @@ def _transfer_summary(cell: dict[str, Any]) -> dict[str, int]:
 
 
 def evaluate(
-    keep_first: dict[str, Any],
+    baseline_first: dict[str, Any],
     deadline_first: dict[str, Any],
     deadline_second: dict[str, Any],
-    keep_second: dict[str, Any],
+    baseline_second: dict[str, Any],
+    *,
+    baseline_policy: str = "keep",
 ) -> dict[str, Any]:
-    cells = (keep_first, deadline_first, deadline_second, keep_second)
+    cells = (baseline_first, deadline_first, deadline_second, baseline_second)
     parity_error: str | None = None
     try:
-        validate_frozen_cells(cells)
+        validate_frozen_cells(cells, baseline_policy=baseline_policy)
         for cell in cells[1:]:
-            validate_output_parity(keep_first, cell)
+            validate_output_parity(baseline_first, cell)
     except ValueError as error:
         parity_error = str(error)
 
     reuse_first = causal_reuse_events(deadline_first)
     reuse_second = causal_reuse_events(deadline_second)
     reuse_rows = (reuse_first, reuse_second)
-    pairs = ((keep_first, deadline_first), (keep_second, deadline_second))
+    pairs = ((baseline_first, deadline_first), (baseline_second, deadline_second))
     pair_rows = []
     action_gates = []
     direction_gates = []
     tail_gates = []
-    for index, ((keep, deadline), reuse) in enumerate(
+    for index, ((baseline, deadline), reuse) in enumerate(
         zip(pairs, reuse_rows, strict=True), start=1
     ):
         owner_count = len({int(row["owner_program_index"]) for row in reuse})
-        affected = {
-            tuple(map(int, row["admitted_request_key"])) for row in reuse
-        }
-        keep_jct = _mean_program_jct(keep)
+        affected = {tuple(map(int, row["admitted_request_key"])) for row in reuse}
+        baseline_jct = _mean_program_jct(baseline)
         deadline_jct = _mean_program_jct(deadline)
-        overall_keep_p99 = _p99(keep["requests"])
+        overall_baseline_p99 = _p99(baseline["requests"])
         overall_deadline_p99 = _p99(deadline["requests"])
-        affected_keep_p99 = _p99(keep["requests"], affected) if affected else None
+        affected_baseline_p99 = (
+            _p99(baseline["requests"], affected) if affected else None
+        )
         affected_deadline_p99 = (
             _p99(deadline["requests"], affected) if affected else None
         )
         action_go = owner_count >= 20
-        direction_go = deadline_jct < keep_jct
+        direction_go = deadline_jct < baseline_jct
         tail_go = (
-            affected_keep_p99 is not None
+            affected_baseline_p99 is not None
             and affected_deadline_p99 is not None
-            and overall_deadline_p99 <= 1.05 * overall_keep_p99
-            and affected_deadline_p99 <= 1.05 * affected_keep_p99
+            and overall_deadline_p99 <= 1.05 * overall_baseline_p99
+            and affected_deadline_p99 <= 1.05 * affected_baseline_p99
         )
         action_gates.append(action_go)
         direction_gates.append(direction_go)
@@ -349,12 +359,12 @@ def evaluate(
                 "repetition": index,
                 "reuse_owner_program_count": owner_count,
                 "affected_request_count": len(affected),
-                "keep_mean_program_jct_ms": keep_jct,
+                "baseline_mean_program_jct_ms": baseline_jct,
                 "deadline_mean_program_jct_ms": deadline_jct,
-                "jct_reduction_fraction": (keep_jct - deadline_jct) / keep_jct,
-                "keep_all_request_p99_ttft_ms": overall_keep_p99,
+                "jct_reduction_fraction": (baseline_jct - deadline_jct) / baseline_jct,
+                "baseline_all_request_p99_ttft_ms": overall_baseline_p99,
                 "deadline_all_request_p99_ttft_ms": overall_deadline_p99,
-                "keep_affected_p99_ttft_ms": affected_keep_p99,
+                "baseline_affected_p99_ttft_ms": affected_baseline_p99,
                 "deadline_affected_p99_ttft_ms": affected_deadline_p99,
                 "action_go": action_go,
                 "direction_go": direction_go,
@@ -362,21 +372,24 @@ def evaluate(
             }
         )
 
-    keep_programs = (_program_map(keep_first), _program_map(keep_second))
+    baseline_programs = (
+        _program_map(baseline_first),
+        _program_map(baseline_second),
+    )
     deadline_programs = (
         _program_map(deadline_first),
         _program_map(deadline_second),
     )
-    program_ids = sorted(keep_programs[0])
-    keep_mean = statistics.fmean(
-        statistics.fmean(float(rows[index]["jct_ms"]) for rows in keep_programs)
+    program_ids = sorted(baseline_programs[0])
+    baseline_mean = statistics.fmean(
+        statistics.fmean(float(rows[index]["jct_ms"]) for rows in baseline_programs)
         for index in program_ids
     )
     deadline_mean = statistics.fmean(
         statistics.fmean(float(rows[index]["jct_ms"]) for rows in deadline_programs)
         for index in program_ids
     )
-    aggregate_reduction = (keep_mean - deadline_mean) / keep_mean
+    aggregate_reduction = (baseline_mean - deadline_mean) / baseline_mean
     effect_go = aggregate_reduction >= 0.05
     validity_go = parity_error is None
     live_go = (
@@ -389,11 +402,16 @@ def evaluate(
 
     return {
         "schema_version": 1,
-        "status": "go" if live_go else "no_go",
-        "protocol": "tool-resource-canonical-objective.md Section 5.3",
+        "status": "invalid" if not validity_go else ("go" if live_go else "no_go"),
+        "protocol": (
+            "tool-resource-canonical-objective.md Section 5.4"
+            if baseline_policy == "cache"
+            else "tool-resource-canonical-objective.md Section 5.3"
+        ),
+        "baseline_policy": baseline_policy,
         "validity": {"output_parity": validity_go, "error": parity_error},
         "aggregate": {
-            "keep_mean_program_jct_ms": keep_mean,
+            "baseline_mean_program_jct_ms": baseline_mean,
             "deadline_mean_program_jct_ms": deadline_mean,
             "jct_reduction_fraction": aggregate_reduction,
             "freed_block_seconds": [
@@ -403,9 +421,7 @@ def evaluate(
                         for row in reuse
                         if row["offload_request_id"] == request_id
                     )
-                    for request_id in {
-                        row["offload_request_id"] for row in reuse
-                    }
+                    for request_id in {row["offload_request_id"] for row in reuse}
                 )
                 for reuse in reuse_rows
             ],
@@ -416,10 +432,10 @@ def evaluate(
         },
         "pairs": pair_rows,
         "transfers": {
-            "keep_first": _transfer_summary(keep_first),
+            "baseline_first": _transfer_summary(baseline_first),
             "deadline_first": _transfer_summary(deadline_first),
             "deadline_second": _transfer_summary(deadline_second),
-            "keep_second": _transfer_summary(keep_second),
+            "baseline_second": _transfer_summary(baseline_second),
         },
         "gates": {
             "validity_go": validity_go,
@@ -441,10 +457,23 @@ def _git_sha() -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--keep-first", type=Path, required=True)
+    parser.add_argument(
+        "--keep-first",
+        "--baseline-first",
+        dest="baseline_first",
+        type=Path,
+        required=True,
+    )
     parser.add_argument("--deadline-first", type=Path, required=True)
     parser.add_argument("--deadline-second", type=Path, required=True)
-    parser.add_argument("--keep-second", type=Path, required=True)
+    parser.add_argument(
+        "--keep-second",
+        "--baseline-second",
+        dest="baseline_second",
+        type=Path,
+        required=True,
+    )
+    parser.add_argument("--baseline-policy", choices=("cache", "keep"), default="keep")
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -452,13 +481,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     paths = (
-        args.keep_first,
+        args.baseline_first,
         args.deadline_first,
         args.deadline_second,
-        args.keep_second,
+        args.baseline_second,
     )
     result = evaluate(
-        *(json.loads(path.read_text(encoding="utf-8")) for path in paths)
+        *(json.loads(path.read_text(encoding="utf-8")) for path in paths),
+        baseline_policy=args.baseline_policy,
     )
     result.update(
         {

@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "status": "protocol_invalid",
+  "method_verdict": null,
+  "generated": "2026-08-09",
+  "git_sha": "e8a7a3b1b5669a046d700cfb61b10b2ac9f97e51",
+  "protocol": "tool-resource-canonical-objective.md Section 5.3",
+  "cell": {
+    "policy": "keep",
+    "load": 32,
+    "workload": "swe-rebench-277-development-exposed",
+    "model": "meta-llama/Llama-3.1-8B-Instruct",
+    "device": "NVIDIA A100 80GB PCIe",
+    "runtime_root": "/home/Ubuntu/gpu-keep-deadline-live-load32-e8a7a3b",
+    "result_written": false
+  },
+  "stall": {
+    "retention_event_count": 1870,
+    "last_event_monotonic_s": 11040.915610543,
+    "inspection_monotonic_s": 11584.334014564,
+    "no_event_seconds": 543.418404021,
+    "active_retention_specs": 32,
+    "largest_active_recorded_gap_seconds": 300.12236189842224,
+    "free_blocks_after_last_admission": 12,
+    "gpu_utilization_percent": 0,
+    "gpu_memory_used_mib": 74081,
+    "engine_core_cpu_percent": 98.8,
+    "traceback_or_oom_observed": false
+  },
+  "evidence": {
+    "retention_events": {
+      "path": "load32-hard-pin-stall-retention-events.jsonl",
+      "sha256": "7799696d0665046404bbe4689fed7166975d4e9ba49174b00aa85107a9a2091a",
+      "bytes": 4235732,
+      "rows": 1870
+    },
+    "retention_control": {
+      "path": "load32-hard-pin-stall-retention-control.json",
+      "sha256": "b651892a0ea6404742cd1a946b62279e630c7ba258614d97987238b6c15632d6",
+      "bytes": 7621
+    },
+    "engine_log": {
+      "path": "load32-hard-pin-stall-engine.log",
+      "sha256": "823385790955ad4bc907bdc7ea86bf11a771e0663f1584ad8160febc365492e8",
+      "bytes": 7882
+    },
+    "interactive_observations_not_raw_files": [
+      "inspection_monotonic_s",
+      "gpu_utilization_percent",
+      "gpu_memory_used_mib",
+      "engine_core_cpu_percent",
+      "traceback_or_oom_observed"
+    ]
+  },
+  "interpretation": {
+    "observation": "hard-pinned prefixes could not be evicted and no request made progress",
+    "root_cause": "a waiting next turn needed free blocks before it could consume the retained prefix whose references would release capacity",
+    "decision": "terminate the protocol-invalid incomplete cell and draw no performance or deadline-action verdict"
+  }
+}

@@ -23,10 +23,10 @@ artifacts retain that history.
 | Offline tool knowledge | Trace-conditioned generation remains closed. The frozen docs-only v1 protocol also stops before fresh collection: only `make` produced a valid specification, and its SQLGlot arm never formed a non-exact contrast. This is an uninformative protocol result, not evidence that documentation semantics cannot work. |
 | Manual tool semantics | **KEEP only the pytest candidate-routing question.** A hindsight selector over existing causal candidates improved full-cohort four-target accuracy by 1.941 points for pytest, but 93/118 corrections merely restored Clause-KB; adding more pytest rules is not supported. pip missed the frozen contrast gate and its perfect-tool ceiling was only 0.392 points, so deprioritize pip-specific work. |
 | KV victim selection | Closed under the current CacheWise/C100 simulator and action model. |
-| GPU tool-gap action | The profile-only early clock and pre-restore are closed by the Section 5.1 offline gate. The load-8 live action test remains unresolved; Section 5.3 separately explores the fixed five-second deadline at load 32. |
+| GPU tool-gap action | The profile-only early clock and pre-restore are closed by the Section 5.1 offline gate. The load-8 live action test remains unresolved. The load-32 hard-pin control in Section 5.3 was invalid; Section 5.4 compares the unchanged five-second action with stock evictable prefix caching. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
-| Next research step | Run the Section 5.3 load-32 `keep` versus `deadline/reactive` A/B only if its bounded smoke proves exact co-tenant block reuse. Do not implement the failed robust clock or pre-restore. Admit a new CPU experiment only if it supplies the missing causal RSS-safety signal or a genuinely different action. |
+| Next research step | Run the Section 5.4 load-32 stock-cache versus `deadline/reactive` A/B only if its bounded cache smoke completes. Do not implement the failed robust clock or pre-restore. Admit a new CPU experiment only if it supplies the missing causal RSS-safety signal or a genuinely different action. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -460,6 +460,50 @@ completion, actual block release, different-program allocation of an
 intersecting block ID, and allocation before owner restore. It must also finish
 all submitted requests and complete every observed restore. Failure stops
 without changing workload order, task selection, capacity, or policy.
+
+The smoke passed, but the formal first `keep` cell exposed an invalid control
+at this operating point. The cell reached 12 free blocks and then produced no
+scheduler event for 543.418 seconds, longer than the largest active recorded
+gap (300.122 seconds), while GPU utilization was zero and the engine thread
+busy-spun. All 32 resident prefixes had no expiry. Because this control held
+finished blocks with positive references, a waiting next turn could not obtain
+the blocks required to run and therefore could not consume the prefix that
+would release those references. The cell was terminated without a result.
+Section 5.3 consequently fails its four-complete-cell validity requirement; no
+performance number or deadline-action verdict is drawn from it. The evidence
+is frozen in
+`analysis/results/gpu-tool-gap-actions-a100-instruct-20260809/load32-hard-pin-stall.json`.
+
+### 5.4 Frozen stock-cache action A/B
+
+This is a separate development experiment frozen before observing any
+stock-cache outcome. It changes only the invalid Section 5.3 control. `cache`
+uses vLLM's enabled prefix cache without manual retention: a finished request
+returns its blocks with reference count zero, so a matching next turn can hit
+them while pressure may evict them and force recomputation. It performs no
+D2H/H2D transfer. `deadline/reactive` is unchanged: causally revealed tool
+calls surviving 5,000 ms trigger D2H, and the next matching turn restores from
+host.
+
+The workload remains all 277 development-exposed programs in manifest order,
+seed 0, load 32, Llama-3.1-8B-Instruct, the same A100-80GB staged-transfer
+configuration, and ABBA order `cache`, `deadline`, `deadline`, `cache`. The
+request/prompt/output/terminal-status validity checks, exact causal block-reuse
+definition, two independent 20-owner action gates, per-pair 1.05x overall and
+affected-cohort p99 TTFT ceilings, per-pair JCT direction gates, and aggregate
+5% mean program-JCT reduction gate are exactly those in Section 5.2. No robust
+clock, pre-restore, subset, changed tool timing, capacity change, or
+outcome-dependent task order is allowed.
+
+Before the formal ABBA, one non-evidentiary `cache` smoke uses the same first 32
+programs and at most 40 turns. It must complete the same 1,090 submitted
+requests with no failed program and no KV transfer. The already completed
+deadline smoke supplies only unchanged-path plumbing evidence: 56 exact causal
+reuse events from 4 owner programs and every observed restore completed. If the
+cache smoke fails, stop. If it passes, run the four formal cells from scratch;
+any failed Section 5.2 validity, action, tail, direction, or effect gate stops
+without tuning. This remains development evidence and needs fresh confirmation
+for a paper claim.
 
 ## 6. Closed directions
 

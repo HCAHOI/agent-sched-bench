@@ -1,5 +1,5 @@
 seed: 0
-policies: [keep, deadline, ours, continuum, thunderagent]
+policies: [cache, keep, deadline, ours, continuum, thunderagent]
 load_levels: [2, 4, 8, 32]
 trigger_table: analysis/serving/w5-multitenant/trigger_table_swe100_rho1_kv5000.json
 continuum_prefill_profile: analysis/serving/w5-multitenant/prefill_result_llama31_8b.json

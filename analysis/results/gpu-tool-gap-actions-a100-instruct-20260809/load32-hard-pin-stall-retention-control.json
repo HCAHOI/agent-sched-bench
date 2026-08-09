@@ -1,0 +1,322 @@
+{
+  "keep:4:8": {
+    "program_id": "program:4",
+    "policy": "keep",
+    "program_arrival_s": 10657.582539143,
+    "program_index": 4,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:24:36": {
+    "program_id": "program:24",
+    "policy": "keep",
+    "program_arrival_s": 10657.629907538,
+    "program_index": 24,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:35:8": {
+    "program_id": "program:35",
+    "policy": "keep",
+    "program_arrival_s": 10921.339657185,
+    "program_index": 35,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:17:25": {
+    "program_id": "program:17",
+    "policy": "keep",
+    "program_arrival_s": 10657.61439767,
+    "program_index": 17,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:32:9": {
+    "program_id": "program:32",
+    "policy": "keep",
+    "program_arrival_s": 10791.412854846,
+    "program_index": 32,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:31:21": {
+    "program_id": "program:31",
+    "policy": "keep",
+    "program_arrival_s": 10657.648143903,
+    "program_index": 31,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:40:0": {
+    "program_id": "program:40",
+    "policy": "keep",
+    "program_arrival_s": 11021.762879355,
+    "program_index": 40,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:11:9": {
+    "program_id": "program:11",
+    "policy": "keep",
+    "program_arrival_s": 10657.598683851,
+    "program_index": 11,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:22:35": {
+    "program_id": "program:22",
+    "policy": "keep",
+    "program_arrival_s": 10657.625656284,
+    "program_index": 22,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:21:17": {
+    "program_id": "program:21",
+    "policy": "keep",
+    "program_arrival_s": 10657.623503576,
+    "program_index": 21,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:39:1": {
+    "program_id": "program:39",
+    "policy": "keep",
+    "program_arrival_s": 11008.093424666,
+    "program_index": 39,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:38:4": {
+    "program_id": "program:38",
+    "policy": "keep",
+    "program_arrival_s": 10988.443443562,
+    "program_index": 38,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:36:8": {
+    "program_id": "program:36",
+    "policy": "keep",
+    "program_arrival_s": 10928.969186377,
+    "program_index": 36,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:3:26": {
+    "program_id": "program:3",
+    "policy": "keep",
+    "program_arrival_s": 10657.577847269,
+    "program_index": 3,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:5:31": {
+    "program_id": "program:5",
+    "policy": "keep",
+    "program_arrival_s": 10657.585095999,
+    "program_index": 5,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:0:31": {
+    "program_id": "program:0",
+    "policy": "keep",
+    "program_arrival_s": 10657.551806766,
+    "program_index": 0,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:34:8": {
+    "program_id": "program:34",
+    "policy": "keep",
+    "program_arrival_s": 10887.897110233,
+    "program_index": 34,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:33:22": {
+    "program_id": "program:33",
+    "policy": "keep",
+    "program_arrival_s": 10793.774892549,
+    "program_index": 33,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:18:29": {
+    "program_id": "program:18",
+    "policy": "keep",
+    "program_arrival_s": 10657.616344546,
+    "program_index": 18,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:26:40": {
+    "program_id": "program:26",
+    "policy": "keep",
+    "program_arrival_s": 10657.634959571,
+    "program_index": 26,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:12:32": {
+    "program_id": "program:12",
+    "policy": "keep",
+    "program_arrival_s": 10657.601627347,
+    "program_index": 12,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:30:24": {
+    "program_id": "program:30",
+    "policy": "keep",
+    "program_arrival_s": 10657.645428226,
+    "program_index": 30,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:15:31": {
+    "program_id": "program:15",
+    "policy": "keep",
+    "program_arrival_s": 10657.607764949,
+    "program_index": 15,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:23:31": {
+    "program_id": "program:23",
+    "policy": "keep",
+    "program_arrival_s": 10657.62795508,
+    "program_index": 23,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:27:30": {
+    "program_id": "program:27",
+    "policy": "keep",
+    "program_arrival_s": 10657.637388008,
+    "program_index": 27,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:6:47": {
+    "program_id": "program:6",
+    "policy": "keep",
+    "program_arrival_s": 10657.588498685,
+    "program_index": 6,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:20:25": {
+    "program_id": "program:20",
+    "policy": "keep",
+    "program_arrival_s": 10657.621352199,
+    "program_index": 20,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:25:30": {
+    "program_id": "program:25",
+    "policy": "keep",
+    "program_arrival_s": 10657.632731784,
+    "program_index": 25,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:14:22": {
+    "program_id": "program:14",
+    "policy": "keep",
+    "program_arrival_s": 10657.605838181,
+    "program_index": 14,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:29:30": {
+    "program_id": "program:29",
+    "policy": "keep",
+    "program_arrival_s": 10657.6431207,
+    "program_index": 29,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:19:41": {
+    "program_id": "program:19",
+    "policy": "keep",
+    "program_arrival_s": 10657.619139042,
+    "program_index": 19,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  },
+  "keep:37:8": {
+    "program_id": "program:37",
+    "policy": "keep",
+    "program_arrival_s": 10944.972398803,
+    "program_index": 37,
+    "priority_stride": 277,
+    "action": "offload",
+    "expire_ms": null,
+    "final": false
+  }
+}

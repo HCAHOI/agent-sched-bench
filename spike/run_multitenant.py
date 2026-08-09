@@ -210,10 +210,7 @@ async def _replay_tool_lifecycles(
         ):
             raise ValueError("tool trigger must be finite and >= 0")
         trigger_offset_ms = tool.start_offset_ms + trigger_ms
-        if (
-            trigger_offset_ms >= tool.end_offset_ms
-            or trigger_offset_ms >= turn.gap_ms
-        ):
+        if trigger_offset_ms >= tool.end_offset_ms or trigger_offset_ms >= turn.gap_ms:
             await sleep_until(end_at)
             return
         trigger_task = asyncio.create_task(
@@ -228,9 +225,7 @@ async def _replay_tool_lifecycles(
     )
 
 
-def _causal_trigger_delay_ms(
-    policy: str, plan: RetentionPlan | None
-) -> float | None:
+def _causal_trigger_delay_ms(policy: str, plan: RetentionPlan | None) -> float | None:
     if plan is None:
         return 0.0 if policy == "continuum" else None
     return plan.expire_ms
@@ -436,6 +431,7 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
                 provisional_action = None
                 if not final:
                     provisional_action = {
+                        "cache": None,
                         "keep": "offload",
                         "deadline": "offload",
                         "ours": "offload",
@@ -570,7 +566,8 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
                         tool_reveals.append(
                             {
                                 "tool_index": tool_index,
-                                "actual_reveal_ms": (revealed_at - gap_started) * 1000.0,
+                                "actual_reveal_ms": (revealed_at - gap_started)
+                                * 1000.0,
                                 "plan_source": None if plan is None else plan.source,
                                 "trigger_delay_ms": trigger_delay_ms,
                                 "trigger_fired": False,
@@ -594,9 +591,9 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
                         if armed_expiry is None or fired_at < armed_expiry:
                             armed_expiry = fired_at
                             reveal_row["armed_expiry"] = True
-                            retention_specs[request_id][
-                                "expire_at_monotonic_s"
-                            ] = fired_at
+                            retention_specs[request_id]["expire_at_monotonic_s"] = (
+                                fired_at
+                            )
                             _atomic_json(retention_path, retention_specs)
                             await engine.engine_core.abort_requests_async(
                                 [f"retention-tick:{request_id}:{tool_index}"]
@@ -741,8 +738,12 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
         "max_turns": args.max_turns,
         "policy_provenance": policy_provenance(),
         "retained_scope": (
-            "complete prompt blocks excluding the final prompt token; "
-            "partial-prompt and generated-completion KV are freed"
+            "stock vLLM prefix cache; finished blocks are evictable"
+            if args.policy == "cache"
+            else (
+                "complete prompt blocks excluding the final prompt token; "
+                "partial-prompt and generated-completion KV are freed"
+            )
         ),
         "continuum_profile": {
             "program_count": len(profile_programs),
