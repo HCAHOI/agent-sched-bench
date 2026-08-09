@@ -9,6 +9,13 @@ from scripts.evaluation.evaluate_cpu_idle_backfill_oracle import (
     _committed_input_paths as _idle_backfill_committed_input_paths,
     _gate as _idle_backfill_gate,
 )
+from scripts.evaluation.evaluate_cpu_idle_rss_safety import (
+    ARMS as IDLE_RSS_ARMS,
+    PROTOCOL as IDLE_RSS_PROTOCOL,
+    VERSION as IDLE_RSS_VERSION,
+    _arm_specs as _idle_rss_arm_specs,
+    _gate as _idle_rss_gate,
+)
 from scripts.evaluation.evaluate_cpu_feedback_borrowing import (
     PROTOCOL as BORROWING_PROTOCOL,
     VERSION as BORROWING_VERSION,
@@ -445,6 +452,36 @@ def test_idle_backfill_excludes_commands_without_rss_evidence() -> None:
     assert result["speculative_starts"] == 0
 
 
+def test_idle_backfill_separates_predicted_fit_from_source_rss_exposure() -> None:
+    programs = [
+        AdmissionProgram(
+            task_id,
+            0.0,
+            (AdmissionCommand(task_id, 1.0, 4.0, 900.0, 0.0),),
+            0.0,
+        )
+        for task_id in ("normal", "speculative")
+    ]
+
+    result = simulate_idle_backfill(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=1_000.0,
+        cpu_work_profiles={
+            "normal": ((1.0, 4.0),),
+            "speculative": ((1.0, 4.0),),
+        },
+        speculative_eligible_command_ids={"normal", "speculative"},
+        rss_reservations={"normal": 500.0, "speculative": 500.0},
+        selection="fcfs",
+    )
+
+    assert result["speculative_starts"] == 1
+    assert not result["capacity_violation"]
+    assert result["modeled_capacity_exposure_events"] == 1
+    assert result["max_modeled_rss_demand_mb"] == 1_800.0
+
+
 def test_idle_backfill_guard_covers_split_and_profile_definitions() -> None:
     names = {path.name for path in _idle_backfill_committed_input_paths()}
 
@@ -490,6 +527,64 @@ def test_idle_backfill_gate_requires_every_frozen_condition() -> None:
         }
         values[field] = value
         assert not _idle_backfill_gate(**values)["go"]
+
+
+def test_idle_rss_evaluator_locks_arms_and_protocol() -> None:
+    assert IDLE_RSS_VERSION == "cpu-idle-rss-safety-v1"
+    assert IDLE_RSS_PROTOCOL.name == "cpu-idle-rss-safety-protocol.md"
+    assert IDLE_RSS_ARMS == (
+        "serial8",
+        "oracle_rss_fcfs",
+        "clause_kb_rss_fcfs",
+        "task_aware_rss_fcfs",
+    )
+    command_ids = {"observed", "unavailable"}
+    oracle_rss = {"observed": 500.0, "unavailable": 16_000.0}
+    arm_specs = _idle_rss_arm_specs(
+        command_ids,
+        oracle_rss,
+        oracle_rss,
+        oracle_rss,
+    )
+    assert arm_specs["oracle_rss_fcfs"][1] == command_ids
+    assert arm_specs["oracle_rss_fcfs"][2]["unavailable"] == 16_000.0
+
+
+def test_idle_rss_gate_requires_utility_contribution_and_safety() -> None:
+    passing = _idle_rss_gate(
+        candidate_reduction=0.08,
+        oracle_reduction=0.14,
+        clause_reduction=0.06,
+        bootstrap_high=-1.0,
+        service_inflation=0.05,
+        makespan_regression=0.01,
+        exposure_events=0,
+        violation=False,
+    )
+    assert passing["go"]
+
+    for field, value in (
+        ("candidate_reduction", 0.049),
+        ("oracle_reduction", 0.17),
+        ("clause_reduction", 0.071),
+        ("bootstrap_high", 0.0),
+        ("service_inflation", 0.051),
+        ("makespan_regression", 0.011),
+        ("exposure_events", 1),
+        ("violation", True),
+    ):
+        values = {
+            "candidate_reduction": 0.08,
+            "oracle_reduction": 0.14,
+            "clause_reduction": 0.06,
+            "bootstrap_high": -1.0,
+            "service_inflation": 0.05,
+            "makespan_regression": 0.01,
+            "exposure_events": 0,
+            "violation": False,
+        }
+        values[field] = value
+        assert not _idle_rss_gate(**values)["go"]
 
 
 def test_feedback_admission_gate_requires_every_frozen_condition() -> None:

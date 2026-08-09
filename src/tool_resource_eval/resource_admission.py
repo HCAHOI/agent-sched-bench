@@ -88,6 +88,7 @@ class _IdleRunning:
     command: AdmissionCommand
     start_s: float
     profile: tuple[tuple[float, float], ...]
+    requested_rss_mb: float
     profile_index: int = 0
     profile_remaining_s: float = 0.0
     speculative: bool = False
@@ -288,6 +289,7 @@ def simulate_idle_backfill(
     rss_capacity_mb: float,
     cpu_work_profiles: Mapping[str, tuple[tuple[float, float], ...]],
     speculative_eligible_command_ids: set[str],
+    rss_reservations: Mapping[str, float] | None = None,
     selection: str,
 ) -> dict[str, object]:
     """Replay one normal command plus one strict-idle-priority backfill."""
@@ -309,6 +311,18 @@ def simulate_idle_backfill(
         raise ValueError("idle backfill requires complete CPU work profiles")
     if not speculative_eligible_command_ids <= set(commands):
         raise ValueError("idle backfill eligibility contains an unknown command")
+    reservation_by_id = (
+        {command_id: command.rss_mb for command_id, command in commands.items()}
+        if rss_reservations is None
+        else dict(rss_reservations)
+    )
+    if set(reservation_by_id) != set(commands) or any(
+        rss < 0.0
+        or rss > rss_capacity_mb + _EPSILON
+        or not math.isfinite(rss)
+        for rss in reservation_by_id.values()
+    ):
+        raise ValueError("idle backfill requires complete in-capacity RSS reservations")
     if any(
         value < 0.0 or not math.isfinite(value)
         for program in programs
@@ -356,11 +370,14 @@ def simulate_idle_backfill(
     ]
     now_s = min(session.ready_s for session in sessions)
     running: list[_IdleRunning] = []
-    used_rss = queue_s = reserved_rss_mb_s = served_cpu_work = 0.0
+    used_rss = modeled_rss = queue_s = reserved_rss_mb_s = served_cpu_work = 0.0
     speculative_cpu_work = 0.0
     normal_starts = speculative_starts = speculative_completions = promotions = 0
     max_concurrent = 0
     capacity_violation = physical_capacity_violation = False
+    exposure_events = 0
+    exposure_commands: set[str] = set()
+    max_modeled_rss = 0.0
     service_by_command: dict[str, float] = {}
     start_by_command: dict[str, float] = {}
     speculative_start_ids: list[str] = []
@@ -382,7 +399,8 @@ def simulate_idle_backfill(
         )
 
     def start(index: int, *, speculative: bool) -> None:
-        nonlocal used_rss, queue_s, normal_starts, speculative_starts
+        nonlocal used_rss, modeled_rss, queue_s, normal_starts
+        nonlocal speculative_starts, exposure_events, max_modeled_rss
         session = sessions[index]
         command = session.program.commands[session.command_index]
         profile = cpu_work_profiles[command.command_id]
@@ -392,12 +410,18 @@ def simulate_idle_backfill(
                 command=command,
                 start_s=now_s,
                 profile=profile,
+                requested_rss_mb=reservation_by_id[command.command_id],
                 profile_remaining_s=profile[0][0],
                 speculative=speculative,
             )
         )
         session.running = True
-        used_rss += command.rss_mb
+        used_rss += reservation_by_id[command.command_id]
+        modeled_rss += command.rss_mb
+        max_modeled_rss = max(max_modeled_rss, modeled_rss)
+        if modeled_rss > rss_capacity_mb + _EPSILON:
+            exposure_events += 1
+            exposure_commands.add(command.command_id)
         queue_s += max(0.0, now_s - session.ready_s)
         start_by_command[command.command_id] = now_s
         if speculative:
@@ -415,7 +439,8 @@ def simulate_idle_backfill(
         )
         for item in completed:
             running.remove(item)
-            used_rss -= item.command.rss_mb
+            used_rss -= item.requested_rss_mb
+            modeled_rss -= item.command.rss_mb
             service_by_command[item.command.command_id] = now_s - item.start_s
             speculative_completions += int(item.speculative)
             session = sessions[item.session_index]
@@ -447,8 +472,10 @@ def simulate_idle_backfill(
                 for item in ready
                 if item[1].program.commands[item[1].command_index].command_id
                 in speculative_eligible_command_ids
-                and normal.command.rss_mb
-                + item[1].program.commands[item[1].command_index].rss_mb
+                and normal.requested_rss_mb
+                + reservation_by_id[
+                    item[1].program.commands[item[1].command_index].command_id
+                ]
                 <= rss_capacity_mb + _EPSILON
             ]
             if fitting:
@@ -523,7 +550,7 @@ def simulate_idle_backfill(
         next_s = min(value for value in future if value > now_s + _EPSILON)
         elapsed_s = next_s - now_s
         reserved_rss_mb_s += sum(
-            item.command.rss_mb * elapsed_s for item in running
+            item.requested_rss_mb * elapsed_s for item in running
         )
         for item, demand, allocation in (
             (normal, normal_demand, normal_allocation),
@@ -546,7 +573,11 @@ def simulate_idle_backfill(
     completion = [session.completion_s for session in sessions]
     if any(value is None for value in completion):
         raise ValueError("idle backfill ended before every task completed")
-    if abs(used_rss) > _EPSILON or set(service_by_command) != set(commands):
+    if (
+        abs(used_rss) > _EPSILON
+        or abs(modeled_rss) > _EPSILON
+        or set(service_by_command) != set(commands)
+    ):
         raise ValueError("idle backfill leaked command state")
     total_cpu_work = sum(
         cpu for profile in cpu_work_profiles.values() for _dt, cpu in profile
@@ -577,6 +608,9 @@ def simulate_idle_backfill(
         "served_cpu_work_core_s": served_cpu_work,
         "capacity_violation": capacity_violation,
         "physical_capacity_violation": physical_capacity_violation,
+        "modeled_capacity_exposure_events": exposure_events,
+        "modeled_capacity_exposure_command_ids": sorted(exposure_commands),
+        "max_modeled_rss_demand_mb": max_modeled_rss,
         "speculative_start_ids": speculative_start_ids,
         "service_s_by_command": dict(sorted(service_by_command.items())),
         "start_s_by_command": dict(sorted(start_by_command.items())),
