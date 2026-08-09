@@ -1,5 +1,14 @@
 import pytest
 
+from scripts.evaluation.evaluate_cpu_idle_backfill_oracle import (
+    ACTION_MINIMUM_REDUCTION,
+    ARMS as IDLE_BACKFILL_ARMS,
+    PROTOCOL as IDLE_BACKFILL_PROTOCOL,
+    SELECTION_MINIMUM_REDUCTION,
+    VERSION as IDLE_BACKFILL_VERSION,
+    _committed_input_paths as _idle_backfill_committed_input_paths,
+    _gate as _idle_backfill_gate,
+)
 from scripts.evaluation.evaluate_cpu_feedback_borrowing import (
     PROTOCOL as BORROWING_PROTOCOL,
     VERSION as BORROWING_VERSION,
@@ -26,6 +35,7 @@ from tool_resource_eval.resource_admission import (
     simulate_admission,
     simulate_burstable_admission,
     simulate_feedback_admission,
+    simulate_idle_backfill,
 )
 
 
@@ -263,6 +273,223 @@ def test_work_conserving_feedback_requires_every_cpu_profile() -> None:
             cpu_pages=(2.0, 4.0, 8.0),
             work_conserving_cpu=True,
         )
+
+
+def test_idle_backfill_uses_only_cpu_left_by_normal_command() -> None:
+    programs = [
+        AdmissionProgram(
+            "normal",
+            0.0,
+            (AdmissionCommand("normal", 2.0, 4.0, 300.0, 0.0),),
+            0.0,
+        ),
+        AdmissionProgram(
+            "speculative",
+            0.0,
+            (AdmissionCommand("speculative", 1.0, 4.0, 300.0, 0.0),),
+            0.0,
+        ),
+    ]
+
+    result = simulate_idle_backfill(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=1_000.0,
+        cpu_work_profiles={
+            "normal": ((2.0, 8.0),),
+            "speculative": ((1.0, 4.0),),
+        },
+        speculative_eligible_command_ids={"normal", "speculative"},
+        selection="fcfs",
+    )
+
+    assert result["makespan_s"] == 2.0
+    assert result["total_command_service_s"] == 3.0
+    assert result["speculative_cpu_work_core_s"] == 4.0
+    assert result["speculative_completions"] == 1
+    assert not result["physical_capacity_violation"]
+
+
+def test_idle_backfill_promotion_preserves_partial_cpu_work() -> None:
+    programs = [
+        AdmissionProgram(
+            "normal",
+            0.0,
+            (AdmissionCommand("normal", 1.0, 4.0, 300.0, 0.0),),
+            0.0,
+        ),
+        AdmissionProgram(
+            "speculative",
+            0.0,
+            (AdmissionCommand("speculative", 2.0, 8.0, 300.0, 0.0),),
+            0.0,
+        ),
+    ]
+
+    result = simulate_idle_backfill(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=1_000.0,
+        cpu_work_profiles={
+            "normal": ((1.0, 4.0),),
+            "speculative": ((2.0, 16.0),),
+        },
+        speculative_eligible_command_ids={"normal", "speculative"},
+        selection="fcfs",
+    )
+
+    assert result["makespan_s"] == 2.5
+    assert result["promotions"] == 1
+    assert result["speculative_cpu_work_core_s"] == 4.0
+    assert result["served_cpu_work_core_s"] == 20.0
+
+
+def test_idle_backfill_shortest_selection_differs_from_fcfs() -> None:
+    programs = [
+        AdmissionProgram(
+            task_id,
+            0.0,
+            (AdmissionCommand(task_id, duration, 4.0, 100.0, 0.0),),
+            0.0,
+        )
+        for task_id, duration in (("normal", 4.0), ("older", 3.0), ("short", 1.0))
+    ]
+    profiles = {
+        task_id: ((duration, 4.0 * duration),)
+        for task_id, duration in (("normal", 4.0), ("older", 3.0), ("short", 1.0))
+    }
+
+    fcfs = simulate_idle_backfill(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=1_000.0,
+        cpu_work_profiles=profiles,
+        speculative_eligible_command_ids=set(profiles),
+        selection="fcfs",
+    )
+    shortest = simulate_idle_backfill(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=1_000.0,
+        cpu_work_profiles=profiles,
+        speculative_eligible_command_ids=set(profiles),
+        selection="shortest",
+    )
+
+    assert fcfs["speculative_start_ids"][0] == "older"
+    assert shortest["speculative_start_ids"][0] == "short"
+
+
+def test_idle_backfill_rejects_speculation_that_does_not_fit_rss() -> None:
+    programs = [
+        AdmissionProgram(
+            task_id,
+            0.0,
+            (AdmissionCommand(task_id, 1.0, 4.0, rss, 0.0),),
+            0.0,
+        )
+        for task_id, rss in (("normal", 900.0), ("waiting", 200.0))
+    ]
+
+    result = simulate_idle_backfill(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=1_000.0,
+        cpu_work_profiles={
+            "normal": ((1.0, 4.0),),
+            "waiting": ((1.0, 4.0),),
+        },
+        speculative_eligible_command_ids={"normal", "waiting"},
+        selection="fcfs",
+    )
+
+    assert result["start_s_by_command"] == {"normal": 0.0, "waiting": 1.0}
+    assert result["speculative_starts"] == 0
+
+
+def test_idle_backfill_requires_every_cpu_profile() -> None:
+    with pytest.raises(ValueError, match="complete CPU work profiles"):
+        simulate_idle_backfill(
+            [_program("task")],
+            cpu_capacity=8.0,
+            rss_capacity_mb=16_000.0,
+            cpu_work_profiles={},
+            speculative_eligible_command_ids=set(),
+            selection="serial",
+        )
+
+
+def test_idle_backfill_excludes_commands_without_rss_evidence() -> None:
+    programs = [
+        AdmissionProgram(
+            task_id,
+            0.0,
+            (AdmissionCommand(task_id, 1.0, 4.0, rss, 0.0),),
+            0.0,
+        )
+        for task_id, rss in (("normal", 100.0), ("unknown", 0.0))
+    ]
+
+    result = simulate_idle_backfill(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=1_000.0,
+        cpu_work_profiles={
+            "normal": ((1.0, 4.0),),
+            "unknown": ((1.0, 4.0),),
+        },
+        speculative_eligible_command_ids={"normal"},
+        selection="fcfs",
+    )
+
+    assert result["speculative_starts"] == 0
+
+
+def test_idle_backfill_guard_covers_split_and_profile_definitions() -> None:
+    names = {path.name for path in _idle_backfill_committed_input_paths()}
+
+    assert "evaluate_kv_prediction_actionability.py" in names
+    assert "early_cpu_reservation.py" in names
+
+
+def test_idle_backfill_evaluator_locks_arms_and_protocol() -> None:
+    assert IDLE_BACKFILL_VERSION == "cpu-idle-backfill-oracle-v1"
+    assert IDLE_BACKFILL_PROTOCOL.name == (
+        "cpu-idle-speculative-backfill-protocol.md"
+    )
+    assert IDLE_BACKFILL_ARMS == ("serial8", "fcfs_idle", "oracle_idle")
+    assert ACTION_MINIMUM_REDUCTION == 0.05
+    assert SELECTION_MINIMUM_REDUCTION == 0.10
+
+
+def test_idle_backfill_gate_requires_every_frozen_condition() -> None:
+    passing = _idle_backfill_gate(
+        reduction=0.10,
+        minimum_reduction=0.10,
+        bootstrap_high=-1.0,
+        service_inflation=0.05,
+        makespan_regression=0.01,
+        violation=False,
+    )
+    assert passing["go"]
+
+    for field, value in (
+        ("reduction", 0.099),
+        ("bootstrap_high", 0.0),
+        ("service_inflation", 0.051),
+        ("makespan_regression", 0.011),
+        ("violation", True),
+    ):
+        values = {
+            "reduction": 0.10,
+            "minimum_reduction": 0.10,
+            "bootstrap_high": -1.0,
+            "service_inflation": 0.05,
+            "makespan_regression": 0.01,
+            "violation": False,
+        }
+        values[field] = value
+        assert not _idle_backfill_gate(**values)["go"]
 
 
 def test_feedback_admission_gate_requires_every_frozen_condition() -> None:

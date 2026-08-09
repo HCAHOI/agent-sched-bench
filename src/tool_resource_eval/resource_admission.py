@@ -82,6 +82,17 @@ class _FeedbackRunning:
     observed_throttling: bool = False
 
 
+@dataclass
+class _IdleRunning:
+    session_index: int
+    command: AdmissionCommand
+    start_s: float
+    profile: tuple[tuple[float, float], ...]
+    profile_index: int = 0
+    profile_remaining_s: float = 0.0
+    speculative: bool = False
+
+
 def simulate_admission(
     programs: list[AdmissionProgram],
     *,
@@ -267,6 +278,308 @@ def simulate_admission(
         "modeled_capacity_exposure_command_ids": sorted(exposure_commands),
         "max_modeled_cpu_demand_cores": max_modeled_cpu,
         "max_modeled_rss_demand_mb": max_modeled_rss,
+    }
+
+
+def simulate_idle_backfill(
+    programs: list[AdmissionProgram],
+    *,
+    cpu_capacity: float,
+    rss_capacity_mb: float,
+    cpu_work_profiles: Mapping[str, tuple[tuple[float, float], ...]],
+    speculative_eligible_command_ids: set[str],
+    selection: str,
+) -> dict[str, object]:
+    """Replay one normal command plus one strict-idle-priority backfill."""
+
+    if not programs or cpu_capacity <= 0.0 or rss_capacity_mb <= 0.0:
+        raise ValueError("idle backfill requires programs and positive capacities")
+    if selection not in {"serial", "fcfs", "shortest"}:
+        raise ValueError("idle backfill selection must be serial, fcfs, or shortest")
+    if any(not program.commands for program in programs):
+        raise ValueError("every idle-backfill program must contain an exec command")
+    commands = {
+        command.command_id: command
+        for program in programs
+        for command in program.commands
+    }
+    if len(commands) != sum(len(program.commands) for program in programs):
+        raise ValueError("idle-backfill command identities must be unique")
+    if set(cpu_work_profiles) != set(commands):
+        raise ValueError("idle backfill requires complete CPU work profiles")
+    if not speculative_eligible_command_ids <= set(commands):
+        raise ValueError("idle backfill eligibility contains an unknown command")
+    if any(
+        value < 0.0 or not math.isfinite(value)
+        for program in programs
+        for value in (program.initial_delay_s, program.tail_s)
+    ) or any(
+        command.duration_s <= 0.0
+        or command.cpu_cores < 0.0
+        or command.rss_mb < 0.0
+        or command.rss_mb > rss_capacity_mb + _EPSILON
+        or command.delay_after_s < 0.0
+        or not all(
+            math.isfinite(value)
+            for value in (
+                command.duration_s,
+                command.cpu_cores,
+                command.rss_mb,
+                command.delay_after_s,
+            )
+        )
+        for command in commands.values()
+    ):
+        raise ValueError("idle backfill requires finite in-capacity inputs")
+    for command_id, command in commands.items():
+        profile = cpu_work_profiles[command_id]
+        if not profile or any(
+            dt <= 0.0
+            or cpu < 0.0
+            or not math.isfinite(dt)
+            or not math.isfinite(cpu)
+            or cpu > cpu_capacity * dt + _EPSILON
+            for dt, cpu in profile
+        ):
+            raise ValueError(f"invalid CPU work profile: {command_id}")
+        if not math.isclose(
+            sum(dt for dt, _cpu in profile),
+            command.duration_s,
+            rel_tol=1e-9,
+            abs_tol=1e-7,
+        ):
+            raise ValueError(f"CPU work profile duration differs: {command_id}")
+
+    sessions = [
+        _Session(program, rank, ready_s=program.initial_delay_s)
+        for rank, program in enumerate(programs)
+    ]
+    now_s = min(session.ready_s for session in sessions)
+    running: list[_IdleRunning] = []
+    used_rss = queue_s = reserved_rss_mb_s = served_cpu_work = 0.0
+    speculative_cpu_work = 0.0
+    normal_starts = speculative_starts = speculative_completions = promotions = 0
+    max_concurrent = 0
+    capacity_violation = physical_capacity_violation = False
+    service_by_command: dict[str, float] = {}
+    start_by_command: dict[str, float] = {}
+    speculative_start_ids: list[str] = []
+
+    def session_key(index: int) -> tuple[float, int, str]:
+        session = sessions[index]
+        return session.ready_s, session.seed_rank, session.program.task_id
+
+    def ready_sessions() -> list[tuple[int, _Session]]:
+        return sorted(
+            (
+                (index, session)
+                for index, session in enumerate(sessions)
+                if not session.running
+                and session.command_index < len(session.program.commands)
+                and session.ready_s <= now_s + _EPSILON
+            ),
+            key=lambda item: session_key(item[0]),
+        )
+
+    def start(index: int, *, speculative: bool) -> None:
+        nonlocal used_rss, queue_s, normal_starts, speculative_starts
+        session = sessions[index]
+        command = session.program.commands[session.command_index]
+        profile = cpu_work_profiles[command.command_id]
+        running.append(
+            _IdleRunning(
+                session_index=index,
+                command=command,
+                start_s=now_s,
+                profile=profile,
+                profile_remaining_s=profile[0][0],
+                speculative=speculative,
+            )
+        )
+        session.running = True
+        used_rss += command.rss_mb
+        queue_s += max(0.0, now_s - session.ready_s)
+        start_by_command[command.command_id] = now_s
+        if speculative:
+            speculative_starts += 1
+            speculative_start_ids.append(command.command_id)
+        else:
+            normal_starts += 1
+
+    while running or any(
+        session.command_index < len(session.program.commands) for session in sessions
+    ):
+        completed = sorted(
+            (item for item in running if item.profile_index >= len(item.profile)),
+            key=lambda item: session_key(item.session_index),
+        )
+        for item in completed:
+            running.remove(item)
+            used_rss -= item.command.rss_mb
+            service_by_command[item.command.command_id] = now_s - item.start_s
+            speculative_completions += int(item.speculative)
+            session = sessions[item.session_index]
+            session.running = False
+            session.command_index += 1
+            if session.command_index == len(session.program.commands):
+                session.completion_s = now_s + session.program.tail_s
+            else:
+                session.ready_s = now_s + item.command.delay_after_s
+
+        normal = next((item for item in running if not item.speculative), None)
+        speculative = next((item for item in running if item.speculative), None)
+        if normal is None and speculative is not None:
+            speculative.speculative = False
+            promotions += 1
+            normal = speculative
+            speculative = None
+
+        ready = ready_sessions()
+        if normal is None and ready:
+            index, _session = ready[0]
+            start(index, speculative=False)
+            normal = running[-1]
+            ready = ready_sessions()
+
+        if selection != "serial" and normal is not None and speculative is None:
+            fitting = [
+                item
+                for item in ready
+                if item[1].program.commands[item[1].command_index].command_id
+                in speculative_eligible_command_ids
+                and normal.command.rss_mb
+                + item[1].program.commands[item[1].command_index].rss_mb
+                <= rss_capacity_mb + _EPSILON
+            ]
+            if fitting:
+                if selection == "shortest":
+                    fitting.sort(
+                        key=lambda item: (
+                            item[1].program.commands[item[1].command_index].duration_s,
+                            *session_key(item[0]),
+                        )
+                    )
+                start(fitting[0][0], speculative=True)
+
+        max_concurrent = max(max_concurrent, len(running))
+        capacity_violation |= used_rss > rss_capacity_mb + _EPSILON
+        if not running and all(
+            session.command_index == len(session.program.commands)
+            for session in sessions
+        ):
+            break
+
+        normal = next((item for item in running if not item.speculative), None)
+        speculative = next((item for item in running if item.speculative), None)
+        if normal is None:
+            future_ready = [
+                session.ready_s
+                for session in sessions
+                if not session.running
+                and session.command_index < len(session.program.commands)
+                and session.ready_s > now_s + _EPSILON
+            ]
+            if not future_ready:
+                raise ValueError("idle backfill ended without a runnable command")
+            now_s = min(future_ready)
+            continue
+
+        normal_dt, normal_cpu = normal.profile[normal.profile_index]
+        normal_demand = normal_cpu / normal_dt
+        normal_allocation = min(normal_demand, cpu_capacity)
+        speculative_demand = speculative_allocation = 0.0
+        if speculative is not None:
+            speculative_dt, speculative_cpu = speculative.profile[
+                speculative.profile_index
+            ]
+            speculative_demand = speculative_cpu / speculative_dt
+            speculative_allocation = min(
+                speculative_demand, cpu_capacity - normal_allocation
+            )
+        physical_capacity_violation |= (
+            normal_allocation + speculative_allocation
+            > cpu_capacity + _EPSILON
+        )
+
+        future: list[float] = []
+        for item, demand, allocation in (
+            (normal, normal_demand, normal_allocation),
+            (speculative, speculative_demand, speculative_allocation),
+        ):
+            if item is None:
+                continue
+            progress_rate = 1.0 if demand <= allocation else allocation / demand
+            if progress_rate > _EPSILON:
+                future.append(now_s + item.profile_remaining_s / progress_rate)
+        future.extend(
+            session.ready_s
+            for session in sessions
+            if not session.running
+            and session.command_index < len(session.program.commands)
+            and session.ready_s > now_s + _EPSILON
+        )
+        if not future:
+            raise ValueError("idle backfill made no progress")
+        next_s = min(value for value in future if value > now_s + _EPSILON)
+        elapsed_s = next_s - now_s
+        reserved_rss_mb_s += sum(
+            item.command.rss_mb * elapsed_s for item in running
+        )
+        for item, demand, allocation in (
+            (normal, normal_demand, normal_allocation),
+            (speculative, speculative_demand, speculative_allocation),
+        ):
+            if item is None:
+                continue
+            progress_rate = 1.0 if demand <= allocation else allocation / demand
+            item.profile_remaining_s -= elapsed_s * progress_rate
+            work = allocation * elapsed_s
+            served_cpu_work += work
+            if item.speculative:
+                speculative_cpu_work += work
+            if item.profile_remaining_s <= _EPSILON:
+                item.profile_index += 1
+                if item.profile_index < len(item.profile):
+                    item.profile_remaining_s = item.profile[item.profile_index][0]
+        now_s = next_s
+
+    completion = [session.completion_s for session in sessions]
+    if any(value is None for value in completion):
+        raise ValueError("idle backfill ended before every task completed")
+    if abs(used_rss) > _EPSILON or set(service_by_command) != set(commands):
+        raise ValueError("idle backfill leaked command state")
+    total_cpu_work = sum(
+        cpu for profile in cpu_work_profiles.values() for _dt, cpu in profile
+    )
+    if not math.isclose(
+        served_cpu_work, total_cpu_work, rel_tol=1e-12, abs_tol=1e-7
+    ):
+        raise ValueError("idle backfill failed to conserve CPU work")
+    completion_s = [float(value) for value in completion if value is not None]
+    recorded_service_s = sum(command.duration_s for command in commands.values())
+    service_s = sum(service_by_command.values())
+    return {
+        "command_count": len(commands),
+        "recorded_command_service_s": recorded_service_s,
+        "total_command_service_s": service_s,
+        "added_service_s": service_s - recorded_service_s,
+        "makespan_s": max(completion_s),
+        "mean_task_completion_s": statistics.fmean(completion_s),
+        "total_command_queue_s": queue_s,
+        "reserved_rss_mb_s": reserved_rss_mb_s,
+        "max_concurrent_commands": max_concurrent,
+        "normal_starts": normal_starts,
+        "speculative_starts": speculative_starts,
+        "speculative_completions": speculative_completions,
+        "promotions": promotions,
+        "speculative_cpu_work_core_s": speculative_cpu_work,
+        "total_cpu_work_core_s": total_cpu_work,
+        "served_cpu_work_core_s": served_cpu_work,
+        "capacity_violation": capacity_violation,
+        "physical_capacity_violation": physical_capacity_violation,
+        "speculative_start_ids": speculative_start_ids,
+        "service_s_by_command": dict(sorted(service_by_command.items())),
+        "start_s_by_command": dict(sorted(start_by_command.items())),
     }
 
 
