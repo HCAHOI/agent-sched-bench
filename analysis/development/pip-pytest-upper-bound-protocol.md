@@ -4,6 +4,12 @@
 **Purpose:** development decision on already exposed SQLGlot traces; not a
 confirmatory result.
 
+**Amendment, 2026-08-09:** independent implementation review found that a
+global verdict could let an uncovered tool determine the covered tool's
+decision. Before any 100-task oracle result was produced, the decision was
+made per tool using its marginal full-cohort arm, as specified below. Only a
+one-task plumbing smoke without aggregate outcomes was visible.
+
 ## Question
 
 Can explicit pip/pytest modeling materially improve the current Task-Aware
@@ -69,7 +75,7 @@ richer state-aware model.
 Before scoring oracle outcomes, report for pip and pytest separately:
 
 - at least 20 scored non-exact commands;
-- at least 10 scored tasks; and
+- at least 10 scored tasks containing the tool; and
 - at least one causally available static semantic candidate distinct from the
   Task-Aware hard prediction.
 
@@ -82,7 +88,10 @@ Report Latency, CPU, RSS, and Disk exact command accuracy; their equal-weight
 mean; task-cluster bootstrap 95% intervals with 2,000 draws and seed 0;
 helpful corrections; severe underpredictions; affected tasks; and pip/pytest
 breakdowns. Absolute accuracy and percentage-point gain over Task-Aware are
-both required.
+both required. Materiality is decided separately for pip and pytest: the
+selected tool receives its oracle arm while every other row remains
+Task-Aware, so the gain remains an overall full-cohort effect rather than a
+within-tool accuracy.
 
 A ceiling is materially positive only if it:
 
@@ -91,17 +100,19 @@ A ceiling is materially positive only if it:
 2. has a task-cluster bootstrap 95% lower bound above zero; and
 3. corrects predictions in at least 10 scored tasks.
 
-Decision:
+Decision for each tool that passes coverage:
 
 | Static-candidate oracle | Perfect-tool oracle | Decision |
 |---|---|---|
 | positive | any | Keep the current static family; routing/aggregation has headroom. |
 | not positive | positive | Close static argv/parser/matcher work; only richer state or compound-work modeling retains headroom. |
-| not positive | not positive | Close pip/pytest-specific modeling on SQLGlot. |
-| insufficient coverage | any | Do not infer failure for the uncovered tool. |
+| not positive | not positive | Close that tool's special modeling on SQLGlot. |
+| insufficient coverage | any | Do not infer failure for that tool. |
 
 The perfect-tool oracle cannot rescue or validate the static family. Neither
-oracle is a predictor result.
+oracle is a predictor result. If pip and pytest receive different decisions,
+the aggregate status is `mixed_by_tool`; an uncovered tool never changes the
+other tool's verdict.
 
 ## Implementation and checks
 
