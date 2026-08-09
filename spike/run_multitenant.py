@@ -242,15 +242,17 @@ def _request_metrics(
     metrics = output.metrics
     if metrics is None:
         raise ValueError("vLLM output lacks request metrics")
-    arrival = float(metrics.arrival_time)
-    scheduled = float(metrics.first_scheduled_time)
-    first_token = float(metrics.first_token_time)
-    finished = float(metrics.finished_time)
+    queued = float(metrics.queued_ts)
+    scheduled = float(metrics.scheduled_ts)
+    first_token = float(metrics.first_token_ts)
+    finished = float(metrics.last_token_ts)
+    if not 0.0 < queued <= scheduled <= first_token <= finished:
+        raise ValueError("vLLM request metrics have invalid timestamp order")
     return {
-        "queue_ms": (scheduled - arrival) * 1000.0,
+        "queue_ms": (scheduled - queued) * 1000.0,
         "prefill_ms": (first_token - scheduled) * 1000.0,
         "ttft_ms": (first_token_at - submitted_at) * 1000.0,
-        "latency_ms": (finished - arrival) * 1000.0,
+        "latency_ms": (time.perf_counter() - submitted_at) * 1000.0,
     }
 
 

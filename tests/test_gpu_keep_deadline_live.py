@@ -4,6 +4,7 @@ import copy
 import datetime as dt
 import importlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -171,3 +172,25 @@ def test_frozen_cells_reject_a_different_replay_root() -> None:
     cells[1]["workload"]["replay_trace_root"] = "traces/other"
     with pytest.raises(ValueError, match="workload"):
         module.validate_frozen_cells(cells)
+
+
+def test_vllm_011_request_metrics_use_state_stats_timestamps(monkeypatch) -> None:
+    module = importlib.import_module("spike.run_multitenant")
+    metrics = SimpleNamespace(
+        queued_ts=1.0,
+        scheduled_ts=1.25,
+        first_token_ts=1.75,
+        last_token_ts=3.0,
+    )
+    monkeypatch.setattr(module.time, "perf_counter", lambda: 10.0)
+
+    row = module._request_metrics(
+        SimpleNamespace(metrics=metrics), submitted_at=5.0, first_token_at=6.5
+    )
+
+    assert row == {
+        "queue_ms": 250.0,
+        "prefill_ms": 500.0,
+        "ttft_ms": 1500.0,
+        "latency_ms": 5000.0,
+    }
