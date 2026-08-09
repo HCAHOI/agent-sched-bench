@@ -108,8 +108,8 @@ def validate_frozen_cells(cells: Sequence[dict[str, Any]]) -> None:
     for cell, policy in zip(cells, _POLICIES, strict=True):
         if cell["status"] != "complete":
             raise ValueError("live cell is not complete")
-        if cell["policy"] != policy or int(cell["load"]) != 8:
-            raise ValueError("live cells must use frozen keep/deadline ABBA at load 8")
+        if cell["policy"] != policy or int(cell["load"]) != 32:
+            raise ValueError("live cells must use frozen keep/deadline ABBA at load 32")
         if int(cell["program_count"]) != 277 or int(cell["request_count"]) != 13_048:
             raise ValueError("live cell does not contain the frozen full workload")
         if cell["limit_programs"] is not None or cell["max_turns"] is not None:
@@ -390,7 +390,7 @@ def evaluate(
     return {
         "schema_version": 1,
         "status": "go" if live_go else "no_go",
-        "protocol": "tool-resource-canonical-objective.md Section 5.2",
+        "protocol": "tool-resource-canonical-objective.md Section 5.3",
         "validity": {"output_parity": validity_go, "error": parity_error},
         "aggregate": {
             "keep_mean_program_jct_ms": keep_mean,

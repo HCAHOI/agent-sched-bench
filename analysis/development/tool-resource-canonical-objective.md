@@ -23,10 +23,10 @@ artifacts retain that history.
 | Offline tool knowledge | Trace-conditioned generation remains closed. The frozen docs-only v1 protocol also stops before fresh collection: only `make` produced a valid specification, and its SQLGlot arm never formed a non-exact contrast. This is an uninformative protocol result, not evidence that documentation semantics cannot work. |
 | Manual tool semantics | **KEEP only the pytest candidate-routing question.** A hindsight selector over existing causal candidates improved full-cohort four-target accuracy by 1.941 points for pytest, but 93/118 corrections merely restored Clause-KB; adding more pytest rules is not supported. pip missed the frozen contrast gate and its perfect-tool ceiling was only 0.392 points, so deprioritize pip-specific work. |
 | KV victim selection | Closed under the current CacheWise/C100 simulator and action model. |
-| GPU tool-gap action | The profile-only early clock and pre-restore are closed by the Section 5.1 offline gate. The fixed five-second causal deadline remains an action baseline with untested live scheduling headroom; Section 5.2 isolates that action from prediction. |
+| GPU tool-gap action | The profile-only early clock and pre-restore are closed by the Section 5.1 offline gate. The load-8 live action test remains unresolved; Section 5.3 separately explores the fixed five-second deadline at load 32. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
-| Next research step | Run the Section 5.2 live `keep` versus `deadline/reactive` A/B only after its action-causality instrumentation passes a bounded smoke. Do not implement the failed robust clock or pre-restore. Admit a new CPU experiment only if it supplies the missing causal RSS-safety signal or a genuinely different action. |
+| Next research step | Run the Section 5.3 load-32 `keep` versus `deadline/reactive` A/B only if its bounded smoke proves exact co-tenant block reuse. Do not implement the failed robust clock or pre-restore. Admit a new CPU experiment only if it supplies the missing causal RSS-safety signal or a genuinely different action. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -433,6 +433,33 @@ per-repetition delta. Any failed validity, per-repetition action-causality,
 effect, direction, or tail gate stops this action without threshold or
 task-selection changes. This remains development evidence; a paper claim
 requires fresh confirmation.
+
+**2026-08-09 preflight amendment.** The allowed two-program smoke completed 47
+requests and three offload/restore pairs but observed no exact co-tenant block
+reuse. A prompt-only diagnostic found at most 294,328 tokens within each fixed
+eight-program chunk, versus 459,392 KV tokens. This is not a simultaneous-demand
+upper bound: slow programs can overlap later chunks, and generation KV is not
+included. Section 5.2 remains unexecuted and unresolved; neither a method nor a
+load-8 operating-point verdict follows from this smoke.
+
+### 5.3 Frozen high-concurrency action A/B
+
+This separate development experiment keeps every Section 5.2 arm, workload,
+instrument, ABBA order, validity check, and GO/NO-GO threshold unchanged, but
+sets load to 32. This exploratory operating point was selected before any
+load-32 outcome because it admits four times as many active programs; as a
+prompt-only diagnostic, all nine fixed 32-program chunks sum above A100 KV
+capacity (644,808--912,306 tokens). This raises the chance of real pressure but
+does not assert it. The four cells still execute 1,108 programs and 9,805,672
+completion tokens; their recorded-gap lower bound is 0.741 hours before
+generation and prefill.
+
+A non-evidentiary first-32-program smoke may run at most 40 turns. It
+authorizes the formal ABBA only if at least one exact event satisfies offload
+completion, actual block release, different-program allocation of an
+intersecting block ID, and allocation before owner restore. It must also finish
+all submitted requests and complete every observed restore. Failure stops
+without changing workload order, task selection, capacity, or policy.
 
 ## 6. Closed directions
 

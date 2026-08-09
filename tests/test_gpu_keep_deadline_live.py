@@ -142,7 +142,7 @@ def test_frozen_cells_reject_a_different_replay_root() -> None:
             {
                 "status": "complete",
                 "policy": policy,
-                "load": 8,
+                "load": 32,
                 "program_count": 277,
                 "request_count": 13_048,
                 "limit_programs": None,
