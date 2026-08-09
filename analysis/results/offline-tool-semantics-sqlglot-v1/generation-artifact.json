@@ -1,0 +1,94 @@
+{
+  "codex_version": "codex-cli 0.146.0",
+  "frozen_code": {
+    "design_commit": "a834ef3043f563d2976a4ad24a5be9b996b27e88",
+    "evaluator_commit": "9df786eb4ec71d2f4a5c5c1ba72a4576bdade5b5",
+    "split_commit": "85efe226f3746994b0870466620d980523a0a150",
+    "tool_spec_commit": "c7cf30b90177920a9b92d82caa050de41c615fec"
+  },
+  "model": "gpt-5.6-sol",
+  "preregistration_commit": "b3711e17721f8073dec5875d439888be7b3a6b5c",
+  "protocol": "offline-tool-semantics-generation-protocol-v1",
+  "reasoning_effort": "medium",
+  "requested_service_tier": "fast",
+  "schema": "offline-tool-semantics-generation-v1",
+  "temperature": "unsupported_by_codex_provider",
+  "tools": {
+    "git": {
+      "cost": {
+        "prompt_bytes": 60635,
+        "usage": {
+          "cached_input_tokens": 0,
+          "input_tokens": 30892,
+          "output_tokens": 17882
+        },
+        "wall_seconds": 226.55165707226843
+      },
+      "estimated_input_tokens": 14451,
+      "response_bytes": 57439,
+      "source": {
+        "bytes": 57926,
+        "documented_version": "2.39.2",
+        "file": "git-2.39.2.txt"
+      },
+      "status": "unsupported_structural_failure"
+    },
+    "make": {
+      "cost": {
+        "prompt_bytes": 5481,
+        "usage": {
+          "cached_input_tokens": 0,
+          "input_tokens": 18694,
+          "output_tokens": 1658
+        },
+        "wall_seconds": 26.914473053999245
+      },
+      "estimated_input_tokens": 2433,
+      "response_bytes": 3568,
+      "source": {
+        "bytes": 2774,
+        "documented_version": "4.3",
+        "file": "make-4.3.txt"
+      },
+      "status": "valid"
+    },
+    "pip_install": {
+      "cost": {
+        "prompt_bytes": 18148,
+        "usage": {
+          "cached_input_tokens": 0,
+          "input_tokens": 20726,
+          "output_tokens": 2967
+        },
+        "wall_seconds": 42.65255665173754
+      },
+      "estimated_input_tokens": 4453,
+      "response_bytes": 7133,
+      "source": {
+        "bytes": 15433,
+        "documented_version": "24.2",
+        "file": "pip-24.2.txt"
+      },
+      "status": "unsupported_structural_failure"
+    },
+    "pytest": {
+      "cost": {
+        "prompt_bytes": 21809,
+        "usage": {
+          "cached_input_tokens": 0,
+          "input_tokens": 21872,
+          "output_tokens": 4161
+        },
+        "wall_seconds": 62.21992131602019
+      },
+      "estimated_input_tokens": 5582,
+      "response_bytes": 10355,
+      "source": {
+        "bytes": 19098,
+        "documented_version": "8.3.5",
+        "file": "pytest-8.3.5.txt"
+      },
+      "status": "unsupported_structural_failure"
+    }
+  }
+}

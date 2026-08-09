@@ -20,11 +20,11 @@ artifacts retain that history.
 | Prediction contribution to feedback | Not established. Task-Aware seeding did not improve the frozen reservation/service operating point over feedback alone. |
 | CPU scheduling | Short-null handling reduced conservative exposure counts about 78%, but Clause-KB and Task-Aware still produced 2,638 and 2,702 confirmed exposure events. Both hard-RSS safety arms remain closed on exposed SQLGlot; the prediction-free action ceiling is retained. |
 | KB representation | Raw exact/prefix/binary `ClauseResourceKB` is the implemented Clause-KB baseline. Trie/lattice/semantic-key replacement is closed as a contribution. |
-| Offline tool knowledge | Trace-conditioned rule generation remains closed. An advisor-authorized, docs-only semantic compiler is open for design and preflight: one bounded generation per tool, no trace/outcome inputs, no runtime LM, and no action claim without an observable state plus a physical oracle gate. |
+| Offline tool knowledge | Trace-conditioned generation remains closed. The frozen docs-only v1 protocol also stops before fresh collection: only `make` produced a valid specification, and its SQLGlot arm never formed a non-exact contrast. This is an uninformative protocol result, not evidence that documentation semantics cannot work. |
 | KV scheduling | Closed under the current CacheWise/C100 simulator and action model. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
-| Next research step | Test whether versioned tool documentation can supply reusable command semantics on several dense same-repository cohorts. Keep EAR's elastic CPU/RSS control unchanged. Before implementing any scheduler, require a separate action-specific oracle showing that an observable pre-execution state can change a real decision and improve end-to-end utility. |
+| Next research step | Do not launch docs-driven PennyLane or DVC confirmation. A future compiler must first pass label-free feasibility on genuinely new tools/cohorts: at least three structurally valid specifications and actual non-exact coverage. Scheduler work still requires a separate observable-state action oracle. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -292,9 +292,13 @@ Do not add another exception on this exposed cohort.
 - **Trace-conditioned offline agent:** generated Python, relational spans,
   bounded regex, and a typed catalog found no resource-separating state. The
   final finite-choice arm removed arbitrary code and still returned no useful
-  contrast. This result is not weakened or repaired. The newly authorized
-  question uses only versioned public documentation to describe argument
-  semantics; it cannot inspect traces, labels, task state, or tool results.
+  contrast. This result is not weakened or repaired.
+- **Docs-only compiler v1:** the frozen generation and SQLGlot development run
+  were protocol-valid, but only one of four generated specifications passed
+  validation. All 1,792 docs and generic predictions copied Clause-KB: public
+  evidence contained no `make`, while all 47 recognized scored clauses were
+  the warm-up-exact command `make test`. The protocol is closed without fresh
+  collection; it did not identify the documentation representation itself.
 - **Task-local last-value state:** repeated command load alternates; a causal
   overlay creates one-command lag rather than stable state.
 - **Continuous latency survival:** most apparent gain came from the elapsed-time
@@ -365,6 +369,9 @@ Result root:
 - CPU-idle backfill oracle: `sqlglot50-cpu-idle-backfill-oracle-v1/result.json`
 - CPU-idle predicted RSS safety: `sqlglot50-cpu-idle-rss-safety-v1/result.json`
 - CPU-idle short-null sensitivity: `sqlglot50-cpu-idle-short-null-v1/result.json`
+
+Docs-only compiler development artifact:
+`analysis/results/offline-tool-semantics-sqlglot-v1/result.json`.
 
 Task split authority:
 `analysis/development/sqlglot-relational-task-split.json`.

@@ -1,0 +1,1376 @@
+{
+  "arms": {
+    "clause_kb": {
+      "equal_weight_accuracy": 0.8638215595134523,
+      "equal_weight_severe_underprediction_rate": 0.040485953996983404,
+      "targets": {
+        "disk_read_write_bytes_total": {
+          "accuracy": 0.8368715083798882,
+          "confusion_label_by_prediction": [
+            [
+              1040,
+              188,
+              7
+            ],
+            [
+              90,
+              342,
+              7
+            ],
+            [
+              0,
+              0,
+              116
+            ]
+          ],
+          "eligible_n": 1790,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.0,
+          "within_one_bucket_accuracy": 0.9960893854748604
+        },
+        "latency": {
+          "confusion_label_by_prediction": [
+            [
+              1054,
+              29,
+              18,
+              3,
+              15
+            ],
+            [
+              71,
+              158,
+              19,
+              6,
+              20
+            ],
+            [
+              4,
+              28,
+              59,
+              6,
+              31
+            ],
+            [
+              0,
+              2,
+              10,
+              108,
+              8
+            ],
+            [
+              1,
+              44,
+              5,
+              7,
+              86
+            ]
+          ],
+          "eligible_examples": 1792,
+          "exact_class_accuracy": 0.8175223214285714,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.03125,
+          "within_one_bucket_accuracy": 0.9168526785714286
+        },
+        "peak_cpu_cores": {
+          "accuracy": 0.893212669683258,
+          "confusion_label_by_prediction": [
+            [
+              919,
+              2,
+              38
+            ],
+            [
+              3,
+              1,
+              0
+            ],
+            [
+              74,
+              1,
+              67
+            ]
+          ],
+          "eligible_n": 1105,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.0669683257918552,
+          "within_one_bucket_accuracy": 0.8986425339366516
+        },
+        "sampled_peak_rss_mb": {
+          "accuracy": 0.9076797385620915,
+          "confusion_label_by_prediction": [
+            [
+              1051,
+              1,
+              31
+            ],
+            [
+              3,
+              3,
+              0
+            ],
+            [
+              78,
+              0,
+              57
+            ]
+          ],
+          "eligible_n": 1224,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.06372549019607843,
+          "within_one_bucket_accuracy": 0.9109477124183006
+        }
+      }
+    },
+    "docs_poset": {
+      "equal_weight_accuracy": 0.8638215595134523,
+      "equal_weight_severe_underprediction_rate": 0.040485953996983404,
+      "targets": {
+        "disk_read_write_bytes_total": {
+          "accuracy": 0.8368715083798882,
+          "confusion_label_by_prediction": [
+            [
+              1040,
+              188,
+              7
+            ],
+            [
+              90,
+              342,
+              7
+            ],
+            [
+              0,
+              0,
+              116
+            ]
+          ],
+          "eligible_n": 1790,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.0,
+          "within_one_bucket_accuracy": 0.9960893854748604
+        },
+        "latency": {
+          "confusion_label_by_prediction": [
+            [
+              1054,
+              29,
+              18,
+              3,
+              15
+            ],
+            [
+              71,
+              158,
+              19,
+              6,
+              20
+            ],
+            [
+              4,
+              28,
+              59,
+              6,
+              31
+            ],
+            [
+              0,
+              2,
+              10,
+              108,
+              8
+            ],
+            [
+              1,
+              44,
+              5,
+              7,
+              86
+            ]
+          ],
+          "eligible_examples": 1792,
+          "exact_class_accuracy": 0.8175223214285714,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.03125,
+          "within_one_bucket_accuracy": 0.9168526785714286
+        },
+        "peak_cpu_cores": {
+          "accuracy": 0.893212669683258,
+          "confusion_label_by_prediction": [
+            [
+              919,
+              2,
+              38
+            ],
+            [
+              3,
+              1,
+              0
+            ],
+            [
+              74,
+              1,
+              67
+            ]
+          ],
+          "eligible_n": 1105,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.0669683257918552,
+          "within_one_bucket_accuracy": 0.8986425339366516
+        },
+        "sampled_peak_rss_mb": {
+          "accuracy": 0.9076797385620915,
+          "confusion_label_by_prediction": [
+            [
+              1051,
+              1,
+              31
+            ],
+            [
+              3,
+              3,
+              0
+            ],
+            [
+              78,
+              0,
+              57
+            ]
+          ],
+          "eligible_n": 1224,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.06372549019607843,
+          "within_one_bucket_accuracy": 0.9109477124183006
+        }
+      }
+    },
+    "generic_poset": {
+      "equal_weight_accuracy": 0.8638215595134523,
+      "equal_weight_severe_underprediction_rate": 0.040485953996983404,
+      "targets": {
+        "disk_read_write_bytes_total": {
+          "accuracy": 0.8368715083798882,
+          "confusion_label_by_prediction": [
+            [
+              1040,
+              188,
+              7
+            ],
+            [
+              90,
+              342,
+              7
+            ],
+            [
+              0,
+              0,
+              116
+            ]
+          ],
+          "eligible_n": 1790,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.0,
+          "within_one_bucket_accuracy": 0.9960893854748604
+        },
+        "latency": {
+          "confusion_label_by_prediction": [
+            [
+              1054,
+              29,
+              18,
+              3,
+              15
+            ],
+            [
+              71,
+              158,
+              19,
+              6,
+              20
+            ],
+            [
+              4,
+              28,
+              59,
+              6,
+              31
+            ],
+            [
+              0,
+              2,
+              10,
+              108,
+              8
+            ],
+            [
+              1,
+              44,
+              5,
+              7,
+              86
+            ]
+          ],
+          "eligible_examples": 1792,
+          "exact_class_accuracy": 0.8175223214285714,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.03125,
+          "within_one_bucket_accuracy": 0.9168526785714286
+        },
+        "peak_cpu_cores": {
+          "accuracy": 0.893212669683258,
+          "confusion_label_by_prediction": [
+            [
+              919,
+              2,
+              38
+            ],
+            [
+              3,
+              1,
+              0
+            ],
+            [
+              74,
+              1,
+              67
+            ]
+          ],
+          "eligible_n": 1105,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.0669683257918552,
+          "within_one_bucket_accuracy": 0.8986425339366516
+        },
+        "sampled_peak_rss_mb": {
+          "accuracy": 0.9076797385620915,
+          "confusion_label_by_prediction": [
+            [
+              1051,
+              1,
+              31
+            ],
+            [
+              3,
+              3,
+              0
+            ],
+            [
+              78,
+              0,
+              57
+            ]
+          ],
+          "eligible_n": 1224,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.06372549019607843,
+          "within_one_bucket_accuracy": 0.9109477124183006
+        }
+      }
+    },
+    "majority": {
+      "equal_weight_accuracy": 0.7667658307749937,
+      "equal_weight_severe_underprediction_rate": 0.13156540606277964,
+      "targets": {
+        "disk_read_write_bytes_total": {
+          "accuracy": 0.6899441340782123,
+          "confusion_label_by_prediction": [
+            [
+              1235,
+              0,
+              0
+            ],
+            [
+              439,
+              0,
+              0
+            ],
+            [
+              116,
+              0,
+              0
+            ]
+          ],
+          "eligible_n": 1790,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.06480446927374302,
+          "within_one_bucket_accuracy": 0.9351955307262569
+        },
+        "latency": {
+          "confusion_label_by_prediction": [
+            [
+              1119,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              274,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              128,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              128,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              143,
+              0,
+              0,
+              0,
+              0
+            ]
+          ],
+          "eligible_examples": 1792,
+          "exact_class_accuracy": 0.6244419642857143,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.22265625,
+          "within_one_bucket_accuracy": 0.77734375
+        },
+        "peak_cpu_cores": {
+          "accuracy": 0.8678733031674208,
+          "confusion_label_by_prediction": [
+            [
+              959,
+              0,
+              0
+            ],
+            [
+              4,
+              0,
+              0
+            ],
+            [
+              142,
+              0,
+              0
+            ]
+          ],
+          "eligible_n": 1105,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.12850678733031673,
+          "within_one_bucket_accuracy": 0.8714932126696833
+        },
+        "sampled_peak_rss_mb": {
+          "accuracy": 0.8848039215686274,
+          "confusion_label_by_prediction": [
+            [
+              1083,
+              0,
+              0
+            ],
+            [
+              6,
+              0,
+              0
+            ],
+            [
+              135,
+              0,
+              0
+            ]
+          ],
+          "eligible_n": 1224,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.11029411764705882,
+          "within_one_bucket_accuracy": 0.8897058823529411
+        }
+      }
+    },
+    "raw_prefix": {
+      "equal_weight_accuracy": 0.8415998202792433,
+      "equal_weight_severe_underprediction_rate": 0.06366222527096356,
+      "targets": {
+        "disk_read_write_bytes_total": {
+          "accuracy": 0.8240223463687151,
+          "confusion_label_by_prediction": [
+            [
+              1114,
+              102,
+              19
+            ],
+            [
+              166,
+              265,
+              8
+            ],
+            [
+              1,
+              19,
+              96
+            ]
+          ],
+          "eligible_n": 1790,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.0005586592178770949,
+          "within_one_bucket_accuracy": 0.9888268156424581
+        },
+        "latency": {
+          "confusion_label_by_prediction": [
+            [
+              1075,
+              30,
+              3,
+              11,
+              0
+            ],
+            [
+              99,
+              153,
+              13,
+              1,
+              8
+            ],
+            [
+              23,
+              49,
+              36,
+              17,
+              3
+            ],
+            [
+              6,
+              4,
+              13,
+              86,
+              19
+            ],
+            [
+              15,
+              92,
+              2,
+              6,
+              28
+            ]
+          ],
+          "eligible_examples": 1792,
+          "exact_class_accuracy": 0.7689732142857143,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.07924107142857142,
+          "within_one_bucket_accuracy": 0.90625
+        },
+        "peak_cpu_cores": {
+          "accuracy": 0.8877828054298642,
+          "confusion_label_by_prediction": [
+            [
+              933,
+              4,
+              22
+            ],
+            [
+              3,
+              1,
+              0
+            ],
+            [
+              93,
+              2,
+              47
+            ]
+          ],
+          "eligible_n": 1105,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.08416289592760182,
+          "within_one_bucket_accuracy": 0.8959276018099548
+        },
+        "sampled_peak_rss_mb": {
+          "accuracy": 0.8856209150326797,
+          "confusion_label_by_prediction": [
+            [
+              1055,
+              20,
+              8
+            ],
+            [
+              1,
+              5,
+              0
+            ],
+            [
+              111,
+              0,
+              24
+            ]
+          ],
+          "eligible_n": 1224,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.09068627450980392,
+          "within_one_bucket_accuracy": 0.9027777777777778
+        }
+      }
+    },
+    "task_aware": {
+      "equal_weight_accuracy": 0.8860234067417434,
+      "equal_weight_severe_underprediction_rate": 0.032831914817208936,
+      "targets": {
+        "disk_read_write_bytes_total": {
+          "accuracy": 0.8346368715083798,
+          "confusion_label_by_prediction": [
+            [
+              1040,
+              189,
+              6
+            ],
+            [
+              94,
+              338,
+              7
+            ],
+            [
+              0,
+              0,
+              116
+            ]
+          ],
+          "eligible_n": 1790,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.0,
+          "within_one_bucket_accuracy": 0.9966480446927374
+        },
+        "latency": {
+          "confusion_label_by_prediction": [
+            [
+              1054,
+              40,
+              20,
+              4,
+              1
+            ],
+            [
+              68,
+              180,
+              16,
+              8,
+              2
+            ],
+            [
+              7,
+              32,
+              79,
+              5,
+              5
+            ],
+            [
+              2,
+              2,
+              16,
+              104,
+              4
+            ],
+            [
+              6,
+              30,
+              17,
+              6,
+              84
+            ]
+          ],
+          "eligible_examples": 1792,
+          "exact_class_accuracy": 0.8376116071428571,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.03571428571428571,
+          "within_one_bucket_accuracy": 0.9419642857142857
+        },
+        "peak_cpu_cores": {
+          "accuracy": 0.9339366515837104,
+          "confusion_label_by_prediction": [
+            [
+              946,
+              0,
+              13
+            ],
+            [
+              2,
+              1,
+              1
+            ],
+            [
+              56,
+              1,
+              85
+            ]
+          ],
+          "eligible_n": 1105,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.05067873303167421,
+          "within_one_bucket_accuracy": 0.9375565610859729
+        },
+        "sampled_peak_rss_mb": {
+          "accuracy": 0.9379084967320261,
+          "confusion_label_by_prediction": [
+            [
+              1065,
+              4,
+              14
+            ],
+            [
+              3,
+              3,
+              0
+            ],
+            [
+              55,
+              0,
+              80
+            ]
+          ],
+          "eligible_n": 1224,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.04493464052287582,
+          "within_one_bucket_accuracy": 0.9436274509803921
+        }
+      }
+    }
+  },
+  "claim_bearing": false,
+  "cold_start_checkpoints": {
+    "10": {
+      "clause_kb": 0.8630619485998297,
+      "docs_poset": 0.8630619485998297,
+      "generic_poset": 0.8630619485998297,
+      "majority": 0.7648087391750396,
+      "raw_prefix": 0.839543388406855,
+      "task_aware": 0.8847388441159116
+    },
+    "20": {
+      "clause_kb": 0.862776015199005,
+      "docs_poset": 0.862776015199005,
+      "generic_poset": 0.862776015199005,
+      "majority": 0.7638973226987378,
+      "raw_prefix": 0.8384416687386087,
+      "task_aware": 0.8848436460420545
+    },
+    "40": {
+      "clause_kb": 0.8661856272497499,
+      "docs_poset": 0.8661856272497499,
+      "generic_poset": 0.8661856272497499,
+      "majority": 0.7625355564970042,
+      "raw_prefix": 0.84100139632201,
+      "task_aware": 0.8893775955882565
+    },
+    "5": {
+      "clause_kb": 0.8642543102859956,
+      "docs_poset": 0.8642543102859956,
+      "generic_poset": 0.8642543102859956,
+      "majority": 0.7667119794866124,
+      "raw_prefix": 0.8409525090520799,
+      "task_aware": 0.8860112313237202
+    }
+  },
+  "comparisons": {
+    "docs_poset_minus_generic_poset": {
+      "bootstrap": {
+        "cluster_unit": "task",
+        "draws": 2000,
+        "interval_95": [
+          0.0,
+          0.0
+        ],
+        "method": "paired_task_cluster_percentile_bootstrap",
+        "point_estimate": 0.0,
+        "seed": 0,
+        "statistic": "docs_poset_minus_generic_poset_equal_weight_accuracy"
+      },
+      "changes": {
+        "by_target": {
+          "disk_read_write_bytes_total": {
+            "changed": 0,
+            "harmful": 0,
+            "helpful": 0,
+            "helpful_task_ids": [],
+            "neutral": 0,
+            "tasks": 0
+          },
+          "latency": {
+            "changed": 0,
+            "harmful": 0,
+            "helpful": 0,
+            "helpful_task_ids": [],
+            "neutral": 0,
+            "tasks": 0
+          },
+          "peak_cpu_cores": {
+            "changed": 0,
+            "harmful": 0,
+            "helpful": 0,
+            "helpful_task_ids": [],
+            "neutral": 0,
+            "tasks": 0
+          },
+          "sampled_peak_rss_mb": {
+            "changed": 0,
+            "harmful": 0,
+            "helpful": 0,
+            "helpful_task_ids": [],
+            "neutral": 0,
+            "tasks": 0
+          }
+        },
+        "changed": 0,
+        "harmful": 0,
+        "helpful": 0,
+        "helpful_task_ids": []
+      }
+    },
+    "docs_poset_minus_task_aware": {
+      "changes": {
+        "by_target": {
+          "disk_read_write_bytes_total": {
+            "changed": 46,
+            "harmful": 21,
+            "helpful": 25,
+            "helpful_task_ids": [
+              "tobymao__sqlglot-3806",
+              "tobymao__sqlglot-3820",
+              "tobymao__sqlglot-3839",
+              "tobymao__sqlglot-3847",
+              "tobymao__sqlglot-3870",
+              "tobymao__sqlglot-3994",
+              "tobymao__sqlglot-4014",
+              "tobymao__sqlglot-4041",
+              "tobymao__sqlglot-4141",
+              "tobymao__sqlglot-4151",
+              "tobymao__sqlglot-4276",
+              "tobymao__sqlglot-4302",
+              "tobymao__sqlglot-4448",
+              "tobymao__sqlglot-4516",
+              "tobymao__sqlglot-4545",
+              "tobymao__sqlglot-4550",
+              "tobymao__sqlglot-4618",
+              "tobymao__sqlglot-4652",
+              "tobymao__sqlglot-4696",
+              "tobymao__sqlglot-4987"
+            ],
+            "neutral": 0,
+            "tasks": 29
+          },
+          "latency": {
+            "changed": 193,
+            "harmful": 106,
+            "helpful": 70,
+            "helpful_task_ids": [
+              "tobymao__sqlglot-3792",
+              "tobymao__sqlglot-3847",
+              "tobymao__sqlglot-3848",
+              "tobymao__sqlglot-3855",
+              "tobymao__sqlglot-3871",
+              "tobymao__sqlglot-3885",
+              "tobymao__sqlglot-3891",
+              "tobymao__sqlglot-3954",
+              "tobymao__sqlglot-3971",
+              "tobymao__sqlglot-3975",
+              "tobymao__sqlglot-4004",
+              "tobymao__sqlglot-4015",
+              "tobymao__sqlglot-4040",
+              "tobymao__sqlglot-4041",
+              "tobymao__sqlglot-4051",
+              "tobymao__sqlglot-4067",
+              "tobymao__sqlglot-4087",
+              "tobymao__sqlglot-4093",
+              "tobymao__sqlglot-4104",
+              "tobymao__sqlglot-4110",
+              "tobymao__sqlglot-4127",
+              "tobymao__sqlglot-4141",
+              "tobymao__sqlglot-4151",
+              "tobymao__sqlglot-4197",
+              "tobymao__sqlglot-4208",
+              "tobymao__sqlglot-4218",
+              "tobymao__sqlglot-4276",
+              "tobymao__sqlglot-4293",
+              "tobymao__sqlglot-4331",
+              "tobymao__sqlglot-4373",
+              "tobymao__sqlglot-4390",
+              "tobymao__sqlglot-4393",
+              "tobymao__sqlglot-4415",
+              "tobymao__sqlglot-4417",
+              "tobymao__sqlglot-4430",
+              "tobymao__sqlglot-4447",
+              "tobymao__sqlglot-4448",
+              "tobymao__sqlglot-4459",
+              "tobymao__sqlglot-4493",
+              "tobymao__sqlglot-4505",
+              "tobymao__sqlglot-4506",
+              "tobymao__sqlglot-4516",
+              "tobymao__sqlglot-4545",
+              "tobymao__sqlglot-4546",
+              "tobymao__sqlglot-4569",
+              "tobymao__sqlglot-4618",
+              "tobymao__sqlglot-4628",
+              "tobymao__sqlglot-4643",
+              "tobymao__sqlglot-4652",
+              "tobymao__sqlglot-4661",
+              "tobymao__sqlglot-4683",
+              "tobymao__sqlglot-4696",
+              "tobymao__sqlglot-4941",
+              "tobymao__sqlglot-4987"
+            ],
+            "neutral": 17,
+            "tasks": 82
+          },
+          "peak_cpu_cores": {
+            "changed": 113,
+            "harmful": 78,
+            "helpful": 33,
+            "helpful_task_ids": [
+              "tobymao__sqlglot-3792",
+              "tobymao__sqlglot-3798",
+              "tobymao__sqlglot-3799",
+              "tobymao__sqlglot-3848",
+              "tobymao__sqlglot-3871",
+              "tobymao__sqlglot-4004",
+              "tobymao__sqlglot-4014",
+              "tobymao__sqlglot-4051",
+              "tobymao__sqlglot-4093",
+              "tobymao__sqlglot-4110",
+              "tobymao__sqlglot-4127",
+              "tobymao__sqlglot-4141",
+              "tobymao__sqlglot-4197",
+              "tobymao__sqlglot-4218",
+              "tobymao__sqlglot-4287",
+              "tobymao__sqlglot-4293",
+              "tobymao__sqlglot-4325",
+              "tobymao__sqlglot-4373",
+              "tobymao__sqlglot-4390",
+              "tobymao__sqlglot-4393",
+              "tobymao__sqlglot-4415",
+              "tobymao__sqlglot-4430",
+              "tobymao__sqlglot-4448",
+              "tobymao__sqlglot-4493",
+              "tobymao__sqlglot-4545",
+              "tobymao__sqlglot-4569",
+              "tobymao__sqlglot-4618",
+              "tobymao__sqlglot-4696",
+              "tobymao__sqlglot-4941"
+            ],
+            "neutral": 2,
+            "tasks": 60
+          },
+          "sampled_peak_rss_mb": {
+            "changed": 99,
+            "harmful": 68,
+            "helpful": 31,
+            "helpful_task_ids": [
+              "tobymao__sqlglot-3798",
+              "tobymao__sqlglot-3799",
+              "tobymao__sqlglot-3871",
+              "tobymao__sqlglot-4004",
+              "tobymao__sqlglot-4014",
+              "tobymao__sqlglot-4051",
+              "tobymao__sqlglot-4093",
+              "tobymao__sqlglot-4110",
+              "tobymao__sqlglot-4141",
+              "tobymao__sqlglot-4197",
+              "tobymao__sqlglot-4218",
+              "tobymao__sqlglot-4287",
+              "tobymao__sqlglot-4325",
+              "tobymao__sqlglot-4390",
+              "tobymao__sqlglot-4393",
+              "tobymao__sqlglot-4415",
+              "tobymao__sqlglot-4430",
+              "tobymao__sqlglot-4448",
+              "tobymao__sqlglot-4493",
+              "tobymao__sqlglot-4516",
+              "tobymao__sqlglot-4545",
+              "tobymao__sqlglot-4569",
+              "tobymao__sqlglot-4618",
+              "tobymao__sqlglot-4696",
+              "tobymao__sqlglot-4941"
+            ],
+            "neutral": 0,
+            "tasks": 55
+          }
+        },
+        "changed": 451,
+        "harmful": 273,
+        "helpful": 159,
+        "helpful_task_ids": [
+          "tobymao__sqlglot-3792",
+          "tobymao__sqlglot-3798",
+          "tobymao__sqlglot-3799",
+          "tobymao__sqlglot-3806",
+          "tobymao__sqlglot-3820",
+          "tobymao__sqlglot-3839",
+          "tobymao__sqlglot-3847",
+          "tobymao__sqlglot-3848",
+          "tobymao__sqlglot-3855",
+          "tobymao__sqlglot-3870",
+          "tobymao__sqlglot-3871",
+          "tobymao__sqlglot-3885",
+          "tobymao__sqlglot-3891",
+          "tobymao__sqlglot-3954",
+          "tobymao__sqlglot-3971",
+          "tobymao__sqlglot-3975",
+          "tobymao__sqlglot-3994",
+          "tobymao__sqlglot-4004",
+          "tobymao__sqlglot-4014",
+          "tobymao__sqlglot-4015",
+          "tobymao__sqlglot-4040",
+          "tobymao__sqlglot-4041",
+          "tobymao__sqlglot-4051",
+          "tobymao__sqlglot-4067",
+          "tobymao__sqlglot-4087",
+          "tobymao__sqlglot-4093",
+          "tobymao__sqlglot-4104",
+          "tobymao__sqlglot-4110",
+          "tobymao__sqlglot-4127",
+          "tobymao__sqlglot-4141",
+          "tobymao__sqlglot-4151",
+          "tobymao__sqlglot-4197",
+          "tobymao__sqlglot-4208",
+          "tobymao__sqlglot-4218",
+          "tobymao__sqlglot-4276",
+          "tobymao__sqlglot-4287",
+          "tobymao__sqlglot-4293",
+          "tobymao__sqlglot-4302",
+          "tobymao__sqlglot-4325",
+          "tobymao__sqlglot-4331",
+          "tobymao__sqlglot-4373",
+          "tobymao__sqlglot-4390",
+          "tobymao__sqlglot-4393",
+          "tobymao__sqlglot-4415",
+          "tobymao__sqlglot-4417",
+          "tobymao__sqlglot-4430",
+          "tobymao__sqlglot-4447",
+          "tobymao__sqlglot-4448",
+          "tobymao__sqlglot-4459",
+          "tobymao__sqlglot-4493",
+          "tobymao__sqlglot-4505",
+          "tobymao__sqlglot-4506",
+          "tobymao__sqlglot-4516",
+          "tobymao__sqlglot-4545",
+          "tobymao__sqlglot-4546",
+          "tobymao__sqlglot-4550",
+          "tobymao__sqlglot-4569",
+          "tobymao__sqlglot-4618",
+          "tobymao__sqlglot-4628",
+          "tobymao__sqlglot-4643",
+          "tobymao__sqlglot-4652",
+          "tobymao__sqlglot-4661",
+          "tobymao__sqlglot-4683",
+          "tobymao__sqlglot-4696",
+          "tobymao__sqlglot-4941",
+          "tobymao__sqlglot-4987"
+        ]
+      }
+    }
+  },
+  "cost": {
+    "evaluation_seconds": 49.32039201585576
+  },
+  "gates": {
+    "development_go": false,
+    "nonnegative_supported_tools": 1,
+    "validation_go": false
+  },
+  "generation": {
+    "enabled_tools": [
+      "make"
+    ],
+    "structural_coverage": {
+      "make": {
+        "invocations": 116,
+        "passed": true,
+        "tasks": 37
+      }
+    }
+  },
+  "per_tool": {
+    "make": {
+      "commands": 31,
+      "docs_poset": {
+        "equal_weight_accuracy": 0.5483870967741935,
+        "equal_weight_severe_underprediction_rate": 0.16129032258064516,
+        "targets": {
+          "disk_read_write_bytes_total": {
+            "accuracy": 0.5161290322580645,
+            "confusion_label_by_prediction": [
+              [
+                13,
+                8,
+                0
+              ],
+              [
+                7,
+                3,
+                0
+              ],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            "eligible_n": 31,
+            "prediction_unavailable": 0,
+            "severe_underprediction_rate": 0.0,
+            "within_one_bucket_accuracy": 1.0
+          },
+          "latency": {
+            "confusion_label_by_prediction": [
+              [
+                0,
+                0,
+                0,
+                0,
+                14
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                4
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                3
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                10
+              ]
+            ],
+            "eligible_examples": 31,
+            "exact_class_accuracy": 0.3225806451612903,
+            "prediction_unavailable": 0,
+            "severe_underprediction_rate": 0.0,
+            "within_one_bucket_accuracy": 0.41935483870967744
+          },
+          "peak_cpu_cores": {
+            "accuracy": 0.6774193548387096,
+            "confusion_label_by_prediction": [
+              [
+                21,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0
+              ],
+              [
+                10,
+                0,
+                0
+              ]
+            ],
+            "eligible_n": 31,
+            "prediction_unavailable": 0,
+            "severe_underprediction_rate": 0.3225806451612903,
+            "within_one_bucket_accuracy": 0.6774193548387096
+          },
+          "sampled_peak_rss_mb": {
+            "accuracy": 0.6774193548387096,
+            "confusion_label_by_prediction": [
+              [
+                21,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0
+              ],
+              [
+                10,
+                0,
+                0
+              ]
+            ],
+            "eligible_n": 31,
+            "prediction_unavailable": 0,
+            "severe_underprediction_rate": 0.3225806451612903,
+            "within_one_bucket_accuracy": 0.6774193548387096
+          }
+        }
+      },
+      "equal_weight_accuracy_difference": 0.0,
+      "generic_poset": {
+        "equal_weight_accuracy": 0.5483870967741935,
+        "equal_weight_severe_underprediction_rate": 0.16129032258064516,
+        "targets": {
+          "disk_read_write_bytes_total": {
+            "accuracy": 0.5161290322580645,
+            "confusion_label_by_prediction": [
+              [
+                13,
+                8,
+                0
+              ],
+              [
+                7,
+                3,
+                0
+              ],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            "eligible_n": 31,
+            "prediction_unavailable": 0,
+            "severe_underprediction_rate": 0.0,
+            "within_one_bucket_accuracy": 1.0
+          },
+          "latency": {
+            "confusion_label_by_prediction": [
+              [
+                0,
+                0,
+                0,
+                0,
+                14
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                4
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                3
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                10
+              ]
+            ],
+            "eligible_examples": 31,
+            "exact_class_accuracy": 0.3225806451612903,
+            "prediction_unavailable": 0,
+            "severe_underprediction_rate": 0.0,
+            "within_one_bucket_accuracy": 0.41935483870967744
+          },
+          "peak_cpu_cores": {
+            "accuracy": 0.6774193548387096,
+            "confusion_label_by_prediction": [
+              [
+                21,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0
+              ],
+              [
+                10,
+                0,
+                0
+              ]
+            ],
+            "eligible_n": 31,
+            "prediction_unavailable": 0,
+            "severe_underprediction_rate": 0.3225806451612903,
+            "within_one_bucket_accuracy": 0.6774193548387096
+          },
+          "sampled_peak_rss_mb": {
+            "accuracy": 0.6774193548387096,
+            "confusion_label_by_prediction": [
+              [
+                21,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0
+              ],
+              [
+                10,
+                0,
+                0
+              ]
+            ],
+            "eligible_n": 31,
+            "prediction_unavailable": 0,
+            "severe_underprediction_rate": 0.3225806451612903,
+            "within_one_bucket_accuracy": 0.6774193548387096
+          }
+        }
+      }
+    }
+  },
+  "protocol": {
+    "causal_update": "whole-task settlement",
+    "macro": "equal weight across four targets",
+    "raw_prefix_max_depth": 4,
+    "scored_task_count": 100,
+    "targets": {
+      "cpu_rss_disk_buckets": 3,
+      "latency_buckets": 5
+    },
+    "warmup_task_count": 100
+  },
+  "provenance": {
+    "enabled_tools": [
+      "make"
+    ],
+    "generation_artifact": "/home/chiyu/workspace/agent-sched-bench/analysis/results/offline-tool-semantics-sqlglot-v1/generation-artifact.json",
+    "generation_preregistration_commit": "b3711e17721f8073dec5875d439888be7b3a6b5c",
+    "public_rows_after_reserved_repo_filter": 16481,
+    "public_rows_before_reserved_repo_filter": 18224,
+    "public_telemetry": [
+      "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+      "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl"
+    ],
+    "split_manifest": "/home/chiyu/workspace/agent-sched-bench/analysis/development/offline-tool-semantics-splits.json",
+    "structural_coverage": {
+      "make": {
+        "invocations": 116,
+        "passed": true,
+        "tasks": 37
+      }
+    }
+  },
+  "row_identity": {
+    "commands": 1792,
+    "identical_availability": true,
+    "identical_command_ids_and_labels": true
+  },
+  "schema": "offline-tool-semantics-evaluation-v1"
+}
