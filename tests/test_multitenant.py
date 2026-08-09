@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import spike.run_multitenant as run_multitenant
 from scripts.serving.measure_prefill_cost import build_parser as build_prefill_parser
 from scripts.serving.run_w5_multitenant import main as run_w5_main
 from scripts.serving.run_w5_multitenant import validate_matrix_inputs
@@ -113,6 +114,87 @@ def test_policies_never_read_realized_next_turn_gap() -> None:
         assert build_retention_plan(
             policy, short, deadline_ms=5000.0, trigger_table=table
         ) == build_retention_plan(policy, long, deadline_ms=5000.0, trigger_table=table)
+
+
+def test_tool_lifecycles_cancel_short_triggers_and_fire_long_overlaps() -> None:
+    turn = replace(
+        _turn(),
+        gap_ms=40.0,
+        tools=(
+            ToolSpan("exec", "short", 0.0, 10.0),
+            ToolSpan("exec", "long", 0.0, 35.0),
+            ToolSpan("exec", "overlap", 5.0, 35.0),
+            ToolSpan("exec", "equal-end", 0.0, 30.0),
+            ToolSpan("exec", "equal-arrival", 10.0, 50.0),
+        ),
+    )
+    reveals: list[str] = []
+    fired: list[int] = []
+
+    async def reveal(tool_index: int, tool_name: str, command: str) -> float:
+        del tool_index, tool_name
+        reveals.append(command)
+        return {
+            "short": 30.0,
+            "long": 20.0,
+            "overlap": 10.0,
+            "equal-end": 30.0,
+            "equal-arrival": 30.0,
+        }[command]
+
+    async def run() -> None:
+        started = __import__("time").monotonic()
+        await run_multitenant._replay_tool_lifecycles(
+            turn,
+            gap_started_s=started,
+            sleep_until=lambda deadline: asyncio.sleep(
+                max(0.0, deadline - __import__("time").monotonic())
+            ),
+            reveal=reveal,
+            fire=lambda tool_index: _append_async(fired, tool_index),
+        )
+
+    async def _append_async(items: list[int], item: int) -> None:
+        items.append(item)
+
+    asyncio.run(run())
+
+    assert reveals == ["short", "long", "equal-end", "overlap", "equal-arrival"]
+    assert fired == [2, 1]
+
+
+def test_continuum_none_plan_immediate_release_still_obeys_boundaries() -> None:
+    turn = replace(
+        _turn(),
+        gap_ms=20.0,
+        tools=(
+            ToolSpan("exec", "normal", 10.0, 15.0),
+            ToolSpan("exec", "at-arrival", 20.0, 30.0),
+        ),
+    )
+    fired: list[int] = []
+
+    async def reveal(tool_index: int, tool_name: str, command: str) -> float:
+        del tool_index, tool_name, command
+        return run_multitenant._causal_trigger_delay_ms("continuum", None)
+
+    async def run() -> None:
+        started = __import__("time").monotonic()
+        await run_multitenant._replay_tool_lifecycles(
+            turn,
+            gap_started_s=started,
+            sleep_until=lambda deadline: asyncio.sleep(
+                max(0.0, deadline - __import__("time").monotonic())
+            ),
+            reveal=reveal,
+            fire=lambda tool_index: _append_async(fired, tool_index),
+        )
+
+    async def _append_async(items: list[int], item: int) -> None:
+        items.append(item)
+
+    asyncio.run(run())
+    assert fired == [0]
 
 
 def test_ours_uses_earliest_command_trigger() -> None:
@@ -291,6 +373,27 @@ def test_retention_book_matches_prefix_without_mutating_and_consumes_expiry() ->
     assert book.due(5.0, waiting_program_ids={"p"}) == []
     assert book.move_to_host("p") is record
     assert book.drop("p") is record
+
+
+def test_retention_expiry_arming_is_earlier_only_and_request_guarded() -> None:
+    from spike.vllm_connector.gpu import SelectiveOffloadConnector
+
+    book = FinishedRetentionBook()
+    book.register(_record("p", "old", tokens=20))
+    connector = object.__new__(SelectiveOffloadConnector)
+    connector._retention = book
+    spec = {"expire_at_monotonic_s": 10.0}
+    connector._retention_spec = lambda _: spec
+
+    connector.refresh_retention_expiries()
+    assert book.resident["p"].expires_at == 10.0
+    spec["expire_at_monotonic_s"] = 12.0
+    connector.refresh_retention_expiries()
+    assert book.resident["p"].expires_at == 10.0
+    assert not book.arm_expiry_earlier("p", "stale", 5.0)
+    assert book.resident["p"].expires_at == 10.0
+    assert book.arm_expiry_earlier("p", "old", 8.0)
+    assert book.resident["p"].expires_at == 8.0
 
 
 def test_connector_refreshes_continuum_priority_from_live_retention() -> None:

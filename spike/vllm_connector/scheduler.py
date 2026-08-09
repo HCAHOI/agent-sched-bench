@@ -298,6 +298,7 @@ class RetentionScheduler(Scheduler):  # type: ignore[misc,valid-type]
         connector = self.connector
         if connector is not None:
             connector.release_requested_programs()
+            connector.refresh_retention_expiries()
             connector.release_retention_due(
                 connector.matching_resident_program_ids(list(self.waiting))
             )

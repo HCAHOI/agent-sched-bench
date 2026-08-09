@@ -628,6 +628,18 @@ class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-
             raise ValueError(f"retention spec for {request_id!r} must be an object")
         return spec
 
+    def refresh_retention_expiries(self) -> None:
+        """Apply causally revealed timer updates to still-resident prefixes."""
+        for record in tuple(self._retention.resident.values()):
+            spec = self._retention_spec(record.request_id)
+            if spec is None or spec.get("expire_at_monotonic_s") is None:
+                continue
+            self._retention.arm_expiry_earlier(
+                record.program_id,
+                record.request_id,
+                spec["expire_at_monotonic_s"],
+            )
+
     def matching_resident_program_ids(self, requests: list[Any]) -> set[str]:
         program_ids: set[str] = set()
         for request in requests:

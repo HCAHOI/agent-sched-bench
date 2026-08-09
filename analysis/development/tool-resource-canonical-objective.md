@@ -22,10 +22,11 @@ artifacts retain that history.
 | KB representation | Raw exact/prefix/binary `ClauseResourceKB` is the implemented Clause-KB baseline. Trie/lattice/semantic-key replacement is closed as a contribution. |
 | Offline tool knowledge | Trace-conditioned generation remains closed. The frozen docs-only v1 protocol also stops before fresh collection: only `make` produced a valid specification, and its SQLGlot arm never formed a non-exact contrast. This is an uninformative protocol result, not evidence that documentation semantics cannot work. |
 | Manual tool semantics | **KEEP only the pytest candidate-routing question.** A hindsight selector over existing causal candidates improved full-cohort four-target accuracy by 1.941 points for pytest, but 93/118 corrections merely restored Clause-KB; adding more pytest rules is not supported. pip missed the frozen contrast gate and its perfect-tool ceiling was only 0.392 points, so deprioritize pip-specific work. |
-| KV scheduling | Closed under the current CacheWise/C100 simulator and action model. |
+| KV victim selection | Closed under the current CacheWise/C100 simulator and action model. |
+| GPU tool-gap action | **OPEN under the separately frozen protocol in Section 5.1.** It asks when to offload one finished agent's prompt KV during a causally observed tool call, not which C100 block to evict. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
-| Next research step | Test only whether inference-time support/provenance can decide when to trust the existing pytest semantic head versus Clause-KB. Do not add pytest rules, build pip-specific state, or launch docs-driven PennyLane/DVC confirmation from this exposed result. Any deployable router needs a separately frozen label-free protocol and fresh confirmation. Scheduler work still requires a separate observable-state action oracle. |
+| Next research step | Connect prediction/observation to an action. First evaluate the frozen GPU tool-gap retention protocol in Section 5.1. In parallel, admit a new CPU experiment only if it uses an observable signal and an action not already closed in Sections 5–6. The pytest router remains a prediction-only fallback, not the active action contribution. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -286,6 +287,68 @@ under-reservations outside the imputed command set, across all 50 tasks. The
 remaining error is therefore not removable by reclassifying short nulls.
 Do not add another exception on this exposed cohort.
 
+### 5.1 Frozen GPU tool-gap retention protocol
+
+**Question.** After an agent finishes an LLM turn and starts a tool, can a
+profile-only command-duration model free its prompt KV earlier, and can a
+causal pre-restore hide the next-turn reload, without harming the other
+tenants? This is a retention-timing action, not the closed C100 victim selector.
+
+**Evidence boundary.** The 50 tasks under
+`traces/swe-rebench/qwen3.7-max/20260624T162037` are the only fitting corpus.
+The disjoint 277 tasks under
+`traces/swe-rebench/qwen3.7-max/fresh-seed42-skip150-n200` are an exposed
+development replay; their outcomes only score frozen decisions. Tool name and
+command become visible at that tool's replay event boundary. Source offsets,
+tool duration, the next event, and the next LLM arrival are never predictor
+inputs. The current turn's block-aligned prompt size is observable.
+
+**Physical costs.** Use only the measured Llama-3.1-8B-Instruct/A100-80GB
+artifacts in
+`analysis/serving/tool-time-rho-measurement-a100-instruct-20260809/`. Map prompt size to
+the smallest measured token point at least as large; do not extrapolate above
+131,072 tokens. The measured D2H and H2D values are separate costs. Recompute
+is a measured comparison, not a live arm: host round-trip is 6.19x--10.25x
+faster than prefix-cache-free prefill at the six shared 1K--32K points.
+
+**2026-08-09 plumbing amendment, before replay outcome access.** The original
+serving config named the base Llama-3.1-8B tokenizer, which has no chat template;
+the evaluator stopped after profile fitting and emitted no result. Serving and
+tokenization are therefore corrected to Llama-3.1-8B-Instruct, the model used
+by the existing validated connector experiments. The architecture and KV
+layout are unchanged, but both physical artifacts are remeasured under the
+exact corrected model identifier before evaluation. No gate or data split
+changes.
+
+**Frozen arms.** Timing is fixed 5-second deadline versus the existing robust
+command clock fitted only on the 50 profile tasks. Restore is reactive at the
+next LLM arrival versus the existing exact pre-restore stopping rule fitted on
+the same profile. This gives a 2x2 attribution: deadline/robust timing by
+reactive/pre-restore. No static demo trigger table, target-call outcome, raw
+future trace span, or artificial `5000 * rho` restore timer is allowed.
+
+**Offline advance gate.** Report, without combining them into an arbitrary
+scalar, released GiB-seconds, critical-path transfer stall, changed gaps and
+tasks, and concentration by command family. Robust/reactive advances only if
+it releases strictly more GiB-seconds than deadline/reactive with no greater
+total critical-path stall, and changes at least 20 tasks. Pre-restore enters
+the live 2x2 only if it changes at least 20 tasks and hides at least 5% of the
+same timing arm's reactive reload stall; its early-residency GiB-seconds remain
+an explicit cost. Exact realized durations are scorer-only. Any oracle is
+reported separately.
+
+**Live gate.** First run a bounded plumbing smoke. A development A/B is valid
+only under real connector transfers and unmodified tool-event order, with
+actual trigger/offload/restore timestamps, bytes and blocks, co-tenant
+admission while blocks are free, early-residency block-time, paired next-turn
+TTFT/program JCT, co-tenant tail latency, and exact request/output parity. If
+the selected workload produces no offload-caused co-tenant admission or
+preemption change, stop: a latency-only difference cannot support a scheduling
+claim. A main candidate must reduce mean completed-program JCT by at least 5%
+versus deadline/reactive, preserve outputs and terminal status, and not worsen
+p99 TTFT by more than 5%. Fresh confirmation remains required for a paper
+claim.
+
 ## 6. Closed directions
 
 - **Lookup structure alone:** trie, lattice, generic argv, pip/pytest semantic
@@ -401,6 +464,8 @@ No result-dependent tuning, hindsight state, or dataset-specific outcome rule.
 Offline LM input = versioned public tool docs and --help only; zero runtime LM.
 Documentation supplies representation, never an action or measured cost.
 Scheduler work requires observable pre-execution state and a physical oracle.
+GPU tool-gap timing sees each command only at its tool-event boundary.
+GPU action costs come from same-model, same-device measurements, never 5s*rho.
 No new collection, runtime integration, or scheduler claim without a separate
 approved protocol.
 ```

@@ -7,12 +7,14 @@ import argparse
 import asyncio
 import datetime as dt
 import json
+import math
 import os
 import platform
 import statistics
 import subprocess
 import time
 import zlib
+from collections.abc import Awaitable, Callable
 from collections import deque
 from dataclasses import asdict
 from pathlib import Path
@@ -21,8 +23,10 @@ from typing import Any
 import yaml
 
 from spike.multitenant import (
+    RetentionPlan,
+    ToolSpan,
+    TraceTurn,
     build_continuum_profile,
-    build_prerestore_profile,
     build_retention_plan,
     load_prefill_cost_profile,
     load_trace_programs,
@@ -169,6 +173,58 @@ async def _sample_gpu(stop: asyncio.Event, interval_s: float) -> list[dict[str, 
     return samples
 
 
+async def _replay_tool_lifecycles(
+    turn: TraceTurn,
+    *,
+    gap_started_s: float,
+    sleep_until: Callable[[float], Awaitable[None]],
+    reveal: Callable[[int, str, str], Awaitable[float | None]],
+    fire: Callable[[int], Awaitable[None]],
+) -> None:
+    """Reveal starts and cancel unfired triggers at causal tool-end events."""
+
+    async def replay_one(tool_index: int, tool: ToolSpan) -> None:
+        start_at = gap_started_s + tool.start_offset_ms / 1000.0
+        end_at = gap_started_s + tool.end_offset_ms / 1000.0
+        await sleep_until(start_at)
+        trigger_ms = await reveal(tool_index, tool.tool_name, tool.command)
+        if trigger_ms is None:
+            await sleep_until(end_at)
+            return
+        if (
+            isinstance(trigger_ms, bool)
+            or not isinstance(trigger_ms, (int, float))
+            or not math.isfinite(trigger_ms)
+            or trigger_ms < 0
+        ):
+            raise ValueError("tool trigger must be finite and >= 0")
+        trigger_offset_ms = tool.start_offset_ms + trigger_ms
+        if (
+            trigger_offset_ms >= tool.end_offset_ms
+            or trigger_offset_ms >= turn.gap_ms
+        ):
+            await sleep_until(end_at)
+            return
+        trigger_task = asyncio.create_task(
+            sleep_until(gap_started_s + trigger_offset_ms / 1000.0)
+        )
+        await trigger_task
+        await fire(tool_index)
+        await sleep_until(end_at)
+
+    await asyncio.gather(
+        *(replay_one(index, tool) for index, tool in enumerate(turn.tools))
+    )
+
+
+def _causal_trigger_delay_ms(
+    policy: str, plan: RetentionPlan | None
+) -> float | None:
+    if plan is None:
+        return 0.0 if policy == "continuum" else None
+    return plan.expire_ms
+
+
 def _request_metrics(
     output: Any, submitted_at: float, first_token_at: float
 ) -> dict[str, float]:
@@ -243,15 +299,6 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
         replay_programs = replay_programs[: args.limit_programs]
     continuum_profile = build_continuum_profile(profile_programs)
     trigger_table = load_trigger_table(config["trigger_table"])
-    prerestore_profile = build_prerestore_profile(
-        profile_programs,
-        max_prefix_depth=trigger_table.max_prefix_depth,
-        skip_leading_cd=trigger_table.skip_leading_cd,
-        min_tool_history=config["prerestore_min_tool_history"],
-        min_profile_tasks=config["prerestore_min_profile_tasks"],
-    )
-    restore_cost_ms = trigger_table.kv_cost_ms * config["restore_cost_fraction"]
-
     out_json = args.output
     runtime_dir = out_json.with_suffix("").with_name(out_json.stem + "-runtime")
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -316,7 +363,6 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
     retention_specs: dict[str, Any] = {}
     request_rows: list[dict[str, Any]] = []
     prerestore_rows: list[dict[str, Any]] = []
-    prerestore_tasks: list[asyncio.Task[None]] = []
     program_rows: list[dict[str, Any]] = []
     observed_queue_ms: deque[float] = deque(maxlen=queue_window)
     semaphore = asyncio.Semaphore(args.load)
@@ -328,71 +374,7 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
     run_started = time.perf_counter()
 
     async def sleep_until(deadline_s: float) -> None:
-        await asyncio.sleep(max(0.0, deadline_s - time.perf_counter()))
-
-    async def wake_retention_timer(deadline_s: float, tick_id: str) -> None:
-        await sleep_until(deadline_s)
-        await engine.engine_core.abort_requests_async([tick_id])
-
-    async def run_prerestore(
-        *,
-        prefetch_id: str,
-        program_index: int,
-        turn_index: int,
-        planned_start_ms: float,
-        gap_started: float,
-        gap_ms: float,
-        token_ids: list[int],
-    ) -> None:
-        retention_specs[prefetch_id] = {
-            "program_id": f"program:{program_index}",
-            "policy": args.policy,
-            "action": None,
-            "expire_ms": None,
-            "final": True,
-        }
-        _atomic_json(retention_path, retention_specs)
-        sampling = SamplingParams(
-            temperature=0.0,
-            max_tokens=1,
-            ignore_eos=True,
-            seed=zlib.crc32(prefetch_id.encode()),
-        )
-        submitted = time.perf_counter()
-        first_token: float | None = None
-        final_output = None
-        async for output in engine.generate(
-            {"prompt_token_ids": token_ids},
-            sampling,
-            prefetch_id,
-        ):
-            if first_token is None and output.outputs[0].token_ids:
-                first_token = time.perf_counter()
-            final_output = output
-        retention_specs.pop(prefetch_id, None)
-        _atomic_json(retention_path, retention_specs)
-        if final_output is None or first_token is None:
-            raise RuntimeError(f"pre-restore request {prefetch_id} produced no output")
-        finished = time.perf_counter()
-        completion = final_output.outputs[0]
-        async with result_lock:
-            prerestore_rows.append(
-                {
-                    "request_id": prefetch_id,
-                    "program_index": program_index,
-                    "after_turn_index": turn_index,
-                    "planned_start_ms": planned_start_ms,
-                    "actual_start_ms": (submitted - gap_started) * 1000.0,
-                    "finish_ms": (finished - gap_started) * 1000.0,
-                    "completed_before_arrival": (
-                        (finished - gap_started) * 1000.0 <= gap_ms
-                    ),
-                    "status": "completed",
-                    "output_text": completion.text,
-                    "output_token_ids": completion.token_ids,
-                    **_request_metrics(final_output, submitted, first_token),
-                }
-            )
+        await asyncio.sleep(max(0.0, deadline_s - time.monotonic()))
 
     async def run_program(program_index: int) -> None:
         program = replay_programs[program_index]
@@ -432,29 +414,22 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
                     statistics.fmean(observed_queue_ms) if observed_queue_ms else 0.0
                 )
                 final = turn_index + 1 == turn_limit and not source_failed
-                plan = (
-                    None
-                    if final
-                    else build_retention_plan(
-                        args.policy,
-                        turn,
-                        deadline_ms=workload["deadline_ms"],
-                        trigger_table=trigger_table,
-                        continuum_profile=continuum_profile,
-                        prerestore_profile=prerestore_profile,
-                        restore_cost_ms=restore_cost_ms,
-                        queue_delay_ms=queue_estimate,
-                        prefill_reload_ms=prefill_reload_ms,
-                    )
-                )
+                provisional_action = None
+                if not final:
+                    provisional_action = {
+                        "deadline": "offload",
+                        "ours": "offload",
+                        "continuum": "release",
+                        "thunderagent": "pressure",
+                    }[args.policy]
                 retention_specs[request_id] = {
                     "program_id": f"program:{program_index}",
                     "policy": args.policy,
                     "program_arrival_s": program_started,
                     "program_index": program_index,
                     "priority_stride": len(replay_programs),
-                    "action": None if plan is None else plan.action,
-                    "expire_ms": None if plan is None else plan.expire_ms,
+                    "action": provisional_action,
+                    "expire_ms": None,
                     "final": final,
                 }
                 _atomic_json(retention_path, retention_specs)
@@ -484,9 +459,7 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
                     final_output = output
                 if final_output is None or first_token_at is None:
                     raise RuntimeError(f"request {request_id} produced no output")
-                retention_specs.pop(request_id, None)
-                _atomic_json(retention_path, retention_specs)
-                gap_started = time.perf_counter()
+                gap_started = time.monotonic()
                 timing = _request_metrics(final_output, submitted, first_token_at)
                 cached_tokens = int(
                     getattr(final_output.metrics, "num_cached_tokens", 0) or 0
@@ -505,6 +478,8 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
                     max(0, len(token_ids) - 1) // serving["block_size"]
                 ) * serving["block_size"]
                 completion = final_output.outputs[0]
+                plan = None
+                tool_reveals: list[dict[str, Any]] = []
                 row = {
                     "request_id": request_id,
                     "program_index": program_index,
@@ -527,7 +502,8 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
                     "actual_completion_tokens": len(completion.token_ids),
                     "recorded_gap_after_ms": turn.gap_ms,
                     "tool_spans": [asdict(span) for span in turn.tools],
-                    "retention_plan": None if plan is None else asdict(plan),
+                    "tool_reveals": tool_reveals,
+                    "retention_plan": None,
                     **timing,
                     "cached_tokens": cached_tokens,
                 }
@@ -536,59 +512,90 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
                 if not final:
                     gap_deadline = gap_started + turn.gap_ms / 1000.0
                     arrival = asyncio.create_task(sleep_until(gap_deadline))
-                    expiry_tick = (
-                        asyncio.create_task(
-                            wake_retention_timer(
-                                gap_started + plan.expire_ms / 1000.0,
-                                f"retention-tick:{request_id}",
+                    revealed_tools: list[ToolSpan] = []
+                    armed_expiry: float | None = None
+
+                    async def reveal(
+                        tool_index: int, tool_name: str, command: str
+                    ) -> float | None:
+                        nonlocal plan
+                        revealed_tools.append(ToolSpan(tool_name, command, 0.0, 0.0))
+                        revealed_turn = TraceTurn(
+                            messages=(),
+                            recorded_prompt_tokens=0,
+                            completion_tokens=0,
+                            gap_ms=0.0,
+                            tools=(
+                                tuple(revealed_tools)
+                                if args.policy == "continuum"
+                                else (revealed_tools[-1],)
+                            ),
+                        )
+                        plan = build_retention_plan(
+                            args.policy,
+                            revealed_turn,
+                            deadline_ms=workload["deadline_ms"],
+                            trigger_table=trigger_table,
+                            continuum_profile=continuum_profile,
+                            queue_delay_ms=queue_estimate,
+                            prefill_reload_ms=prefill_reload_ms,
+                        )
+                        revealed_at = time.monotonic()
+                        trigger_delay_ms = _causal_trigger_delay_ms(args.policy, plan)
+                        tool_reveals.append(
+                            {
+                                "tool_index": tool_index,
+                                "actual_reveal_ms": (revealed_at - gap_started) * 1000.0,
+                                "plan_source": None if plan is None else plan.source,
+                                "trigger_delay_ms": trigger_delay_ms,
+                                "trigger_fired": False,
+                            }
+                        )
+                        row["retention_plan"] = None if plan is None else asdict(plan)
+                        return trigger_delay_ms
+
+                    async def fire(tool_index: int) -> None:
+                        nonlocal armed_expiry
+                        fired_at = time.monotonic()
+                        reveal_row = next(
+                            item
+                            for item in tool_reveals
+                            if item["tool_index"] == tool_index
+                        )
+                        reveal_row["trigger_fired"] = True
+                        reveal_row["actual_trigger_ms"] = (
+                            fired_at - gap_started
+                        ) * 1000.0
+                        if armed_expiry is None or fired_at < armed_expiry:
+                            armed_expiry = fired_at
+                            reveal_row["armed_expiry"] = True
+                            retention_specs[request_id][
+                                "expire_at_monotonic_s"
+                            ] = fired_at
+                            _atomic_json(retention_path, retention_specs)
+                            await engine.engine_core.abort_requests_async(
+                                [f"retention-tick:{request_id}:{tool_index}"]
                             )
-                        )
-                        if plan is not None and plan.expire_ms is not None
-                        else None
-                    )
-                    if plan is not None and plan.prerestore_ms is not None:
-                        restore_timer = asyncio.create_task(
-                            sleep_until(gap_started + plan.prerestore_ms / 1000.0)
-                        )
-                        done, _ = await asyncio.wait(
-                            {arrival, restore_timer},
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-                        if arrival in done:
-                            restore_timer.cancel()
-                            await asyncio.gather(restore_timer, return_exceptions=True)
-                            async with result_lock:
-                                prerestore_rows.append(
-                                    {
-                                        "program_index": program_index,
-                                        "after_turn_index": turn_index,
-                                        "planned_start_ms": plan.prerestore_ms,
-                                        "status": "call_returned_before_timer",
-                                    }
-                                )
                         else:
-                            prefetch_id = (
-                                f"prerestore:{args.policy}:{program_index}:{turn_index}"
-                            )
-                            prerestore_tasks.append(
-                                asyncio.create_task(
-                                    run_prerestore(
-                                        prefetch_id=prefetch_id,
-                                        program_index=program_index,
-                                        turn_index=turn_index,
-                                        planned_start_ms=plan.prerestore_ms,
-                                        gap_started=gap_started,
-                                        gap_ms=turn.gap_ms,
-                                        token_ids=token_ids,
-                                    )
-                                )
-                            )
-                            await arrival
+                            reveal_row["armed_expiry"] = False
+
+                    tool_events = asyncio.create_task(
+                        _replay_tool_lifecycles(
+                            turn,
+                            gap_started_s=gap_started,
+                            sleep_until=sleep_until,
+                            reveal=reveal,
+                            fire=fire,
+                        )
+                    )
+                    await arrival
+                    if tool_events.done():
+                        await tool_events
                     else:
-                        await arrival
-                    if expiry_tick is not None:
-                        expiry_tick.cancel()
-                        await asyncio.gather(expiry_tick, return_exceptions=True)
+                        tool_events.cancel()
+                        await asyncio.gather(tool_events, return_exceptions=True)
+                retention_specs.pop(request_id, None)
+                _atomic_json(retention_path, retention_specs)
             if source_failed:
                 releases = retention_specs.setdefault("__release_programs__", [])
                 releases.append(f"program:{program_index}")
@@ -621,8 +628,6 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
         await asyncio.gather(
             *(run_program(index) for index in range(len(replay_programs)))
         )
-        if prerestore_tasks:
-            await asyncio.gather(*prerestore_tasks)
         run_finished = time.perf_counter()
     finally:
         stop_gpu.set()
@@ -634,11 +639,6 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
     program_rows.sort(key=lambda row: row["program_index"])
     transfers = _read_transfer_events(transfer_path)
     transfer_count, transfer_bytes = _transfer_totals(transfers)
-    restored_request_ids = {
-        row["request_id"]
-        for row in transfers
-        if row.get("phase") == "retention_restore"
-    }
     if args.policy == "continuum":
         priority_events = {
             row["request_id"]: row
@@ -654,9 +654,6 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
             request_row["scheduler_priority"] = priority["priority"]
             request_row["continuum_ttl_priority"] = priority["ttl_hit"]
             request_row["continuum_preempted_priority"] = priority["preempted"]
-    for row in prerestore_rows:
-        if row["status"] == "completed":
-            row["host_restore_observed"] = row["request_id"] in restored_request_ids
     total_tokens = sum(row["actual_completion_tokens"] for row in request_rows)
     elapsed_s = run_finished - run_started
     completed_programs = [
@@ -739,17 +736,11 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
             ),
         },
         "prerestore_profile": {
-            "program_count": len(profile_programs),
-            "restore_cost_fraction": config["restore_cost_fraction"],
-            "min_tool_history": config["prerestore_min_tool_history"],
-            "min_profile_tasks": config["prerestore_min_profile_tasks"],
-            "optimizer": (
-                "tool_time.prerestore.prerestore_start_ms"
-            ),
+            "enabled": False,
+            "optimizer": None,
             "mechanism": (
-                "one-token internal request attempts to restore retained prompt KV "
-                "before the next recorded arrival; each event records whether the "
-                "connector observed a host restore"
+                "disabled until pre-restore planning consumes only causally "
+                "revealed tool events"
             ),
         },
         "program_count": len(replay_programs),

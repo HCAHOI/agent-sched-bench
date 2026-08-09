@@ -10,9 +10,10 @@ testable WITHOUT vllm or a GPU installed.
 from __future__ import annotations
 
 import json
+import math
 import platform
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Protocol, Sequence, runtime_checkable
 
 
@@ -520,6 +521,25 @@ class FinishedRetentionBook:
                 f"program {record.program_id!r} already has an unconsumed prefix"
             )
         self.resident[record.program_id] = record
+
+    def arm_expiry_earlier(
+        self, program_id: str, request_id: str, expires_at: float
+    ) -> bool:
+        """Arm one resident prefix without letting stale events postpone it."""
+        if (
+            isinstance(expires_at, bool)
+            or not isinstance(expires_at, (int, float))
+            or not math.isfinite(expires_at)
+            or expires_at < 0
+        ):
+            raise ValueError("expires_at must be finite and >= 0")
+        record = self.resident.get(program_id)
+        if record is None or record.request_id != request_id:
+            return False
+        if record.expires_at is not None and record.expires_at <= expires_at:
+            return False
+        self.resident[program_id] = replace(record, expires_at=expires_at)
+        return True
 
     def due(
         self, now: float, *, waiting_program_ids: set[str] | None = None

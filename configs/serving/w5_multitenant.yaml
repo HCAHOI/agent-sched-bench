@@ -9,7 +9,7 @@ prerestore_min_tool_history: 1
 prerestore_min_profile_tasks: 1
 
 serving:
-  model: meta-llama/Llama-3.1-8B
+  model: meta-llama/Llama-3.1-8B-Instruct
   kv_cache_dtype: auto
   quantization: null
   tensor_parallel_size: 1
