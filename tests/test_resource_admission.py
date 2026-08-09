@@ -1,5 +1,10 @@
 import pytest
 
+from scripts.evaluation.evaluate_cpu_feedback_borrowing import (
+    PROTOCOL as BORROWING_PROTOCOL,
+    VERSION as BORROWING_VERSION,
+    WORK_CONSERVING_CPU,
+)
 from scripts.evaluation.evaluate_cpu_work_admission import (
     _clause_cpu_work,
     _cpu_floor_programs,
@@ -8,8 +13,10 @@ from scripts.evaluation.evaluate_cpu_throughput_oracle import _bucket_cpu
 from scripts.evaluation.evaluate_cpu_feedback_admission import (
     _assert_frozen_protocol,
     _file_identities,
+    _fixed_cpu_requests,
     _gate,
     _mean_relative_reduction,
+    _service_inflation,
 )
 from scripts.evaluation.evaluate_clause_resource_classes import CommandRow, Row
 from scripts.evaluation.evaluate_resource_admission_oracle import _reservation
@@ -139,6 +146,125 @@ def test_feedback_without_profile_matches_static_service() -> None:
     assert feedback == static
 
 
+def test_work_conserving_feedback_borrows_above_logical_reservation() -> None:
+    program = AdmissionProgram(
+        "task",
+        0.0,
+        (AdmissionCommand("cmd", 1.0, 8.0, 100.0, 0.0),),
+        0.0,
+    )
+    kwargs = {
+        "cpu_capacity": 8.0,
+        "rss_capacity_mb": 1_000.0,
+        "requested_reservations": {"cmd": (2.0, 100.0)},
+        "cpu_work_profiles": {"cmd": ((1.0, 8.0),)},
+        "feedback": False,
+        "sample_interval_s": 0.5,
+        "update_delay_s": 0.1,
+        "cpu_pages": (2.0, 4.0, 8.0),
+    }
+
+    hard = simulate_feedback_admission([program], **kwargs)
+    borrowing = simulate_feedback_admission(
+        [program], **kwargs, work_conserving_cpu=True
+    )
+
+    assert hard["total_command_service_s"] == 4.0
+    assert borrowing["total_command_service_s"] == 1.0
+    assert borrowing["served_cpu_work_core_s"] == 8.0
+
+
+def test_work_conserving_feedback_charges_contention_and_denied_expansion() -> None:
+    programs = [
+        AdmissionProgram(
+            task_id,
+            0.0,
+            (AdmissionCommand(task_id, 1.0, 8.0, 100.0, 0.0),),
+            0.0,
+        )
+        for task_id in ("a", "b")
+    ]
+
+    result = simulate_feedback_admission(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=1_000.0,
+        requested_reservations={"a": (4.0, 100.0), "b": (4.0, 100.0)},
+        cpu_work_profiles={
+            "a": ((1.0, 8.0),),
+            "b": ((1.0, 8.0),),
+        },
+        feedback=True,
+        sample_interval_s=0.5,
+        update_delay_s=0.1,
+        cpu_pages=(2.0, 4.0, 8.0),
+        work_conserving_cpu=True,
+    )
+
+    assert result["makespan_s"] == 2.0
+    assert result["total_command_service_s"] == 4.0
+    assert result["served_cpu_work_core_s"] == 16.0
+    assert result["denied_expansions"] >= 2
+    assert not result["capacity_violation"]
+
+
+def test_work_conserving_cpu_uses_equal_weights_not_logical_pages() -> None:
+    specifications = {
+        "a": (4.0, 4.0),
+        "b": (2.0, 8.0),
+        "c": (2.0, 8.0),
+    }
+    programs = [
+        AdmissionProgram(
+            task_id,
+            0.0,
+            (AdmissionCommand(task_id, 1.0, demand, 100.0, 0.0),),
+            0.0,
+        )
+        for task_id, (_request, demand) in specifications.items()
+    ]
+
+    result = simulate_feedback_admission(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=1_000.0,
+        requested_reservations={
+            task_id: (request, 100.0)
+            for task_id, (request, _demand) in specifications.items()
+        },
+        cpu_work_profiles={
+            task_id: ((1.0, demand),)
+            for task_id, (_request, demand) in specifications.items()
+        },
+        feedback=True,
+        sample_interval_s=0.5,
+        update_delay_s=0.1,
+        cpu_pages=(2.0, 4.0, 8.0),
+        work_conserving_cpu=True,
+    )
+
+    assert result["service_s_by_command"]["a"] == pytest.approx(1.5)
+    assert result["service_s_by_command"]["b"] == pytest.approx(2.5)
+    assert result["service_s_by_command"]["c"] == pytest.approx(2.5)
+    assert result["served_cpu_work_core_s"] == 20.0
+
+
+def test_work_conserving_feedback_requires_every_cpu_profile() -> None:
+    with pytest.raises(ValueError, match="complete CPU work profiles"):
+        simulate_feedback_admission(
+            [_program("task")],
+            cpu_capacity=8.0,
+            rss_capacity_mb=16_000.0,
+            requested_reservations={"task:0": (2.0, 500.0)},
+            cpu_work_profiles={},
+            feedback=True,
+            sample_interval_s=0.5,
+            update_delay_s=0.1,
+            cpu_pages=(2.0, 4.0, 8.0),
+            work_conserving_cpu=True,
+        )
+
+
 def test_feedback_admission_gate_requires_every_frozen_condition() -> None:
     passing = _gate(
         relative_mean_completion_reduction=0.05,
@@ -191,6 +317,27 @@ def test_feedback_admission_keeps_same_named_input_identities(tmp_path) -> None:
     identities = _file_identities((first, second))
 
     assert set(identities) == {str(first.resolve()), str(second.resolve())}
+
+
+def test_borrowing_evaluator_has_a_separate_frozen_entrypoint() -> None:
+    assert BORROWING_VERSION == "cpu-feedback-borrowing-v1"
+    assert BORROWING_PROTOCOL.name == "cpu-feedback-borrowing-protocol.md"
+    assert WORK_CONSERVING_CPU is True
+
+
+def test_borrowing_fixed8_context_preserves_task_aware_rss() -> None:
+    requests = {"a": (2.0, 500.0), "b": (8.0, 2_000.0)}
+
+    assert _fixed_cpu_requests(requests) == {
+        "a": (8.0, 500.0),
+        "b": (8.0, 2_000.0),
+    }
+
+
+def test_feedback_evaluator_reports_service_inflation() -> None:
+    assert _service_inflation(
+        {"total_command_service_s": 11.0, "recorded_command_service_s": 10.0}
+    ) == pytest.approx(0.1)
 
 
 def test_admission_rejects_zero_duration_overlap() -> None:

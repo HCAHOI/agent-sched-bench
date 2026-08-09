@@ -131,6 +131,23 @@ def _file_identities(paths: tuple[Path, ...]) -> dict[str, dict[str, Any]]:
     return {str(path.resolve()): _file_identity(path) for path in paths}
 
 
+def _fixed_cpu_requests(
+    requests: Mapping[str, tuple[float, float]],
+) -> dict[str, tuple[float, float]]:
+    return {
+        command_id: (CPU_CAPACITY, rss_mb)
+        for command_id, (_cpu, rss_mb) in requests.items()
+    }
+
+
+def _service_inflation(metrics: Mapping[str, Any]) -> float:
+    return (
+        float(metrics["total_command_service_s"])
+        / float(metrics["recorded_command_service_s"])
+        - 1.0
+    )
+
+
 def _profiles(
     programs: Mapping[str, AdmissionProgram], traces: Mapping[str, Path]
 ) -> tuple[
@@ -187,6 +204,9 @@ def _mean_metrics(schedule_results: list[dict[str, Any]]) -> dict[str, Any]:
         "reservation_shrinks",
         "reservation_expansions",
         "denied_expansions",
+        "total_cpu_work_core_s",
+        "served_cpu_work_core_s",
+        "service_inflation",
     )
     return {
         arm: {
@@ -199,7 +219,7 @@ def _mean_metrics(schedule_results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def run() -> dict[str, Any]:
+def run(*, work_conserving_cpu: bool = False) -> dict[str, Any]:
     _assert_frozen_protocol(LOAD, SEEDS, CPU_CAPACITY, RSS_CAPACITY_MB)
     validation_ids = list(json.loads(SPLIT.read_text(encoding="utf-8"))["validation"])
     if len(validation_ids) != 50:
@@ -221,14 +241,20 @@ def run() -> dict[str, Any]:
     }
     profiles, source_files = _profiles(programs, traces)
     task_requests = _full_reservation_map(programs, task_predictions)
-    fixed_requests = {
-        command.command_id: (CPU_CAPACITY, RSS_CAPACITY_MB)
-        for program in programs.values()
-        for command in program.commands
-    }
+    fixed_requests = (
+        _fixed_cpu_requests(task_requests)
+        if work_conserving_cpu
+        else {
+            command.command_id: (CPU_CAPACITY, RSS_CAPACITY_MB)
+            for program in programs.values()
+            for command in program.commands
+        }
+    )
     all_command_ids = set(fixed_requests)
     if set(task_requests) != all_command_ids or not set(profiles) <= all_command_ids:
         raise ValueError("feedback inputs differ from admission commands")
+    if work_conserving_cpu and set(profiles) != all_command_ids:
+        raise ValueError("work-conserving evaluation requires complete profiles")
 
     schedule_results: list[dict[str, Any]] = []
     capacity_violation = False
@@ -254,6 +280,7 @@ def run() -> dict[str, Any]:
             "sample_interval_s": SAMPLE_INTERVAL_S,
             "update_delay_s": CPU_UPDATE_DELAY_S,
             "cpu_pages": tuple(float(page) for page in THROUGHPUT_CPU_PAGES),
+            "work_conserving_cpu": work_conserving_cpu,
         }
         arms = {
             "fixed8": simulate_feedback_admission(
@@ -294,7 +321,10 @@ def run() -> dict[str, Any]:
         if len(identity) != 1:
             raise ValueError("admission arms used different commands or source service")
         for arm in arms.values():
-            capacity_violation |= bool(arm["capacity_violation"])
+            arm["service_inflation"] = _service_inflation(arm)
+            capacity_violation |= bool(
+                arm["capacity_violation"] or arm["physical_capacity_violation"]
+            )
             arm.pop("overlapped_command_ids")
             arm.pop("service_s_by_command")
             arm.pop("start_s_by_command")
@@ -314,10 +344,7 @@ def run() -> dict[str, Any]:
         "mean_per_order_relative_reduction": relative_reduction,
         **_bootstrap(deltas),
     }
-    recorded = means["fixed8"]["recorded_command_service_s"]
-    service_inflation = (
-        means["task_aware_feedback"]["total_command_service_s"] / recorded - 1.0
-    )
+    service_inflation = _service_inflation(means["task_aware_feedback"])
     bootstrap_high = comparison["ci95_paired_seed_bootstrap"][1]
     gate = _gate(
         relative_reduction,
@@ -351,6 +378,16 @@ def run() -> dict[str, Any]:
         ),
         "all_profiles_belong_to_commands": set(profiles) <= all_command_ids,
         "zero_capacity_violations": not capacity_violation,
+        "all_arms_conserve_cpu_work": all(
+            math.isclose(
+                arm["total_cpu_work_core_s"],
+                arm["served_cpu_work_core_s"],
+                rel_tol=1e-12,
+                abs_tol=1e-7,
+            )
+            for row in schedule_results
+            for arm in row["arms"].values()
+        ),
     }
     if not all(integrity.values()):
         raise ValueError(f"feedback admission integrity failure: {integrity}")
@@ -371,11 +408,21 @@ def run() -> dict[str, Any]:
         for command in program.commands
     )
     return {
-        "schema": VERSION,
+        "schema": (
+            "cpu-feedback-borrowing-v1" if work_conserving_cpu else VERSION
+        ),
         "status": (
-            "development_go_to_physical_feedback_admission"
+            (
+                "development_go_to_real_psi_calibration"
+                if work_conserving_cpu
+                else "development_go_to_physical_feedback_admission"
+            )
             if gate["go"]
-            else "development_stop_before_physical_feedback_admission"
+            else (
+                "development_stop_feedback_borrowing"
+                if work_conserving_cpu
+                else "development_stop_before_physical_feedback_admission"
+            )
         ),
         "claim_bearing": False,
         "protocol": {
@@ -387,6 +434,16 @@ def run() -> dict[str, Any]:
             "cpu_pages": list(THROUGHPUT_CPU_PAGES),
             "sample_interval_s": SAMPLE_INTERVAL_S,
             "update_delay_s": CPU_UPDATE_DELAY_S,
+            "cpu_execution": (
+                "equal_weight_work_conserving"
+                if work_conserving_cpu
+                else "hard_logical_page"
+            ),
+            "backlog_signal": (
+                "ideal causal ceiling for per-cgroup CPU PSI"
+                if work_conserving_cpu
+                else "hard-page throttling"
+            ),
             "primary": "Task-Aware feedback minus static mean task completion",
             "minimum_relative_reduction": MINIMUM_MEAN_COMPLETION_REDUCTION,
             "maximum_service_inflation": MAXIMUM_SERVICE_INFLATION,
@@ -423,10 +480,18 @@ def run() -> dict[str, Any]:
         "limitations": [
             "All tasks and predictor outputs are development-exposed.",
             "CPU work is uniform within each source telemetry interval.",
-            "Denied expansions retain the current hard page until the next observation.",
+            "Denied expansions retain the current logical page until the next observation.",
             "The paired bootstrap measures workload-order sensitivity, not new-task uncertainty.",
             "This is an event replay, not a physical runtime result.",
-        ],
+        ]
+        + (
+            [
+                "The causal backlog bit is an ideal-observation ceiling; existing traces did not record per-cgroup CPU PSI.",
+                "Logical reservations affect admission only and never cap physical CPU allocation.",
+            ]
+            if work_conserving_cpu
+            else []
+        ),
     }
 
 

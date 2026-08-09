@@ -281,8 +281,9 @@ def simulate_feedback_admission(
     sample_interval_s: float,
     update_delay_s: float,
     cpu_pages: tuple[float, ...],
+    work_conserving_cpu: bool = False,
 ) -> dict[str, object]:
-    """Replay hard CPU reservations with causal per-command feedback."""
+    """Replay CPU admission with causal per-command reservation feedback."""
 
     if (
         not programs
@@ -313,6 +314,8 @@ def simulate_feedback_admission(
         raise ValueError("feedback admission requires complete reservations")
     if not set(cpu_work_profiles) <= set(commands):
         raise ValueError("CPU work profile contains an unknown command")
+    if work_conserving_cpu and set(cpu_work_profiles) != set(commands):
+        raise ValueError("work-conserving CPU requires complete CPU work profiles")
     if any(
         value < 0.0 or not math.isfinite(value)
         for program in programs
@@ -369,9 +372,10 @@ def simulate_feedback_admission(
     running: list[_FeedbackRunning] = []
     used_cpu = used_rss = 0.0
     queue_s = reserved_cpu_s = reserved_rss_mb_s = 0.0
+    served_cpu_work = 0.0
     feedback_updates = shrinks = expansions = denied_expansions = 0
     starts = max_concurrent = 0
-    capacity_violation = False
+    capacity_violation = physical_capacity_violation = False
     overlapped: set[str] = set()
     service_by_command: dict[str, float] = {}
     start_by_command: dict[str, float] = {}
@@ -540,18 +544,53 @@ def simulate_feedback_admission(
         ):
             break
 
-        future: list[float] = []
+        demands = []
         for item in running:
+            if item.profile is not None:
+                dt, cpu = item.profile[item.profile_index]
+                demands.append(cpu / dt)
+            else:
+                demands.append(0.0)
+        if work_conserving_cpu:
+            allocations = {index: 0.0 for index in range(len(running))}
+            active = {
+                index
+                for index, demand in enumerate(demands)
+                if demand > _EPSILON
+            }
+            remaining_capacity = cpu_capacity
+            while active:
+                equal_share = remaining_capacity / len(active)
+                capped = {
+                    index
+                    for index in active
+                    if demands[index] <= equal_share + _EPSILON
+                }
+                if not capped:
+                    for index in active:
+                        allocations[index] = equal_share
+                    break
+                for index in capped:
+                    allocations[index] = demands[index]
+                    remaining_capacity -= demands[index]
+                active -= capped
+        else:
+            allocations = {
+                index: min(demand, item.requested_cpu_cores)
+                for index, (item, demand) in enumerate(zip(running, demands, strict=True))
+            }
+        physical_capacity_violation |= (
+            sum(allocations.values()) > cpu_capacity + _EPSILON
+        )
+
+        future: list[float] = []
+        for index, item in enumerate(running):
             if item.profile is None:
                 future.append(item.finish_s)
             else:
-                dt, cpu = item.profile[item.profile_index]
-                rate = cpu / dt
-                progress_rate = (
-                    1.0
-                    if rate <= item.requested_cpu_cores
-                    else item.requested_cpu_cores / rate
-                )
+                rate = demands[index]
+                served_rate = allocations[index]
+                progress_rate = 1.0 if rate <= served_rate else served_rate / rate
                 future.append(now_s + item.profile_remaining_s / progress_rate)
                 if item.next_observation_s < math.inf:
                     future.append(item.next_observation_s)
@@ -574,18 +613,18 @@ def simulate_feedback_admission(
         reserved_rss_mb_s += sum(
             item.requested_rss_mb * elapsed_s for item in running
         )
-        for item in running:
+        for index, item in enumerate(running):
             if item.profile is None:
                 continue
-            dt, cpu = item.profile[item.profile_index]
-            rate = cpu / dt
-            served_rate = min(rate, item.requested_cpu_cores)
-            progress_rate = 1.0 if rate <= item.requested_cpu_cores else served_rate / rate
+            rate = demands[index]
+            served_rate = allocations[index]
+            progress_rate = 1.0 if rate <= served_rate else served_rate / rate
             item.profile_remaining_s -= elapsed_s * progress_rate
+            served_cpu_work += served_rate * elapsed_s
             if item.next_observation_s < math.inf:
                 item.observed_cpu_core_s += served_rate * elapsed_s
                 item.observed_throttling |= (
-                    elapsed_s > 0.0 and rate > item.requested_cpu_cores + _EPSILON
+                    elapsed_s > 0.0 and rate > served_rate + _EPSILON
                 )
             if item.profile_remaining_s <= _EPSILON:
                 item.profile_index += 1
@@ -606,6 +645,13 @@ def simulate_feedback_admission(
     completion_s = [float(value) for value in completion if value is not None]
     service_s = sum(service_by_command.values())
     recorded_service_s = sum(command.duration_s for command in commands.values())
+    total_cpu_work = sum(
+        cpu for profile in cpu_work_profiles.values() for _dt, cpu in profile
+    )
+    if not math.isclose(
+        served_cpu_work, total_cpu_work, rel_tol=1e-12, abs_tol=1e-7
+    ):
+        raise ValueError("feedback admission failed to conserve CPU work")
     return {
         "command_count": starts,
         "total_command_service_s": service_s,
@@ -619,6 +665,9 @@ def simulate_feedback_admission(
         "max_concurrent_commands": max_concurrent,
         "overlapped_command_ids": sorted(overlapped),
         "capacity_violation": capacity_violation,
+        "physical_capacity_violation": physical_capacity_violation,
+        "total_cpu_work_core_s": total_cpu_work,
+        "served_cpu_work_core_s": served_cpu_work,
         "feedback_updates": feedback_updates,
         "reservation_shrinks": shrinks,
         "reservation_expansions": expansions,
