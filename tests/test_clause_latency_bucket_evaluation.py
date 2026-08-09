@@ -29,6 +29,7 @@ from scripts.evaluation.evaluate_clause_latency_buckets import (
     _is_full_test_suite,
     _maximal_intersections,
     _parser,
+    _predict_poset_resource_buckets,
     _select_shrinkage_alpha,
     _subset_count,
     _subset_kernel,
@@ -52,6 +53,7 @@ from scripts.evaluation.evaluate_clause_resource_classes import (
     load_candidate_s_selection,
     load_rows,
 )
+from tool_resource.clause_parser import parse_command_clauses
 from tool_resource.runtime_kb import ClauseLatencyBucketPrediction
 
 
@@ -1048,6 +1050,79 @@ def test_interaction_exact_compound_uses_current_composition() -> None:
             resource_provenance,
             wrong_gate,
         )
+
+
+def test_poset_resource_buckets_compose_physical_values_before_bucketing() -> None:
+    mib = 1024 * 1024
+
+    def clauses(command: str) -> tuple[Row, Row]:
+        parsed = parse_command_clauses(command)["clauses"]
+        return tuple(
+            Row(
+                task_id="target__repo-1",
+                repo="target__repo",
+                manifest_index=0,
+                bin=str(clause["bin"]),
+                argv=tuple(clause["argv"]),
+                latency_ms=100.0,
+                peak_cpu_cores=2.0,
+                sampled_peak_rss_mb=400.0,
+                disk_read_write_bytes_total=float(mib),
+                in_pipe=bool(clause["in_pipe"]),
+                in_subst=bool(clause["in_subst"]),
+                pipeline_position=int(clause["pipeline_position"]),
+            )
+            for clause in parsed
+        )
+
+    sequential_clauses = clauses("a; b")
+    pipeline_clauses = clauses("a | b")
+    kbs = {
+        resource: _InteractionPosetKB()
+        for resource in (
+            "peak_cpu_cores",
+            "sampled_peak_rss_mb",
+            "disk_read_write_bytes_total",
+        )
+    }
+    for kb in kbs.values():
+        kb.observe(sequential_clauses)
+    public = {resource: [sequential_clauses[0]] for resource in kbs}
+    public_by_bin = {
+        resource: {"a": [sequential_clauses[0]]} for resource in kbs
+    }
+
+    def predict(command: str, observed: tuple[Row, Row]) -> dict:
+        row = CommandRow(
+            task_id="target__repo-2",
+            repo="target__repo",
+            manifest_index=1,
+            call_index=0,
+            call_id="call",
+            command=command,
+            duration_ms=200.0,
+            clauses=observed,
+        )
+        parsed = parse_command_clauses(command)
+        predictions, unavailable, _diagnostics = _predict_poset_resource_buckets(
+            kbs,
+            row,
+            parsed["clauses"],
+            parse_failed=parsed["parse_failed"],
+            public_by_resource_bin=public_by_bin,
+            public_by_resource=public,
+        )
+        assert unavailable is None
+        return predictions
+
+    sequential = predict("a; b", sequential_clauses)
+    pipeline = predict("a | b", pipeline_clauses)
+    assert sequential["peak_cpu_cores"].label == "low"
+    assert sequential["sampled_peak_rss_mb"].label == "low"
+    assert sequential["disk_read_write_bytes_total"].label == "medium"
+    assert pipeline["peak_cpu_cores"].label == "medium"
+    assert pipeline["sampled_peak_rss_mb"].label == "medium"
+    assert pipeline["disk_read_write_bytes_total"].label == "medium"
 
 
 def _telemetry_record(

@@ -4,15 +4,64 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 import json
 import os
 from pathlib import Path, PurePosixPath
+import random
+import sys
 from typing import Any, Iterable, Mapping, Sequence
 
-from tool_resource.clause_parser import parse_command_clauses
-from tool_resource.pip_semantics import parse_pip_install
-from tool_resource.pytest_semantics import is_pytest_invocation
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPO_ROOT))
+sys.path.insert(0, str(_REPO_ROOT / "src"))
+
+from scripts.evaluation.evaluate_clause_latency_buckets import (  # noqa: E402
+    INTERACTION_FEATURE_VERSION,
+    InteractionFeatureSet,
+    _InteractionPosetKB,
+    _argmax_probabilities,
+    _fit_stable_subcommands,
+    _phase_changes,
+    _predict_interaction_command,
+    _predict_poset_resource_buckets,
+    _row_resource_value,
+    evaluate_prequential_commands,
+)
+from scripts.evaluation.evaluate_clause_resource_classes import (  # noqa: E402
+    CommandRow,
+    Row,
+    command_resource_bucket_label,
+)
+from scripts.evaluation.evaluate_command_history_residual import (  # noqa: E402
+    BUCKETS,
+    Row as HistoryRow,
+    _fail_closed_metrics,
+)
+from scripts.evaluation.evaluate_command_outcome_memory import (  # noqa: E402
+    run as run_command_outcome_memory,
+)
+from scripts.evaluation.evaluate_multitarget_sota import _compose  # noqa: E402
+from scripts.evaluation.evaluate_semantic_work_units import (  # noqa: E402
+    run as run_semantic_work_units,
+)
+from scripts.evaluation.evaluate_full_test_phase_fresh import (  # noqa: E402
+    MINIMUM_FIT_TASKS,
+    apply_phase_candidate,
+    fit_phase_pmfs,
+    phase_coverage,
+)
+from tool_resource.clause_parser import parse_command_clauses  # noqa: E402
+from tool_resource.pip_semantics import parse_pip_install  # noqa: E402
+from tool_resource.pytest_semantics import is_pytest_invocation  # noqa: E402
+from tool_resource.runtime_kb import (  # noqa: E402
+    CANONICAL_LATENCY_BUCKETS,
+    CANONICAL_RESOURCE_BUCKET_EDGES,
+    RESOURCE_BUCKET_LABELS,
+    ClauseResourceKB,
+)
+from tool_resource.tool_spec import ToolSpec, interpret_argv  # noqa: E402
+from tool_time.command import command_prefix_keys  # noqa: E402
 
 
 SCHEMA = "offline-tool-semantics-splits-v1"
@@ -33,6 +82,18 @@ _VALID_STATUS = {
     "cleanup": "ok",
 }
 _TOOL_NAMES = ("git", "make", "pip_install", "pytest")
+_TARGETS = ("latency", *CANONICAL_RESOURCE_BUCKET_EDGES)
+_ARMS = (
+    "majority",
+    "raw_prefix",
+    "clause_kb",
+    "task_aware",
+    "generic_poset",
+    "docs_poset",
+)
+_RAW_PREFIX_DEPTH = 4
+_BOOTSTRAP_DRAWS = 2_000
+_BOOTSTRAP_SEED = 0
 
 
 def traced_task_ids(trace_root: Path, known_ids: set[str]) -> set[str]:
@@ -211,6 +272,859 @@ def census_attempts(
             for name in _TOOL_NAMES
         },
     }
+
+
+def _labels(row: CommandRow) -> dict[str, int | None]:
+    return {
+        "latency": CANONICAL_LATENCY_BUCKETS.bucket_id(row.duration_ms),
+        **{
+            resource: command_resource_bucket_label(row, resource)[0]
+            for resource in CANONICAL_RESOURCE_BUCKET_EDGES
+        },
+    }
+
+
+def _hard_predictions(
+    pmfs: Mapping[str, Sequence[float] | None],
+) -> dict[str, int | str | None]:
+    return {
+        target: (
+            None
+            if pmf is None
+            else _argmax_probabilities(pmf)
+            if target == "latency"
+            else RESOURCE_BUCKET_LABELS[_argmax_probabilities(pmf)]
+        )
+        for target, pmf in pmfs.items()
+    }
+
+
+def _arm(
+    pmfs: Mapping[str, Sequence[float] | None],
+    *,
+    provenance: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    copied = {
+        target: None if pmf is None else list(pmf) for target, pmf in pmfs.items()
+    }
+    return {
+        "prediction": _hard_predictions(copied),
+        "probability_by_bucket": copied,
+        "provenance": {} if provenance is None else dict(provenance),
+    }
+
+
+def _empirical_pmf(values: Sequence[int], bucket_count: int) -> list[float]:
+    counts = Counter(values)
+    return [counts[bucket] / len(values) for bucket in range(bucket_count)]
+
+
+def _doc_feature_builder(
+    specs: Mapping[str, ToolSpec],
+    observed_versions: Mapping[str, str],
+):
+    def build(bin_: str, argv: Sequence[str]) -> InteractionFeatureSet:
+        matches = [
+            interpreted
+            for name, spec in specs.items()
+            if (
+                interpreted := interpret_argv(
+                    spec,
+                    bin_,
+                    argv,
+                    observed_versions[name],
+                )
+            )
+            is not None
+        ]
+        if len(matches) != 1:
+            raise ValueError("argv is unsupported or ambiguously documented")
+        return InteractionFeatureSet(matches[0].scope, matches[0].features)
+
+    return build
+
+
+def _documented_tools(
+    parsed_clauses: Sequence[Mapping[str, Any]],
+    specs: Mapping[str, ToolSpec],
+    observed_versions: Mapping[str, str],
+) -> tuple[str, ...] | None:
+    tools: list[str] = []
+    for clause in parsed_clauses:
+        bin_ = clause.get("bin")
+        argv = clause.get("argv")
+        if not isinstance(bin_, str) or not isinstance(argv, list) or not argv:
+            return None
+        matches = [
+            name
+            for name, spec in specs.items()
+            if interpret_argv(
+                spec,
+                bin_,
+                tuple(str(value) for value in argv),
+                observed_versions[name],
+            )
+            is not None
+        ]
+        if len(matches) != 1:
+            return None
+        tools.append(matches[0])
+    return tuple(dict.fromkeys(tools)) if tools else None
+
+
+def _public_pools(
+    rows: Sequence[Row],
+    feature_builder=None,
+) -> tuple[
+    dict[str, list[Row]],
+    dict[str, dict[str, list[Row]]],
+    dict[str, list[Row]],
+]:
+    by_scope: dict[str, list[Row]] = defaultdict(list)
+    by_resource_scope = {
+        resource: defaultdict(list)
+        for resource in CANONICAL_RESOURCE_BUCKET_EDGES
+    }
+    by_resource = {
+        resource: [] for resource in CANONICAL_RESOURCE_BUCKET_EDGES
+    }
+    for row in rows:
+        scope = row.bin if feature_builder is None else feature_builder(row.bin, row.argv).bin
+        by_scope[scope].append(row)
+        for resource in CANONICAL_RESOURCE_BUCKET_EDGES:
+            if _row_resource_value(row, resource) is None:
+                continue
+            by_resource_scope[resource][scope].append(row)
+            by_resource[resource].append(row)
+    return by_scope, by_resource_scope, by_resource
+
+
+def _observe_posets(
+    latency: _InteractionPosetKB,
+    resources: Mapping[str, _InteractionPosetKB],
+    rows: Sequence[Row],
+) -> None:
+    latency.observe(rows)
+    for resource, kb in resources.items():
+        kb.observe([row for row in rows if _row_resource_value(row, resource) is not None])
+
+
+def _predict_posets(
+    row: CommandRow,
+    parsed: Mapping[str, Any],
+    latency: _InteractionPosetKB,
+    resources: Mapping[str, _InteractionPosetKB],
+    public_by_scope: Mapping[str, Sequence[Row]],
+    public_by_resource_scope: Mapping[str, Mapping[str, Sequence[Row]]],
+    public: Sequence[Row],
+    public_by_resource: Mapping[str, Sequence[Row]],
+    *,
+    feature_version: str,
+) -> tuple[dict[str, Sequence[float] | None], dict[str, Any]]:
+    clauses = parsed.get("clauses", [])
+    parse_failed = bool(parsed.get("parse_failed"))
+    latency_prediction, latency_unavailable, latency_diagnostic = (
+        _predict_interaction_command(
+            latency,
+            row,
+            clauses,
+            parse_failed=parse_failed,
+            public_by_bin=public_by_scope,
+            public_global=public,
+        )
+    )
+    resource_predictions, resource_unavailable, resource_diagnostic = (
+        _predict_poset_resource_buckets(
+            resources,
+            row,
+            clauses,
+            parse_failed=parse_failed,
+            public_by_resource_bin=public_by_resource_scope,
+            public_by_resource=public_by_resource,
+            feature_version=feature_version,
+        )
+    )
+    return {
+        "latency": (
+            None
+            if latency_prediction is None
+            else latency_prediction.probability_by_bucket
+        ),
+        **{
+            resource: (
+                None
+                if resource_predictions.get(resource) is None
+                else resource_predictions[resource].probability_by_bucket
+            )
+            for resource in CANONICAL_RESOURCE_BUCKET_EDGES
+        },
+    }, {
+        "latency": latency_diagnostic,
+        "resources": resource_diagnostic,
+        "unavailable": latency_unavailable or resource_unavailable,
+    }
+
+
+def _history_row(
+    row: CommandRow,
+    current: Mapping[str, Any] | None = None,
+    pmfs: Mapping[str, Sequence[float] | None] | None = None,
+) -> HistoryRow:
+    return HistoryRow(
+        sample_id=f"{row.task_id}:{row.call_index}",
+        task_id=row.task_id,
+        command=row.command,
+        labels=_labels(row),
+        current=(
+            {target: None for target in _TARGETS}
+            if current is None
+            else dict(current)
+        ),
+        pmfs=(
+            {target: None for target in _TARGETS}
+            if pmfs is None
+            else {
+                target: None if value is None else tuple(value)
+                for target, value in pmfs.items()
+            }
+        ),
+    )
+
+
+def _task_aware(
+    warmup_commands: Sequence[CommandRow],
+    scored_commands: Sequence[CommandRow],
+    baseline_by_sample: Mapping[str, Mapping[str, Any]],
+    *,
+    events_by_task: Mapping[str, Sequence[Any]],
+) -> dict[str, dict[str, Any]]:
+    fit_rows = [_history_row(row) for row in warmup_commands]
+    validation_rows: list[HistoryRow] = []
+    for row in scored_commands:
+        base = baseline_by_sample[f"{row.task_id}:{row.call_index}"]
+        current = dict(base["current_dynamic"])
+        pmfs = current.pop("probability_by_bucket")
+        validation_rows.append(_history_row(row, current, pmfs))
+    _semantic_result, semantic = run_semantic_work_units(fit_rows, validation_rows)
+    _exact_result, exact = run_command_outcome_memory(fit_rows, validation_rows)
+    warmup_ids = list(dict.fromkeys(row.task_id for row in warmup_commands))
+    scored_ids = list(dict.fromkeys(row.task_id for row in scored_commands))
+    warmup_events = {task_id: events_by_task[task_id] for task_id in warmup_ids}
+    if phase_coverage(warmup_ids, warmup_events)["phase_tasks"] < MINIMUM_FIT_TASKS:
+        phase = [
+            {
+                **{key: value for key, value in row.items() if key != "arms"},
+                "phase_applied_targets": [],
+            }
+            for row in semantic
+        ]
+    else:
+        phase_pmfs, _support = fit_phase_pmfs(
+            warmup_ids,
+            warmup_commands,
+            warmup_events,
+        )
+        phase = apply_phase_candidate(
+            list(baseline_by_sample.values()),
+            scored_commands,
+            {task_id: events_by_task[task_id] for task_id in scored_ids},
+            phase_pmfs,
+        )
+    return {
+        str(semantic_row["sample_id"]): _compose(semantic_row, phase_row, exact_row)
+        for semantic_row, phase_row, exact_row in zip(
+            semantic, phase, exact, strict=True
+        )
+    }
+
+
+def _metric_rows(
+    rows: Sequence[Mapping[str, Any]],
+    arm: str,
+    *,
+    reference: str | None = None,
+) -> list[dict[str, Any]]:
+    output = []
+    for row in rows:
+        value = {
+            "sample_id": row["sample_id"],
+            "task_id": row["task_id"],
+            "command": row["command"],
+            "labels": row["labels"],
+            "candidate": row["arms"][arm]["prediction"],
+            "candidate_probability_by_bucket": row["arms"][arm][
+                "probability_by_bucket"
+            ],
+        }
+        if reference is not None:
+            value["reference"] = row["arms"][reference]["prediction"]
+        output.append(value)
+    return output
+
+
+def _arm_metrics(rows: Sequence[Mapping[str, Any]], arm: str) -> dict[str, Any]:
+    metrics: dict[str, Any] = {}
+    accuracies = []
+    severe = []
+    arm_rows = _metric_rows(rows, arm)
+    for target in _TARGETS:
+        eligible = sum(row["labels"][target] is not None for row in rows)
+        if not eligible:
+            metrics[target] = None
+            continue
+        metric = _fail_closed_metrics(arm_rows, target)
+        metrics[target] = metric
+        accuracies.append(
+            metric["exact_class_accuracy" if target == "latency" else "accuracy"]
+        )
+        severe.append(metric["severe_underprediction_rate"])
+    return {
+        "targets": metrics,
+        "equal_weight_accuracy": (
+            None if len(accuracies) != len(_TARGETS) else sum(accuracies) / len(accuracies)
+        ),
+        "equal_weight_severe_underprediction_rate": (
+            None if len(severe) != len(_TARGETS) else sum(severe) / len(severe)
+        ),
+    }
+
+
+def _macro_accuracy_difference(
+    rows: Sequence[Mapping[str, Any]], left: str, right: str
+) -> float:
+    differences = []
+    for target in _TARGETS:
+        eligible = [row for row in rows if row["labels"][target] is not None]
+        if not eligible:
+            raise ValueError(f"no eligible {target} labels")
+        differences.append(
+            sum(
+                (
+                    row["arms"][left]["prediction"][target]
+                    == (
+                        row["labels"][target]
+                        if target == "latency"
+                        else RESOURCE_BUCKET_LABELS[row["labels"][target]]
+                    )
+                )
+                - (
+                    row["arms"][right]["prediction"][target]
+                    == (
+                        row["labels"][target]
+                        if target == "latency"
+                        else RESOURCE_BUCKET_LABELS[row["labels"][target]]
+                    )
+                )
+                for row in eligible
+            )
+            / len(eligible)
+        )
+    return sum(differences) / len(differences)
+
+
+def _paired_macro_bootstrap(
+    rows: Sequence[Mapping[str, Any]], left: str, right: str
+) -> dict[str, Any]:
+    by_task: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_task[str(row["task_id"])].append(row)
+    tasks = sorted(by_task)
+    if not tasks:
+        raise ValueError("task bootstrap has no tasks")
+    rng = random.Random(_BOOTSTRAP_SEED)
+    draws = []
+    for _ in range(_BOOTSTRAP_DRAWS):
+        sample = [tasks[rng.randrange(len(tasks))] for _ in tasks]
+        draws.append(
+            _macro_accuracy_difference(
+                [row for task_id in sample for row in by_task[task_id]],
+                left,
+                right,
+            )
+        )
+    draws.sort()
+
+    def percentile(probability: float) -> float:
+        position = probability * (len(draws) - 1)
+        lower = int(position)
+        upper = min(lower + 1, len(draws) - 1)
+        fraction = position - lower
+        return draws[lower] * (1.0 - fraction) + draws[upper] * fraction
+
+    return {
+        "method": "paired_task_cluster_percentile_bootstrap",
+        "cluster_unit": "task",
+        "seed": _BOOTSTRAP_SEED,
+        "draws": _BOOTSTRAP_DRAWS,
+        "statistic": f"{left}_minus_{right}_equal_weight_accuracy",
+        "point_estimate": _macro_accuracy_difference(rows, left, right),
+        "interval_95": [percentile(0.025), percentile(0.975)],
+    }
+
+
+def _changes(
+    rows: Sequence[Mapping[str, Any]], left: str, right: str
+) -> dict[str, Any]:
+    by_target = {
+        target: _phase_changes(
+            _metric_rows(rows, left, reference=right),
+            target,
+            reference="reference",
+        )
+        for target in _TARGETS
+    }
+    return {
+        "by_target": by_target,
+        "helpful": sum(value["helpful"] for value in by_target.values()),
+        "harmful": sum(value["harmful"] for value in by_target.values()),
+        "changed": sum(value["changed"] for value in by_target.values()),
+        "helpful_task_ids": sorted(
+            {
+                task_id
+                for value in by_target.values()
+                for task_id in value["helpful_task_ids"]
+            }
+        ),
+    }
+
+
+def _report(
+    rows: Sequence[Mapping[str, Any]],
+    provenance: Mapping[str, Any],
+    task_ids: Sequence[str],
+    warmup_task_count: int,
+) -> dict[str, Any]:
+    metrics = {arm: _arm_metrics(rows, arm) for arm in _ARMS}
+    docs_vs_generic = _changes(rows, "docs_poset", "generic_poset")
+    docs_vs_task = _changes(rows, "docs_poset", "task_aware")
+    bootstrap = _paired_macro_bootstrap(rows, "docs_poset", "generic_poset")
+    generic_accuracy = metrics["generic_poset"]["equal_weight_accuracy"]
+    docs_accuracy = metrics["docs_poset"]["equal_weight_accuracy"]
+    task_accuracy = metrics["task_aware"]["equal_weight_accuracy"]
+    generic_severe = metrics["generic_poset"][
+        "equal_weight_severe_underprediction_rate"
+    ]
+    docs_severe = metrics["docs_poset"][
+        "equal_weight_severe_underprediction_rate"
+    ]
+    per_tool: dict[str, Any] = {}
+    for tool in sorted(
+        {tool for row in rows for tool in row.get("documented_tools", [])}
+    ):
+        selected = [row for row in rows if tool in row.get("documented_tools", [])]
+        tool_docs = _arm_metrics(selected, "docs_poset")
+        tool_generic = _arm_metrics(selected, "generic_poset")
+        left = tool_docs["equal_weight_accuracy"]
+        right = tool_generic["equal_weight_accuracy"]
+        per_tool[tool] = {
+            "commands": len(selected),
+            "docs_poset": tool_docs,
+            "generic_poset": tool_generic,
+            "equal_weight_accuracy_difference": (
+                None if left is None or right is None else left - right
+            ),
+        }
+    nonnegative_tools = sum(
+        value["equal_weight_accuracy_difference"] is not None
+        and value["equal_weight_accuracy_difference"] >= 0.0
+        for value in per_tool.values()
+    )
+    checkpoints = {}
+    scored_ids = list(task_ids[warmup_task_count:])
+    for settled in (5, 10, 20, 40):
+        remaining = set(scored_ids[settled:])
+        checkpoints[str(settled)] = (
+            None
+            if not remaining
+            else {
+                arm: _arm_metrics(
+                    [row for row in rows if row["task_id"] in remaining], arm
+                )["equal_weight_accuracy"]
+                for arm in _ARMS
+            }
+        )
+    development_go = (
+        docs_accuracy is not None
+        and generic_accuracy is not None
+        and docs_accuracy > generic_accuracy
+        and docs_vs_generic["helpful"] > docs_vs_generic["harmful"]
+        and docs_severe is not None
+        and generic_severe is not None
+        and docs_severe <= generic_severe
+        and len(docs_vs_generic["helpful_task_ids"]) > 1
+    )
+    validation_go = (
+        bootstrap["interval_95"][0] > 0.0
+        and docs_vs_generic["helpful"] > docs_vs_generic["harmful"]
+        and docs_severe is not None
+        and generic_severe is not None
+        and docs_severe <= generic_severe
+        and nonnegative_tools >= 3
+        and len(docs_vs_generic["helpful_task_ids"]) > 1
+        and docs_accuracy is not None
+        and task_accuracy is not None
+        and docs_accuracy >= task_accuracy
+    )
+    return {
+        "schema": "offline-tool-semantics-evaluation-v1",
+        "claim_bearing": False,
+        "provenance": dict(provenance),
+        "protocol": {
+            "targets": {"latency_buckets": 5, "cpu_rss_disk_buckets": 3},
+            "warmup_task_count": warmup_task_count,
+            "scored_task_count": len(scored_ids),
+            "causal_update": "whole-task settlement",
+            "raw_prefix_max_depth": _RAW_PREFIX_DEPTH,
+            "macro": "equal weight across four targets",
+        },
+        "arms": metrics,
+        "per_tool": per_tool,
+        "comparisons": {
+            "docs_poset_minus_generic_poset": {
+                "changes": docs_vs_generic,
+                "bootstrap": bootstrap,
+            },
+            "docs_poset_minus_task_aware": {"changes": docs_vs_task},
+        },
+        "cold_start_checkpoints": checkpoints,
+        "gates": {
+            "development_go": development_go,
+            "validation_go": validation_go,
+            "nonnegative_supported_tools": nonnegative_tools,
+        },
+        "row_identity": {
+            "identical_command_ids_and_labels": True,
+            "identical_availability": True,
+            "commands": len(rows),
+        },
+    }
+
+
+def evaluate_doc_semantics(
+    public_rows: Sequence[Row],
+    task_ids: Sequence[str],
+    clause_rows: Sequence[Row],
+    command_rows: Sequence[CommandRow],
+    specs: Mapping[str, ToolSpec],
+    *,
+    warmup_task_count: int,
+    provenance: Mapping[str, Any],
+    observed_versions: Mapping[str, str] | None = None,
+    allow_unverified_versions: bool = False,
+    events_by_task: Mapping[str, Sequence[Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Score the six frozen arms on one same-repository causal stream."""
+
+    if allow_unverified_versions and observed_versions is not None:
+        raise ValueError("cannot combine verified and unverified tool versions")
+    if not specs:
+        raise ValueError("at least one valid ToolSpec is required")
+    versions = (
+        {name: spec.documented_version for name, spec in specs.items()}
+        if allow_unverified_versions
+        else dict(observed_versions or {})
+    )
+    if set(versions) != set(specs):
+        raise ValueError("observed tool versions differ from generated specs")
+    if not 0 < warmup_task_count < len(task_ids):
+        raise ValueError("warmup must leave at least one scored task")
+    if list(events_by_task) != list(task_ids):
+        raise ValueError("Task-Aware requires ordered raw events for every task")
+
+    baseline_result, baseline_rows = evaluate_prequential_commands(
+        public_rows,
+        task_ids,
+        clause_rows,
+        command_rows,
+        provenance,
+        warmup_task_count=warmup_task_count,
+    )
+    del baseline_result
+    baseline_by_sample = {str(row["sample_id"]): row for row in baseline_rows}
+    if len(baseline_by_sample) != len(baseline_rows):
+        raise AssertionError("Clause-KB baseline contains duplicate commands")
+
+    commands_by_task: dict[str, list[CommandRow]] = defaultdict(list)
+    clauses_by_task: dict[str, list[Row]] = defaultdict(list)
+    for row in command_rows:
+        commands_by_task[row.task_id].append(row)
+    for row in clause_rows:
+        clauses_by_task[row.task_id].append(row)
+    warmup_ids = list(task_ids[:warmup_task_count])
+    scored_ids = list(task_ids[warmup_task_count:])
+    warmup_commands = [row for task_id in warmup_ids for row in commands_by_task[task_id]]
+    scored_commands = [row for task_id in scored_ids for row in commands_by_task[task_id]]
+    if [f"{row.task_id}:{row.call_index}" for row in scored_commands] != list(
+        baseline_by_sample
+    ):
+        raise AssertionError("Clause-KB baseline differs from command order")
+
+    fit_labels = {target: [] for target in _TARGETS}
+    for row in warmup_commands:
+        for target, label in _labels(row).items():
+            if label is not None:
+                fit_labels[target].append(label)
+    if any(not values for values in fit_labels.values()):
+        raise ValueError("fit-set Majority lacks an eligible target label")
+    majority = {
+        target: _empirical_pmf(values, BUCKETS[target])
+        for target, values in fit_labels.items()
+    }
+
+    prefix_history: dict[str, dict[str, list[int]]] = {
+        target: defaultdict(list) for target in _TARGETS
+    }
+
+    def absorb_prefix(rows: Sequence[CommandRow]) -> None:
+        for row in rows:
+            keys = command_prefix_keys(
+                "exec", row.command, max_depth=_RAW_PREFIX_DEPTH
+            )
+            labels = _labels(row)
+            for target, label in labels.items():
+                if label is None:
+                    continue
+                for key in keys:
+                    prefix_history[target][key].append(label)
+
+    absorb_prefix(warmup_commands)
+    public = tuple(
+        row
+        for row in public_rows
+        if row.structure_known and row.pipeline_position <= 0
+    )
+    if not public:
+        raise ValueError("no eligible public evidence")
+    doc_builder = _doc_feature_builder(specs, versions)
+    doc_public = tuple(
+        row
+        for row in public
+        if _documented_tools(
+            ({"bin": row.bin, "argv": list(row.argv)},), specs, versions
+        )
+        is not None
+    )
+    stable_subcommands = _fit_stable_subcommands(
+        row.observation(0.0, 1.0) for row in doc_public
+    )
+    generic_latency = _InteractionPosetKB(stable_subcommands)
+    generic_resources = {
+        resource: _InteractionPosetKB(stable_subcommands)
+        for resource in CANONICAL_RESOURCE_BUCKET_EDGES
+    }
+    generic_pools = _public_pools(doc_public) if doc_public else ({}, {}, {})
+    docs_latency = _InteractionPosetKB(feature_builder=doc_builder)
+    docs_resources = {
+        resource: _InteractionPosetKB(feature_builder=doc_builder)
+        for resource in CANONICAL_RESOURCE_BUCKET_EDGES
+    }
+    docs_pools = _public_pools(doc_public, doc_builder) if doc_public else ({}, {}, {})
+
+    warmup_clauses = [row for task_id in warmup_ids for row in clauses_by_task[task_id]]
+    documented_warmup = [
+        row
+        for row in warmup_clauses
+        if _documented_tools(
+            ({"bin": row.bin, "argv": list(row.argv)},), specs, versions
+        )
+        is not None
+    ]
+    _observe_posets(generic_latency, generic_resources, documented_warmup)
+    _observe_posets(
+        docs_latency,
+        docs_resources,
+        documented_warmup,
+    )
+    public_kb = ClauseResourceKB.fit_public(
+        row.observation(0.0, 1.0) for row in public
+    )
+
+    rows: list[dict[str, Any]] = []
+    for task_id in scored_ids:
+        task_outputs = []
+        for row in commands_by_task[task_id]:
+            sample_id = f"{row.task_id}:{row.call_index}"
+            base = baseline_by_sample[sample_id]
+            current = dict(base["current_dynamic"])
+            current_pmfs = current.pop("probability_by_bucket")
+            parsed = parse_command_clauses(row.command)
+            parsed_clauses = parsed.get("clauses", [])
+            documented = (
+                None
+                if parsed.get("parse_failed")
+                else _documented_tools(parsed_clauses, specs, versions)
+            )
+            docs_ready = (
+                documented is not None
+                and bool(doc_public)
+                and all(docs_pools[2].get(resource) for resource in CANONICAL_RESOURCE_BUCKET_EDGES)
+            )
+            if docs_ready:
+                generic_pmfs, generic_diagnostic = _predict_posets(
+                    row,
+                    parsed,
+                    generic_latency,
+                    generic_resources,
+                    generic_pools[0],
+                    generic_pools[1],
+                    doc_public,
+                    generic_pools[2],
+                    feature_version=INTERACTION_FEATURE_VERSION,
+                )
+                docs_pmfs, docs_diagnostic = _predict_posets(
+                    row,
+                    parsed,
+                    docs_latency,
+                    docs_resources,
+                    docs_pools[0],
+                    docs_pools[1],
+                    doc_public,
+                    docs_pools[2],
+                    feature_version="documentation-tool-spec-v1",
+                )
+            else:
+                generic_pmfs, generic_diagnostic = current_pmfs, {
+                    "fallback": "clause_kb"
+                }
+                docs_pmfs, docs_diagnostic = current_pmfs, {"fallback": "clause_kb"}
+
+            def aligned(candidate: Mapping[str, Sequence[float] | None]):
+                return {
+                    target: (
+                        None
+                        if current_pmfs[target] is None
+                        else current_pmfs[target]
+                        if candidate.get(target) is None
+                        else candidate[target]
+                    )
+                    for target in _TARGETS
+                }
+
+            keys = command_prefix_keys(
+                "exec", row.command, max_depth=_RAW_PREFIX_DEPTH
+            )
+            public_latency = public_kb.predict_command_latency_bucket(
+                row.repo,
+                row.command,
+                3.0,
+                CANONICAL_LATENCY_BUCKETS,
+            ).prediction
+            public_resources = public_kb.predict_command_resource_buckets(
+                row.repo,
+                row.command,
+                3.0,
+            ).classifications
+            public_pmfs = {
+                "latency": (
+                    None
+                    if public_latency is None
+                    else public_latency.probability_by_bucket
+                ),
+                **{
+                    resource: (
+                        None
+                        if public_resources[resource] is None
+                        else public_resources[resource].probability_by_bucket
+                    )
+                    for resource in CANONICAL_RESOURCE_BUCKET_EDGES
+                },
+            }
+            prefix_pmfs = {}
+            for target in _TARGETS:
+                values = next(
+                    (
+                        prefix_history[target][key]
+                        for key in reversed(keys)
+                        if prefix_history[target].get(key)
+                    ),
+                    None,
+                )
+                if current_pmfs[target] is None:
+                    prefix_pmfs[target] = None
+                elif values is not None:
+                    prefix_pmfs[target] = _empirical_pmf(values, BUCKETS[target])
+                elif public_pmfs[target] is None:
+                    raise ValueError(f"public prefix fallback lacks {target}")
+                else:
+                    prefix_pmfs[target] = public_pmfs[target]
+            majority_pmfs = {
+                target: None if current_pmfs[target] is None else majority[target]
+                for target in _TARGETS
+            }
+            task_outputs.append(
+                {
+                    "sample_id": sample_id,
+                    "task_id": row.task_id,
+                    "command": row.command,
+                    "labels": _labels(row),
+                    "documented_tools": [] if documented is None else list(documented),
+                    "arms": {
+                        "majority": _arm(majority_pmfs),
+                        "raw_prefix": _arm(prefix_pmfs),
+                        "clause_kb": _arm(current_pmfs),
+                        "generic_poset": _arm(
+                            aligned(generic_pmfs), provenance=generic_diagnostic
+                        ),
+                        "docs_poset": _arm(
+                            aligned(docs_pmfs), provenance=docs_diagnostic
+                        ),
+                    },
+                }
+            )
+        rows.extend(task_outputs)
+        absorb_prefix(commands_by_task[task_id])
+        settled = clauses_by_task[task_id]
+        documented_settled = [
+            row
+            for row in settled
+            if _documented_tools(
+                ({"bin": row.bin, "argv": list(row.argv)},), specs, versions
+            )
+            is not None
+        ]
+        _observe_posets(generic_latency, generic_resources, documented_settled)
+        _observe_posets(
+            docs_latency,
+            docs_resources,
+            documented_settled,
+        )
+
+    task_aware = _task_aware(
+        warmup_commands,
+        scored_commands,
+        baseline_by_sample,
+        events_by_task=events_by_task,
+    )
+    for row in rows:
+        selected = task_aware[row["sample_id"]]
+        clause_pmfs = row["arms"]["clause_kb"]["probability_by_bucket"]
+        task_pmfs = {
+            target: (
+                None
+                if clause_pmfs[target] is None
+                else clause_pmfs[target]
+                if selected["candidate_probability_by_bucket"][target] is None
+                else selected["candidate_probability_by_bucket"][target]
+            )
+            for target in _TARGETS
+        }
+        row["arms"]["task_aware"] = _arm(
+            task_pmfs,
+            provenance=selected.get("provenance", {}),
+        )
+        if set(row["arms"]) != set(_ARMS):
+            raise AssertionError("evaluation arms differ")
+        availability = {
+            arm: tuple(
+                row["arms"][arm]["probability_by_bucket"][target] is not None
+                for target in _TARGETS
+            )
+            for arm in _ARMS
+        }
+        if len(set(availability.values())) != 1:
+            raise AssertionError("evaluation arms differ in prediction availability")
+
+    return _report(rows, provenance, task_ids, warmup_task_count), rows
 
 
 def _run_attempts(run_dir: Path, versions: Mapping[str, str]) -> list[tuple[str, str, Path]]:

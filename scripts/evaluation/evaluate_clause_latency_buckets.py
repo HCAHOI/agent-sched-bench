@@ -66,6 +66,7 @@ from tool_resource.runtime_kb import (  # noqa: E402
     ClauseLatencyBucketPrediction,
     ClauseResourceBucketPrediction,
     ClauseResourceKB,
+    LatencyBuckets,
     _canonical_dynamic_value,
     _command_stages,
     _fit_stable_subcommands,
@@ -1384,7 +1385,10 @@ def _candidate_clause_evidence(
             public_key_kind=None,
         )
 
-    public = tuple(public_by_bin.get(row.bin, ()))
+    public_scope = (
+        kb.feature_set(row).bin if isinstance(kb, _InteractionPosetKB) else row.bin
+    )
+    public = tuple(public_by_bin.get(public_scope, ()))
     public_key_kind = "bin"
     if not public:
         public = tuple(public_global)
@@ -1414,10 +1418,11 @@ def _candidate_clause_evidence(
 def _weighted_bucket_probabilities(
     values: Sequence[float],
     weights: Sequence[float],
+    buckets: LatencyBuckets = CANONICAL_LATENCY_BUCKETS,
 ) -> tuple[float, ...]:
-    totals = [0.0] * CANONICAL_LATENCY_BUCKETS.bucket_count
+    totals = [0.0] * buckets.bucket_count
     for value, weight in zip(values, weights, strict=True):
-        totals[CANONICAL_LATENCY_BUCKETS.bucket_id(value)] += weight
+        totals[buckets.bucket_id(value)] += weight
     total = sum(totals)
     if total <= 0.0:
         raise ValueError("weighted evidence has no positive mass")
@@ -1634,7 +1639,7 @@ def _poset_resource_evidence(
             key_kind="exact_clause",
             public_key_kind=None,
         )
-    public = tuple(public_by_bin.get(row.bin, ()))
+    public = tuple(public_by_bin.get(kb.feature_set(row).bin, ()))
     public_key_kind = "bin"
     if not public:
         public = tuple(public_global)
@@ -1799,6 +1804,143 @@ def _predict_poset_resources(
             ),
             "minimum_effective_sample_size": min(
                 item.effective_sample_size for item in evidence
+            ),
+        }
+    return predictions, None, diagnostics
+
+
+def _predict_poset_resource_buckets(
+    kbs: Mapping[str, _InteractionPosetKB],
+    row: CommandRow,
+    parsed_clauses: Sequence[Mapping[str, Any]],
+    *,
+    parse_failed: bool,
+    public_by_resource_bin: Mapping[str, Mapping[str, Sequence[Row]]],
+    public_by_resource: Mapping[str, Sequence[Row]],
+    feature_version: str = INTERACTION_FEATURE_VERSION,
+) -> tuple[
+    dict[str, ClauseResourceBucketPrediction | None],
+    str | None,
+    dict[str, Any],
+]:
+    """Predict canonical resource buckets with physical-value composition."""
+
+    if parse_failed:
+        return {}, "parse_failed", {}
+    query_clauses = _interaction_query_clauses(parsed_clauses)
+    if not query_clauses:
+        return {}, "no_executable_clause", {}
+    stages = _command_stages(parsed_clauses)
+    if stages is None:
+        return {}, "compound_composition_unavailable", {}
+    predictions: dict[str, ClauseResourceBucketPrediction | None] = {}
+    diagnostics: dict[str, Any] = {}
+    for resource, edges in CANONICAL_RESOURCE_BUCKET_EDGES.items():
+        evidence = tuple(
+            _poset_resource_evidence(
+                kbs[resource],
+                clause,
+                public_by_resource_bin[resource],
+                public_by_resource[resource],
+                resource,
+            )
+            for clause in query_clauses
+        )
+        buckets = LatencyBuckets(tuple(edges))
+        if len(evidence) == 1:
+            probabilities = _weighted_bucket_probabilities(
+                evidence[0].values,
+                evidence[0].weights,
+                buckets,
+            )
+        else:
+            draws = tuple(
+                _weighted_stratified_draws(
+                    item.values,
+                    item.weights,
+                    (
+                        f"{row.command}\0{resource}\0{index}\0"
+                        f"{'repo' if item.exact else 'repo+public' if item.nonexact_local else 'public'}\0"
+                        f"{'exact_clause' if item.exact else 'weighted_pool' if item.nonexact_local else item.public_key_kind}"
+                    ),
+                )
+                for index, item in enumerate(evidence)
+            )
+            composed = tuple(
+                (
+                    sum(
+                        sum(draws[index][draw] for index in stage)
+                        for stage in stages
+                    )
+                    if resource == "disk_read_write_bytes_total"
+                    else max(
+                        sum(draws[index][draw] for index in stage)
+                        for stage in stages
+                    )
+                )
+                for draw in range(COMMAND_COMPOSITION_DRAWS)
+            )
+            probabilities = _weighted_bucket_probabilities(
+                composed,
+                (1.0,) * len(composed),
+                buckets,
+            )
+        local_counts = [item.local_observation_count for item in evidence]
+        public_counts = [
+            len(item.values) - item.local_observation_count for item in evidence
+        ]
+        exact = all(item.exact for item in evidence)
+        prediction_id = _argmax_probabilities(probabilities)
+        predictions[resource] = ClauseResourceBucketPrediction(
+            resource=resource,
+            bucket_edges=tuple(edges),
+            probability_by_bucket=probabilities,
+            bucket_id=prediction_id,
+            label=RESOURCE_BUCKET_LABELS[prediction_id],
+            scope=(
+                "repo"
+                if exact
+                else "repo+public"
+                if any(local_counts)
+                else "public"
+            ),
+            key_kind=(
+                evidence[0].key_kind
+                if len(evidence) == 1
+                else "shell_execution_graph"
+            ),
+            evidence_count=min(len(item.values) for item in evidence),
+            fallback_path=tuple(
+                f"clause[{index}]:{item.key_kind}"
+                for index, item in enumerate(evidence)
+            ),
+            canonicalizer_version=feature_version,
+            arbitration="exact-or-weighted-public-pooling-v1",
+            local_key_kind="interaction_poset" if any(local_counts) else None,
+            local_evidence_count=min(local_counts),
+            public_key_kind=(
+                None
+                if exact
+                else "+".join(
+                    sorted(
+                        {
+                            item.public_key_kind
+                            for item in evidence
+                            if item.public_key_kind is not None
+                        }
+                    )
+                )
+            ),
+            public_evidence_count=min(public_counts),
+            shrinkage_alpha=None if exact else INTERACTION_ALPHA,
+        )
+        diagnostics[resource] = {
+            "carrier": any(item.nonexact_local for item in evidence),
+            "all_clauses_exact": exact,
+            "distinct_contributing_tasks": len(
+                frozenset().union(
+                    *(item.contributing_task_ids for item in evidence)
+                )
             ),
         }
     return predictions, None, diagnostics
