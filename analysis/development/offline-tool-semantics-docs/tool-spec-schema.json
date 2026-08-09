@@ -1,0 +1,338 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "documented_version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "invocations": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "tokens": {
+            "items": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "tokens",
+          "operation"
+        ],
+        "type": "object"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "type": "array"
+    },
+    "operations": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "arguments": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "arity": {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                "forms": {
+                  "items": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 8,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "id": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "repeatable": {
+                  "type": "boolean"
+                },
+                "role": {
+                  "enum": [
+                    "execution_policy",
+                    "opaque",
+                    "output",
+                    "work_item",
+                    "work_selector"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "forms",
+                "arity",
+                "role",
+                "repeatable"
+              ],
+              "type": "object"
+            },
+            "maxItems": 128,
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "positionals": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "max_items": {
+                    "maximum": 64,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "min_items": {
+                    "maximum": 64,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "role": {
+                    "enum": [
+                      "execution_policy",
+                      "opaque",
+                      "output",
+                      "work_item",
+                      "work_selector"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "role",
+                  "min_items",
+                  "max_items"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "arguments",
+          "positionals"
+        ],
+        "type": "object"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "type": "array"
+    },
+    "relations": {
+      "items": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "argument": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "const": "unordered_collection",
+                "type": "string"
+              },
+              "operation": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "operation",
+              "argument"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "argument": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "const": "fixed_value_equivalence",
+                "type": "string"
+              },
+              "operation": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "other": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "value": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "operation",
+              "argument",
+              "other",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "argument": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "delimiter": {
+                "maxLength": 8,
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "const": "scope_order",
+                "type": "string"
+              },
+              "operation": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "operation",
+              "argument",
+              "delimiter"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "argument": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "const": "requires",
+                "type": "string"
+              },
+              "operation": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "other": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "operation",
+              "argument",
+              "other"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "argument": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "const": "excludes",
+                "type": "string"
+              },
+              "operation": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "other": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "operation",
+              "argument",
+              "other"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "schema": {
+      "const": "tool-spec-v1",
+      "type": "string"
+    },
+    "tool": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "tool",
+    "documented_version",
+    "invocations",
+    "operations",
+    "relations"
+  ],
+  "type": "object"
+}

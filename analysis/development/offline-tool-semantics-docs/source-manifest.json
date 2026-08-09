@@ -1,0 +1,65 @@
+{
+  "schema": "offline-tool-semantics-source-manifest-v1",
+  "purpose": "label-free deployed CLI documentation snapshot",
+  "selected_image": {
+    "name": "swerebench/sweb.eval.x86_64.pennylaneai_1776_pennylane-963:latest",
+    "id": "sha256:9f9786e126ca5e47a3a535a9b9b4b85e0d357da95bb594c3ff59fe62af36cf0a"
+  },
+  "version_probe": {
+    "images": [
+      "swerebench/sweb.eval.x86_64.pennylaneai_1776_pennylane-963:latest",
+      "swerebench/sweb.eval.x86_64.pennylaneai_1776_pennylane-4421:latest",
+      "swerebench/sweb.eval.x86_64.pennylaneai_1776_pennylane-3477:latest"
+    ],
+    "identical": true,
+    "versions": {
+      "pip_install": "24.2",
+      "pytest": "8.3.5",
+      "git": "2.39.2",
+      "make": "4.3"
+    },
+    "evidence_boundary": "existing quarantined images; no agent, trace, or task outcome opened"
+  },
+  "tools": {
+    "pip_install": {
+      "documented_version": "24.2",
+      "file": "pip-24.2.txt",
+      "bytes": 15433,
+      "source_command": "/opt/conda/bin/python -m pip install --help"
+    },
+    "pytest": {
+      "documented_version": "8.3.5",
+      "file": "pytest-8.3.5.txt",
+      "bytes": 19098,
+      "source_command": "/opt/conda/envs/testbed/bin/python -m pytest --help",
+      "working_directory": "/tmp",
+      "deployed_plugins_included": true
+    },
+    "git": {
+      "documented_version": "2.39.2",
+      "file": "git-2.39.2.txt",
+      "bytes": 57926,
+      "source_command": "git --help; git help -a; git <documented-common-command> -h"
+    },
+    "make": {
+      "documented_version": "4.3",
+      "file": "make-4.3.txt",
+      "bytes": 2774,
+      "source_command": "make --help"
+    }
+  },
+  "generator_visibility": [
+    "one tool name",
+    "one exact version",
+    "that tool's snapshot",
+    "prompt-template.md",
+    "tool-spec-schema.json"
+  ],
+  "generator_forbidden_visibility": [
+    "argv or commands from traces",
+    "repository or task identity",
+    "tool outputs or errors from tasks",
+    "latency, CPU, RSS, or Disk labels",
+    "prior generated specifications"
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "schema": "offline-tool-semantics-generation-protocol-v1",
+  "frozen_code": {
+    "evaluator_commit": "9df786eb4ec71d2f4a5c5c1ba72a4576bdade5b5",
+    "split_commit": "85efe226f3746994b0870466620d980523a0a150",
+    "tool_spec_commit": "c7cf30b90177920a9b92d82caa050de41c615fec",
+    "design_commit": "a834ef3043f563d2976a4ad24a5be9b996b27e88"
+  },
+  "split_manifest": "analysis/development/offline-tool-semantics-splits.json",
+  "public_telemetry": [
+    "traces/swe-rebench/qwen3.7-max/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+    "traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl"
+  ],
+  "public_excluded_repositories": [
+    "tobymao/sqlglot",
+    "PennyLaneAI/pennylane",
+    "iterative/dvc"
+  ],
+  "development_role": "SQLGlot 100 warmup plus 100 scored; exposed and non-confirmatory",
+  "generation": {
+    "calls_per_tool": 1,
+    "model": "gpt-5.6-sol",
+    "requested_service_tier": "fast",
+    "reasoning_effort": "medium",
+    "temperature": "unsupported_by_codex_provider",
+    "sandbox": "read-only",
+    "maximum_input_tokens": 64000,
+    "maximum_response_bytes": 65536,
+    "repair_calls": 0,
+    "invalid_result": "tool unsupported"
+  },
+  "arms": [
+    "majority",
+    "raw_prefix",
+    "clause_kb",
+    "task_aware",
+    "generic_poset",
+    "docs_poset"
+  ],
+  "host_semantics": {
+    "targets": "latency 5 buckets; CPU, sampled RSS, and Disk each 3 buckets",
+    "update": "whole-task settlement",
+    "generic_and_docs_evidence": "identical ToolSpec-eligible rows",
+    "unsupported_command": "generic and docs copy Clause-KB PMFs bit-for-bit",
+    "raw_prefix_depth": 4,
+    "raw_prefix_miss": "frozen public Clause-KB",
+    "task_aware": "semantic work units, full-test phase, exact-command Disk",
+    "compound": "compose physical values before bucketing"
+  },
+  "uncertainty": {
+    "method": "paired task-cluster percentile bootstrap",
+    "draws": 2000,
+    "seed": 0,
+    "interval": 0.95
+  },
+  "development_gate": [
+    "docs equal-weight four-target accuracy strictly exceeds generic",
+    "docs helpful changes exceed harmful changes versus generic",
+    "docs equal-weight severe underprediction does not exceed generic",
+    "helpful gains span more than one task"
+  ],
+  "validation_gate": [
+    "bootstrap 95 percent lower bound for docs minus generic exceeds zero",
+    "helpful changes exceed harmful changes",
+    "severe underprediction does not worsen",
+    "at least three supported tools have non-negative direction",
+    "helpful gains span more than one task",
+    "docs equal-weight accuracy is non-negative versus Task-Aware"
+  ],
+  "version_policy": {
+    "sqlglot_development": "selected versions used without historical verification; development only",
+    "fresh_collection": "pre-agent exact binary probes required; mismatch abstains and cannot be repaired"
+  }
+}

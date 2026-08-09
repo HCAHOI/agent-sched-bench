@@ -1,7 +1,15 @@
 import json
 from pathlib import Path
+import subprocess
 
+import pytest
+
+import scripts.evaluation.evaluate_doc_tool_semantics as doc_tool_semantics
 from scripts.evaluation.evaluate_doc_tool_semantics import (
+    _generation_status,
+    _generated_specs,
+    _render_generation_prompt,
+    _validated_response_text,
     build_split_manifest,
     census_attempts,
     evaluate_doc_semantics,
@@ -114,6 +122,140 @@ def test_census_projects_valid_exec_commands_to_counts_only(tmp_path: Path) -> N
     serialized = json.dumps(census)
     assert "install a b" not in serialized
     assert "private" not in serialized
+
+
+def test_generation_prompt_contains_only_the_selected_tool_source() -> None:
+    prompt = _render_generation_prompt(
+        "tool={{TOOL}} version={{VERSION}}\n{{DOCUMENTATION}}",
+        "pytest",
+        "8.3.5",
+        "official help only",
+    )
+
+    assert prompt == "tool=pytest version=8.3.5\nofficial help only"
+
+
+def test_generated_specs_rejects_a_fabricated_protocol(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(doc_tool_semantics, "_GENERATION_OUTPUT", tmp_path)
+    (tmp_path / "generation-artifact.json").write_text(
+        json.dumps(
+            {
+                "schema": "offline-tool-semantics-generation-v1",
+                "preregistration_commit": "fabricated",
+                "model": "not-the-frozen-model",
+                "requested_service_tier": "fast",
+                "reasoning_effort": "medium",
+                "temperature": "unsupported_by_codex_provider",
+                "codex_version": "codex 1.0",
+                "tools": {},
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="generation artifact differs"):
+        _generated_specs()
+
+
+def test_generation_status_keeps_an_overbudget_response_unsupported() -> None:
+    spec = validate_tool_spec(
+        {
+            "schema": "tool-spec-v1",
+            "tool": "pytest",
+            "documented_version": "8.3.5",
+            "invocations": [{"tokens": ["pytest"], "operation": "run"}],
+            "operations": [
+                {
+                    "name": "run",
+                    "arguments": [],
+                    "positionals": {
+                        "id": "targets",
+                        "role": "work_item",
+                        "min_items": 1,
+                        "max_items": 8,
+                    },
+                }
+            ],
+            "relations": [],
+        }
+    )
+    assert spec is not None
+
+    assert (
+        _generation_status("pytest", "8.3.5", spec, 100, {"input_tokens": 64_001})
+        == "unsupported_structural_failure"
+    )
+
+
+def test_generation_response_rejects_text_different_from_agent_message() -> None:
+    with pytest.raises(ValueError, match="response differs"):
+        _validated_response_text(
+            [
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "{}"},
+                }
+            ],
+            '{"schema":"tool-spec-v1"}',
+            "pytest",
+        )
+
+
+def test_generation_records_post_call_validation_failure_and_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+
+    def fake_codex_call(
+        prompt: str, schema: dict[str, object], directory: Path, tool: str
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        del schema
+        calls.append(tool)
+        response_text = "{}"
+        (directory / f"{tool}.response.json").write_text(response_text)
+        (directory / f"{tool}.events.jsonl").write_text(
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "agent_message",
+                        "text": "mismatch" if tool == "git" else response_text,
+                    },
+                }
+            )
+            + "\n"
+        )
+        return {}, {
+            "prompt_bytes": len(prompt.encode()),
+            "wall_seconds": 0.0,
+            "usage": {
+                "input_tokens": 1,
+                "cached_input_tokens": 0,
+                "output_tokens": 1,
+            },
+        }
+
+    monkeypatch.setattr(
+        doc_tool_semantics, "_GENERATION_OUTPUT", tmp_path / "generation"
+    )
+    monkeypatch.setattr(
+        doc_tool_semantics, "_generation_worktree_head", lambda: "f" * 40
+    )
+    monkeypatch.setattr(doc_tool_semantics, "_codex_call", fake_codex_call)
+    monkeypatch.setattr(
+        doc_tool_semantics.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, "fixture\n"),
+    )
+
+    doc_tool_semantics._generate_specs()
+
+    artifact = json.loads(
+        (tmp_path / "generation" / "generation-artifact.json").read_text()
+    )
+    assert artifact["tools"]["git"]["status"] == "unsupported_generation_failure"
+    assert calls == ["git", "make", "pip_install", "pytest"]
 
 
 def test_causal_evaluator_keeps_rows_and_falls_back_for_unsupported_tools() -> None:
@@ -250,20 +392,27 @@ def test_causal_evaluator_keeps_rows_and_falls_back_for_unsupported_tools() -> N
         "generic_poset",
         "docs_poset",
     }
-    assert rows[0]["arms"]["docs_poset"]["probability_by_bucket"] == rows[1][
-        "arms"
-    ]["docs_poset"]["probability_by_bucket"]
-    assert rows[0]["arms"]["generic_poset"]["provenance"]["latency"][
-        "clauses"
-    ][0]["local_observation_count"] == rows[0]["arms"]["docs_poset"][
-        "provenance"
-    ]["latency"]["clauses"][0]["local_observation_count"] == 1
-    assert rows[2]["arms"]["docs_poset"]["probability_by_bucket"] == rows[2][
-        "arms"
-    ]["clause_kb"]["probability_by_bucket"]
-    assert rows[3]["arms"]["docs_poset"]["probability_by_bucket"] != rows[0][
-        "arms"
-    ]["docs_poset"]["probability_by_bucket"]
+    assert (
+        rows[0]["arms"]["docs_poset"]["probability_by_bucket"]
+        == rows[1]["arms"]["docs_poset"]["probability_by_bucket"]
+    )
+    assert (
+        rows[0]["arms"]["generic_poset"]["provenance"]["latency"]["clauses"][0][
+            "local_observation_count"
+        ]
+        == rows[0]["arms"]["docs_poset"]["provenance"]["latency"]["clauses"][0][
+            "local_observation_count"
+        ]
+        == 1
+    )
+    assert (
+        rows[2]["arms"]["docs_poset"]["probability_by_bucket"]
+        == rows[2]["arms"]["clause_kb"]["probability_by_bucket"]
+    )
+    assert (
+        rows[3]["arms"]["docs_poset"]["probability_by_bucket"]
+        != rows[0]["arms"]["docs_poset"]["probability_by_bucket"]
+    )
 
 
 def test_raw_prefix_miss_uses_frozen_public_fallback() -> None:

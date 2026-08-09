@@ -5,12 +5,17 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
+from dataclasses import replace
 import json
 import os
 from pathlib import Path, PurePosixPath
 import random
+import subprocess
 import sys
+import time
 from typing import Any, Iterable, Mapping, Sequence
+
+import tiktoken
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
@@ -32,6 +37,11 @@ from scripts.evaluation.evaluate_clause_resource_classes import (  # noqa: E402
     CommandRow,
     Row,
     command_resource_bucket_label,
+    load_rows,
+    load_run_rows,
+)
+from scripts.evaluation.evaluate_command_prequential import (  # noqa: E402
+    _load_exec_events,
 )
 from scripts.evaluation.evaluate_command_history_residual import (  # noqa: E402
     BUCKETS,
@@ -51,6 +61,11 @@ from scripts.evaluation.evaluate_full_test_phase_fresh import (  # noqa: E402
     fit_phase_pmfs,
     phase_coverage,
 )
+from scripts.evaluation.evaluate_offline_agent_extractor import (  # noqa: E402
+    _codex_call,
+    _validated_usage,
+)
+from scripts.evaluation.classify_full_test_states import _is_tool_free_event  # noqa: E402
 from tool_resource.clause_parser import parse_command_clauses  # noqa: E402
 from tool_resource.pip_semantics import parse_pip_install  # noqa: E402
 from tool_resource.pytest_semantics import is_pytest_invocation  # noqa: E402
@@ -60,7 +75,12 @@ from tool_resource.runtime_kb import (  # noqa: E402
     RESOURCE_BUCKET_LABELS,
     ClauseResourceKB,
 )
-from tool_resource.tool_spec import ToolSpec, interpret_argv  # noqa: E402
+from tool_resource.tool_spec import (  # noqa: E402
+    ToolSpec,
+    interpret_argv,
+    tool_spec_schema,
+    validate_tool_spec,
+)
 from tool_time.command import command_prefix_keys  # noqa: E402
 
 
@@ -94,6 +114,11 @@ _ARMS = (
 _RAW_PREFIX_DEPTH = 4
 _BOOTSTRAP_DRAWS = 2_000
 _BOOTSTRAP_SEED = 0
+_GENERATION_SOURCES = _REPO_ROOT / "analysis/development/offline-tool-semantics-docs"
+_GENERATION_OUTPUT = _REPO_ROOT / "analysis/results/offline-tool-semantics-sqlglot-v1"
+_SPLIT_MANIFEST = _REPO_ROOT / "analysis/development/offline-tool-semantics-splits.json"
+_MAX_GENERATION_INPUT_TOKENS = 64_000
+_MAX_GENERATION_RESPONSE_BYTES = 65_536
 
 
 def traced_task_ids(trace_root: Path, known_ids: set[str]) -> set[str]:
@@ -125,10 +150,14 @@ def _ordered_tasks(
     return sorted(selected, key=lambda row: (row["created_at"], row["instance_id"]))
 
 
-def _slice_exact(ids: Sequence[str], sizes: tuple[int, int], repo: str) -> tuple[list[str], list[str]]:
+def _slice_exact(
+    ids: Sequence[str], sizes: tuple[int, int], repo: str
+) -> tuple[list[str], list[str]]:
     expected = sum(sizes)
     if len(ids) != expected:
-        raise ValueError(f"{repo}: expected {expected} eligible tasks, found {len(ids)}")
+        raise ValueError(
+            f"{repo}: expected {expected} eligible tasks, found {len(ids)}"
+        )
     return list(ids[: sizes[0]]), list(ids[sizes[0] :])
 
 
@@ -147,9 +176,7 @@ def build_split_manifest(
     if len(set(all_ids)) != len(all_ids):
         raise ValueError("task manifest contains duplicate instance IDs")
 
-    ordered = {
-        name: _ordered_tasks(tasks, repo) for name, repo in REPOSITORIES.items()
-    }
+    ordered = {name: _ordered_tasks(tasks, repo) for name, repo in REPOSITORIES.items()}
     sql_ids = [
         row["instance_id"]
         for row in ordered["sqlglot"]
@@ -182,7 +209,12 @@ def build_split_manifest(
         },
         "dvc": {"warmup": dvc_warmup, "final": dvc_final},
     }
-    split_ids = [task_id for cohort in cohorts.values() for ids in cohort.values() for task_id in ids]
+    split_ids = [
+        task_id
+        for cohort in cohorts.values()
+        for ids in cohort.values()
+        for task_id in ids
+    ]
     return {
         "schema": SCHEMA,
         "cohorts": cohorts,
@@ -241,7 +273,9 @@ def census_attempts(
             if not isinstance(call, Mapping) or call.get("tool") != "exec":
                 continue
             input_value = call.get("input")
-            command = input_value.get("command") if isinstance(input_value, Mapping) else None
+            command = (
+                input_value.get("command") if isinstance(input_value, Mapping) else None
+            )
             if not isinstance(command, str):
                 raise ValueError(f"{attempt}: exec call lacks a command")
             exec_commands += 1
@@ -382,14 +416,15 @@ def _public_pools(
 ]:
     by_scope: dict[str, list[Row]] = defaultdict(list)
     by_resource_scope = {
-        resource: defaultdict(list)
-        for resource in CANONICAL_RESOURCE_BUCKET_EDGES
+        resource: defaultdict(list) for resource in CANONICAL_RESOURCE_BUCKET_EDGES
     }
-    by_resource = {
-        resource: [] for resource in CANONICAL_RESOURCE_BUCKET_EDGES
-    }
+    by_resource = {resource: [] for resource in CANONICAL_RESOURCE_BUCKET_EDGES}
     for row in rows:
-        scope = row.bin if feature_builder is None else feature_builder(row.bin, row.argv).bin
+        scope = (
+            row.bin
+            if feature_builder is None
+            else feature_builder(row.bin, row.argv).bin
+        )
         by_scope[scope].append(row)
         for resource in CANONICAL_RESOURCE_BUCKET_EDGES:
             if _row_resource_value(row, resource) is None:
@@ -406,7 +441,9 @@ def _observe_posets(
 ) -> None:
     latency.observe(rows)
     for resource, kb in resources.items():
-        kb.observe([row for row in rows if _row_resource_value(row, resource) is not None])
+        kb.observe(
+            [row for row in rows if _row_resource_value(row, resource) is not None]
+        )
 
 
 def _predict_posets(
@@ -476,9 +513,7 @@ def _history_row(
         command=row.command,
         labels=_labels(row),
         current=(
-            {target: None for target in _TARGETS}
-            if current is None
-            else dict(current)
+            {target: None for target in _TARGETS} if current is None else dict(current)
         ),
         pmfs=(
             {target: None for target in _TARGETS}
@@ -581,7 +616,9 @@ def _arm_metrics(rows: Sequence[Mapping[str, Any]], arm: str) -> dict[str, Any]:
     return {
         "targets": metrics,
         "equal_weight_accuracy": (
-            None if len(accuracies) != len(_TARGETS) else sum(accuracies) / len(accuracies)
+            None
+            if len(accuracies) != len(_TARGETS)
+            else sum(accuracies) / len(accuracies)
         ),
         "equal_weight_severe_underprediction_rate": (
             None if len(severe) != len(_TARGETS) else sum(severe) / len(severe)
@@ -704,9 +741,7 @@ def _report(
     generic_severe = metrics["generic_poset"][
         "equal_weight_severe_underprediction_rate"
     ]
-    docs_severe = metrics["docs_poset"][
-        "equal_weight_severe_underprediction_rate"
-    ]
+    docs_severe = metrics["docs_poset"]["equal_weight_severe_underprediction_rate"]
     per_tool: dict[str, Any] = {}
     for tool in sorted(
         {tool for row in rows for tool in row.get("documented_tools", [])}
@@ -852,8 +887,12 @@ def evaluate_doc_semantics(
         clauses_by_task[row.task_id].append(row)
     warmup_ids = list(task_ids[:warmup_task_count])
     scored_ids = list(task_ids[warmup_task_count:])
-    warmup_commands = [row for task_id in warmup_ids for row in commands_by_task[task_id]]
-    scored_commands = [row for task_id in scored_ids for row in commands_by_task[task_id]]
+    warmup_commands = [
+        row for task_id in warmup_ids for row in commands_by_task[task_id]
+    ]
+    scored_commands = [
+        row for task_id in scored_ids for row in commands_by_task[task_id]
+    ]
     if [f"{row.task_id}:{row.call_index}" for row in scored_commands] != list(
         baseline_by_sample
     ):
@@ -877,9 +916,7 @@ def evaluate_doc_semantics(
 
     def absorb_prefix(rows: Sequence[CommandRow]) -> None:
         for row in rows:
-            keys = command_prefix_keys(
-                "exec", row.command, max_depth=_RAW_PREFIX_DEPTH
-            )
+            keys = command_prefix_keys("exec", row.command, max_depth=_RAW_PREFIX_DEPTH)
             labels = _labels(row)
             for target, label in labels.items():
                 if label is None:
@@ -889,9 +926,7 @@ def evaluate_doc_semantics(
 
     absorb_prefix(warmup_commands)
     public = tuple(
-        row
-        for row in public_rows
-        if row.structure_known and row.pipeline_position <= 0
+        row for row in public_rows if row.structure_known and row.pipeline_position <= 0
     )
     if not public:
         raise ValueError("no eligible public evidence")
@@ -935,9 +970,7 @@ def evaluate_doc_semantics(
         docs_resources,
         documented_warmup,
     )
-    public_kb = ClauseResourceKB.fit_public(
-        row.observation(0.0, 1.0) for row in public
-    )
+    public_kb = ClauseResourceKB.fit_public(row.observation(0.0, 1.0) for row in public)
 
     rows: list[dict[str, Any]] = []
     for task_id in scored_ids:
@@ -957,7 +990,10 @@ def evaluate_doc_semantics(
             docs_ready = (
                 documented is not None
                 and bool(doc_public)
-                and all(docs_pools[2].get(resource) for resource in CANONICAL_RESOURCE_BUCKET_EDGES)
+                and all(
+                    docs_pools[2].get(resource)
+                    for resource in CANONICAL_RESOURCE_BUCKET_EDGES
+                )
             )
             if docs_ready:
                 generic_pmfs, generic_diagnostic = _predict_posets(
@@ -983,9 +1019,10 @@ def evaluate_doc_semantics(
                     feature_version="documentation-tool-spec-v1",
                 )
             else:
-                generic_pmfs, generic_diagnostic = current_pmfs, {
-                    "fallback": "clause_kb"
-                }
+                generic_pmfs, generic_diagnostic = (
+                    current_pmfs,
+                    {"fallback": "clause_kb"},
+                )
                 docs_pmfs, docs_diagnostic = current_pmfs, {"fallback": "clause_kb"}
 
             def aligned(candidate: Mapping[str, Sequence[float] | None]):
@@ -1000,9 +1037,7 @@ def evaluate_doc_semantics(
                     for target in _TARGETS
                 }
 
-            keys = command_prefix_keys(
-                "exec", row.command, max_depth=_RAW_PREFIX_DEPTH
-            )
+            keys = command_prefix_keys("exec", row.command, max_depth=_RAW_PREFIX_DEPTH)
             public_latency = public_kb.predict_command_latency_bucket(
                 row.repo,
                 row.command,
@@ -1127,14 +1162,542 @@ def evaluate_doc_semantics(
     return _report(rows, provenance, task_ids, warmup_task_count), rows
 
 
-def _run_attempts(run_dir: Path, versions: Mapping[str, str]) -> list[tuple[str, str, Path]]:
+def _render_generation_prompt(
+    template: str,
+    tool: str,
+    version: str,
+    documentation: str,
+) -> str:
+    """Fill the frozen prompt without interpreting or combining tool sources."""
+
+    placeholders = ("{{TOOL}}", "{{VERSION}}", "{{DOCUMENTATION}}")
+    if any(template.count(value) != 1 for value in placeholders):
+        raise ValueError("generation prompt placeholders differ from the protocol")
+    prefix, suffix = template.split("{{DOCUMENTATION}}")
+    return (
+        prefix.replace("{{TOOL}}", tool).replace("{{VERSION}}", version)
+        + documentation
+        + suffix
+    )
+
+
+def _generation_inputs() -> tuple[dict[str, Any], str, dict[str, Any], dict[str, Any]]:
+    protocol = json.loads(
+        (_GENERATION_SOURCES / "protocol.json").read_text(encoding="utf-8")
+    )
+    manifest = json.loads(
+        (_GENERATION_SOURCES / "source-manifest.json").read_text(encoding="utf-8")
+    )
+    template = (_GENERATION_SOURCES / "prompt-template.md").read_text(encoding="utf-8")
+    schema = json.loads(
+        (_GENERATION_SOURCES / "tool-spec-schema.json").read_text(encoding="utf-8")
+    )
+    if schema != tool_spec_schema():
+        raise ValueError("frozen output schema differs from host validation")
+    tools = manifest.get("tools")
+    if not isinstance(tools, dict) or set(tools) != set(_TOOL_NAMES):
+        raise ValueError("source manifest differs from the fixed tool list")
+    for tool, source in tools.items():
+        if not isinstance(source, dict):
+            raise ValueError(f"{tool}: source manifest entry is invalid")
+        path = _GENERATION_SOURCES / str(source.get("file"))
+        if not path.is_file() or path.stat().st_size != source.get("bytes"):
+            raise ValueError(f"{tool}: source snapshot differs from its manifest")
+    generation = protocol.get("generation")
+    if (
+        not isinstance(protocol.get("frozen_code"), dict)
+        or not isinstance(protocol.get("public_telemetry"), list)
+        or len(protocol["public_telemetry"]) != 2
+        or not all(isinstance(path, str) for path in protocol["public_telemetry"])
+        or generation
+        != {
+            "calls_per_tool": 1,
+            "model": "gpt-5.6-sol",
+            "requested_service_tier": "fast",
+            "reasoning_effort": "medium",
+            "temperature": "unsupported_by_codex_provider",
+            "sandbox": "read-only",
+            "maximum_input_tokens": _MAX_GENERATION_INPUT_TOKENS,
+            "maximum_response_bytes": _MAX_GENERATION_RESPONSE_BYTES,
+            "repair_calls": 0,
+            "invalid_result": "tool unsupported",
+        }
+    ):
+        raise ValueError("generation protocol differs from the frozen contract")
+    return manifest, template, schema, protocol
+
+
+def _generation_worktree_head() -> str:
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=_REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    output = _GENERATION_OUTPUT.resolve()
+    status = subprocess.run(
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        cwd=_REPO_ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout
+    for record in status.split(b"\0"):
+        if not record:
+            continue
+        path = _REPO_ROOT / record[3:].decode()
+        if record[:2] != b"??" or not path.resolve().is_relative_to(output):
+            raise ValueError("generation requires a clean preregistration worktree")
+    return head
+
+
+def _tool_generation_paths(directory: Path, tool: str) -> dict[str, Path]:
+    return {
+        "prompt": directory / f"{tool}.prompt.txt",
+        "schema": directory / f"{tool}.schema.json",
+        "response": directory / f"{tool}.response.json",
+        "events": directory / f"{tool}.events.jsonl",
+        "stderr": directory / f"{tool}.stderr.txt",
+    }
+
+
+def _generation_events(path: Path, tool: str) -> list[dict[str, Any]]:
+    try:
+        events = [json.loads(line) for line in path.read_text().splitlines() if line]
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            f"{tool}: generation events differ from their artifact"
+        ) from error
+    if not events or any(not _is_tool_free_event(event) for event in events):
+        raise ValueError(f"{tool}: generation events differ from their artifact")
+    return events
+
+
+def _validated_response_text(
+    events: Sequence[Mapping[str, Any]], response_text: str, tool: str
+) -> None:
+    messages = [
+        item["text"]
+        for event in events
+        if event.get("type") == "item.completed"
+        and isinstance(item := event.get("item"), dict)
+        and item.get("type") == "agent_message"
+        and isinstance(item.get("text"), str)
+    ]
+    if len(messages) != 1 or messages[0] != response_text:
+        raise ValueError(f"{tool}: generation response differs from its event")
+
+
+def _generation_status(
+    tool: str,
+    version: str,
+    spec: ToolSpec | None,
+    response_bytes: int,
+    usage: Mapping[str, int],
+) -> str:
+    if (
+        spec is not None
+        and spec.tool == tool
+        and spec.documented_version == version
+        and response_bytes <= _MAX_GENERATION_RESPONSE_BYTES
+        and usage["input_tokens"] <= _MAX_GENERATION_INPUT_TOKENS
+    ):
+        return "valid"
+    return "unsupported_structural_failure"
+
+
+def _generate_specs() -> None:
+    if _GENERATION_OUTPUT.exists():
+        raise FileExistsError(
+            "generation output already exists; calls cannot be repeated"
+        )
+    preregistration_commit = _generation_worktree_head()
+    manifest, template, schema, protocol = _generation_inputs()
+    _GENERATION_OUTPUT.mkdir(parents=True)
+    encoding = tiktoken.get_encoding("cl100k_base")
+    tool_results: dict[str, Any] = {}
+    for tool in _TOOL_NAMES:
+        source = manifest["tools"][tool]
+        version = str(source["documented_version"])
+        source_record = {
+            "file": source["file"],
+            "documented_version": version,
+            "bytes": source["bytes"],
+        }
+        documentation = (_GENERATION_SOURCES / source["file"]).read_text(
+            encoding="utf-8"
+        )
+        prompt = _render_generation_prompt(template, tool, version, documentation)
+        estimated_tokens = len(encoding.encode(prompt)) + len(
+            encoding.encode(json.dumps(schema, sort_keys=True))
+        )
+        if estimated_tokens > _MAX_GENERATION_INPUT_TOKENS:
+            raise ValueError(f"{tool}: generation input exceeds the frozen budget")
+        try:
+            response, cost = _codex_call(prompt, schema, _GENERATION_OUTPUT, tool)
+            paths = _tool_generation_paths(_GENERATION_OUTPUT, tool)
+            response_text = paths["response"].read_text(encoding="utf-8")
+            _validated_response_text(
+                _generation_events(paths["events"], tool), response_text, tool
+            )
+            response_bytes = paths["response"].stat().st_size
+            status = _generation_status(
+                tool,
+                version,
+                validate_tool_spec(response),
+                response_bytes,
+                cost["usage"],
+            )
+        except (OSError, RuntimeError, TypeError, ValueError, KeyError) as exc:
+            tool_results[tool] = {
+                "status": "unsupported_generation_failure",
+                "source": source_record,
+                "error": str(exc),
+                "estimated_input_tokens": estimated_tokens,
+            }
+            continue
+        tool_results[tool] = {
+            "status": status,
+            "source": source_record,
+            "estimated_input_tokens": estimated_tokens,
+            "response_bytes": response_bytes,
+            "cost": cost,
+        }
+    artifact = {
+        "schema": "offline-tool-semantics-generation-v1",
+        "protocol": protocol["schema"],
+        "frozen_code": protocol["frozen_code"],
+        "preregistration_commit": preregistration_commit,
+        "model": "gpt-5.6-sol",
+        "requested_service_tier": "fast",
+        "reasoning_effort": "medium",
+        "temperature": "unsupported_by_codex_provider",
+        "codex_version": subprocess.run(
+            ["codex", "--version"], check=True, capture_output=True, text=True
+        ).stdout.strip(),
+        "tools": tool_results,
+    }
+    (_GENERATION_OUTPUT / "generation-artifact.json").write_text(
+        json.dumps(artifact, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _generated_specs() -> tuple[dict[str, ToolSpec], dict[str, Any]]:
+    manifest, template, schema, protocol = _generation_inputs()
+    artifact = json.loads(
+        (_GENERATION_OUTPUT / "generation-artifact.json").read_text(encoding="utf-8")
+    )
+    expected = {
+        "schema": "offline-tool-semantics-generation-v1",
+        "protocol": protocol["schema"],
+        "frozen_code": protocol["frozen_code"],
+        "model": "gpt-5.6-sol",
+        "requested_service_tier": "fast",
+        "reasoning_effort": "medium",
+        "temperature": "unsupported_by_codex_provider",
+    }
+    if (
+        not isinstance(artifact, dict)
+        or any(artifact.get(key) != value for key, value in expected.items())
+        or set(artifact)
+        != {*expected, "preregistration_commit", "codex_version", "tools"}
+        or not isinstance(artifact["codex_version"], str)
+        or not artifact["codex_version"]
+        or not isinstance(artifact["tools"], dict)
+        or set(artifact["tools"]) != set(_TOOL_NAMES)
+        or artifact.get("preregistration_commit") != _generation_worktree_head()
+    ):
+        raise ValueError("generation artifact differs from the frozen protocol")
+    specs: dict[str, ToolSpec] = {}
+    encoding = tiktoken.get_encoding("cl100k_base")
+    for tool in _TOOL_NAMES:
+        record = artifact["tools"][tool]
+        source = manifest["tools"][tool]
+        version = str(source["documented_version"])
+        if not isinstance(record, dict) or record.get("source") != {
+            "file": source["file"],
+            "documented_version": version,
+            "bytes": source["bytes"],
+        }:
+            raise ValueError("generation artifact differs from the frozen protocol")
+        prompt = _render_generation_prompt(
+            template,
+            tool,
+            version,
+            (_GENERATION_SOURCES / source["file"]).read_text(encoding="utf-8"),
+        )
+        paths = _tool_generation_paths(_GENERATION_OUTPUT, tool)
+        if (
+            not paths["prompt"].is_file()
+            or not paths["schema"].is_file()
+            or not paths["events"].is_file()
+            or paths["prompt"].read_text(encoding="utf-8") != prompt
+            or json.loads(paths["schema"].read_text(encoding="utf-8")) != schema
+            or record.get("estimated_input_tokens")
+            != len(encoding.encode(prompt))
+            + len(encoding.encode(json.dumps(schema, sort_keys=True)))
+        ):
+            raise ValueError("generation artifact differs from the frozen protocol")
+        if record.get("status") == "unsupported_generation_failure":
+            if set(record) != {
+                "status",
+                "source",
+                "estimated_input_tokens",
+                "error",
+            } or not isinstance(record["error"], str):
+                raise ValueError("generation artifact differs from the frozen protocol")
+            continue
+        if (
+            set(record)
+            != {"status", "source", "estimated_input_tokens", "response_bytes", "cost"}
+            or not paths["response"].is_file()
+        ):
+            raise ValueError("generation artifact differs from the frozen protocol")
+        events = _generation_events(paths["events"], tool)
+        usage = _validated_usage(events, tool)
+        cost = record["cost"]
+        if (
+            not isinstance(cost, dict)
+            or set(cost) != {"prompt_bytes", "wall_seconds", "usage"}
+            or cost["prompt_bytes"] != len(prompt.encode())
+            or not isinstance(cost["wall_seconds"], (int, float))
+            or isinstance(cost["wall_seconds"], bool)
+            or cost["wall_seconds"] < 0
+            or cost["usage"] != usage
+            or record["response_bytes"] != paths["response"].stat().st_size
+        ):
+            raise ValueError("generation artifact differs from the frozen protocol")
+        response_text = paths["response"].read_text(encoding="utf-8")
+        _validated_response_text(events, response_text, tool)
+        value = json.loads(response_text)
+        spec = validate_tool_spec(value)
+        expected_status = _generation_status(
+            tool, version, spec, record["response_bytes"], usage
+        )
+        if record["status"] != expected_status:
+            raise ValueError("generation artifact differs from the frozen protocol")
+        if expected_status == "valid":
+            specs[tool] = spec
+    return specs, artifact
+
+
+def _load_development_stream() -> tuple[
+    list[str],
+    list[Row],
+    list[CommandRow],
+    dict[str, Sequence[Any]],
+    dict[str, Any],
+]:
+    split = json.loads(_SPLIT_MANIFEST.read_text(encoding="utf-8"))
+    cohorts = split["cohorts"]["sqlglot"]
+    ordered_ids = [
+        *cohorts["development_warmup"],
+        *cohorts["development_scored"],
+    ]
+    clauses_by_task: dict[str, list[Row]] = defaultdict(list)
+    commands_by_task: dict[str, list[CommandRow]] = defaultdict(list)
+    events: dict[str, Sequence[Any]] = {}
+    loaded_ids: list[str] = []
+    for raw_path in split["sources"]["sqlglot_runs"]:
+        run_dir = Path(raw_path)
+        task_ids, clauses, commands = load_run_rows(run_dir)
+        run_events = _load_exec_events(run_dir, task_ids)
+        loaded_ids.extend(task_ids)
+        for row in clauses:
+            clauses_by_task[row.task_id].append(row)
+        for row in commands:
+            commands_by_task[row.task_id].append(row)
+        overlap = set(events) & set(run_events)
+        if overlap:
+            raise ValueError(f"development runs repeat tasks: {sorted(overlap)[:3]}")
+        events.update(run_events)
+    if set(loaded_ids) != set(ordered_ids) or len(loaded_ids) != len(ordered_ids):
+        raise ValueError("development runs differ from the frozen SQLGlot tasks")
+
+    clauses: list[Row] = []
+    commands: list[CommandRow] = []
+    ordered_events: dict[str, Sequence[Any]] = {}
+    for manifest_index, task_id in enumerate(ordered_ids):
+        replacements: dict[int, Row] = {}
+
+        def replaced(row: Row) -> Row:
+            value = replacements.get(id(row))
+            if value is None:
+                value = replace(row, manifest_index=manifest_index)
+                replacements[id(row)] = value
+            return value
+
+        commands.extend(
+            replace(
+                row,
+                manifest_index=manifest_index,
+                clauses=tuple(replaced(clause) for clause in row.clauses),
+            )
+            for row in commands_by_task[task_id]
+        )
+        clauses.extend(replaced(row) for row in clauses_by_task[task_id])
+        ordered_events[task_id] = events[task_id]
+    return ordered_ids, clauses, commands, ordered_events, split
+
+
+def _spec_coverage(
+    task_ids: Sequence[str],
+    commands: Sequence[CommandRow],
+    specs: Mapping[str, ToolSpec],
+) -> tuple[dict[str, ToolSpec], dict[str, Any]]:
+    invocations = Counter()
+    tasks: dict[str, set[str]] = defaultdict(set)
+    for command in commands:
+        for clause in command.clauses:
+            for tool, spec in specs.items():
+                if (
+                    interpret_argv(
+                        spec,
+                        clause.bin,
+                        clause.argv,
+                        spec.documented_version,
+                    )
+                    is not None
+                ):
+                    invocations[tool] += 1
+                    tasks[tool].add(command.task_id)
+    report = {
+        tool: {
+            "invocations": invocations[tool],
+            "tasks": len(tasks[tool]),
+            "passed": invocations[tool] >= 50 and len(tasks[tool]) >= 10,
+        }
+        for tool in specs
+    }
+    enabled = {tool: spec for tool, spec in specs.items() if report[tool]["passed"]}
+    if len(set(task_ids)) != len(task_ids):
+        raise ValueError("coverage task order contains duplicates")
+    return enabled, report
+
+
+def _evaluation_inputs(
+    *,
+    scored_task_limit: int | None,
+) -> tuple[
+    list[Row],
+    list[str],
+    list[Row],
+    list[CommandRow],
+    dict[str, ToolSpec],
+    dict[str, Sequence[Any]],
+    dict[str, Any],
+]:
+    specs, generation = _generated_specs()
+    protocol = json.loads(
+        (_GENERATION_SOURCES / "protocol.json").read_text(encoding="utf-8")
+    )
+    task_ids, clauses, commands, events, split = _load_development_stream()
+    specs, coverage = _spec_coverage(task_ids, commands, specs)
+    if not specs:
+        raise ValueError("no generated tool passes structural and coverage gates")
+    warmup_count = len(split["cohorts"]["sqlglot"]["development_warmup"])
+    if scored_task_limit is not None:
+        if not 0 < scored_task_limit <= len(task_ids) - warmup_count:
+            raise ValueError("profile scored-task limit is invalid")
+        task_ids = task_ids[: warmup_count + scored_task_limit]
+        selected = set(task_ids)
+        clauses = [row for row in clauses if row.task_id in selected]
+        commands = [row for row in commands if row.task_id in selected]
+        events = {task_id: events[task_id] for task_id in task_ids}
+    public_paths = [_REPO_ROOT / path for path in protocol["public_telemetry"]]
+    public = [row for path in public_paths for row in load_rows(path)]
+    reserved_repos = {REPOSITORIES[name].replace("/", "__") for name in REPOSITORIES}
+    raw_public_count = len(public)
+    public = [row for row in public if row.repo not in reserved_repos]
+    if not public or {row.task_id for row in public} & set(task_ids):
+        raise ValueError("public evidence is empty or overlaps a reserved task")
+    provenance = {
+        "generation_artifact": str(
+            (_GENERATION_OUTPUT / "generation-artifact.json").resolve()
+        ),
+        "generation_preregistration_commit": generation["preregistration_commit"],
+        "split_manifest": str(_SPLIT_MANIFEST.resolve()),
+        "public_telemetry": [str(path.resolve()) for path in public_paths],
+        "public_rows_before_reserved_repo_filter": raw_public_count,
+        "public_rows_after_reserved_repo_filter": len(public),
+        "enabled_tools": sorted(specs),
+        "structural_coverage": coverage,
+    }
+    return public, task_ids, clauses, commands, specs, events, provenance
+
+
+def _run_evaluation(args: argparse.Namespace, *, profile: bool) -> None:
+    inputs = _evaluation_inputs(
+        scored_task_limit=args.scored_tasks if profile else None,
+    )
+    public, task_ids, clauses, commands, specs, events, provenance = inputs
+    warmup_count = len(
+        json.loads(_SPLIT_MANIFEST.read_text(encoding="utf-8"))["cohorts"]["sqlglot"][
+            "development_warmup"
+        ]
+    )
+    started = time.monotonic()
+    result, rows = evaluate_doc_semantics(
+        public,
+        task_ids,
+        clauses,
+        commands,
+        specs,
+        warmup_task_count=warmup_count,
+        provenance=provenance,
+        allow_unverified_versions=True,
+        events_by_task=events,
+    )
+    elapsed = time.monotonic() - started
+    if profile:
+        print(
+            json.dumps(
+                {
+                    "profile_only": True,
+                    "scored_tasks": args.scored_tasks,
+                    "scored_commands": len(rows),
+                    "evaluation_seconds": elapsed,
+                    "enabled_tools": sorted(specs),
+                    "structural_coverage": provenance["structural_coverage"],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+    result["cost"] = {"evaluation_seconds": elapsed}
+    result["generation"] = {
+        "enabled_tools": sorted(specs),
+        "structural_coverage": provenance["structural_coverage"],
+    }
+    result_path = _GENERATION_OUTPUT / "result.json"
+    rows_path = _GENERATION_OUTPUT / "rows.jsonl"
+    if result_path.exists() or rows_path.exists():
+        raise FileExistsError("development evaluation output already exists")
+    result_path.write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    rows_path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+
+def _run_attempts(
+    run_dir: Path, versions: Mapping[str, str]
+) -> list[tuple[str, str, Path]]:
     attempts: list[tuple[str, str, Path]] = []
     with (run_dir / "results.jsonl").open(encoding="utf-8") as handle:
         for line in handle:
             row = json.loads(line)
             task_id = row.get("instance_id")
             attempt_value = row.get("attempt_dir")
-            if row.get("success") is not True or not isinstance(task_id, str) or not isinstance(attempt_value, str):
+            if (
+                row.get("success") is not True
+                or not isinstance(task_id, str)
+                or not isinstance(attempt_value, str)
+            ):
                 raise ValueError(f"{run_dir}: result is not a successful final attempt")
             attempt = Path(attempt_value)
             if not attempt.is_absolute():
@@ -1193,9 +1756,20 @@ def main() -> None:
     freeze.add_argument("--trace-root", type=Path, required=True)
     freeze.add_argument("--sqlglot-run", type=Path, action="append", required=True)
     freeze.add_argument("--out", type=Path, required=True)
+    subparsers.add_parser("generate")
+    for name in ("profile", "evaluate"):
+        evaluate = subparsers.add_parser(name)
+        if name == "profile":
+            evaluate.add_argument("--scored-tasks", type=int, required=True)
     args = parser.parse_args()
     if args.command == "freeze":
         _freeze(args)
+    elif args.command == "generate":
+        _generate_specs()
+    elif args.command == "profile":
+        _run_evaluation(args, profile=True)
+    elif args.command == "evaluate":
+        _run_evaluation(args, profile=False)
 
 
 if __name__ == "__main__":
