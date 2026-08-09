@@ -505,6 +505,19 @@ any failed Section 5.2 validity, action, tail, direction, or effect gate stops
 without tuning. This remains development evidence and needs fresh confirmation
 for a paper claim.
 
+**2026-08-09 thermal preflight amendment, before any completed formal cell.**
+The initial `cache-first` process at the A100's default 300 W limit reached the
+documented 85 C maximum operating temperature and repeatedly reported software
+thermal slowdown. It emitted no cell result and is excluded. While that same
+non-evidentiary load remained active, lowering the fixed power limit to 250 W
+reduced the device to 74--76 C within four minutes, with both software and
+hardware thermal-slowdown flags inactive. The formal ABBA therefore restarts
+all four cells from scratch at 250 W. One-minute telemetry records power limit,
+draw, temperatures, SM clock, and both thermal flags; any formal sample with a
+thermal-slowdown flag makes timing comparisons invalid. Workload, order,
+policies, outputs, and every Section 5.2 gate remain unchanged. The default
+300 W limit is restored after the run.
+
 ## 6. Closed directions
 
 - **Lookup structure alone:** trie, lattice, generic argv, pip/pytest semantic
