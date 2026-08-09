@@ -13,18 +13,18 @@ artifacts retain that history.
 | Area | Current decision |
 |---|---|
 | Prediction | Keep the target-specific Task-Aware Command Predictor below as the selected development candidate. It is exposed evidence, not confirmation or deployed code. |
-| Runtime feedback | **KEEP causal command-level eBPF feedback.** It improved modeled admission completion, but hard CPU pages still exceeded the frozen service-cost budget. |
+| Runtime feedback | **KEEP causal command-level eBPF feedback as a measured mechanism and control.** Neither tested admission action passed its frozen utility gate, so it is not a runtime scheduler candidate. |
 | CPU execution | Keep equal-share burstable execution as the simple physical CPU-sharing baseline, not as a proven method. |
 | Saturated quartet result | Frozen claim verdict is NO-GO because 8/12, not 9/12, groups improved. This is not a module-retirement decision. |
 | Fresh counterbalanced queue | **Inconclusive because 7/1,818 paired tool calls changed terminal class.** Timing-only improvement was 0.929% with 2/4 queues improving, below the frozen gate even before the quality failure. |
 | Prediction contribution to feedback | Not established. Task-Aware seeding did not improve the frozen reservation/service operating point over feedback alone. |
-| CPU scheduling | Do not run the hard-page physical admission test: its frozen event replay improved completion 6.584% but incurred 12.936% service inflation. Keep the positive mechanism evidence. |
+| CPU scheduling | Stop feedback-driven page admission on exposed SQLGlot. Hard pages improved completion 6.584% but inflated service 12.936%; work-conserving borrowing improved it only 1.982%, inflated service 7.352%, and worsened makespan 0.917%. Keep both as evidence and controls. |
 | KB representation | Raw exact/prefix/binary `ClauseResourceKB` is the implemented Clause-KB baseline. Trie/lattice/semantic-key replacement is closed as a contribution. |
 | Offline agent | Closed. More prompts, critics, DSLs, or generated adapters are not authorized. |
 | KV scheduling | Closed under the current CacheWise/C100 simulator and action model. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
-| Next research step | Test feedback-driven logical admission over work-conserving CPU borrowing, so a denied reservation expansion does not become a hard throughput cap. Freeze this new action model before evaluation. |
+| Next research step | Do not calibrate PSI or tune feedback pages: the ideal backlog ceiling already missed both effect and service gates. Any next scheduler study needs a different action with pre-measured oracle headroom; otherwise prioritize fresh confirmation of the selected predictor. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -165,6 +165,7 @@ All rows below are development-exposed.
 | Prediction-seeded feedback | Feedback alone reduced reservation 37.076% at 1.032% service inflation; Task-Aware seeding changed this to 37.635% and 1.274% | Feedback promising; incremental prediction gate failed |
 | Cross-repository feedback | On 259 SWE100/277 tasks, reservation fell 45.010% at 1.543% service inflation; task-bootstrap intervals were [38.286%, 50.959%] and [1.256%, 1.820%] | Development GO for causal feedback; physical scheduling utility untested |
 | Hard-page feedback admission | Versus static Task-Aware requests, mean per-order task completion improved 6.584%; all 32 orders improved, queue time fell 6.702%, and makespan fell 6.810% by ratio of means | Positive admission mechanism; frozen physical-advance gate failed because service inflation was 12.936%, above 5% |
+| Feedback admission with CPU borrowing | Mean per-order task completion improved 1.982%; 27/32 orders improved and the paired absolute-delta interval was [-278.536, -133.809] s. By ratio of means, queue fell 2.140%, service fell 0.877%, but makespan rose 0.917% | Frozen gate failed: effect was below 5% and service inflation was 7.352%; stop before PSI calibration |
 | Prediction-weighted CPU shares | Task-Aware reduced mean completion by 0.0056%; a true-demand oracle reduced it by only 0.0527% | Closed: recorded-duration floor leaves no useful share-allocation headroom |
 | Ready-queue priority | Exact-duration aging oracle reduced mean completion 3.991% with 0.301% makespan cost | Below the frozen 5% gate; retain only as a diagnosed tradeoff |
 
@@ -186,7 +187,7 @@ queues improved. The first two burstable arms also overlapped unquantified
 offline host work; the generated result and run note forbid post-hoc correction.
 Thus burstable remains a control, not a supported scheduling claim.
 
-The strongest current action is instead causal command-level feedback. Each
+The strongest measured mechanism is causal command-level feedback. Each
 command begins at eight cores; after the first complete 0.5-second eBPF/cgroup
 sample, demand maps to a 2, 4, or 8-core page and can update causally. On the
 SQLGlot development set, feedback alone reduced reserved CPU-core-seconds by
@@ -210,14 +211,30 @@ service time fell 9.354%, and reserved CPU-core-seconds fell 30.171%.
 
 The physical-advance gate nevertheless failed: candidate service remained
 12.936% above recorded eight-core service, versus the frozen 5% ceiling. This
-failure was consistent across orders (minimum inflation 7.921%). The mechanism
-diagnosis is expansion pressure, not absent admission benefit: 82.030% of
-expansion attempts were denied by the saturated hard-reservation pool, while
-feedback recovered 47.393% of the static predictor's service overhead. A hard
-page therefore turns capacity-accounting contention into throughput loss. The
-next action must preserve feedback-driven admission decisions while allowing
-work-conserving CPU borrowing; the current result does not authorize a hard-cap
-physical replay or runtime integration.
+failure was consistent across orders (minimum inflation 7.921%). Expansion
+pressure explained the lost work: 82.030% of expansion attempts were denied by
+the saturated hard-reservation pool, while feedback recovered 47.393% of the
+static predictor's service overhead. A hard page therefore turned
+capacity-accounting contention into throughput loss.
+
+The separately frozen borrowing replay removed that confound: logical pages
+controlled admission only, while every admitted command received equal-weight,
+work-conserving CPU. Feedback still improved mean completion in 27/32 orders;
+the mean per-order relative reduction was 1.982% and the paired absolute-delta
+interval was [-278.536, -133.809] seconds. By ratio of means, queue time fell
+2.140% and command service fell 0.877%, but makespan rose 0.917%. Logical
+reserved core-seconds fell 32.619% without changing maximum concurrency.
+
+This was a clean NO-GO for the tested action, not for the feedback module.
+Candidate service remained 7.352% above recorded eight-core service, and only
+6/32 orders were within the 5% ceiling. The mean effect also missed 5%. CPU
+work was conserved and no capacity violation occurred. Mechanistically,
+borrowing had already removed most hard-page loss from the static baseline, so
+feedback mainly changed queue order; its completion delta was almost entirely
+aligned with queue-time delta across orders, while the extra overlap still paid
+physical contention cost. The simulation used an ideal causal backlog bit, so
+a real PSI signal cannot rescue this frozen hypothesis. Do not run PSI
+calibration, physical replay, or post-hoc page tuning from this result.
 
 ## 6. Closed directions
 
@@ -232,6 +249,10 @@ physical replay or runtime integration.
   physical floor; command-equal accuracy gain was only 0.229 points.
 - **Peak CPU as admission demand:** instantaneous peak does not equal the CPU
   quota required to preserve throughput.
+- **Feedback-driven admission pages:** hard pages failed the service-cost gate;
+  work-conserving pages failed both effect and service-cost gates. Retain the
+  causal feedback implementation as evidence and a control, but do not tune
+  this action on exposed SQLGlot.
 - **KV victim selection:** C100 already removes most LRU recomputation, leaving
   insufficient predictor headroom in the current model.
 
@@ -281,6 +302,7 @@ Result root:
 - Prediction-weighted CPU shares: `sqlglot50-prediction-weighted-cpu-shares-v1/result.json`
 - SWE100/277 feedback generality: `swe100-277-cpu-feedback-generality-v1/result.json`
 - Dynamic hard-page feedback admission: `sqlglot50-cpu-feedback-admission-v1/result.json`
+- Feedback admission with CPU borrowing: `sqlglot50-cpu-feedback-borrowing-v1/result.json`
 
 Task split authority:
 `analysis/development/sqlglot-relational-task-split.json`.
@@ -300,7 +322,7 @@ Causal visibility = observation end before query start, after task settlement.
 Compound commands = physical sequential/pipeline composition, never Boolean OR.
 Clause-KB baseline = unchanged raw exact/prefix/binary control.
 Task-Aware Command Predictor = selected development candidate, not deployed.
-Causal eBPF feedback = promising resource-action candidate, not integrated.
+Causal eBPF feedback = retained measured mechanism/control, not integrated.
 Equal-share burstable CPU execution = retained physical control baseline.
 Protocol NO-GO != permission to delete a retained baseline.
 No result-dependent tuning, hindsight state, or dataset-specific outcome rule.
