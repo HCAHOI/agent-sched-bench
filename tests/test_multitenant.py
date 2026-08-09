@@ -90,6 +90,16 @@ def test_continuum_tool_signature_uses_shell_command_head() -> None:
     assert native.tool_signature == "read_file"
 
 
+def test_keep_retains_finished_prefix_until_the_next_turn() -> None:
+    plan = build_retention_plan("keep", _turn(), deadline_ms=5000.0)
+
+    assert plan is not None
+    assert plan.policy == "keep"
+    assert plan.action == "offload"
+    assert plan.expire_ms is None
+    assert plan.source == "keep_until_next_turn"
+
+
 def test_llama_chat_adapter_serializes_parallel_calls_without_losing_results() -> None:
     messages = (
         {"role": "user", "content": "inspect both"},

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime as dt
+import hashlib
 import json
 import math
 import os
@@ -245,6 +246,7 @@ def _request_metrics(
 
 
 async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
+    cell_started_at = dt.datetime.now(dt.timezone.utc).isoformat()
     config, workload = _load_config(args.config, args.workload)
     if args.policy not in config["policies"]:
         raise ValueError(f"policy {args.policy!r} is not enabled by the config")
@@ -262,6 +264,7 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("--max-turns is forbidden for heldout_eval workloads")
     validate_serving_cell(workload["corpus_role"], args.policy)
     serving = config["serving"]
+    runtime_host, runtime_device = _runtime_device()
     prefill_profile = (
         load_prefill_cost_profile(
             config["continuum_prefill_profile"],
@@ -273,7 +276,6 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
         else None
     )
     if prefill_profile is not None:
-        runtime_host, runtime_device = _runtime_device()
         if (
             prefill_profile.host_name != runtime_host
             or prefill_profile.device_name != runtime_device
@@ -306,9 +308,11 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
     control_path = runtime_dir / "offload-control.json"
     retention_path = runtime_dir / "retention-control.json"
     transfer_path = runtime_dir / "transfers.jsonl"
+    retention_events_path = runtime_dir / "retention-events.jsonl"
     OffloadControl(control_path).clear()
     _atomic_json(retention_path, {})
     transfer_path.unlink(missing_ok=True)
+    retention_events_path.unlink(missing_ok=True)
 
     queue_window = int(config["continuum_queue_window"])
     if queue_window <= 0:
@@ -330,6 +334,7 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
             "control_path": str(control_path),
             "timing_path": str(transfer_path),
             "retention_path": str(retention_path),
+            "retention_events_path": str(retention_events_path),
             "transfer_mode": serving["transfer_mode"],
             "block_dim": serving["block_dim"],
             "max_blocks": serving["transfer_max_blocks"],
@@ -420,6 +425,7 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
                 provisional_action = None
                 if not final:
                     provisional_action = {
+                        "keep": "offload",
                         "deadline": "offload",
                         "ours": "offload",
                         "continuum": "release",
@@ -441,7 +447,9 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
                     temperature=0.0,
                     max_tokens=max_tokens,
                     ignore_eos=True,
-                    seed=zlib.crc32(request_id.encode()),
+                    seed=zlib.crc32(
+                        f"{config['seed']}:{program_index}:{turn_index}".encode()
+                    ),
                 )
                 request_priority = continuum_priority(
                     program_index,
@@ -496,6 +504,9 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
                         continuum_retention_hit if args.policy == "continuum" else None
                     ),
                     "messages_in": list(turn.messages),
+                    "prompt_token_ids_sha256": hashlib.sha256(
+                        json.dumps(token_ids, separators=(",", ":")).encode()
+                    ).hexdigest(),
                     "output_text": completion.text,
                     "output_token_ids": completion.token_ids,
                     "finish_reason": completion.finish_reason,
@@ -641,6 +652,7 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
     )
     program_rows.sort(key=lambda row: row["program_index"])
     transfers = _read_transfer_events(transfer_path)
+    retention_events = _read_transfer_events(retention_events_path)
     transfer_count, transfer_bytes = _transfer_totals(transfers)
     if args.policy == "continuum":
         priority_events = {
@@ -702,11 +714,17 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
         "generated": dt.datetime.now().isoformat(timespec="seconds"),
         "git_sha": _git_sha(),
         "vllm_version": vllm.__version__,
+        "cell_started_at": cell_started_at,
+        "runtime": {
+            "host_name": runtime_host,
+            "device_name": runtime_device,
+        },
         "config_path": str(args.config),
         "config": config,
         "policy": args.policy,
         "load": args.load,
         "workload": workload,
+        "replay_task_ids": replay_ids,
         "corpus_role": workload["corpus_role"],
         "limit_programs": args.limit_programs,
         "max_turns": args.max_turns,
@@ -754,8 +772,10 @@ async def run_cell(args: argparse.Namespace) -> dict[str, Any]:
         "requests": request_rows,
         "prerestore_events": prerestore_rows,
         "transfers": transfers,
+        "retention_events": retention_events,
         "gpu_samples": gpu_samples,
     }
+    result["cell_finished_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
     _atomic_json(out_json, result)
     return result
 

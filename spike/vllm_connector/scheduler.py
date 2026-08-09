@@ -259,6 +259,7 @@ class RetentionScheduler(Scheduler):  # type: ignore[misc,valid-type]
     def __init__(self, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
         extra = self.vllm_config.kv_transfer_config.kv_connector_extra_config
+        self._retention_events_path = extra["retention_events_path"]
         stride = int(extra.get("continuum_priority_stride", 0))
         if stride:
             if not isinstance(self.waiting, PriorityRequestQueue):
@@ -268,25 +269,50 @@ class RetentionScheduler(Scheduler):  # type: ignore[misc,valid-type]
     def _free_request(self, request: Any) -> dict[str, Any] | None:
         params = super()._free_request(request)
         keep_blocks = self.connector.take_retained_block_count(request.request_id)
-        if keep_blocks is None:
-            return params
-        for manager in self.kv_cache_manager.coordinator.single_type_managers:
-            blocks = manager.req_to_blocks[request.request_id]
-            if len(blocks) < keep_blocks:
-                raise ValueError(
-                    f"request {request.request_id!r} has {len(blocks)} blocks; "
-                    f"cannot retain {keep_blocks}"
+        if keep_blocks is not None:
+            for manager in self.kv_cache_manager.coordinator.single_type_managers:
+                blocks = manager.req_to_blocks[request.request_id]
+                if len(blocks) < keep_blocks:
+                    raise ValueError(
+                        f"request {request.request_id!r} has {len(blocks)} blocks; "
+                        f"cannot retain {keep_blocks}"
+                    )
+                suffix = blocks[keep_blocks:]
+                for block in suffix:
+                    manager.block_pool._maybe_evict_cached_block(block)
+                manager.req_to_blocks[request.request_id] = blocks[:keep_blocks]
+                manager.num_cached_block[request.request_id] = min(
+                    manager.num_cached_block.get(request.request_id, 0),
+                    keep_blocks,
                 )
-            suffix = blocks[keep_blocks:]
-            for block in suffix:
-                manager.block_pool._maybe_evict_cached_block(block)
-            manager.req_to_blocks[request.request_id] = blocks[:keep_blocks]
-            manager.num_cached_block[request.request_id] = min(
-                manager.num_cached_block.get(request.request_id, 0),
-                keep_blocks,
-            )
-            manager.block_pool.free_blocks(reversed(suffix))
+                manager.block_pool.free_blocks(reversed(suffix))
         return params
+
+    def _free_blocks(self, request: Any) -> None:
+        block_pool = self.kv_cache_manager.block_pool
+        free_blocks_before = block_pool.get_num_free_blocks()
+        block_ids = list(self.kv_cache_manager.get_block_ids(request.request_id)[0])
+        ref_counts_before = {
+            block_id: block_pool.blocks[block_id].ref_cnt for block_id in block_ids
+        }
+        super()._free_blocks(request)
+        freed_block_ids = [
+            block_id
+            for block_id in block_ids
+            if ref_counts_before[block_id] > 0
+            and block_pool.blocks[block_id].ref_cnt == 0
+            and not block_pool.blocks[block_id].is_null
+        ]
+        free_blocks_after = block_pool.get_num_free_blocks()
+        if free_blocks_after - free_blocks_before != len(freed_block_ids):
+            raise RuntimeError("freed block IDs do not match the free-pool delta")
+        self._record_retention_event(
+            "retention_blocks_freed",
+            request_id=request.request_id,
+            block_ids=freed_block_ids,
+            free_blocks_before=free_blocks_before,
+            free_blocks_after=free_blocks_after,
+        )
 
     def has_requests(self) -> bool:
         connector = self.connector
@@ -296,6 +322,9 @@ class RetentionScheduler(Scheduler):  # type: ignore[misc,valid-type]
 
     def schedule(self) -> Any:
         connector = self.connector
+        running_before = {request.request_id for request in self.running}
+        block_pool = self.kv_cache_manager.block_pool
+        free_blocks_before = block_pool.get_num_free_blocks()
         if connector is not None:
             connector.release_requested_programs()
             connector.refresh_retention_expiries()
@@ -353,4 +382,22 @@ class RetentionScheduler(Scheduler):  # type: ignore[misc,valid-type]
                 self.waiting.remove_requests(waiting)
                 for request in waiting:
                     self.waiting.add_request(request)
-        return super().schedule()
+        output = super().schedule()
+        free_blocks_after = block_pool.get_num_free_blocks()
+        for request in self.running:
+            if request.request_id not in running_before:
+                self._record_retention_event(
+                    "retention_request_admitted",
+                    request_id=request.request_id,
+                    block_ids=list(
+                        self.kv_cache_manager.get_block_ids(request.request_id)[0]
+                    ),
+                    free_blocks_before=free_blocks_before,
+                    free_blocks_after=free_blocks_after,
+                )
+        return output
+
+    def _record_retention_event(self, phase: str, **fields: Any) -> None:
+        row = {"phase": phase, "monotonic_s": time.monotonic(), **fields}
+        with open(self._retention_events_path, "a") as file:
+            file.write(json.dumps(row) + "\n")

@@ -507,6 +507,7 @@ class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-
             program_id = directive["program_id"]
             retained_id = f"retention:{program_id}"
             if kind == "save":
+                started = time.monotonic()
                 timing = self._transfer.save_retained(
                     retained_id, directive["block_ids"]
                 )
@@ -514,16 +515,25 @@ class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-
                     "retention_offload",
                     timing,
                     request_id=directive["old_request_id"],
+                    program_id=program_id,
+                    started_monotonic_s=started,
+                    completed_monotonic_s=time.monotonic(),
                 )
                 self._retention_release_ready.add(directive["old_request_id"])
             elif kind == "load":
+                started = time.monotonic()
                 timing = self._transfer.load_retained(
                     retained_id,
                     directive["block_ids"],
                     source_start=directive["source_start"],
                 )
                 self._record(
-                    "retention_restore", timing, request_id=directive["request_id"]
+                    "retention_restore",
+                    timing,
+                    request_id=directive["request_id"],
+                    program_id=program_id,
+                    started_monotonic_s=started,
+                    completed_monotonic_s=time.monotonic(),
                 )
             elif kind == "drop_host":
                 self._transfer.free_retained(retained_id)
@@ -580,7 +590,11 @@ class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-
         self._pending.clear()
 
     def _record(
-        self, phase: str, timing: TransferTiming, request_id: str | None = None
+        self,
+        phase: str,
+        timing: TransferTiming,
+        request_id: str | None = None,
+        **fields: Any,
     ) -> None:
         import json
 
@@ -594,6 +608,7 @@ class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-
                         "bytes_moved": timing.bytes_moved,
                         "num_blocks": timing.num_blocks,
                         "effective_gbps": timing.effective_gbps,
+                        **fields,
                     }
                 )
                 + "\n"

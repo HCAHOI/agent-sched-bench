@@ -511,6 +511,52 @@ def test_register_pause_save_uses_fresh_block_ids_not_stale_admission_cache() ->
     assert conn2._queued == []  # rejected before queuing anything
 
 
+def test_retention_transfer_record_carries_cross_process_timestamps(tmp_path) -> None:
+    from spike.vllm_connector.gpu import SelectiveOffloadConnector
+
+    path = tmp_path / "transfers.jsonl"
+    connector = object.__new__(SelectiveOffloadConnector)
+    connector._timing_path = str(path)
+    timing = TransferTiming(bytes_moved=1024, milliseconds=2.0, num_blocks=4)
+
+    connector._record(
+        "retention_restore",
+        timing,
+        request_id="deadline:1:2",
+        program_id="program:1",
+        started_monotonic_s=10.0,
+        completed_monotonic_s=10.002,
+    )
+
+    row = json.loads(path.read_text())
+    assert row["program_id"] == "program:1"
+    assert row["started_monotonic_s"] == 10.0
+    assert row["completed_monotonic_s"] == 10.002
+
+
+def test_retention_scheduler_event_preserves_block_ids_and_pool_delta(tmp_path) -> None:
+    from spike.vllm_connector.scheduler import RetentionScheduler
+
+    path = tmp_path / "scheduler.jsonl"
+    scheduler = object.__new__(RetentionScheduler)
+    scheduler._retention_events_path = str(path)
+
+    scheduler._record_retention_event(
+        "retention_blocks_freed",
+        request_id="deadline:1:1",
+        block_ids=[3, 5],
+        free_blocks_before=7,
+        free_blocks_after=9,
+    )
+
+    row = json.loads(path.read_text())
+    assert row["phase"] == "retention_blocks_freed"
+    assert row["request_id"] == "deadline:1:1"
+    assert row["block_ids"] == [3, 5]
+    assert row["free_blocks_after"] - row["free_blocks_before"] == 2
+    assert isinstance(row["monotonic_s"], float)
+
+
 def test_saved_kv_registry_lifecycle() -> None:
     reg = SavedKVRegistry()
     assert reg.matched_tokens("unknown", 0) == (0, False)  # base-connector fallthrough
