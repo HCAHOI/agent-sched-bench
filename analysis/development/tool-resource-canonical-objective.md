@@ -21,10 +21,11 @@ artifacts retain that history.
 | CPU scheduling | Short-null handling reduced conservative exposure counts about 78%, but Clause-KB and Task-Aware still produced 2,638 and 2,702 confirmed exposure events. Both hard-RSS safety arms remain closed on exposed SQLGlot; the prediction-free action ceiling is retained. |
 | KB representation | Raw exact/prefix/binary `ClauseResourceKB` is the implemented Clause-KB baseline. Trie/lattice/semantic-key replacement is closed as a contribution. |
 | Offline tool knowledge | Trace-conditioned generation remains closed. The frozen docs-only v1 protocol also stops before fresh collection: only `make` produced a valid specification, and its SQLGlot arm never formed a non-exact contrast. This is an uninformative protocol result, not evidence that documentation semantics cannot work. |
+| Manual tool semantics | **KEEP only the pytest candidate-routing question.** A hindsight selector over existing causal candidates improved full-cohort four-target accuracy by 1.941 points for pytest, but 93/118 corrections merely restored Clause-KB; adding more pytest rules is not supported. pip missed the frozen contrast gate and its perfect-tool ceiling was only 0.392 points, so deprioritize pip-specific work. |
 | KV scheduling | Closed under the current CacheWise/C100 simulator and action model. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
-| Next research step | Do not launch docs-driven PennyLane or DVC confirmation. A future compiler must first pass label-free feasibility on genuinely new tools/cohorts: at least three structurally valid specifications and actual non-exact coverage. Scheduler work still requires a separate observable-state action oracle. |
+| Next research step | Test only whether inference-time support/provenance can decide when to trust the existing pytest semantic head versus Clause-KB. Do not add pytest rules, build pip-specific state, or launch docs-driven PennyLane/DVC confirmation from this exposed result. Any deployable router needs a separately frozen label-free protocol and fresh confirmation. Scheduler work still requires a separate observable-state action oracle. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
