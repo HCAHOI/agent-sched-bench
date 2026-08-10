@@ -753,6 +753,34 @@ actions, and committed evaluator SHA. The ignored trace directories themselves
 have no immutable content digest, so preserving those collection directories is
 required for byte-level reproduction.
 
+### 5.10 Frozen robust survival-clock development protocol
+
+This protocol was fixed before computing either robust-clock arm. It reuses the
+Section 5.9 populations, task order, complete-command/work keys, whole-task-final
+updates, five-second feedback control, measured A100 transfer costs, scorer, and
+three-part gate. It adds no support or probability threshold. State is excluded
+because Section 5.9 showed that it changed zero actions.
+
+The two new arms are exact-command and work-signature robust clocks. For the
+selected causal history, the existing `robust_utility_trigger_stats` chooses a
+continuous trigger in [0, 5,000] ms only when the full history and every
+non-empty leave-one-task-out history unanimously prefer it to every later
+trigger; fewer than two independent tasks therefore falls back to feedback.
+There is no parent fallback. A second deterministic guard requires that the
+same full and leave-one-task-out histories predict strictly positive released
+GiB-seconds and non-positive stall versus five-second feedback at that trigger.
+Otherwise the arm waits five seconds. Current exact/work immediate actions and
+the realized-survival oracle remain attribution controls.
+
+The primary work-robust arm advances only if it releases strictly more
+GiB-seconds than feedback, adds no aggregate critical-path stall, and changes at
+least 20 tasks. Exact robust uses the same gate as an ablation. If both pass,
+prefer exact unless work strictly Pareto-dominates it on release and stall. A
+failed primary closes this robust representation/action combination on exposed
+SWE without trying thresholds or alternate trigger rules. A passing development
+arm only authorizes a separately frozen evaluation on genuinely fresh task
+outcomes; it is not confirmation itself.
+
 ## 6. Closed directions
 
 - **Lookup structure alone:** trie, lattice, generic argv, pip/pytest semantic
