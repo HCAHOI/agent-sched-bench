@@ -123,6 +123,7 @@ BPF_PROGRAM = r"""
 #include <linux/mm_types.h>
 #include <linux/sched.h>
 #include <linux/sched/signal.h>
+#include <linux/version.h>
 #include <uapi/linux/bpf_perf_event.h>
 
 #define TYPE_EXEC_ARG 1
@@ -263,9 +264,15 @@ static u64 current_rss_pages(struct task_struct *task, u64 *mm_out) {
     *mm_out = (u64)mm;
     if (!mm) return 0;
     long file = 0, anon = 0, shmem = 0;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 2, 0)
+    bpf_probe_read_kernel(&file, sizeof(file), &mm->rss_stat[0].count);
+    bpf_probe_read_kernel(&anon, sizeof(anon), &mm->rss_stat[1].count);
+    bpf_probe_read_kernel(&shmem, sizeof(shmem), &mm->rss_stat[3].count);
+#else
     bpf_probe_read_kernel(&file, sizeof(file), &mm->rss_stat.count[0].counter);
     bpf_probe_read_kernel(&anon, sizeof(anon), &mm->rss_stat.count[1].counter);
     bpf_probe_read_kernel(&shmem, sizeof(shmem), &mm->rss_stat.count[3].counter);
+#endif
     long total = file + anon + shmem;
     return total < 0 ? 0 : (u64)total;
 }

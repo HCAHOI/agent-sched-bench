@@ -51,6 +51,25 @@ def _assert_only_harness_root_pre_exec_gaps(run, gaps) -> None:
         )
 
 
+def test_current_rss_counter_layout_compiles_and_reports_pages() -> None:
+    payload = (
+        "buf=bytearray(32*1024*1024);"
+        "[(buf.__setitem__(i,1)) for i in range(0,len(buf),4096)];"
+        "print(sum(buf))"
+    )
+    run = collect_case(
+        f"{shlex.quote(sys.executable)} -c {shlex.quote(payload)}",
+        "rss_counter_layout",
+    )
+
+    assert run.status == 0
+    assert max(
+        event["rss_pages"]
+        for event in run.events
+        if event["type"] == "perf"
+    ) > 0
+
+
 def test_parallel_collectors_isolate_cgroups_and_report_task_io(
     tmp_path: Path,
 ) -> None:
