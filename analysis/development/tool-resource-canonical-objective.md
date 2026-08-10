@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Consolidate the action frontier, then test only a materially different action with a larger end-to-end ceiling; do not tune the closed two-sided phase-envelope arm. |
+| Next research step | Run the reactive-current/peak ceiling in Section 5.18; it removes foreground forecasting rather than tuning the closed phase-envelope arm. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1168,6 +1168,28 @@ The phase oracle exceeded 5% in 15/15 subsets (median 10.912%); the one-sided
 fit-envelope arm did so in 14/15 (median 8.455%, minimum 4.929%); the two-sided
 arm did so in only 1/15 (median 2.719%, minimum -0.213%). No method or gate was
 changed from these diagnostics.
+
+### 5.18 Frozen reactive-current/peak CPU ceiling
+
+Test a different action that makes no foreground-future prediction. Reuse the
+fixed 15-task PennyLane replay wave, strict foreground priority, FCFS order,
+actual CPU-work profiles, and observed RSS-safe candidate set. A candidate may
+be considered only after the running foreground has produced a complete 0.5 s
+CPU interval whose end plus the existing 0.14132007875 s observation/update
+delay is no later than the decision. Use the latest such foreground rate and
+the candidate's exact whole-command peak; admit only when their sum is at most
+eight cores. Reevaluate at later simulator events. A foreground command that
+started speculatively is ineligible because its earlier observed rate may have
+been throttled.
+
+The foreground signal is causal, but candidate peak and RSS safety are
+hindsight oracles. Compare Serial-8, pairwise exact peak, full phase shape, and
+reactive-current/peak FCFS in the same wave. GO requires at least 5% lower mean
+task completion than Serial-8, at most 5% aggregate service inflation, and zero
+capacity or CPU-work violations. A pass authorizes replacing candidate peak
+with the frozen fit envelope; a failure closes this reactive-current/static-
+candidate action. Do not change the sample interval, delay, peak definition,
+candidate order, or gates after reading the outcome.
 
 ## 6. Closed directions
 
