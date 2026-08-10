@@ -18,7 +18,10 @@ _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "src"))
 
-from tool_resource.runtime_kb import _command_stages  # noqa: E402
+from tool_resource.runtime_kb import (  # noqa: E402
+    _command_stages,
+    parse_command_clauses,
+)
 from tool_resource_eval.early_cpu_reservation import cpu_work_profile  # noqa: E402
 from tool_resource_eval.resource_admission import (  # noqa: E402
     AdmissionCommand,
@@ -28,7 +31,7 @@ from tool_resource_eval.resource_admission import (  # noqa: E402
 from trace_collect.trace_data import TraceData  # noqa: E402
 
 
-_PROTOCOL_GIT_SHA = "a220194dea7b4a7c1aadece47bfe0919c0dfea87"
+_PROTOCOL_GIT_SHA = "c9291b04ff0adc5da4c24a34b82c00a2a9cc6589"
 _SPLIT = _ROOT / "analysis/development/pennylane-survival-action-split.json"
 _CPU_CAPACITY = 8.0
 _RSS_CAPACITY_MB = 16_000.0
@@ -41,6 +44,7 @@ _ARMS = (
     "pairwise_exact_peak_fcfs",
     "pairwise_canonical_bucket_fcfs",
     "pairwise_phase_shape_fcfs",
+    "clause_kb_phase_envelope_fcfs",
 )
 
 
@@ -133,6 +137,7 @@ def _load_programs(
 ) -> tuple[
     dict[str, AdmissionProgram],
     dict[str, tuple[tuple[float, float], ...]],
+    dict[str, str],
     dict[str, float],
     set[str],
     list[dict[str, Any]],
@@ -140,6 +145,7 @@ def _load_programs(
 ]:
     programs: dict[str, AdmissionProgram] = {}
     profiles: dict[str, tuple[tuple[float, float], ...]] = {}
+    command_text: dict[str, str] = {}
     mean_cpu: dict[str, float] = {}
     rss_safe: set[str] = set()
     excluded: list[dict[str, Any]] = []
@@ -194,6 +200,13 @@ def _load_programs(
             if profile is None:
                 raise ValueError(f"{command_id}: CPU profile is unavailable")
             profiles[command_id] = profile
+            tool_args = data.get("tool_args")
+            parsed_args = json.loads(tool_args) if isinstance(tool_args, str) else tool_args
+            if not isinstance(parsed_args, Mapping) or not isinstance(
+                parsed_args.get("command"), str
+            ):
+                raise ValueError(f"{command_id}: command text is unavailable")
+            command_text[command_id] = parsed_args["command"]
             mean_cpu[command_id] = sum(cpu for _span, cpu in profile) / sum(
                 span for span, _cpu in profile
             )
@@ -223,7 +236,15 @@ def _load_programs(
             tuple(commands),
             max(0.0, task_end_s - float(exec_actions[-1]["ts_end"])),
         )
-    return programs, profiles, mean_cpu, rss_safe, excluded, rss_sources
+    return (
+        programs,
+        profiles,
+        command_text,
+        mean_cpu,
+        rss_safe,
+        excluded,
+        rss_sources,
+    )
 
 
 def _comparison(
@@ -253,15 +274,150 @@ def _bucket_upper(peak_cpu: float) -> float:
     return _CPU_CAPACITY
 
 
+def _command_signatures(command: str) -> tuple[tuple[Any, ...], ...]:
+    parsed = parse_command_clauses(command)
+    if parsed["parse_failed"] or not parsed["clauses"]:
+        return ()
+    operators = tuple(edge["operator"] for edge in parsed["control_edges"])
+
+    def signature(label: str, depth: int | None) -> tuple[Any, ...]:
+        clauses = []
+        for clause in parsed["clauses"]:
+            tokens = (clause["bin"], *clause["argv"][1:])
+            clauses.append(
+                (
+                    clause["in_loop"],
+                    clause["in_pipe"],
+                    clause["in_subst"],
+                    clause["pipeline_position"],
+                    tuple(clause["structural_context"]),
+                    tokens if depth is None else tokens[:depth],
+                )
+            )
+        return label, operators, tuple(clauses)
+
+    return (
+        signature("exact", None),
+        *(signature(f"depth_{depth}", depth) for depth in (4, 3, 2, 1)),
+    )
+
+
+def _profile_envelope(
+    profiles: tuple[tuple[tuple[float, float], ...], ...],
+) -> tuple[tuple[float, float], ...]:
+    boundaries = {0.0}
+    for profile in profiles:
+        elapsed = 0.0
+        for span, _work in profile:
+            elapsed += span
+            boundaries.add(elapsed)
+    ordered = sorted(boundaries)
+    envelope = []
+    for start, end in zip(ordered, ordered[1:]):
+        midpoint = (start + end) / 2.0
+        rates = []
+        for profile in profiles:
+            elapsed = 0.0
+            for span, work in profile:
+                if midpoint < elapsed + span:
+                    rates.append(work / span)
+                    break
+                elapsed += span
+        span = end - start
+        envelope.append((span, max(rates, default=0.0) * span))
+    return tuple(envelope)
+
+
+def _fit_candidate_envelopes(
+    fit_commands: Mapping[str, str],
+    fit_profiles: Mapping[str, tuple[tuple[float, float], ...]],
+    replay_commands: Mapping[str, str],
+    replay_profiles: Mapping[str, tuple[tuple[float, float], ...]],
+    eligible_ids: set[str],
+) -> tuple[dict[str, tuple[tuple[float, float], ...]], dict[str, Any]]:
+    fit_by_signature: dict[
+        tuple[Any, ...], list[tuple[tuple[float, float], ...]]
+    ] = {}
+    for command_id, command in fit_commands.items():
+        for signature in _command_signatures(command):
+            fit_by_signature.setdefault(signature, []).append(fit_profiles[command_id])
+
+    cache: dict[tuple[Any, ...], tuple[tuple[float, float], ...]] = {}
+    predicted: dict[str, tuple[tuple[float, float], ...]] = {}
+    levels: Counter[str] = Counter()
+    supports: Counter[int] = Counter()
+    outlasted = 0
+    maximum_unmodeled_tail_s = 0.0
+    for command_id in sorted(eligible_ids):
+        match = next(
+            (
+                signature
+                for signature in _command_signatures(replay_commands[command_id])
+                if signature in fit_by_signature
+            ),
+            None,
+        )
+        if match is None:
+            continue
+        if match not in cache:
+            cache[match] = _profile_envelope(tuple(fit_by_signature[match]))
+        envelope = cache[match]
+        predicted[command_id] = envelope
+        levels[str(match[0])] += 1
+        supports[len(fit_by_signature[match])] += 1
+        actual_duration = sum(span for span, _work in replay_profiles[command_id])
+        predicted_duration = sum(span for span, _work in envelope)
+        if actual_duration > predicted_duration + 1e-9:
+            outlasted += 1
+            maximum_unmodeled_tail_s = max(
+                maximum_unmodeled_tail_s,
+                actual_duration - predicted_duration,
+            )
+    return predicted, {
+        "fit_signatures": len(fit_by_signature),
+        "matched_commands": len(predicted),
+        "match_levels": dict(sorted(levels.items())),
+        "fit_support_counts": {
+            str(support): count for support, count in sorted(supports.items())
+        },
+        "commands_outlasting_envelope": outlasted,
+        "maximum_unmodeled_tail_s": maximum_unmodeled_tail_s,
+    }
+
+
 def _evaluate() -> dict[str, Any]:
     started = time.monotonic()
     git_sha = _require_clean_checkout()
     split = _require_frozen_split()
-    programs, profiles, mean_cpu, rss_safe, excluded, rss_sources = _load_programs(
-        split
-    )
+    (
+        programs,
+        profiles,
+        commands,
+        mean_cpu,
+        rss_safe,
+        excluded,
+        rss_sources,
+    ) = _load_programs(split)
+    (
+        fit_programs,
+        fit_profiles,
+        fit_commands,
+        _fit_mean_cpu,
+        _fit_rss_safe,
+        fit_excluded,
+        _fit_rss_sources,
+    ) = _load_programs({"replay": split["fit"]})
     if len(programs) != 15 or len(profiles) != 570 or len(excluded) != 11:
         raise ValueError("PennyLane evidence-valid population changed")
+    if len(fit_programs) != 15 or len(fit_profiles) != 637 or fit_excluded:
+        raise ValueError("PennyLane fit population changed")
+    candidate_profiles, envelope_evidence = _fit_candidate_envelopes(
+        fit_commands,
+        fit_profiles,
+        commands,
+        profiles,
+        rss_safe,
+    )
     chosen = [programs[task_id] for task_id in sorted(programs)]
     peak_cpu = {
         command_id: max(cpu / span for span, cpu in profile)
@@ -323,6 +479,16 @@ def _evaluate() -> dict[str, Any]:
             require_pairwise_profile_compatibility=True,
             selection="fcfs",
         ),
+        "clause_kb_phase_envelope_fcfs": simulate_idle_backfill(
+            chosen,
+            cpu_capacity=_CPU_CAPACITY,
+            rss_capacity_mb=_RSS_CAPACITY_MB,
+            cpu_work_profiles=profiles,
+            speculative_eligible_command_ids=set(candidate_profiles),
+            pairwise_candidate_profiles=candidate_profiles,
+            require_pairwise_profile_compatibility=True,
+            selection="fcfs",
+        ),
     }
     violation_by_arm = {}
     for arm, metrics in arms.items():
@@ -360,20 +526,20 @@ def _evaluate() -> dict[str, Any]:
             <= _MAXIMUM_SERVICE_INFLATION,
             "zero_capacity_or_work_violations": not violation_by_arm[arm],
         }
-        for arm in ("pairwise_phase_shape_fcfs",)
+        for arm in ("clause_kb_phase_envelope_fcfs",)
     }
     for gate in gates.values():
         gate["go"] = all(gate.values())
-    phase_go = gates["pairwise_phase_shape_fcfs"]["go"]
+    phase_go = gates["clause_kb_phase_envelope_fcfs"]["go"]
     return {
         "schema_version": 1,
-        "status": "development_go_to_phase_prediction_feasibility"
+        "status": "development_go_to_foreground_feedback_feasibility"
         if phase_go
         else "development_no_go",
         "generated": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
         "git_sha": git_sha,
         "protocol_git_sha": _PROTOCOL_GIT_SHA,
-        "protocol": "tool-resource-canonical-objective.md Section 5.15",
+        "protocol": "tool-resource-canonical-objective.md Section 5.16",
         "config": {
             "split": str(_SPLIT.resolve()),
             "cpu_capacity": _CPU_CAPACITY,
@@ -385,22 +551,32 @@ def _evaluate() -> dict[str, Any]:
                 "exact_peak": "foreground exact peak CPU + candidate exact peak CPU <= 8",
                 "canonical_bucket": "foreground and candidate peak labels map to upper bounds 2/4/8 whose sum <= 8",
                 "phase_shape": "aligned remaining foreground and candidate sampled CPU demand never exceeds 8",
+                "clause_kb_phase_envelope": "fit-only pointwise-max candidate envelope plus actual remaining foreground profile",
             },
+            "candidate_signature_hierarchy": [
+                "exact",
+                "depth_4",
+                "depth_3",
+                "depth_2",
+                "depth_1_binary",
+            ],
             "rss_rule": "observed composed upper bound only",
         },
         "evidence": {
-            "fit_tasks_read": 0,
+            "fit_tasks_read": len(fit_programs),
+            "fit_exec_commands": len(fit_profiles),
             "replay_tasks": len(programs),
             "excluded_replay_tasks": excluded,
             "exec_commands": len(profiles),
             "rss_safe_commands": len(rss_safe),
             "rss_source_counts": dict(sorted(rss_sources.items())),
             "reserved_tasks_read": 0,
+            "candidate_envelopes": envelope_evidence,
         },
         "arms": arms,
         "comparisons_vs_serial8": comparisons,
         "gates": gates,
-        "go_to_phase_prediction_feasibility": phase_go,
+        "go_to_foreground_feedback_feasibility": phase_go,
         "cost": {
             "prediction_time_agent_calls": 0,
             "gpu_runtime_s": 0.0,
@@ -408,7 +584,7 @@ def _evaluate() -> dict[str, Any]:
         },
         "limitations": [
             "All 15 scored PennyLane tasks are development-exposed.",
-            "Mean CPU, peak CPU, canonical labels, phase-shape alignment, and RSS safety are hindsight oracles, not deployable predictions.",
+            "Candidate envelopes use fit tasks only, but foreground future shape and RSS safety remain hindsight oracles.",
             "The action-space ceiling contains one physically defined arrival wave, not workload-order uncertainty.",
             "The deterministic replay preserves recorded commands but models CPU sharing.",
         ],

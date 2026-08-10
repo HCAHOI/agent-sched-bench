@@ -291,6 +291,10 @@ def simulate_idle_backfill(
     speculative_eligible_command_ids: set[str],
     pairwise_cpu_demands: Mapping[str, float] | None = None,
     require_pairwise_profile_compatibility: bool = False,
+    pairwise_candidate_profiles: Mapping[
+        str, tuple[tuple[float, float], ...]
+    ]
+    | None = None,
     rss_reservations: Mapping[str, float] | None = None,
     rss_unverified_command_ids: set[str] | None = None,
     selection: str,
@@ -314,6 +318,27 @@ def simulate_idle_backfill(
         raise ValueError("idle backfill requires complete CPU work profiles")
     if not speculative_eligible_command_ids <= set(commands):
         raise ValueError("idle backfill eligibility contains an unknown command")
+    candidate_profiles = (
+        None if pairwise_candidate_profiles is None else dict(pairwise_candidate_profiles)
+    )
+    if candidate_profiles is not None and (
+        not require_pairwise_profile_compatibility
+        or not speculative_eligible_command_ids <= set(candidate_profiles)
+        or not set(candidate_profiles) <= set(commands)
+        or any(
+            not profile
+            or any(
+                dt <= 0.0
+                or cpu < 0.0
+                or not math.isfinite(dt)
+                or not math.isfinite(cpu)
+                or cpu > cpu_capacity * dt + _EPSILON
+                for dt, cpu in profile
+            )
+            for profile in candidate_profiles.values()
+        )
+    ):
+        raise ValueError("idle backfill requires valid eligible candidate profiles")
     cpu_demands = None if pairwise_cpu_demands is None else dict(pairwise_cpu_demands)
     if cpu_demands is not None and (
         set(cpu_demands) != set(commands)
@@ -418,7 +443,11 @@ def simulate_idle_backfill(
         )
 
     def profiles_fit(normal: _IdleRunning, candidate_id: str) -> bool:
-        candidate = cpu_work_profiles[candidate_id]
+        candidate = (
+            cpu_work_profiles[candidate_id]
+            if candidate_profiles is None
+            else candidate_profiles[candidate_id]
+        )
         normal_index = normal.profile_index
         candidate_index = 0
         normal_remaining = normal.profile_remaining_s

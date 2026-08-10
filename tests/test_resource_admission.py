@@ -32,6 +32,8 @@ from scripts.evaluation.evaluate_cpu_work_admission import (
 from scripts.evaluation.evaluate_cpu_throughput_oracle import _bucket_cpu
 from scripts.evaluation.evaluate_pennylane_pairwise_cpu_backfill import (
     _bucket_upper,
+    _command_signatures,
+    _profile_envelope,
 )
 from scripts.evaluation.evaluate_cpu_feedback_admission import (
     _assert_frozen_protocol,
@@ -385,11 +387,24 @@ def test_idle_backfill_uses_remaining_phase_compatibility() -> None:
         require_pairwise_profile_compatibility=True,
         selection="fcfs",
     )
+    predicted = simulate_idle_backfill(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=1_000.0,
+        cpu_work_profiles=staggered,
+        speculative_eligible_command_ids={"candidate"},
+        pairwise_candidate_profiles={
+            "candidate": ((1.0, 8.0), (1.0, 0.0)),
+        },
+        require_pairwise_profile_compatibility=True,
+        selection="fcfs",
+    )
 
     assert admitted["speculative_start_ids"] == ["candidate"]
     assert admitted["start_s_by_command"]["candidate"] == 0.0
     assert admitted["total_command_service_s"] == 4.0
     assert rejected["start_s_by_command"]["candidate"] == 1.0
+    assert predicted["start_s_by_command"]["candidate"] == 1.0
 
 
 def test_idle_backfill_promotion_preserves_partial_cpu_work() -> None:
@@ -1564,3 +1579,22 @@ def test_pairwise_peak_uses_canonical_cpu_upper_bounds() -> None:
         8.0,
         8.0,
     ]
+
+
+def test_phase_envelope_reuses_clause_prefixes_and_max_rates() -> None:
+    direct = _command_signatures("python -m pytest tests/test_a.py")
+    venv = _command_signatures("/opt/venv/bin/python -m pytest tests/test_b.py")
+
+    assert direct[0] != venv[0]
+    assert direct[2] == venv[2]
+    assert _profile_envelope(
+        (
+            ((1.0, 8.0), (1.0, 0.0)),
+            ((0.5, 0.0), (1.0, 4.0), (0.5, 0.0)),
+        )
+    ) == (
+        (0.5, 4.0),
+        (0.5, 4.0),
+        (0.5, 2.0),
+        (0.5, 0.0),
+    )
