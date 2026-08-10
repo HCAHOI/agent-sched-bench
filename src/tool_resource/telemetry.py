@@ -3668,11 +3668,21 @@ def _failed_exec_attempt_records(
     argv_words, argv_capture_flags = (
         _captured_argv(events) if captured_argv is None else captured_argv
     )
+    requested_paths: dict[tuple[int, int], str] = {}
+    requested_path_truncated: set[tuple[int, int]] = set()
+    for event in events:
+        if event["type"] != "exec_meta":
+            continue
+        key = (event["host_pid"], event["exec_seq"])
+        requested_paths[key] = event.get("arg", "")
+        if int(event.get("arg_flags", 0)) & ARG_FLAG_TRUNCATED:
+            requested_path_truncated.add(key)
     attempts: list[FailedExecAttempt] = []
     for event in events:
         if event["type"] != "failed_exec_attempt":
             continue
         words = argv_words.get((event["host_pid"], event["exec_seq"]), {})
+        key = (event["host_pid"], event["exec_seq"])
         argv = tuple(words[index] for index in sorted(words))
         attempts.append(
             FailedExecAttempt(
@@ -3682,8 +3692,10 @@ def _failed_exec_attempt_records(
                 argv=argv,
                 errno=event["errno"],
                 argv_capture_flags=argv_capture_flags.get(
-                    (event["host_pid"], event["exec_seq"]), 0
+                    key, 0
                 ),
+                requested_executable_path=requested_paths.get(key),
+                requested_executable_path_truncated=key in requested_path_truncated,
             )
         )
     return attempts

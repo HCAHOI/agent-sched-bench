@@ -156,6 +156,8 @@ class FailedExecAttempt:
     argv: tuple[str, ...]
     errno: int
     argv_capture_flags: int = 0
+    requested_executable_path: str | None = None
+    requested_executable_path_truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -1287,6 +1289,95 @@ def bridge_command(
             failed_zero.update(dict.fromkeys(indices, attempts))
         elif len(indices) == 1:
             failed_assigned[indices[0]] = attempts
+
+    def literal_head(clause: Mapping[str, Any]) -> str | None:
+        intents = clause.get("word_intents")
+        if not isinstance(intents, list) or not intents:
+            return None
+        components = intents[0].get("components")
+        if (
+            not isinstance(components, list)
+            or len(components) != 1
+            or components[0].get("kind") != "literal"
+        ):
+            return None
+        argv = clause.get("argv")
+        return str(argv[0]) if isinstance(argv, list) and argv else None
+
+    def direct_shell_attempt(attempt: FailedExecAttempt) -> bool:
+        current = attempt.host_pid
+        seen: set[int] = set()
+        while current not in seen:
+            seen.add(current)
+            if current in chains and not is_shell(current):
+                return False
+            if current == entry_pid:
+                return True
+            parent = fork_parent.get(current)
+            if parent is None:
+                return False
+            current = parent
+        return False
+
+    def path_matches(head: str, path: str) -> bool:
+        return path == head if "/" in head else path.rsplit("/", 1)[-1] == head
+
+    filename_candidates: dict[str, list[int]] = {}
+    for si, clause in statics.items():
+        head = literal_head(clause)
+        if (
+            head is not None
+            and str(clause["bin"]) not in _NOEXEC_BUILTINS
+            and not clause.get("in_loop")
+            and not clause.get("in_pipe")
+            and not clause.get("in_subst")
+        ):
+            filename_candidates.setdefault(head, []).append(si)
+
+    filename_failed_zero: dict[int, tuple[FailedExecAttempt, ...]] = {}
+    for head, indices in filename_candidates.items():
+        if len(indices) != 1:
+            continue
+        si = indices[0]
+        if (
+            si in assigned
+            or si in loop_assigned
+            or si in ambiguous
+            or si in failed_assigned
+            or si in failed_zero
+        ):
+            continue
+        if any(
+            path_matches(
+                head,
+                image.requested_executable_path
+                or (image.argv[0] if image.argv else image.bin),
+            )
+            for image in exec_images
+        ):
+            continue
+        matching_attempts = tuple(
+            attempt
+            for attempt in failed_exec_attempts
+            if attempt.requested_executable_path
+            and path_matches(head, attempt.requested_executable_path)
+        )
+        matching_pids = {attempt.host_pid for attempt in matching_attempts}
+        attempts = tuple(
+            attempt
+            for attempt in failed_exec_attempts
+            if attempt.host_pid in matching_pids
+        )
+        if attempts and all(
+            attempt.argv_capture_flags != 0
+            and attempt.requested_executable_path is not None
+            and path_matches(head, attempt.requested_executable_path)
+            and not attempt.requested_executable_path_truncated
+            and attempt.errno == errno.ENOENT
+            and direct_shell_attempt(attempt)
+            for attempt in attempts
+        ):
+            filename_failed_zero[si] = attempts
     lookup_assigned: dict[int, ShellCommandLookupFailure] = {}
     if command_lookup_failure is not None and _valid_lookup_failure(
         command_lookup_failure,
@@ -1303,6 +1394,7 @@ def bridge_command(
             and si not in ambiguous
             and si not in failed_assigned
             and si not in failed_zero
+            and si not in filename_failed_zero
             and clause["argv"][0] == command_lookup_failure.executable_head
             and str(clause["bin"])
             not in (_NOEXEC_BUILTINS - _DIALECT_DEPENDENT_BUILTINS)
@@ -1339,6 +1431,7 @@ def bridge_command(
                 *ambiguous,
                 *failed_assigned,
                 *failed_zero,
+                *filename_failed_zero,
                 *lookup_assigned,
                 *guard_assigned,
                 # A loop clause did run; it must never be resolved as
@@ -1454,6 +1547,17 @@ def bridge_command(
                     clause,
                     failed_zero[si],
                     epoch_offset,
+                )
+            )
+        elif si in filename_failed_zero:
+            bridged_indices.add(si)
+            bridged.append(
+                _missing_exec_zero(
+                    repo,
+                    clause,
+                    filename_failed_zero[si],
+                    epoch_offset,
+                    mapping_evidence="failed_exec_filename_enoent_zero",
                 )
             )
         elif si in failed_assigned:
@@ -1649,6 +1753,7 @@ def _missing_exec_zero(
     clause: Mapping[str, Any],
     attempts: Sequence[FailedExecAttempt],
     epoch_offset: float,
+    mapping_evidence: str = "failed_exec_enoent_zero",
 ) -> BridgedClause:
     """Represent an observed ENOENT attempt as zero target-program demand."""
 
@@ -1657,7 +1762,7 @@ def _missing_exec_zero(
         clause,
         timestamp_ns=min(attempt.ts_ns for attempt in attempts),
         epoch_offset=epoch_offset,
-        mapping_evidence="failed_exec_enoent_zero",
+        mapping_evidence=mapping_evidence,
         execution_outcome="enoent",
         evidence={
             "failed_exec_attempts": [
@@ -1666,6 +1771,7 @@ def _missing_exec_zero(
                     "exec_seq": attempt.exec_seq,
                     "ts_ns": attempt.ts_ns,
                     "errno": attempt.errno,
+                    "requested_executable_path": attempt.requested_executable_path,
                 }
                 for attempt in attempts
             ]

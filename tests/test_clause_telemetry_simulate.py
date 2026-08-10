@@ -1744,6 +1744,142 @@ def test_incomplete_failed_exec_argv_does_not_resolve_static_clause() -> None:
     ]
 
 
+def test_complete_failed_exec_path_resolves_unique_literal_head() -> None:
+    events = _failed_exec_events()
+    next(event for event in events if event["type"] == "failed_exec_attempt")[
+        "arg_flags"
+    ] = ARG_FLAG_TRUNCATED
+    events.insert(
+        4,
+        _event(
+            "exec_meta",
+            139,
+            100,
+            seq=1,
+            arg="/usr/local/bin/python",
+        ),
+    )
+
+    collector = _collector_without_bpf()
+    summary, violations = collector._summarize_call(
+        token=ToolCallToken(
+            "call-incomplete-failed-path",
+            "cd /testbed && python -m pytest",
+            100,
+            0,
+            0,
+        ),
+        ended_ns=230,
+        events=events,
+        loss_counts={},
+        perf_samples=0,
+    )
+
+    assert violations == []
+    assert summary["mapping"]["gaps"] == []
+    assert summary["clauses"][0]["latency_ms"] == 0.0
+    assert summary["clauses"][0]["mapping_evidence"] == (
+        "failed_exec_filename_enoent_zero"
+    )
+
+
+def test_failed_exec_path_does_not_choose_between_repeated_heads() -> None:
+    events = _failed_exec_events()
+    next(event for event in events if event["type"] == "failed_exec_attempt")[
+        "arg_flags"
+    ] = ARG_FLAG_TRUNCATED
+    events.insert(
+        4,
+        _event("exec_meta", 139, 100, seq=1, arg="/usr/local/bin/python"),
+    )
+
+    collector = _collector_without_bpf()
+    summary, _ = collector._summarize_call(
+        token=ToolCallToken("call-repeated-head", "python one; python two", 100, 0, 0),
+        ended_ns=230,
+        events=events,
+        loss_counts={},
+        perf_samples=0,
+    )
+
+    assert summary["clauses"] == []
+    assert [gap["kind"] for gap in summary["mapping"]["gaps"]] == [
+        "unmatched_static_clause",
+        "unmatched_static_clause",
+    ]
+
+
+@pytest.mark.parametrize(("path_flags", "failed_errno"), [(ARG_FLAG_TRUNCATED, 2), (0, 13)])
+def test_failed_exec_path_requires_complete_enoent(
+    path_flags: int,
+    failed_errno: int,
+) -> None:
+    events = _failed_exec_events()
+    failed = next(event for event in events if event["type"] == "failed_exec_attempt")
+    failed["arg_flags"] = ARG_FLAG_TRUNCATED
+    failed["exit_code"] = failed_errno
+    failed["errno"] = failed_errno
+    events.insert(
+        4,
+        _event(
+            "exec_meta",
+            139,
+            100,
+            seq=1,
+            arg="/usr/local/bin/python",
+            arg_flags=path_flags,
+        ),
+    )
+
+    collector = _collector_without_bpf()
+    summary, _ = collector._summarize_call(
+        token=ToolCallToken("call-invalid-path", "python -m pytest", 100, 0, 0),
+        ended_ns=230,
+        events=events,
+        loss_counts={},
+        perf_samples=0,
+    )
+
+    assert summary["clauses"] == []
+    assert [gap["kind"] for gap in summary["mapping"]["gaps"]] == [
+        "unmatched_static_clause"
+    ]
+
+
+def test_failed_exec_path_rejects_mixed_complete_attempts_on_same_pid() -> None:
+    events = _failed_exec_events()
+    next(event for event in events if event["type"] == "failed_exec_attempt")[
+        "arg_flags"
+    ] = ARG_FLAG_TRUNCATED
+    events[4:4] = [
+        _event("exec_meta", 139, 100, seq=1, arg="/usr/local/bin/python"),
+        _event("exec_meta", 143, 100, seq=2, arg="/usr/local/bin/python"),
+        _event("exec_arg", 144, 100, seq=2, arg_index=0, arg="python"),
+        _event("exec_arg", 145, 100, seq=2, arg_index=1, arg="--other"),
+        _event(
+            "failed_exec_attempt",
+            149,
+            100,
+            seq=2,
+            exit_code=2,
+        ),
+    ]
+
+    collector = _collector_without_bpf()
+    summary, _ = collector._summarize_call(
+        token=ToolCallToken("call-mixed-path", "python -m pytest", 100, 0, 0),
+        ended_ns=230,
+        events=events,
+        loss_counts={},
+        perf_samples=0,
+    )
+
+    assert summary["clauses"] == []
+    assert [gap["kind"] for gap in summary["mapping"]["gaps"]] == [
+        "unmatched_static_clause"
+    ]
+
+
 def test_direct_command_not_found_is_zero_target_evidence() -> None:
     command = "cd /testbed && python -m pytest"
     diagnostic = "/bin/sh: 1: python: not found"
