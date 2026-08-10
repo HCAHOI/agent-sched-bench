@@ -546,12 +546,6 @@ class OpenClawReplayProvider(LLMProvider):
                     (slot_acquired_monotonic - request_ready_monotonic) * 1000.0,
                     3,
                 )
-            if self._tool_gap_loan is not None:
-                self._tool_gap_loan.record_llm_response(
-                    source_action_id,
-                    float(shadow_metrics["latency_ms"]),
-                    wall_end_s=slot_released_wall_time_s,
-                )
                 shadow_metrics.update(
                     {
                         "admission_slot_index": lease.slot_index,
@@ -564,6 +558,12 @@ class OpenClawReplayProvider(LLMProvider):
                         "slot_acquired_wall_time_s": slot_acquired_wall_time_s,
                         "slot_released_wall_time_s": slot_released_wall_time_s,
                     }
+                )
+            if self._tool_gap_loan is not None:
+                self._tool_gap_loan.record_llm_response(
+                    source_action_id,
+                    float(shadow_metrics["latency_ms"]),
+                    wall_end_s=slot_released_wall_time_s,
                 )
             sleep_record = None
             timing_fields = {"llm_timing_mode": "shadow_generation"}
