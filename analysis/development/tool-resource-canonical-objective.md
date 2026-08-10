@@ -176,6 +176,7 @@ All rows below are development-exposed.
 | CPU-idle FCFS backfill | Versus Serial-8, mean per-order completion improved 14.620%; all 32 orders improved, makespan improved 17.226%, and service inflation was 3.073% | Action gate passed under strict-priority CPU and hindsight RSS safety; requires causal RSS safety and physical calibration |
 | CPU-idle shortest-safe selection | Hindsight shortest selection changed completion by -0.137% versus FCFS; 17/32 orders improved and the paired interval [-51.549, 70.048] s crossed zero | Ordering predictor has no headroom; do not build a latency/shortest selector |
 | CPU-idle predicted RSS safety | Conservative null handling produced 12,390/12,439 Clause-KB/Task-Aware exposures. The open short-null amendment reduced these to 2,638/2,702, but both remained nonzero; utility was 33.392%/25.984% | Amendment gate still failed; do not calibrate physical `cpu.idle` or add another exposed-data exception |
+| PennyLane phase-aware CPU backfill | Full-profile oracle: 10.699% completion gain at zero service cost. Fit-only candidate envelope: 6.707% at 0.0835%. Fully CPU-causal two-sided envelope: 4.461% at 1.757%. | Phase headroom and candidate transfer are real; absolute-time foreground transfer misses the gate, so this scheduler is closed before RSS replacement |
 | Prediction-weighted CPU shares | Task-Aware reduced mean completion by 0.0056%; a true-demand oracle reduced it by only 0.0527% | Closed: recorded-duration floor leaves no useful share-allocation headroom |
 | Ready-queue priority | Exact-duration aging oracle reduced mean completion 3.991% with 0.301% makespan cost | Below the frozen 5% gate; retain only as a diagnosed tradeoff |
 
@@ -1161,6 +1162,12 @@ Close this phase-envelope scheduler under the present single-wave action model;
 do not add a post-outcome alignment or feedback correction on these replay
 tasks. This does not negate the 10.699% hindsight phase-shape headroom or rule
 out a preemptive/differently timed action.
+
+Post-outcome leave-one-task-out sensitivity supports that mechanism boundary.
+The phase oracle exceeded 5% in 15/15 subsets (median 10.912%); the one-sided
+fit-envelope arm did so in 14/15 (median 8.455%, minimum 4.929%); the two-sided
+arm did so in only 1/15 (median 2.719%, minimum -0.213%). No method or gate was
+changed from these diagnostics.
 
 ## 6. Closed directions
 
