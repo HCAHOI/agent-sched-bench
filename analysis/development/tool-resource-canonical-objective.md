@@ -14,7 +14,7 @@ artifacts retain that history.
 |---|---|
 | Prediction | Keep the target-specific Task-Aware Command Predictor below as the selected development candidate. It is exposed evidence, not confirmation or deployed code. |
 | Runtime feedback | **KEEP causal command-level eBPF feedback as a measured mechanism and control.** Neither tested admission action passed its frozen utility gate, so it is not a runtime scheduler candidate. |
-| CPU execution | Keep equal-share burstable execution as a physical control. Strict-priority CPU-idle backfill retains exposed action headroom, but neither tested hard-RSS predictor established safe admission, so physical `cpu.idle` calibration is not authorized. |
+| CPU execution | Keep equal-share burstable execution as a physical control. PennyLane exposes substantial strict-priority backfill headroom, but candidate-only peak/latency predictions do not satisfy the completion/fairness gate. Test pairwise CPU-work compatibility before any physical `cpu.idle` calibration. |
 | Saturated quartet result | Frozen claim verdict is NO-GO because 8/12, not 9/12, groups improved. This is not a module-retirement decision. |
 | Fresh counterbalanced queue | **Inconclusive because 7/1,818 paired tool calls changed terminal class.** Timing-only improvement was 0.929% with 2/4 queues improving, below the frozen gate even before the quality failure. |
 | Prediction contribution to feedback | Not established. Task-Aware seeding did not improve the frozen reservation/service operating point over feedback alone. |
@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Specify a byte-aware live loan whose primary metric is waiting-request admission/TTFT, then use the untouched PennyLane 16+16 only if the expected 5 s action advance justifies GPU cost. Do not repair the failed work signature on exposed PennyLane. |
+| Next research step | Run the frozen PennyLane pairwise mean-CPU backfill ceiling in Section 5.13. Only a pass authorizes a causal CPU-work predictor; the separate byte-aware KV loan remains a lower-ceiling candidate. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -922,6 +922,55 @@ if every foreground task hits and every advance propagates fully. The live
 action must therefore account for bytes and should measure waiting-request
 admission/TTFT directly; an expensive task-JCT run alone is unlikely to resolve
 such a small ceiling.
+
+### 5.13 Frozen PennyLane pairwise CPU-work ceiling
+
+This exposed-development branch asks whether the long PennyLane commands make
+CPU-idle backfill actionable under a workload unlike SQLGlot. Of the 26 replay
+tasks in Section 5.11, exactly 15 have evidence-valid command telemetry; the
+other 11 are excluded solely by the pre-existing telemetry validity gate. The
+15 tasks contain 570 exec commands with complete eight-core CPU timelines. No
+reserved PennyLane task is read.
+
+Preliminary diagnosis fixed the next question. With observed RSS as a hindsight
+safety filter, unrestricted FCFS backfill reduced mean task completion by
+23.484% and makespan by 17.191%, but inflated aggregate command service by
+9.553%. Hindsight shortest-safe selection still inflated service by 8.102%.
+Canonical latency-bucket-5 plus non-High peak CPU reduced completion only
+0.940%. A continuous hindsight score based on duration and average CPU did
+contain 5%/5% operating points, but fit-history exact commands covered only 16
+of 330 RSS-safe commands. The unchanged work signature collapsed 196 covered
+commands to 13 scores; its apparent top-160 pass split a tied score by task ID
+and is invalid. Thresholding whole ties produced no pass. The repository's
+fixed CacheWise TF-IDF representation plus default Ridge also produced no
+5%/5% point. These are diagnostics, not candidate-selection claims.
+
+The remaining mechanism question is pairwise compatibility. For every command,
+mean CPU demand is total clipped CPU core-seconds divided by recorded command
+duration. At each backfill decision, the oracle admits the first RSS-safe ready
+command whose mean demand plus the running foreground command's mean demand is
+at most the physical eight-core capacity. It otherwise follows the unchanged
+strict-priority simulator: foreground work has first claim, speculative work
+uses only residual CPU, task programs and command order are unchanged, and all
+CPU work is conserved. Full realized profiles and observed RSS make this a
+hindsight action-space ceiling, not a predictor.
+
+Compare Serial-8, unrestricted RSS-safe FCFS, and pairwise-mean FCFS on all 15
+valid tasks under 32 deterministic full-task permutations (seeds 0--31). The
+primary gate requires pairwise-mean FCFS to reduce mean per-order task
+completion by at least 5%, keep aggregate service inflation at or below 5%,
+improve every order, and introduce zero logical/physical capacity or CPU-work
+violations. A pass authorizes a separately frozen causal predictor using
+fit-task command CPU work plus runtime foreground feedback. A failure closes
+CPU-idle backfill for the present PennyLane action model. It does not amend any
+earlier survival, work-signature, or SQLGlot result.
+
+Dependency prewarming is not part of this experiment. The repeated
+`python3-pip` setup gain was real (about 11--12 s per invocation), but the task
+images already expose `/opt/conda/bin` while the collector deliberately
+replaces the image PATH. Treat that setup recurrence as a runtime confounder,
+not a research claim; changing PATH would require a separate trace-regime
+decision.
 
 ## 6. Closed directions
 
