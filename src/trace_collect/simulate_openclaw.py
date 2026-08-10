@@ -28,6 +28,7 @@ from trace_collect.simulate_utils import (
     _source_model,
     _summarize_sleep_drifts,
 )
+from trace_collect.tool_gap_loan import ToolGapLoanConfig
 
 
 OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV = "OPENCLAW_REPLAY_EXEC_TIMEOUT_FLOOR_S"
@@ -292,6 +293,7 @@ async def _run_openclaw_replay_session(
     trace_logger: TraceLogger,
     replay_speed: float,
     shadow_generation: ShadowGenerationConfig | None = None,
+    tool_gap_loan: ToolGapLoanConfig | None = None,
     llm_timing: LLMTimingConfig,
     command_timeout_s: float,
     warmup_skip_iterations: int = 0,
@@ -382,6 +384,29 @@ async def _run_openclaw_replay_session(
                 "admission_slot_paths": list(shadow_generation.admission_slot_paths),
             }
             if shadow_generation is not None
+            else None
+        ),
+        "tool_gap_loan": (
+            {
+                "arm": tool_gap_loan.arm,
+                "state_dir": tool_gap_loan.state_dir,
+                "task_id": tool_gap_loan.task_id,
+                "foreground_task_ids": list(tool_gap_loan.foreground_task_ids),
+                "can_lend": tool_gap_loan.can_lend,
+                "predictions": [
+                    {
+                        "sample_id": prediction.sample_id,
+                        "command": prediction.command,
+                        "probability_by_bucket": list(
+                            prediction.probability_by_bucket
+                        ),
+                        "hard_bucket": prediction.hard_bucket,
+                        "provenance": dict(prediction.provenance),
+                    }
+                    for prediction in tool_gap_loan.predictions
+                ],
+            }
+            if tool_gap_loan is not None
             else None
         ),
         "llm_timing": {

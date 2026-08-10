@@ -26,6 +26,11 @@ from llm_call.provider_base import (
     ToolCallRequest,
 )
 from trace_collect.openclaw_tools import ContainerAgent
+from trace_collect.tool_gap_loan import (
+    ToolGapLoanConfig,
+    ToolGapLoanRuntime,
+    ToolGapPrediction,
+)
 
 
 @dataclass(slots=True)
@@ -411,6 +416,7 @@ class OpenClawReplayProvider(LLMProvider):
         model: str = "replay-openclaw",
         stop_before_final_tool_calls: bool = False,
         shadow_generation: ShadowGenerationConfig | None = None,
+        tool_gap_loan: ToolGapLoanRuntime | None = None,
     ) -> None:
         super().__init__(api_key=None, api_base=None)
         validate_llm_replay_timing(
@@ -428,6 +434,7 @@ class OpenClawReplayProvider(LLMProvider):
         self._index = 0
         self._stop_before_final_tool_calls = stop_before_final_tool_calls
         self._shadow_generation = shadow_generation
+        self._tool_gap_loan = tool_gap_loan
         self._shadow_client = (
             httpx.AsyncClient(timeout=shadow_generation.timeout_s, trust_env=False)
             if shadow_generation is not None
@@ -538,6 +545,12 @@ class OpenClawReplayProvider(LLMProvider):
                 admission_wait_ms = round(
                     (slot_acquired_monotonic - request_ready_monotonic) * 1000.0,
                     3,
+                )
+            if self._tool_gap_loan is not None:
+                self._tool_gap_loan.record_llm_response(
+                    source_action_id,
+                    float(shadow_metrics["latency_ms"]),
+                    wall_end_s=slot_released_wall_time_s,
                 )
                 shadow_metrics.update(
                     {
@@ -1119,6 +1132,7 @@ def build_container_tools_for_agent(
     exec_path_append: str = "",
     workspace: str = "/testbed",
     resource_trace: Any | None = None,
+    tool_gap_loan: ToolGapLoanRuntime | None = None,
     runtime_artifact_root_map: dict[str, str] | None = None,
     exec_timeout_floor_exempt_call_ids: set[str] | frozenset[str] = frozenset(),
 ) -> list[Any]:
@@ -1129,6 +1143,7 @@ def build_container_tools_for_agent(
         exec_path_append=exec_path_append,
         workspace=workspace,
         resource_trace=resource_trace,
+        tool_gap_loan=tool_gap_loan,
         runtime_artifact_root_map=runtime_artifact_root_map,
         exec_timeout_floor_exempt_call_ids=exec_timeout_floor_exempt_call_ids,
     )
@@ -1393,6 +1408,38 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
         if shadow_payload is not None
         else None
     )
+    tool_gap_payload = request.get("tool_gap_loan")
+    tool_gap_loan = None
+    tool_gap_status = None
+    if tool_gap_payload is not None:
+        payload = dict(tool_gap_payload)
+        predictions = tuple(
+            ToolGapPrediction(
+                sample_id=str(item["sample_id"]),
+                command=str(item["command"]),
+                probability_by_bucket=tuple(item["probability_by_bucket"]),
+                hard_bucket=int(item["hard_bucket"]),
+                provenance=dict(item["provenance"]),
+            )
+            for item in payload.get("predictions", [])
+        )
+        tool_gap_loan = ToolGapLoanRuntime(
+            ToolGapLoanConfig(
+                arm=payload["arm"],
+                state_dir=str(payload["state_dir"]),
+                task_id=str(payload["task_id"]),
+                foreground_task_ids=tuple(payload["foreground_task_ids"]),
+                can_lend=bool(payload["can_lend"]),
+                predictions=predictions,
+            )
+        )
+        tool_gap_status = {
+            "arm": tool_gap_loan.config.arm,
+            "state_dir": str(tool_gap_loan.state_dir),
+            "task_id": tool_gap_loan.config.task_id,
+            "can_lend": tool_gap_loan.config.can_lend,
+            "prediction_count": len(tool_gap_loan.config.predictions),
+        }
     tool_resource_profile = request.get("tool_resource_profile")
     if tool_resource_profile is not None:
         tool_resource_profile = str(tool_resource_profile)
@@ -1529,6 +1576,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 source_terminal_reason == "trace_ended_before_tools"
             ),
             shadow_generation=shadow_generation,
+            tool_gap_loan=tool_gap_loan,
         )
         runner = SessionRunner(
             provider,
@@ -1541,6 +1589,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 exec_timeout_floor=exec_timeout_floor_s,
                 workspace=container_workdir,
                 resource_trace=resource_trace,
+                tool_gap_loan=tool_gap_loan,
                 runtime_artifact_root_map=dict(
                     request.get("runtime_artifact_root_map") or {}
                 ),
@@ -1575,6 +1624,11 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 "profile": tool_resource_profile,
                 "service_enabled": bool(tool_resource_profile),
             },
+            **(
+                {"tool_gap_loan": tool_gap_status}
+                if tool_gap_status is not None
+                else {}
+            ),
         }
         result = await runner.run(
             prompt=prompt,
@@ -1680,6 +1734,11 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 "profile": tool_resource_profile,
                 "service_enabled": bool(tool_resource_profile),
             },
+            **(
+                {"tool_gap_loan": tool_gap_status}
+                if tool_gap_status is not None
+                else {}
+            ),
         }
     finally:
         try:

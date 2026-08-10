@@ -689,6 +689,7 @@ def test_openclaw_replay_provider_charges_streamed_shadow_generation(
         OpenClawReplayProvider,
         ShadowGenerationConfig,
     )
+    from trace_collect.tool_gap_loan import ToolGapLoanConfig, ToolGapLoanRuntime
 
     captured: dict[str, object] = {}
 
@@ -784,6 +785,15 @@ def test_openclaw_replay_provider_charges_streamed_shadow_generation(
     }
     slot_path = tmp_path / "slot-000.lock"
     slot_path.touch()
+    gap_runtime = ToolGapLoanRuntime(
+        ToolGapLoanConfig(
+            arm="fixed",
+            state_dir=str(tmp_path / "gap-state"),
+            task_id="task-0",
+            foreground_task_ids=("task-0", "task-1", "task-2", "task-3"),
+            can_lend=True,
+        )
+    )
     provider = OpenClawReplayProvider(
         llm_actions=[source_action],
         replay_speed=1.0,
@@ -795,6 +805,7 @@ def test_openclaw_replay_provider_charges_streamed_shadow_generation(
             seed=7,
             admission_slot_paths=(str(slot_path),),
         ),
+        tool_gap_loan=gap_runtime,
     )
 
     response = asyncio.run(
@@ -880,6 +891,87 @@ def test_openclaw_replay_provider_charges_streamed_shadow_generation(
     )
     assert captured["client_kwargs"] == {"timeout": 12.0, "trust_env": False}
     assert captured["closed"] is True
+    responses = json.loads(
+        (tmp_path / "gap-state" / "responses" / "task-0.json").read_text()
+    )
+    assert responses[0]["action_id"] == "source-llm-17"
+    assert responses[0]["latency_ms"] == shadow_metrics["latency_ms"]
+
+
+def test_container_exec_tool_brackets_tool_gap_without_changing_request(
+    tmp_path: Path,
+) -> None:
+    from agents.openclaw.tools.container import ContainerExecTool
+    from trace_collect.tool_gap_loan import (
+        ToolGapLoanConfig,
+        ToolGapLoanRuntime,
+        ToolGapPrediction,
+    )
+
+    captured: list[tuple[dict[str, object], float | None]] = []
+
+    class Agent:
+        async def execute(
+            self,
+            request: dict[str, object],
+            *,
+            timeout_s: float | None,
+        ) -> dict[str, object]:
+            captured.append((request, timeout_s))
+            return {"ok": True, "result": "ok", "returncode": 0}
+
+    foreground = ("task-0", "task-1", "task-2", "task-3")
+    for index, task_id in enumerate(foreground):
+        peer = ToolGapLoanRuntime(
+            ToolGapLoanConfig(
+                arm="fixed",
+                state_dir=str(tmp_path),
+                task_id=task_id,
+                foreground_task_ids=foreground,
+                can_lend=True,
+            )
+        )
+        peer.record_llm_response(f"llm-{index}", 2.0, wall_end_s=1.0)
+    runtime = ToolGapLoanRuntime(
+        ToolGapLoanConfig(
+            arm="predictor",
+            state_dir=str(tmp_path),
+            task_id="task-0",
+            foreground_task_ids=foreground,
+            can_lend=True,
+            predictions=(
+                ToolGapPrediction(
+                    sample_id="sample-0",
+                    command="echo ok",
+                    probability_by_bucket=(0.0, 0.0, 0.0, 1.0, 0.0),
+                    hard_bucket=3,
+                    provenance={"head": "task-aware"},
+                ),
+            ),
+        )
+    )
+    tool = ContainerExecTool(
+        Agent(),  # type: ignore[arg-type]
+        timeout=10,
+        workspace="/testbed",
+        tool_gap_loan=runtime,
+    )
+    tool.set_tool_call_context("call-0", {"command": "echo ok"})
+
+    result = asyncio.run(tool.execute("echo ok"))
+
+    assert result == "ok\n\nExit code: 0"
+    assert captured == [
+        ({"tool": "exec", "args": {"command": "echo ok", "timeout": 10}}, 10.0)
+    ]
+    [loan_path] = (tmp_path / "loans").glob("*.json")
+    assert json.loads(loan_path.read_text())["trigger"] == "predictor"
+    events = json.loads((tmp_path / "events" / "task-0.json").read_text())
+    assert [event["event"] for event in events[-3:]] == [
+        "tool_start",
+        "loan",
+        "tool_end",
+    ]
 
 
 def test_openclaw_replay_provider_rejects_shadow_token_count_mismatch(
@@ -1174,6 +1266,19 @@ def test_openclaw_host_replay_request_closes_provider_after_runner_failure(
                     "timeout_s": 12.0,
                     "seed": 7,
                 },
+                "tool_gap_loan": {
+                    "arm": "fixed",
+                    "state_dir": str(tmp_path / "gap-state"),
+                    "task_id": "close-on-failure",
+                    "foreground_task_ids": [
+                        "close-on-failure",
+                        "task-1",
+                        "task-2",
+                        "task-3",
+                    ],
+                    "can_lend": True,
+                    "predictions": [],
+                },
                 "command_timeout_s": 60.0,
                 "run_instance_id": "close-on-failure",
                 "task_instance_id": "close-on-failure",
@@ -1194,6 +1299,14 @@ def test_openclaw_host_replay_request_closes_provider_after_runner_failure(
     assert shadow_generation.seed == 7
     assert captured["llm_actions"][0]["action_id"] == "source-llm-1"
     assert captured["llm_actions"][0]["_source_action_index"] == 1
+    assert captured["tool_gap_loan"].config.task_id == "close-on-failure"
+    assert status["tool_gap_loan"] == {
+        "arm": "fixed",
+        "state_dir": str(tmp_path / "gap-state"),
+        "task_id": "close-on-failure",
+        "can_lend": True,
+        "prediction_count": 0,
+    }
     assert json.loads(status_path.read_text(encoding="utf-8"))["success"] is False
 
 
@@ -2382,6 +2495,7 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
         PreparedContainer,
         PreparedTraceSession,
     )
+    from trace_collect.tool_gap_loan import ToolGapLoanConfig, ToolGapPrediction
 
     source_trace = tmp_path / "source.jsonl"
     source_trace.write_text("", encoding="utf-8")
@@ -2431,6 +2545,27 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
         task_output_dir=tmp_path / "task-output",
     )
     worker_timeouts: list[float] = []
+    tool_gap_loan = ToolGapLoanConfig(
+        arm="predictor",
+        state_dir=str(tmp_path / "gap-state"),
+        task_id="fc_openclaw_failed_replay",
+        foreground_task_ids=(
+            "fc_openclaw_failed_replay",
+            "task-1",
+            "task-2",
+            "task-3",
+        ),
+        can_lend=True,
+        predictions=(
+            ToolGapPrediction(
+                sample_id="sample-0",
+                command="pytest",
+                probability_by_bucket=(0.0, 0.0, 0.0, 1.0, 0.0),
+                hard_bucket=3,
+                provenance={"head": "task-aware"},
+            ),
+        ),
+    )
 
     async def fake_worker_process(
         *,
@@ -2444,6 +2579,27 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
         assert request["task_instance_id"] == "fc_openclaw_failed_replay"
         assert request["source_action_agent_id"] == "cli:oc-failed"
         assert request["tool_resource_run_token"] == "shared-run-token"
+        assert request["tool_gap_loan"] == {
+            "arm": "predictor",
+            "state_dir": str(tmp_path / "gap-state"),
+            "task_id": "fc_openclaw_failed_replay",
+            "foreground_task_ids": [
+                "fc_openclaw_failed_replay",
+                "task-1",
+                "task-2",
+                "task-3",
+            ],
+            "can_lend": True,
+            "predictions": [
+                {
+                    "sample_id": "sample-0",
+                    "command": "pytest",
+                    "probability_by_bucket": [0.0, 0.0, 0.0, 1.0, 0.0],
+                    "hard_bucket": 3,
+                    "provenance": {"head": "task-aware"},
+                }
+            ],
+        }
         Path(request["status_path"]).write_text(
             json.dumps(
                 {
@@ -2523,6 +2679,7 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
                 replay_speed=1.0,
                 llm_timing=LLMTimingConfig(),
                 command_timeout_s=60.0,
+                tool_gap_loan=tool_gap_loan,
             )
         )
     finally:

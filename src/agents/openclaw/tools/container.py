@@ -1,5 +1,6 @@
 from __future__ import annotations
 import shlex
+import time
 
 from typing import Any, Iterable
 
@@ -233,6 +234,7 @@ class ContainerExecTool(_ContainerTool):
         restrict_to_workspace: bool = False,
         workspace: str = "/testbed",
         resource_trace: Any | None = None,
+        tool_gap_loan: Any | None = None,
         timeout_floor_exempt_call_ids: Iterable[str] = (),
     ) -> None:
         super().__init__(agent)
@@ -242,6 +244,7 @@ class ContainerExecTool(_ContainerTool):
         self.path_append = path_append
         self.workspace = workspace or "/testbed"
         self._resource_trace = resource_trace
+        self._tool_gap_loan = tool_gap_loan
         self._timeout_floor_exempt_call_ids = frozenset(timeout_floor_exempt_call_ids)
         self._tool_call_id: str | None = None
         self._pending_resource_token: Any | None = None
@@ -347,11 +350,27 @@ class ContainerExecTool(_ContainerTool):
                 )
             except BaseException as exc:
                 self._record_resource_failure("begin", exc)
-        response = await self._request(
-            "exec",
-            {"command": effective_command, "timeout": effective_timeout},
-            timeout_s=float(effective_timeout),
+        gap_handle = (
+            self._tool_gap_loan.start_tool(
+                self._tool_call_id or "",
+                command,
+                wall_start_s=time.time(),
+            )
+            if self._tool_gap_loan is not None
+            else None
         )
+        try:
+            response = await self._request(
+                "exec",
+                {"command": effective_command, "timeout": effective_timeout},
+                timeout_s=float(effective_timeout),
+            )
+        finally:
+            if gap_handle is not None:
+                await self._tool_gap_loan.finish_tool(
+                    gap_handle,
+                    wall_end_s=time.time(),
+                )
         self._pending_resource_response = response
         result = self._result_or_error(response)
         returncode = response.get("returncode")
@@ -409,6 +428,7 @@ def build_container_tool_overrides(
     restrict_to_workspace: bool = False,
     workspace: str = "/testbed",
     resource_trace: Any | None = None,
+    tool_gap_loan: Any | None = None,
     runtime_artifact_root_map: dict[str, str] | None = None,
     exec_timeout_floor_exempt_call_ids: Iterable[str] = (),
 ) -> list[Tool]:
@@ -430,6 +450,7 @@ def build_container_tool_overrides(
             restrict_to_workspace=restrict_to_workspace,
             workspace=workspace,
             resource_trace=resource_trace,
+            tool_gap_loan=tool_gap_loan,
             timeout_floor_exempt_call_ids=exec_timeout_floor_exempt_call_ids,
         ),
         *[UnsupportedReplayTool(name) for name in _UNSUPPORTED_REPLAY_TOOL_NAMES],
