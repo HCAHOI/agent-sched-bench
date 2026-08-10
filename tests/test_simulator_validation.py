@@ -812,6 +812,7 @@ def test_openclaw_replay_provider_charges_streamed_shadow_generation(
         if key not in {"ttft_ms", "latency_ms"}
     } == {
         "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "seed": 7,
         "requested_completion_tokens": 3,
         "returned_completion_tokens": 3,
         "completion_token_ids": [101, 102, 103],

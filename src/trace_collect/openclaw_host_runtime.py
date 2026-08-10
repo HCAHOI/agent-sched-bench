@@ -577,6 +577,7 @@ class OpenClawReplayProvider(LLMProvider):
         finished_at = time.monotonic()
         return {
             "model": self._shadow_generation.model,
+            "seed": self._shadow_generation.seed,
             "requested_completion_tokens": requested_tokens,
             "returned_completion_tokens": len(token_ids),
             "completion_token_ids": token_ids,

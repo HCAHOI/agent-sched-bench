@@ -448,6 +448,7 @@ async def _drive_persists_shadow_generation_metrics(tmp_path: Path) -> None:
     await hook.before_iteration(_StubContext(iteration=0, messages=messages))
     shadow_generation = {
         "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "seed": 7,
         "requested_completion_tokens": 3,
         "returned_completion_tokens": 3,
         "completion_token_ids": [101, 102, 103],
