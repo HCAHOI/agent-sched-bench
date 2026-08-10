@@ -24,11 +24,11 @@ artifacts retain that history.
 | Manual tool semantics | **KEEP only the pytest candidate-routing question.** A hindsight selector over existing causal candidates improved full-cohort four-target accuracy by 1.941 points for pytest, but 93/118 corrections merely restored Clause-KB; adding more pytest rules is not supported. pip missed the frozen contrast gate and its perfect-tool ceiling was only 0.392 points, so deprioritize pip-specific work. |
 | KV victim selection | Closed under the current CacheWise/C100 simulator and action model. |
 | GPU tool-gap action | The profile-only early clock and pre-restore are closed by the Section 5.1 offline gate. The load-8 live action test remains unresolved. The load-32 hard-pin control in Section 5.3 was invalid; Section 5.4 compares the unchanged five-second action with stock evictable prefix caching. |
-| Static survival KV action | The raw Clause-KB duration-sample expected-Pareto arm is closed: it released more memory-time but increased stall and changed only 15 tasks. The realized-survival oracle retains substantial action headroom. |
+| Static survival KV action | Raw Clause-KB, exact-command, exact work-signature, and causal work-state histories all released more memory-time but increased stall. Work state never changed an action beyond work signature. The realized-survival oracle retains substantial action headroom. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | On existing exposed data, isolate whether complete-command evidence or causal environment state can recover the survival oracle without the compound-evidence false positives. Do not tune the current threshold or spend fresh tasks yet. |
+| Next research step | Representation alone did not control costly false positives. Before fresh evaluation, freeze a risk-aware abstention rule that exposes uncertainty in duration history; do not tune support or probability thresholds on exposed SWE. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -155,6 +155,7 @@ All rows below are development-exposed.
 | Question | Result | Decision |
 |---|---|---|
 | CacheWise/C100 KV victim selection | Task-Aware Command Predictor improved C100 recomputation 1.481%; block-aware hindsight upper bound improved 9.620% | Closed for current simulator/action model |
+| Complete-work/state survival action | Exact command: +668.981 GiB-s release, +1,236.944 ms stall; work and work+state: +794.288 GiB-s, +1,848.373 ms. State changed zero actions. | All learned arms fail the no-added-stall gate; representation-only branch closed on exposed SWE |
 | CPU+RSS admission oracle | Hindsight reservations reduced mean makespan 10.868% | Action space exists |
 | Peak-class predictor admission | Task-Aware Command Predictor was 9.630% slower than Clause-KB and both created many unverifiable capacity exposures | Direct hard-class admission closed |
 | Physical under-reservation | 2 cores were 3.928x slower than 8; 2 GiB `memory.high` did not finish within 3,600 s versus 18.493 s baseline | Under-reservation cost is real and must be charged |
@@ -709,6 +710,49 @@ are concrete counterexamples. This concentration does not by itself prove
 composition is the sole cause; environment state and requested work are also
 plausible missing variables. Do not tune the Pareto rule on this exposed result.
 
+### 5.9 Complete-work and causal-state attribution — development NO-GO
+
+Commit `5ebdc45` froze exact complete-command, exact apt/pip/pytest work, and
+exact work-plus-causal-state histories before outcomes. The first invocation
+stopped before producing an artifact because the evaluator required raw terminal
+tool actions with no following LLM gap to appear in `TraceProgram`. Commit
+`65e3fcf` fixed only that alignment: the modeled prefix remains identity-checked,
+two terminal raw actions in each population are excluded and counted, and no
+method, action, population, or gate changed before the sole completed run.
+
+The run used 2,435 exec observations from 82 SWE100 tasks as
+leave-target-repository-out public evidence and causally replayed 8,273 gaps and
+5,799 exec calls from 177 SWE277 tasks. Local histories settled only after a
+whole task. Prediction-time agent and GPU costs were zero; the CPU evaluator ran
+95.820 seconds. Relative to five-second feedback, exact command released
+668.981 additional GiB-seconds but added 1,236.944 ms stall across 80 tasks.
+Work signature released 794.288 GiB-seconds but added 1,848.373 ms across 94
+tasks. Work plus state was bit-identical to work signature: 26 queries retrieved
+different histories and one differed in availability, but none crossed the
+binary action boundary. Every learned arm therefore failed only the registered
+no-added-stall condition. Their task-bootstrap stall intervals were also wholly
+positive: [480.157, 2,146.915] ms for exact command and [805.820, 3,059.905] ms
+for both work arms.
+
+A post-outcome read-only attribution localizes the failure. The 95 work-signature
+actions whose commands actually survived five seconds added 760.469 GiB-seconds
+with zero stall. The 12 false positives added only 33.819 GiB-seconds but all
+1,848.373 ms of stall. Apt-family rows supplied about 731.4 of 794.3
+GiB-seconds with zero stall; the displayed Python-heavy families supplied about
+1.683 seconds and `apt-get+which` another 0.080 of the 1.848 seconds of added
+stall. Thus the observed problem is not that
+early release lacks value: it is that exact and semantic duration transfer still
+cannot make a zero-added-stall action from finite, variable histories. The
+inference is that the modeled invocation/install state is too weak; this run
+does not establish which missing runtime variable would fix it. Do not tune a
+support threshold on these exposed outcomes. A future test must preregister
+risk-aware uncertainty or abstention and use genuinely fresh task outcomes.
+
+The result records dated trace paths, ordered task counts, omitted terminal
+actions, and committed evaluator SHA. The ignored trace directories themselves
+have no immutable content digest, so preserving those collection directories is
+required for byte-level reproduction.
+
 ## 6. Closed directions
 
 - **Lookup structure alone:** trie, lattice, generic argv, pip/pytest semantic
@@ -802,6 +846,8 @@ Result root:
   `../predictive-tool-gap-loan-20260810/result.json`
 - Static command-survival action:
   `../static-survival-gap-action-swe177-20260810/result.json`
+- Complete-work and causal-state survival attribution:
+  `../survival-work-state-action-swe177-20260810/result.json`
 
 Docs-only compiler development artifact:
 `analysis/results/offline-tool-semantics-sqlglot-v1/result.json`.
