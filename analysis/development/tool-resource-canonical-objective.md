@@ -14,7 +14,7 @@ artifacts retain that history.
 |---|---|
 | Prediction | Keep the target-specific Task-Aware Command Predictor below as the selected development candidate. It is exposed evidence, not confirmation or deployed code. |
 | Runtime feedback | **KEEP causal command-level eBPF feedback as a measured mechanism and control.** Neither tested admission action passed its frozen utility gate, so it is not a runtime scheduler candidate. |
-| CPU execution | Keep equal-share burstable execution as a physical control. The hindsight phase-shape ceiling passes the PennyLane utility gate; next test whether fit-history profiles and causal runtime position can recover the action without future information. |
+| CPU execution | Keep equal-share burstable execution as a physical control. Fit-only Clause-KB candidate envelopes pass under a hindsight foreground control. Next replace foreground future shape with a fit-only profile at causal elapsed position. |
 | Saturated quartet result | Frozen claim verdict is NO-GO because 8/12, not 9/12, groups improved. This is not a module-retirement decision. |
 | Fresh counterbalanced queue | **Inconclusive because 7/1,818 paired tool calls changed terminal class.** Timing-only improvement was 0.929% with 2/4 queues improving, below the frozen gate even before the quality failure. |
 | Prediction contribution to feedback | Not established. Task-Aware seeding did not improve the frozen reservation/service operating point over feedback alone. |
@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Measure causal phase-profile coverage and stability on PennyLane fit/replay tasks, then freeze the smallest predictor only if coverage supports it. The separate byte-aware KV loan remains a lower-ceiling candidate. |
+| Next research step | Freeze the two-sided fit-envelope test: predict both commands from fit history and locate the running foreground only by causal elapsed time. Keep RSS as the last isolated oracle control. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1111,6 +1111,15 @@ capacity or CPU-work violations. A pass authorizes only the next test replacing
 foreground-future hindsight with causal feedback; a failure closes this
 Clause-KB phase-envelope representation. Replay results may not change keys,
 envelope construction, candidate order, or gates.
+
+**Result and decision.** The fit-only candidate-envelope arm reduced mean task
+completion by 6.707% and makespan by 3.172%, with 0.0835% aggregate service
+inflation and no capacity or CPU-work violation. It matched 302/330 RSS-safe
+commands and made 287 speculative starts. Forty commands accumulated 26.175 s
+of added service; 13 of those outlasted their fit envelope. The frozen gate
+passes and therefore authorizes only replacing the actual foreground future
+profile. Candidate prediction is causal, but foreground shape and RSS safety
+remain hindsight controls; this is not yet a deployable scheduler result.
 
 ## 6. Closed directions
 
