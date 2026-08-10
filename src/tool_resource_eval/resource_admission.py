@@ -290,6 +290,7 @@ def simulate_idle_backfill(
     cpu_work_profiles: Mapping[str, tuple[tuple[float, float], ...]],
     speculative_eligible_command_ids: set[str],
     pairwise_cpu_demands: Mapping[str, float] | None = None,
+    require_pairwise_profile_compatibility: bool = False,
     rss_reservations: Mapping[str, float] | None = None,
     rss_unverified_command_ids: set[str] | None = None,
     selection: str,
@@ -416,6 +417,33 @@ def simulate_idle_backfill(
             key=lambda item: session_key(item[0]),
         )
 
+    def profiles_fit(normal: _IdleRunning, candidate_id: str) -> bool:
+        candidate = cpu_work_profiles[candidate_id]
+        normal_index = normal.profile_index
+        candidate_index = 0
+        normal_remaining = normal.profile_remaining_s
+        candidate_remaining = candidate[0][0]
+        while normal_index < len(normal.profile) and candidate_index < len(candidate):
+            normal_span, normal_work = normal.profile[normal_index]
+            candidate_span, candidate_work = candidate[candidate_index]
+            if (
+                normal_work / normal_span + candidate_work / candidate_span
+                > cpu_capacity + _EPSILON
+            ):
+                return False
+            elapsed = min(normal_remaining, candidate_remaining)
+            normal_remaining -= elapsed
+            candidate_remaining -= elapsed
+            if normal_remaining <= _EPSILON:
+                normal_index += 1
+                if normal_index < len(normal.profile):
+                    normal_remaining = normal.profile[normal_index][0]
+            if candidate_remaining <= _EPSILON:
+                candidate_index += 1
+                if candidate_index < len(candidate):
+                    candidate_remaining = candidate[candidate_index][0]
+        return True
+
     def start(index: int, *, speculative: bool) -> None:
         nonlocal used_rss, modeled_rss, queue_s, normal_starts
         nonlocal speculative_starts, exposure_events, max_modeled_rss
@@ -512,6 +540,15 @@ def simulate_idle_backfill(
                         ].command_id
                     ]
                     <= cpu_capacity + _EPSILON
+                )
+                and (
+                    not require_pairwise_profile_compatibility
+                    or profiles_fit(
+                        normal,
+                        item[1].program.commands[
+                            item[1].command_index
+                        ].command_id,
+                    )
                 )
             ]
             if fitting:

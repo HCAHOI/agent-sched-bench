@@ -28,7 +28,7 @@ from tool_resource_eval.resource_admission import (  # noqa: E402
 from trace_collect.trace_data import TraceData  # noqa: E402
 
 
-_PROTOCOL_GIT_SHA = "dff3af4b1501853233dcf33ccb7f0a4325627ce3"
+_PROTOCOL_GIT_SHA = "a220194dea7b4a7c1aadece47bfe0919c0dfea87"
 _SPLIT = _ROOT / "analysis/development/pennylane-survival-action-split.json"
 _CPU_CAPACITY = 8.0
 _RSS_CAPACITY_MB = 16_000.0
@@ -40,6 +40,7 @@ _ARMS = (
     "pairwise_mean_fcfs",
     "pairwise_exact_peak_fcfs",
     "pairwise_canonical_bucket_fcfs",
+    "pairwise_phase_shape_fcfs",
 )
 
 
@@ -313,6 +314,15 @@ def _evaluate() -> dict[str, Any]:
             pairwise_cpu_demands=bucket_cpu,
             selection="fcfs",
         ),
+        "pairwise_phase_shape_fcfs": simulate_idle_backfill(
+            chosen,
+            cpu_capacity=_CPU_CAPACITY,
+            rss_capacity_mb=_RSS_CAPACITY_MB,
+            cpu_work_profiles=profiles,
+            speculative_eligible_command_ids=rss_safe,
+            require_pairwise_profile_compatibility=True,
+            selection="fcfs",
+        ),
     }
     violation_by_arm = {}
     for arm, metrics in arms.items():
@@ -350,25 +360,20 @@ def _evaluate() -> dict[str, Any]:
             <= _MAXIMUM_SERVICE_INFLATION,
             "zero_capacity_or_work_violations": not violation_by_arm[arm],
         }
-        for arm in ("pairwise_exact_peak_fcfs", "pairwise_canonical_bucket_fcfs")
+        for arm in ("pairwise_phase_shape_fcfs",)
     }
     for gate in gates.values():
         gate["go"] = all(gate.values())
-    exact_go = gates["pairwise_exact_peak_fcfs"]["go"]
-    predictor_go = exact_go and gates["pairwise_canonical_bucket_fcfs"]["go"]
+    phase_go = gates["pairwise_phase_shape_fcfs"]["go"]
     return {
         "schema_version": 1,
-        "status": (
-            "development_go_to_causal_predictor"
-            if predictor_go
-            else "development_mechanism_only"
-            if exact_go
-            else "development_no_go"
-        ),
+        "status": "development_go_to_phase_prediction_feasibility"
+        if phase_go
+        else "development_no_go",
         "generated": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
         "git_sha": git_sha,
         "protocol_git_sha": _PROTOCOL_GIT_SHA,
-        "protocol": "tool-resource-canonical-objective.md Section 5.14",
+        "protocol": "tool-resource-canonical-objective.md Section 5.15",
         "config": {
             "split": str(_SPLIT.resolve()),
             "cpu_capacity": _CPU_CAPACITY,
@@ -379,6 +384,7 @@ def _evaluate() -> dict[str, Any]:
                 "mean": "foreground mean CPU + candidate mean CPU <= 8",
                 "exact_peak": "foreground exact peak CPU + candidate exact peak CPU <= 8",
                 "canonical_bucket": "foreground and candidate peak labels map to upper bounds 2/4/8 whose sum <= 8",
+                "phase_shape": "aligned remaining foreground and candidate sampled CPU demand never exceeds 8",
             },
             "rss_rule": "observed composed upper bound only",
         },
@@ -394,7 +400,7 @@ def _evaluate() -> dict[str, Any]:
         "arms": arms,
         "comparisons_vs_serial8": comparisons,
         "gates": gates,
-        "go_to_causal_predictor": predictor_go,
+        "go_to_phase_prediction_feasibility": phase_go,
         "cost": {
             "prediction_time_agent_calls": 0,
             "gpu_runtime_s": 0.0,
@@ -402,7 +408,7 @@ def _evaluate() -> dict[str, Any]:
         },
         "limitations": [
             "All 15 scored PennyLane tasks are development-exposed.",
-            "Mean CPU, peak CPU, canonical labels, and RSS safety are hindsight oracles, not deployable predictions.",
+            "Mean CPU, peak CPU, canonical labels, phase-shape alignment, and RSS safety are hindsight oracles, not deployable predictions.",
             "The action-space ceiling contains one physically defined arrival wave, not workload-order uncertainty.",
             "The deterministic replay preserves recorded commands but models CPU sharing.",
         ],

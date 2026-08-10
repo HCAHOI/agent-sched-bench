@@ -349,6 +349,49 @@ def test_idle_backfill_skips_pairwise_cpu_incompatible_candidate() -> None:
     assert result["speculative_start_ids"][0] == "fits"
 
 
+def test_idle_backfill_uses_remaining_phase_compatibility() -> None:
+    programs = [
+        AdmissionProgram(
+            task_id,
+            0.0,
+            (AdmissionCommand(task_id, 2.0, 8.0, 100.0, 0.0),),
+            0.0,
+        )
+        for task_id in ("normal", "candidate")
+    ]
+    staggered = {
+        "normal": ((1.0, 8.0), (1.0, 0.0)),
+        "candidate": ((1.0, 0.0), (1.0, 8.0)),
+    }
+
+    admitted = simulate_idle_backfill(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=1_000.0,
+        cpu_work_profiles=staggered,
+        speculative_eligible_command_ids=set(staggered),
+        require_pairwise_profile_compatibility=True,
+        selection="fcfs",
+    )
+    rejected = simulate_idle_backfill(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=1_000.0,
+        cpu_work_profiles={
+            "normal": ((1.0, 8.0), (1.0, 0.0)),
+            "candidate": ((1.0, 8.0), (1.0, 0.0)),
+        },
+        speculative_eligible_command_ids={"normal", "candidate"},
+        require_pairwise_profile_compatibility=True,
+        selection="fcfs",
+    )
+
+    assert admitted["speculative_start_ids"] == ["candidate"]
+    assert admitted["start_s_by_command"]["candidate"] == 0.0
+    assert admitted["total_command_service_s"] == 4.0
+    assert rejected["start_s_by_command"]["candidate"] == 1.0
+
+
 def test_idle_backfill_promotion_preserves_partial_cpu_work() -> None:
     programs = [
         AdmissionProgram(
