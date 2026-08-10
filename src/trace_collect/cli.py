@@ -219,6 +219,15 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--stage-all-before-replay",
+        action="store_true",
+        help=(
+            "Prepare every task before one common ready time, then admit "
+            "replays FIFO up to --concurrency. Requires --workers 1 and no "
+            "task dependencies."
+        ),
+    )
+    parser.add_argument(
         "--resource-monitoring",
         choices=MONITORING_CHOICES,
         default="auto",
@@ -588,6 +597,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
         ),
         "workers": args.workers,
         "prep_concurrency": args.prep_concurrency,
+        "stage_all_before_replay": args.stage_all_before_replay,
         "resource_monitoring": args.resource_monitoring,
         "pmu_monitoring": args.pmu_monitoring,
         "memory_bandwidth_monitoring": args.memory_bandwidth_monitoring,

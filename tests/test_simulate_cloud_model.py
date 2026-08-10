@@ -391,6 +391,7 @@ def test_parse_simulate_args_accepts_cloud_model_manifest_without_llm_args() -> 
     assert args.llm_timing == "source-scaled"
     assert args.llm_ttft_ms is None
     assert args.llm_tpot_ms is None
+    assert args.stage_all_before_replay is False
 
 
 def test_parse_simulate_args_accepts_workers_and_monitoring_policy() -> None:
@@ -416,6 +417,14 @@ def test_parse_simulate_args_accepts_workers_and_monitoring_policy() -> None:
     assert args.resource_monitoring == "off"
     assert args.pmu_monitoring == "off"
     assert args.memory_bandwidth_monitoring == "off"
+
+
+def test_parse_simulate_args_accepts_stage_all_before_replay() -> None:
+    args = parse_simulate_args(
+        ["--manifest", "manifest.yaml", "--stage-all-before-replay"]
+    )
+
+    assert args.stage_all_before_replay is True
 
 
 def test_parse_simulate_args_accepts_ttft_tpot_llm_timing() -> None:
@@ -481,12 +490,259 @@ def test_worker_partition_helpers_preserve_order_and_limits() -> None:
         ["task-3", "task-4", "task-5"],
         ["task-6"],
     ]
-
     chunks = _partition_worker_inputs(waves[0], 2)
     assert [[entry.run_instance_id for entry in chunk] for chunk in chunks] == [
         ["task-0", "task-1"],
         ["task-2"],
     ]
+
+
+def test_staged_queue_prepares_every_task_before_fifo_admission(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    sessions = [
+        LoadedTraceSession(
+            source_trace=tmp_path / f"trace-{index}.jsonl",
+            task_source=tmp_path / "tasks.json",
+            task_instance_id=f"task-{index}",
+            source_action_agent_id=f"task-{index}",
+            run_instance_id=f"task-{index}",
+            manifest_index=index,
+            scaffold="openclaw",
+            metadata={"source_model": "model"},
+            summary=None,
+            task={"instance_id": f"task-{index}"},
+            actions=[],
+            iterations={},
+        )
+        for index in range(3)
+    ]
+    prepared_ids: list[str] = []
+    admitted_ids: list[str] = []
+    active = 0
+    max_active = 0
+
+    async def fake_prepare(
+        loaded: LoadedTraceSession,
+        **_kwargs,
+    ) -> PreparedTraceSession:
+        prepared_ids.append(loaded.run_instance_id)
+        return PreparedTraceSession(loaded=loaded)
+
+    async def fake_replay(
+        prepared: PreparedTraceSession,
+        **_kwargs,
+    ) -> ReplayTaskStats:
+        nonlocal active, max_active
+        assert len(prepared_ids) == len(sessions)
+        admitted_ids.append(prepared.loaded.run_instance_id)
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        loaded = prepared.loaded
+        return ReplayTaskStats(
+            agent_id=loaded.agent_id,
+            run_instance_id=loaded.run_instance_id,
+            source_agent_id=loaded.source_action_agent_id,
+            manifest_index=loaded.manifest_index,
+            label=loaded.label,
+            source_trace=str(loaded.source_trace),
+            success=True,
+            elapsed_s=0.01,
+            action_count=0,
+            llm_call_count=0,
+            tool_exec_count=0,
+        )
+
+    monkeypatch.setattr(simulator_module, "_prepare_replay_session", fake_prepare)
+    monkeypatch.setattr(simulator_module, "_replay_cloud_model_session", fake_replay)
+    monkeypatch.setattr(simulator_module, "_REPLAY_START_DELAY_S", 0.001)
+
+    prepared, stats, common_ready_wall_time_s = asyncio.run(
+        simulator_module._run_staged_cloud_model_queue(
+            sessions,
+            output_path=tmp_path / "out",
+            trace_logger=object(),
+            concurrency=2,
+            prep_concurrency=2,
+            container_executable=None,
+            network_mode="host",
+            container_resource_recorder=None,
+            replay_speed=1.0,
+            llm_timing=LLMTimingConfig(),
+            command_timeout_s=1.0,
+            warmup_skip_iterations=0,
+        )
+    )
+
+    assert [item.loaded.run_instance_id for item in prepared] == [
+        "task-0",
+        "task-1",
+        "task-2",
+    ]
+    assert admitted_ids == ["task-0", "task-1", "task-2"]
+    assert max_active == 2
+    assert common_ready_wall_time_s <= time.time()
+    stats_by_id = {stat.run_instance_id: stat for stat in stats}
+    assert stats_by_id["task-0"].admission_wait_s is not None
+    assert stats_by_id["task-1"].admission_wait_s is not None
+    assert stats_by_id["task-2"].admission_wait_s > 0.005
+    assert all(
+        stat.ready_to_terminal_s >= stat.admission_wait_s for stat in stats
+    )
+
+
+def test_staged_queue_cleans_successful_preparations_when_one_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    sessions = [
+        LoadedTraceSession(
+            source_trace=tmp_path / f"{task_id}.jsonl",
+            task_source=tmp_path / "tasks.json",
+            task_instance_id=task_id,
+            source_action_agent_id=task_id,
+            run_instance_id=task_id,
+            manifest_index=index,
+            scaffold="openclaw",
+            metadata={"source_model": "model"},
+            summary=None,
+            task={"instance_id": task_id},
+            actions=[],
+            iterations={},
+        )
+        for index, task_id in enumerate(("good", "bad"))
+    ]
+    finalized: list[str] = []
+    released: list[str] = []
+
+    async def fake_prepare(
+        loaded: LoadedTraceSession,
+        **_kwargs,
+    ) -> PreparedTraceSession:
+        if loaded.run_instance_id == "bad":
+            raise RuntimeError("prep failed")
+        return PreparedTraceSession(loaded=loaded)
+
+    async def fake_finalize(prepared: PreparedTraceSession) -> None:
+        finalized.append(prepared.loaded.run_instance_id)
+
+    async def fake_release(_cleanup_state: object, run_instance_id: str) -> None:
+        released.append(run_instance_id)
+
+    monkeypatch.setattr(simulator_module, "_prepare_replay_session", fake_prepare)
+    monkeypatch.setattr(simulator_module, "_finalize_prepared_session", fake_finalize)
+    monkeypatch.setattr(simulator_module, "_release_source_image", fake_release)
+
+    with pytest.raises(SimulateError, match="1/2 staged preparations failed"):
+        asyncio.run(
+            simulator_module._run_staged_cloud_model_queue(
+                sessions,
+                output_path=tmp_path / "out",
+                trace_logger=object(),
+                concurrency=1,
+                prep_concurrency=2,
+                container_executable=None,
+                network_mode="host",
+                container_resource_recorder=None,
+                replay_speed=1.0,
+                llm_timing=LLMTimingConfig(),
+                command_timeout_s=1.0,
+                warmup_skip_iterations=0,
+                cleanup_state=object(),
+            )
+        )
+
+    assert finalized == ["good"]
+    assert sorted(released) == ["bad", "good"]
+
+
+def test_staged_queue_cleans_every_preparation_when_replay_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    sessions = [
+        LoadedTraceSession(
+            source_trace=tmp_path / f"{task_id}.jsonl",
+            task_source=tmp_path / "tasks.json",
+            task_instance_id=task_id,
+            source_action_agent_id=task_id,
+            run_instance_id=task_id,
+            manifest_index=index,
+            scaffold="openclaw",
+            metadata={"source_model": "model"},
+            summary=None,
+            task={"instance_id": task_id},
+            actions=[],
+            iterations={},
+        )
+        for index, task_id in enumerate(("bad", "peer"))
+    ]
+    finalized: list[str] = []
+    released: list[str] = []
+
+    async def fake_prepare(
+        loaded: LoadedTraceSession,
+        **_kwargs,
+    ) -> PreparedTraceSession:
+        return PreparedTraceSession(loaded=loaded)
+
+    async def fake_replay(
+        prepared: PreparedTraceSession,
+        **_kwargs,
+    ) -> ReplayTaskStats:
+        if prepared.loaded.run_instance_id == "bad":
+            raise RuntimeError("replay failed")
+        loaded = prepared.loaded
+        return ReplayTaskStats(
+            agent_id=loaded.agent_id,
+            run_instance_id=loaded.run_instance_id,
+            source_agent_id=loaded.source_action_agent_id,
+            manifest_index=loaded.manifest_index,
+            label=loaded.label,
+            source_trace=str(loaded.source_trace),
+            success=True,
+            elapsed_s=0.0,
+            action_count=0,
+            llm_call_count=0,
+            tool_exec_count=0,
+        )
+
+    async def fake_finalize(prepared: PreparedTraceSession) -> None:
+        finalized.append(prepared.loaded.run_instance_id)
+
+    async def fake_release(_cleanup_state: object, run_instance_id: str) -> None:
+        released.append(run_instance_id)
+
+    monkeypatch.setattr(simulator_module, "_prepare_replay_session", fake_prepare)
+    monkeypatch.setattr(simulator_module, "_replay_cloud_model_session", fake_replay)
+    monkeypatch.setattr(simulator_module, "_finalize_prepared_session", fake_finalize)
+    monkeypatch.setattr(simulator_module, "_release_source_image", fake_release)
+    monkeypatch.setattr(simulator_module, "_REPLAY_START_DELAY_S", 0.001)
+
+    with pytest.raises(SimulateError, match="staged replay workers failed"):
+        asyncio.run(
+            simulator_module._run_staged_cloud_model_queue(
+                sessions,
+                output_path=tmp_path / "out",
+                trace_logger=object(),
+                concurrency=2,
+                prep_concurrency=2,
+                container_executable=None,
+                network_mode="host",
+                container_resource_recorder=None,
+                replay_speed=1.0,
+                llm_timing=LLMTimingConfig(),
+                command_timeout_s=1.0,
+                warmup_skip_iterations=0,
+                cleanup_state=object(),
+            )
+        )
+
+    assert sorted(finalized) == ["bad", "peer"]
+    assert sorted(released) == ["bad", "peer"]
 
 
 
@@ -1133,6 +1389,7 @@ def test_run_simulate_cloud_model_bypasses_llm_config(monkeypatch, tmp_path: Pat
             "cloud_model",
             "--manifest",
             "manifest.yaml",
+            "--stage-all-before-replay",
         ]
     )
 
@@ -1150,6 +1407,63 @@ def test_run_simulate_cloud_model_bypasses_llm_config(monkeypatch, tmp_path: Pat
     assert seen["llm_timing_mode"] == "source_scaled"
     assert seen["llm_ttft_ms"] is None
     assert seen["llm_tpot_ms"] is None
+    assert seen["stage_all_before_replay"] is True
+
+
+def test_stage_all_before_replay_rejects_multiple_process_workers(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="stage_all_before_replay requires workers=1",
+    ):
+        asyncio.run(
+            simulate(
+                manifest=tmp_path / "missing.yaml",
+                output_dir=tmp_path / "out",
+                workers=2,
+                stage_all_before_replay=True,
+            )
+        )
+
+
+def test_stage_all_before_replay_rejects_dependency_dag(tmp_path: Path) -> None:
+    parent_trace = tmp_path / "parent.jsonl"
+    child_trace = tmp_path / "child.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(parent_trace, agent_id="parent", execution_environment="host")
+    _write_trace(child_trace, agent_id="child", execution_environment="host")
+    task_source.write_text(
+        json.dumps(
+            [
+                {"instance_id": "parent", "problem_statement": "parent"},
+                {
+                    "instance_id": "child",
+                    "problem_statement": "child",
+                    "depends_on": ["parent"],
+                },
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest = _write_manifest(
+        tmp_path / "manifest.yaml",
+        [str(parent_trace), str(child_trace)],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="stage_all_before_replay does not support task dependencies",
+    ):
+        asyncio.run(
+            simulate(
+                manifest=manifest,
+                task_source=task_source,
+                output_dir=tmp_path / "out",
+                stage_all_before_replay=True,
+            )
+        )
 
 
 @pytest.mark.parametrize("error_type", [ValueError, SimulateError])
@@ -4041,6 +4355,93 @@ def test_cloud_model_manifest_replays_multiple_sessions(
     assert {record["agent_id"] for record in summaries} == {"task-a", "task-b"}
     assert {record["agent_id"] for record in llm_records} == {"task-a", "task-b"}
     assert abs(llm_records[0]["ts_start"] - llm_records[1]["ts_start"]) < 0.05
+
+
+def test_cloud_model_staged_queue_records_common_ready_jct(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_a = tmp_path / "trace-a.jsonl"
+    trace_b = tmp_path / "trace-b.jsonl"
+    task_source = tmp_path / "tasks.json"
+    manifest = tmp_path / "manifest.yaml"
+    _write_trace(trace_a, agent_id="task-a")
+    _write_trace(trace_b, agent_id="task-b")
+    _write_tasks(task_source, "task-a", "task-b")
+    _write_manifest(manifest, [str(trace_a), str(trace_b)])
+    _patch_simulator_runtime(monkeypatch, tmp_path, tool_delay_s=0.01)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=manifest,
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            concurrency=1,
+            prep_concurrency=2,
+            container_executable="docker",
+            replay_speed=100.0,
+            stage_all_before_replay=True,
+        )
+    )
+
+    metadata = _read_jsonl(trace_file)[0]
+    summary = json.loads((tmp_path / "out" / "throughput_summary.json").read_text())
+    assert metadata["scheduler_mode"] == "staged_bounded_queue"
+    assert metadata["stage_all_before_replay"] is True
+    assert summary["scheduler_mode"] == "staged_bounded_queue"
+    assert summary["common_ready_wall_time_s"] > 0
+    assert summary["ready_to_all_terminal_s"] == max(
+        task["ready_to_terminal_s"] for task in summary["tasks"]
+    )
+    assert [task["run_instance_id"] for task in summary["tasks"]] == [
+        "task-a",
+        "task-b",
+    ]
+    assert summary["tasks"][0]["admission_wait_s"] < 0.05
+    assert summary["tasks"][1]["admission_wait_s"] > 0
+
+
+def test_staged_queue_finalizes_every_session_when_trace_split_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_a = tmp_path / "trace-a.jsonl"
+    trace_b = tmp_path / "trace-b.jsonl"
+    task_source = tmp_path / "tasks.json"
+    manifest = tmp_path / "manifest.yaml"
+    _write_trace(trace_a, agent_id="task-a")
+    _write_trace(trace_b, agent_id="task-b")
+    _write_tasks(task_source, "task-a", "task-b")
+    _write_manifest(manifest, [str(trace_a), str(trace_b)])
+    _patch_simulator_runtime(monkeypatch, tmp_path, tool_delay_s=0.001)
+    finalized: list[str] = []
+
+    def fake_split(*_args, **_kwargs) -> None:
+        raise RuntimeError("split failed")
+
+    async def fake_finalize(prepared: PreparedTraceSession) -> None:
+        finalized.append(prepared.loaded.run_instance_id)
+        if prepared.loaded.run_instance_id == "task-a":
+            raise RuntimeError("first finalizer failed")
+
+    monkeypatch.setattr(simulator_module, "_split_trace_by_agent", fake_split)
+    monkeypatch.setattr(simulator_module, "_finalize_prepared_session", fake_finalize)
+
+    with pytest.raises(RuntimeError, match="split failed"):
+        asyncio.run(
+            simulate(
+                manifest=manifest,
+                task_source=task_source,
+                output_dir=tmp_path / "out",
+                concurrency=1,
+                prep_concurrency=2,
+                container_executable="docker",
+                replay_speed=100.0,
+                stage_all_before_replay=True,
+            )
+        )
+
+    assert sorted(finalized) == ["task-a", "task-b"]
 
 
 def test_cloud_model_manifest_allows_duplicate_trace_entries(

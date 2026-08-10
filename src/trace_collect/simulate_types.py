@@ -45,6 +45,8 @@ class ReplayTaskStats:
     tool_exec_count: int
     failed_action_count: int = 0
     depends_on: tuple[str, ...] = ()
+    admission_wait_s: float | None = None
+    ready_to_terminal_s: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

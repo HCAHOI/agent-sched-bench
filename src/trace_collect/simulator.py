@@ -2273,6 +2273,167 @@ def _record_prepare_failure(
     )
 
 
+async def _cleanup_staged_sessions(
+    prepared_sessions: list[PreparedTraceSession],
+    cleanup_state: _ImageCleanupState | None,
+    *,
+    release_only: tuple[str, ...] = (),
+) -> None:
+    async def finalize(prepared: PreparedTraceSession) -> None:
+        try:
+            await _finalize_prepared_session(prepared)
+        finally:
+            if cleanup_state is not None:
+                await _release_source_image(
+                    cleanup_state,
+                    prepared.loaded.run_instance_id,
+                )
+
+    operations = [finalize(prepared) for prepared in prepared_sessions]
+    if cleanup_state is not None:
+        operations.extend(
+            _release_source_image(cleanup_state, run_instance_id)
+            for run_instance_id in release_only
+        )
+    cleanup_results = await asyncio.gather(*operations, return_exceptions=True)
+    cleanup_failures = [
+        result for result in cleanup_results if isinstance(result, BaseException)
+    ]
+    if cleanup_failures:
+        raise SimulateError(
+            f"{len(cleanup_failures)}/{len(cleanup_results)} staged cleanups failed"
+        ) from cleanup_failures[0]
+
+
+async def _run_staged_cloud_model_queue(
+    loaded_sessions: list[LoadedTraceSession],
+    *,
+    output_path: Path,
+    trace_logger: TraceLogger,
+    concurrency: int,
+    prep_concurrency: int,
+    container_executable: str | None,
+    network_mode: str,
+    container_resource_recorder: ContainerResourceRecorder | None,
+    replay_speed: float,
+    shadow_generation: ShadowGenerationConfig | None = None,
+    llm_timing: LLMTimingConfig,
+    command_timeout_s: float,
+    warmup_skip_iterations: int,
+    fixed_images_by_source: dict[str, str] | None = None,
+    resource_monitoring_enabled: bool = True,
+    memory_bandwidth_enabled: bool = True,
+    monitoring_policy: dict[str, object] | None = None,
+    container_start_extra_args: tuple[str, ...] = (),
+    cleanup_state: _ImageCleanupState | None = None,
+) -> tuple[list[PreparedTraceSession], list[ReplayTaskStats], float]:
+    """Prepare all sessions, then replay them FIFO from one ready time."""
+
+    prep_limit = _resolve_prep_concurrency(prep_concurrency, len(loaded_sessions))
+    prep_semaphore = asyncio.Semaphore(prep_limit)
+
+    async def prepare(loaded: LoadedTraceSession) -> PreparedTraceSession:
+        async with prep_semaphore:
+            return await _prepare_replay_session(
+                loaded,
+                output_path=output_path,
+                container_executable=container_executable,
+                network_mode=network_mode,
+                container_resource_recorder=container_resource_recorder,
+                fixed_images_by_source=fixed_images_by_source,
+                resource_monitoring_enabled=resource_monitoring_enabled,
+                memory_bandwidth_enabled=memory_bandwidth_enabled,
+                monitoring_policy=monitoring_policy,
+                container_start_extra_args=container_start_extra_args,
+            )
+
+    prep_results = await asyncio.gather(
+        *(prepare(loaded) for loaded in loaded_sessions),
+        return_exceptions=True,
+    )
+    prepared_sessions: list[PreparedTraceSession] = []
+    successful_preparations: list[PreparedTraceSession] = []
+    prep_failures: list[BaseException] = []
+    failed_run_instance_ids: list[str] = []
+    for loaded, result in zip(loaded_sessions, prep_results, strict=True):
+        if isinstance(result, _ReplayPreparationError):
+            prepared_sessions.append(result.prepared)
+            prep_failures.append(result)
+            failed_run_instance_ids.append(loaded.run_instance_id)
+        elif isinstance(result, BaseException):
+            prep_failures.append(result)
+            failed_run_instance_ids.append(loaded.run_instance_id)
+        else:
+            prepared_sessions.append(result)
+            successful_preparations.append(result)
+    if prep_failures:
+        await _cleanup_staged_sessions(
+            successful_preparations,
+            cleanup_state,
+            release_only=tuple(failed_run_instance_ids),
+        )
+        raise SimulateError(
+            f"{len(prep_failures)}/{len(prep_results)} staged preparations failed"
+        ) from prep_failures[0]
+
+    common_ready_monotonic = time.monotonic() + _REPLAY_START_DELAY_S
+    common_ready_wall_time_s = time.time() + _REPLAY_START_DELAY_S
+    queue: asyncio.Queue[PreparedTraceSession] = asyncio.Queue()
+    for prepared in prepared_sessions:
+        queue.put_nowait(prepared)
+    task_stats: dict[str, ReplayTaskStats] = {}
+
+    async def worker() -> None:
+        await _sleep_until_monotonic(common_ready_monotonic)
+        while True:
+            try:
+                prepared = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            admitted_monotonic = time.monotonic()
+            try:
+                stats = await _replay_cloud_model_session(
+                    prepared,
+                    trace_logger=trace_logger,
+                    replay_zero_monotonic=common_ready_monotonic,
+                    replay_speed=replay_speed,
+                    shadow_generation=shadow_generation,
+                    llm_timing=llm_timing,
+                    command_timeout_s=command_timeout_s,
+                    warmup_skip_iterations=warmup_skip_iterations,
+                )
+                terminal_monotonic = time.monotonic()
+                task_stats[prepared.loaded.run_instance_id] = dataclasses.replace(
+                    stats,
+                    admission_wait_s=max(
+                        0.0,
+                        admitted_monotonic - common_ready_monotonic,
+                    ),
+                    ready_to_terminal_s=max(
+                        0.0,
+                        terminal_monotonic - common_ready_monotonic,
+                    ),
+                )
+            finally:
+                queue.task_done()
+
+    worker_results = await asyncio.gather(
+        *(worker() for _ in range(min(concurrency, len(prepared_sessions)))),
+        return_exceptions=True,
+    )
+    failures = [result for result in worker_results if isinstance(result, BaseException)]
+    if failures:
+        await _cleanup_staged_sessions(prepared_sessions, cleanup_state)
+        raise SimulateError(
+            f"{len(failures)}/{len(worker_results)} staged replay workers failed"
+        ) from failures[0]
+    ordered_stats = [
+        task_stats[prepared.loaded.run_instance_id]
+        for prepared in prepared_sessions
+    ]
+    return prepared_sessions, ordered_stats, common_ready_wall_time_s
+
+
 async def _run_cloud_model_queue(
     loaded_sessions: list[LoadedTraceSession],
     *,
@@ -3437,6 +3598,7 @@ async def simulate(
     tool_resource_profile: Path | None = None,
     cleanup_images: bool = False,
     container_start_extra_args: tuple[str, ...] = (),
+    stage_all_before_replay: bool = False,
 ) -> Path:
     if mode != "cloud_model":
         raise ValueError(f"Unsupported simulate mode: {mode}")
@@ -3444,6 +3606,8 @@ async def simulate(
         raise ValueError("concurrency must be >= 1")
     if workers < 1:
         raise ValueError("workers must be >= 1")
+    if stage_all_before_replay and workers != 1:
+        raise ValueError("stage_all_before_replay requires workers=1")
     if prep_concurrency < 0:
         raise ValueError("prep_concurrency must be >= 0")
     if (shadow_llm_api_base is None) != (shadow_llm_model is None):
@@ -3498,6 +3662,11 @@ async def simulate(
         replay_speed=replay_speed,
         llm_timing=llm_timing,
     )
+    has_dependencies = _has_session_dependencies(loaded_sessions)
+    if stage_all_before_replay and has_dependencies:
+        raise ValueError(
+            "stage_all_before_replay does not support task dependencies"
+        )
     non_openclaw_sessions = [
         session.task_instance_id
         for session in loaded_sessions
@@ -3578,19 +3747,20 @@ async def simulate(
     resource_runs: dict[str, Any] = {}
     run_wall_start: float | None = None
     run_wall_end: float | None = None
+    common_ready_wall_time_s: float | None = None
     output_path.mkdir(parents=True, exist_ok=True)
-    has_dependencies = _has_session_dependencies(loaded_sessions)
     if has_dependencies and workers > 1:
         raise SimulateError(
             "Dependency-aware simulation currently requires workers=1; "
             "multi-process worker waves cannot release children immediately "
             "after each parent finishes"
         )
-    scheduler_mode = (
-        "dependency_queue"
-        if has_dependencies
-        else ("bounded_queue" if workers == 1 else "multi_process_workers")
-    )
+    if stage_all_before_replay:
+        scheduler_mode = "staged_bounded_queue"
+    elif has_dependencies:
+        scheduler_mode = "dependency_queue"
+    else:
+        scheduler_mode = "bounded_queue" if workers == 1 else "multi_process_workers"
 
     try:
         if cleanup_images:
@@ -3648,6 +3818,7 @@ async def simulate(
                 extra={
                     "workers": workers,
                     "prep_concurrency": prep_concurrency,
+                    "stage_all_before_replay": stage_all_before_replay,
                     "monitoring": monitoring_policy_dict,
                     "container_start_extra_args": list(container_start_extra_args),
                     "exec_timeout_floor_s": exec_timeout_floor_s,
@@ -3681,26 +3852,45 @@ async def simulate(
                 container_resource_recorder.start()
 
             assert trace_logger is not None
-            prepared_sessions, task_stats = await _run_cloud_model_queue(
-                loaded_sessions,
-                output_path=output_path,
-                trace_logger=trace_logger,
-                concurrency=concurrency,
-                container_executable=container_executable,
-                network_mode=network_mode,
-                container_resource_recorder=container_resource_recorder,
-                replay_speed=replay_speed,
-                shadow_generation=shadow_generation,
-                llm_timing=llm_timing,
-                command_timeout_s=command_timeout_s,
-                warmup_skip_iterations=warmup_skip_iterations,
-                fixed_images_by_source=sweep_fixed_images,
-                resource_monitoring_enabled=monitoring_policy.per_task_resource_enabled,
-                memory_bandwidth_enabled=monitoring_policy.memory_bandwidth_enabled,
-                monitoring_policy=monitoring_policy_dict,
-                cleanup_state=cleanup_state,
-                container_start_extra_args=container_start_extra_args,
-            )
+            queue_kwargs = {
+                "output_path": output_path,
+                "trace_logger": trace_logger,
+                "concurrency": concurrency,
+                "container_executable": container_executable,
+                "network_mode": network_mode,
+                "container_resource_recorder": container_resource_recorder,
+                "replay_speed": replay_speed,
+                "shadow_generation": shadow_generation,
+                "llm_timing": llm_timing,
+                "command_timeout_s": command_timeout_s,
+                "warmup_skip_iterations": warmup_skip_iterations,
+                "fixed_images_by_source": sweep_fixed_images,
+                "resource_monitoring_enabled": (
+                    monitoring_policy.per_task_resource_enabled
+                ),
+                "memory_bandwidth_enabled": (
+                    monitoring_policy.memory_bandwidth_enabled
+                ),
+                "monitoring_policy": monitoring_policy_dict,
+                "container_start_extra_args": container_start_extra_args,
+            }
+            if stage_all_before_replay:
+                (
+                    prepared_sessions,
+                    task_stats,
+                    common_ready_wall_time_s,
+                ) = await _run_staged_cloud_model_queue(
+                    loaded_sessions,
+                    prep_concurrency=prep_concurrency,
+                    cleanup_state=cleanup_state,
+                    **queue_kwargs,
+                )
+            else:
+                prepared_sessions, task_stats = await _run_cloud_model_queue(
+                    loaded_sessions,
+                    cleanup_state=cleanup_state,
+                    **queue_kwargs,
+                )
         else:
             worker_results, task_stats = await _run_cloud_model_worker_waves(
                 [_worker_trace_input(session) for session in loaded_sessions],
@@ -3762,14 +3952,32 @@ async def simulate(
     finally:
         finalization_error: BaseException | None = None
         try:
-            try:
-                if trace_logger is not None:
-                    trace_logger.close()
-                    _split_trace_by_agent(trace_logger.path, prepared_sessions)
-                for prepared in prepared_sessions:
-                    await _finalize_prepared_session(prepared)
-            except (Exception, asyncio.CancelledError) as exc:
-                finalization_error = exc
+            if stage_all_before_replay:
+                try:
+                    if trace_logger is not None:
+                        trace_logger.close()
+                        _split_trace_by_agent(trace_logger.path, prepared_sessions)
+                except (Exception, asyncio.CancelledError) as exc:
+                    finalization_error = exc
+                try:
+                    await _cleanup_staged_sessions(
+                        prepared_sessions,
+                        cleanup_state,
+                    )
+                except (Exception, asyncio.CancelledError) as exc:
+                    if finalization_error is None:
+                        finalization_error = exc
+                    else:
+                        logger.error("Staged cleanup also failed: %s", exc)
+            else:
+                try:
+                    if trace_logger is not None:
+                        trace_logger.close()
+                        _split_trace_by_agent(trace_logger.path, prepared_sessions)
+                    for prepared in prepared_sessions:
+                        await _finalize_prepared_session(prepared)
+                except (Exception, asyncio.CancelledError) as exc:
+                    finalization_error = exc
             for resource_run in resource_runs.values():
                 resource_error = resource_run.finalize(
                     workload_status=(
@@ -3819,6 +4027,7 @@ async def simulate(
         task_stats=task_stats,
         container_resources=container_resource_summary,
         monitoring_policy=monitoring_policy_dict,
+        common_ready_wall_time_s=common_ready_wall_time_s,
     )
     if cleanup_state is not None:
         logger.info(

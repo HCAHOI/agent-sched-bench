@@ -282,6 +282,7 @@ def _write_throughput_summary(
     task_stats: list[ReplayTaskStats],
     container_resources: dict[str, Any] | None = None,
     monitoring_policy: dict[str, object] | None = None,
+    common_ready_wall_time_s: float | None = None,
 ) -> Path:
     attempted = len(task_stats)
     completed = sum(1 for stat in task_stats if stat.success)
@@ -300,7 +301,8 @@ def _write_throughput_summary(
         "prep_concurrency": prep_concurrency,
         "effective_prep_concurrency": (
             _resolve_prep_concurrency(prep_concurrency, attempted)
-            if workers > 1 and attempted
+            if (workers > 1 or scheduler_mode == "staged_bounded_queue")
+            and attempted
             else None
         ),
         "scheduler_mode": scheduler_mode,
@@ -317,6 +319,14 @@ def _write_throughput_summary(
         "tool_exec_count": sum(stat.tool_exec_count for stat in task_stats),
         "tasks": [dataclasses.asdict(stat) for stat in task_stats],
     }
+    if common_ready_wall_time_s is not None:
+        ready_to_terminal = [
+            stat.ready_to_terminal_s
+            for stat in task_stats
+            if stat.ready_to_terminal_s is not None
+        ]
+        payload["common_ready_wall_time_s"] = common_ready_wall_time_s
+        payload["ready_to_all_terminal_s"] = max(ready_to_terminal, default=0.0)
     if llm_timing.mode == "ttft_tpot":
         payload["llm_ttft_ms"] = llm_timing.ttft_ms
         payload["llm_tpot_ms"] = llm_timing.tpot_ms
