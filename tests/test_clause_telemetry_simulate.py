@@ -1717,6 +1717,33 @@ def test_unmatched_static_without_failed_exec_evidence_remains_fatal() -> None:
     assert violations == ["call-unmatched: mapping gaps=unmatched_static_clause"]
 
 
+def test_incomplete_failed_exec_argv_does_not_resolve_static_clause() -> None:
+    collector = _collector_without_bpf()
+    events = _failed_exec_events()
+    next(event for event in events if event["type"] == "failed_exec_attempt")[
+        "arg_flags"
+    ] = ARG_FLAG_TRUNCATED
+
+    summary, violations = collector._summarize_call(
+        token=ToolCallToken(
+            "call-incomplete-failed",
+            "cd /testbed && python -m pytest",
+            100,
+            0,
+            0,
+        ),
+        ended_ns=230,
+        events=events,
+        loss_counts={},
+        perf_samples=0,
+    )
+
+    assert summary["no_runtime_exec"] == []
+    assert violations == [
+        "call-incomplete-failed: mapping gaps=unmatched_static_clause"
+    ]
+
+
 def test_direct_command_not_found_is_zero_target_evidence() -> None:
     command = "cd /testbed && python -m pytest"
     diagnostic = "/bin/sh: 1: python: not found"
@@ -2293,6 +2320,40 @@ def test_replay_failure_is_separate_from_healthy_telemetry(
     assert artifact["formal_completeness"] == "complete"
     assert artifact["collection_validity"] == "valid"
     assert trimmed == [("closed", "ok", "valid")]
+
+
+def test_finalize_records_argv_failure_sites_without_double_counting(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    collector = _active_collector()
+    collector.artifact_path = tmp_path / "clause.json"
+    monkeypatch.setattr(
+        "tool_resource.telemetry._loss_counts",
+        lambda _bpf: {
+            "ringbuf_reserve_failures": 0,
+            "argv_read_failures": 2,
+            "argv_boundary_read_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        "tool_resource.telemetry._argv_read_failure_sites",
+        lambda _bpf: {"missing_bprm_capture": 2},
+    )
+    monkeypatch.setattr(
+        collector,
+        "_close_bpf",
+        lambda: setattr(collector, "_cleanup_status", "ok"),
+    )
+
+    collector.finalize()
+
+    artifact = json.loads(collector.artifact_path.read_text(encoding="utf-8"))
+    assert artifact["telemetry_loss_total"]["total"] == 2
+    assert artifact["argv_read_failure_sites"] == {"missing_bprm_capture": 2}
+    assert "argv read failure sites: missing_bprm_capture=2" in artifact["integrity"][
+        "errors"
+    ]
 
 
 def test_finalize_marks_mapping_gaps_partial_without_discarding_valid_calls(

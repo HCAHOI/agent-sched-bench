@@ -832,7 +832,7 @@ def test_only_the_argv_ring_carries_an_argv_payload() -> None:
         emitted = set(re.findall(r"e->type\s*=\s*[^;]*?(TYPE_\w+)", body))
         emitted |= set(re.findall(r":\s*(TYPE_\w+)", body))
         if ring == "events_small":
-            assert "e->arg" not in body, "small-ring emitter fills a payload"
+            assert not re.search(r"e->arg\b", body), "small-ring emitter fills a payload"
             assert not emitted & payload_types, (
                 f"payload type {sorted(emitted & payload_types)} on the small ring"
             )

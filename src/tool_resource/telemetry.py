@@ -104,6 +104,14 @@ LOSS_COUNTER_NAMES = (
     "argv_read_failures",
     "argv_boundary_read_failures",
 )
+ARGV_READ_FAILURE_SITE_NAMES = (
+    "argv_pointer",
+    "argv_string",
+    "argv_cap_pointer",
+    "kernel_exec_metadata",
+    "missing_bprm_capture",
+    "unrecovered_filename",
+)
 
 TYPE_NAMES = {
     1: "exec_arg",
@@ -141,6 +149,12 @@ BPF_PROGRAM = r"""
 #define ARG_FLAG_TRUNCATED 1
 #define ARG_FLAG_ARGV_CAPPED 2
 #define ARG_FLAG_CONTINUED 4
+#define ARGV_FAILURE_POINTER 0
+#define ARGV_FAILURE_STRING 1
+#define ARGV_FAILURE_CAP_POINTER 2
+#define ARGV_FAILURE_KERNEL_META 3
+#define ARGV_FAILURE_MISSING_BPRM 4
+#define ARGV_FAILURE_FILENAME 5
 
 /* The fields every event carries. Only four of the nine event types ever fill
  * the argv payload that follows, and those four are the minority: across 370
@@ -201,6 +215,7 @@ BPF_ARRAY(ringbuf_reserve_failures, u64, 1);
  * came from. */
 BPF_ARRAY(ringbuf_small_reserve_failures, u64, 1);
 BPF_ARRAY(argv_read_failures, u64, 1);
+BPF_ARRAY(argv_read_failure_sites, u64, 6);
 BPF_ARRAY(argv_boundary_read_failures, u64, 1);
 BPF_ARRAY(perf_sample_count, u64, 1);
 BPF_PERCPU_ARRAY(next_exec_sequence, u64, 1);
@@ -239,9 +254,10 @@ static void ringbuf_small_reserve_failed(void) {
     lost(ringbuf_small_reserve_failures.lookup(&z));
 }
 
-static void argv_read_failed(void) {
+static void argv_read_failed(u32 site) {
     u32 z = 0;
     lost(argv_read_failures.lookup(&z));
+    lost(argv_read_failure_sites.lookup(&site));
 }
 
 static void argv_boundary_read_failed(void) {
@@ -302,17 +318,19 @@ static void fill_counters(struct event_small_t *e, struct task_struct *task) {
     );
 }
 
-static void capture_argv(
-    u64 seq, const char *const *argv, u64 pid_tgid
+static u32 capture_argv(
+    u64 seq, const char *const *argv, u64 pid_tgid, u32 failed_exec_fallback
 ) {
     u32 tid = pid_tgid;
     u32 captured_args = 0;
+    u32 capture_incomplete = 0;
     #pragma unroll
     for (int i = 0; i < MAX_ARGS; i++) {
         const char *a = 0;
         int pointer_read = bpf_probe_read_user(&a, sizeof(a), &argv[i]);
         if (pointer_read < 0) {
-            argv_read_failed();
+            capture_incomplete = 1;
+            if (!failed_exec_fallback) argv_read_failed(ARGV_FAILURE_POINTER);
             break;
         }
         if (!a) break;
@@ -339,7 +357,9 @@ static void capture_argv(
             );
             int complete = 0;
             if (arg_size < 0) {
-                argv_read_failed();
+                capture_incomplete = 1;
+                e->arg_flags = ARG_FLAG_TRUNCATED;
+                if (!failed_exec_fallback) argv_read_failed(ARGV_FAILURE_STRING);
                 complete = 1;
             } else if (arg_size == sizeof(e->arg)) {
                 char source_last = 0;
@@ -349,7 +369,9 @@ static void capture_argv(
                     a + offset + sizeof(e->arg) - 1
                 );
                 if (last_read < 0) {
-                    argv_boundary_read_failed();
+                    capture_incomplete = 1;
+                    e->arg_flags = ARG_FLAG_TRUNCATED;
+                    if (!failed_exec_fallback) argv_boundary_read_failed();
                     complete = 1;
                 } else if (source_last == '\0') {
                     complete = 1;
@@ -371,7 +393,11 @@ static void capture_argv(
         int pointer_read = bpf_probe_read_user(
             &extra, sizeof(extra), &argv[MAX_ARGS]
         );
-        if (pointer_read < 0) argv_read_failed();
+        if (pointer_read < 0) {
+            capture_incomplete = 1;
+            if (!failed_exec_fallback)
+                argv_read_failed(ARGV_FAILURE_CAP_POINTER);
+        }
     }
     if (extra) {
         struct event_t *e = events.ringbuf_reserve(sizeof(*e));
@@ -390,6 +416,7 @@ static void capture_argv(
             events.ringbuf_submit(e, 0);
         }
     }
+    return capture_incomplete;
 }
 
 static void emit_kernel_exec_meta(
@@ -411,7 +438,7 @@ static void emit_kernel_exec_meta(
     e->exit_code = argc;
     int size = bpf_probe_read_kernel_str(e->arg, sizeof(e->arg), value);
     if (size < 0)
-        argv_read_failed();
+        argv_read_failed(ARGV_FAILURE_KERNEL_META);
     else if (size == sizeof(e->arg))
         e->arg_flags = ARG_FLAG_TRUNCATED;
     events.ringbuf_submit(e, 0);
@@ -509,7 +536,8 @@ int capture_bprm_argv(struct pt_regs *ctx) {
     capture_argv(
         pending->seq,
         (const char *const *)pending->argv_ptr,
-        pid_tgid
+        pid_tgid,
+        0
     );
     pending->argv_captured = 1;
     return 0;
@@ -542,18 +570,20 @@ static int on_exec_return(long ret) {
         .task_ptr = (u64)bpf_get_current_task(),
     };
     struct pending_exec_t *pending = pending_seq.lookup(&task_key);
+    u32 argv_capture_incomplete = 0;
     if (pending) {
         if (!pending->argv_captured && ret < 0) {
-            capture_argv(
+            argv_capture_incomplete = capture_argv(
                 pending->seq,
                 (const char *const *)pending->argv_ptr,
-                pid_tgid
+                pid_tgid,
+                1
             );
         } else if (!pending->argv_captured) {
-            argv_read_failed();
+            argv_read_failed(ARGV_FAILURE_MISSING_BPRM);
         }
         if (pending->filename_read_failed) {
-            argv_read_failed();
+            argv_read_failed(ARGV_FAILURE_FILENAME);
         }
         if (ret >= 0) {
             current_seq.update(&task_key, &pending->seq);
@@ -572,6 +602,8 @@ static int on_exec_return(long ret) {
             e->parent_host_pid = parent_tgid();
             if (ret < 0) {
                 e->exit_code = (u32)(-ret);  /* positive errno */
+                if (argv_capture_incomplete)
+                    e->arg_flags = ARG_FLAG_TRUNCATED;
             } else {
                 fill_counters(
                     e, (struct task_struct *)bpf_get_current_task()
@@ -1164,7 +1196,10 @@ def _captured_argv(
 
     for event in events:
         if event["type"] in {"exec_boundary", "failed_exec_attempt"}:
-            finish_exec((int(event["host_pid"]), int(event["exec_seq"])))
+            key = (int(event["host_pid"]), int(event["exec_seq"]))
+            if int(event.get("arg_flags", 0)) & ARG_FLAG_TRUNCATED:
+                capture_flags[key] = capture_flags.get(key, 0) | (1 << MAX_ARGS)
+            finish_exec(key)
             continue
         if event["type"] != "exec_arg":
             continue
@@ -3559,6 +3594,15 @@ def _loss_counts(bpf: Any) -> dict[str, int]:
     return {name: _counter(bpf, name) for name in LOSS_COUNTER_NAMES}
 
 
+def _argv_read_failure_sites(bpf: Any) -> dict[str, int]:
+    table = bpf["argv_read_failure_sites"]
+    return {
+        name: count
+        for index, name in enumerate(ARGV_READ_FAILURE_SITE_NAMES)
+        if (count := int(table[ctypes.c_int(index)].value))
+    }
+
+
 def _loss_delta(bpf: Any, token: ToolCallToken) -> dict[str, int]:
     before = {
         "ringbuf_reserve_failures": token.ringbuf_reserve_failures,
@@ -4722,6 +4766,11 @@ class ClauseTelemetryCollector:
         except BaseException as exc:
             total_loss_counts = dict.fromkeys(LOSS_COUNTER_NAMES, 0)
             self._disable(f"collector counter read failed: {type(exc).__name__}: {exc}")
+        argv_read_failure_sites = (
+            _argv_read_failure_sites(self._bpf)
+            if self.state == "active" and total_loss_counts["argv_read_failures"]
+            else {}
+        )
         total_loss = sum(total_loss_counts.values())
         if self._active is not None:
             self._disable(
@@ -4743,6 +4792,11 @@ class ClauseTelemetryCollector:
             self._integrity_errors.append(
                 f"collector total telemetry loss={total_loss} ({causes})"
             )
+        if argv_read_failure_sites:
+            sites = ",".join(
+                f"{name}={count}" for name, count in argv_read_failure_sites.items()
+            )
+            self._integrity_errors.append(f"argv read failure sites: {sites}")
         if self._poll_error is not None:
             self._disable(
                 "ring poller failed: "
@@ -4795,6 +4849,7 @@ class ClauseTelemetryCollector:
                         **total_loss_counts,
                         "total": total_loss,
                     },
+                    "argv_read_failure_sites": argv_read_failure_sites,
                     "ring_loss_total": total_loss,
                     "cleanup": self._cleanup_status,
                     "collector": {
