@@ -992,6 +992,25 @@ def test_shadow_generation_config_rejects_non_loopback_api_base() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "http://user@127.0.0.1:8000/v1",
+        "http://:secret@127.0.0.1:8000/v1",
+    ],
+)
+def test_shadow_generation_config_rejects_url_credentials(api_base: str) -> None:
+    from trace_collect.openclaw_host_runtime import ShadowGenerationConfig
+
+    with pytest.raises(ValueError, match="credentials"):
+        ShadowGenerationConfig(
+            api_base=api_base,
+            model="meta-llama/Llama-3.1-8B-Instruct",
+            timeout_s=12.0,
+            seed=7,
+        )
+
+
 def test_simulate_cli_parses_shadow_generation_options() -> None:
     from trace_collect.cli import parse_simulate_args
 
@@ -1081,6 +1100,150 @@ def test_simulate_validates_shadow_generation_configuration(
                 **shadow_kwargs,
             )
         )
+
+
+def test_simulate_rejects_shadow_generation_for_non_openclaw_before_output(
+    tmp_path: Path,
+) -> None:
+    trace_path = _write_host_trace(tmp_path / "generic.jsonl", "generic-task")
+    task_source = _write_tasks(
+        tmp_path / "tasks.json",
+        {"instance_id": "generic-task", "problem_statement": "generic"},
+    )
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(ValueError, match="shadow generation requires OpenClaw"):
+        asyncio.run(
+            simulate(
+                manifest=_single_trace_manifest(tmp_path, trace_path),
+                task_source=task_source,
+                output_dir=output_dir,
+                shadow_llm_api_base="http://127.0.0.1:8000/v1",
+                shadow_llm_model="meta-llama/Llama-3.1-8B-Instruct",
+            )
+        )
+
+    assert not output_dir.exists()
+
+
+def test_simulate_rejects_shadow_generation_for_mixed_scaffolds_before_output(
+    tmp_path: Path,
+) -> None:
+    generic_trace = _write_host_trace(
+        tmp_path / "generic.jsonl", "generic-task"
+    )
+    openclaw_trace = _write_host_trace(
+        tmp_path / "openclaw.jsonl", "openclaw-task"
+    )
+    openclaw_records = [
+        json.loads(line) for line in openclaw_trace.read_text().splitlines()
+    ]
+    openclaw_records[0].update(scaffold="openclaw", execution_environment="container")
+    openclaw_trace.write_text(
+        "\n".join(json.dumps(record) for record in openclaw_records) + "\n",
+        encoding="utf-8",
+    )
+    task_source = _write_tasks(
+        tmp_path / "tasks.json",
+        {"instance_id": "generic-task", "problem_statement": "generic"},
+        {
+            "instance_id": "openclaw-task",
+            "problem_statement": "openclaw",
+            "image_name": "example/openclaw:latest",
+        },
+    )
+    manifest = _write_manifest(
+        tmp_path / "manifest.yaml", [str(generic_trace), str(openclaw_trace)]
+    )
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(ValueError, match="shadow generation requires OpenClaw"):
+        asyncio.run(
+            simulate(
+                manifest=manifest,
+                task_source=task_source,
+                output_dir=output_dir,
+                shadow_llm_api_base="http://127.0.0.1:8000/v1",
+                shadow_llm_model="meta-llama/Llama-3.1-8B-Instruct",
+            )
+        )
+
+    assert not output_dir.exists()
+
+
+def test_simulate_rejects_container_cpu_cap_for_non_openclaw_before_output(
+    tmp_path: Path,
+) -> None:
+    trace_path = _write_host_trace(tmp_path / "generic.jsonl", "generic-task")
+    task_source = _write_tasks(
+        tmp_path / "tasks.json",
+        {"instance_id": "generic-task", "problem_statement": "generic"},
+    )
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(ValueError, match="container CPU cap requires OpenClaw"):
+        asyncio.run(
+            simulate(
+                manifest=_single_trace_manifest(tmp_path, trace_path),
+                task_source=task_source,
+                output_dir=output_dir,
+                container_start_extra_args=("--cpus", "2"),
+            )
+        )
+
+    assert not output_dir.exists()
+
+
+def test_simulate_rejects_container_cpu_cap_for_terminal_bench_before_work(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = _write_host_trace(
+        tmp_path / "terminal-bench.jsonl", "terminal-task"
+    )
+    trace_records = [
+        json.loads(line) for line in trace_path.read_text().splitlines()
+    ]
+    trace_records[0].update(
+        scaffold="openclaw",
+        execution_environment="container",
+        task_source_kind="terminal_bench_registry",
+    )
+    trace_path.write_text(
+        "\n".join(json.dumps(record) for record in trace_records) + "\n",
+        encoding="utf-8",
+    )
+    task_source = _write_tasks(
+        tmp_path / "tasks.json",
+        {
+            "instance_id": "terminal-task",
+            "task_id": "terminal-task",
+            "task_source_kind": "terminal_bench_registry",
+            "task_source_path": str(tmp_path / "terminal-task"),
+            "problem_statement": "terminal",
+        },
+    )
+    output_dir = tmp_path / "out"
+
+    async def fail_prefetch(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("prefetch started before CPU-cap validation")
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._prefetch_container_images", fail_prefetch
+    )
+
+    with pytest.raises(ValueError, match="does not support Terminal-Bench"):
+        asyncio.run(
+            simulate(
+                manifest=_single_trace_manifest(tmp_path, trace_path),
+                task_source=task_source,
+                output_dir=output_dir,
+                container_executable="docker",
+                container_start_extra_args=("--cpus", "2"),
+            )
+        )
+
+    assert not output_dir.exists()
 
 
 def test_combined_worker_trace_records_shadow_generation_metadata(tmp_path: Path) -> None:

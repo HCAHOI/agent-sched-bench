@@ -3498,6 +3498,32 @@ async def simulate(
         replay_speed=replay_speed,
         llm_timing=llm_timing,
     )
+    non_openclaw_sessions = [
+        session.task_instance_id
+        for session in loaded_sessions
+        if session.scaffold != "openclaw"
+    ]
+    if shadow_generation is not None and non_openclaw_sessions:
+        raise ValueError(
+            "shadow generation requires OpenClaw for every selected trace; "
+            "non-OpenClaw tasks: " + ", ".join(non_openclaw_sessions)
+        )
+    if "--cpus" in container_start_extra_args:
+        if non_openclaw_sessions:
+            raise ValueError(
+                "container CPU cap requires OpenClaw for every selected trace; "
+                "non-OpenClaw tasks: " + ", ".join(non_openclaw_sessions)
+            )
+        terminal_bench_sessions = [
+            session.task_instance_id
+            for session in loaded_sessions
+            if _is_terminal_bench_registry_task(session)
+        ]
+        if terminal_bench_sessions:
+            raise ValueError(
+                "container CPU cap does not support Terminal-Bench compose tasks: "
+                + ", ".join(terminal_bench_sessions)
+            )
     _validate_container_runtime(
         loaded_sessions,
         container_executable=container_executable,

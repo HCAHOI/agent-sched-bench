@@ -69,6 +69,8 @@ class ShadowGenerationConfig:
 
     def __post_init__(self) -> None:
         parsed = urlparse(self.api_base)
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("shadow api_base must not contain credentials")
         host = (parsed.hostname or "").lower().rstrip(".")
         try:
             is_loopback = ipaddress.ip_address(host).is_loopback
