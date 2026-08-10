@@ -14,7 +14,7 @@ artifacts retain that history.
 |---|---|
 | Prediction | Keep the target-specific Task-Aware Command Predictor below as the selected development candidate. It is exposed evidence, not confirmation or deployed code. |
 | Runtime feedback | **KEEP causal command-level eBPF feedback as a measured mechanism and control.** Neither tested admission action passed its frozen utility gate, so it is not a runtime scheduler candidate. |
-| CPU execution | Keep equal-share burstable execution as a physical control. Whole-command mean CPU violates the service-cost gate, while exact peak is safe but too conservative. Test phase-shape compatibility before building a causal predictor or physical `cpu.idle` calibration. |
+| CPU execution | Keep equal-share burstable execution as a physical control. The hindsight phase-shape ceiling passes the PennyLane utility gate; next test whether fit-history profiles and causal runtime position can recover the action without future information. |
 | Saturated quartet result | Frozen claim verdict is NO-GO because 8/12, not 9/12, groups improved. This is not a module-retirement decision. |
 | Fresh counterbalanced queue | **Inconclusive because 7/1,818 paired tool calls changed terminal class.** Timing-only improvement was 0.929% with 2/4 queues improving, below the frozen gate even before the quality failure. |
 | Prediction contribution to feedback | Not established. Task-Aware seeding did not improve the frozen reservation/service operating point over feedback alone. |
@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Freeze and run the PennyLane phase-shape compatibility ceiling. It tests whether non-overlapping within-command bursts recover safe backfill headroom; the separate byte-aware KV loan remains a lower-ceiling candidate. |
+| Next research step | Measure causal phase-profile coverage and stability on PennyLane fit/replay tasks, then freeze the smallest predictor only if coverage supports it. The separate byte-aware KV loan remains a lower-ceiling candidate. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1061,6 +1061,17 @@ from causal runtime feedback. A failure closes this single-start, pairwise
 CPU-backfill action under the present PennyLane wave; it does not rule out a
 preemptive or differently timed action. No phase smoothing, tolerance,
 candidate reordering, or gate may change after the outcome is read.
+
+**Result and decision.** Phase-shape FCFS reduced mean task completion by
+10.699% and makespan by 6.680% with effectively zero aggregate service
+inflation and no capacity or CPU-work violation. It admitted 301 speculative
+commands, versus 196 for exact peak, while preserving all 570 commands and
+their recorded work. The frozen gate passes. This authorizes only the causal
+prediction-feasibility test above: phase profiles and observed RSS were
+hindsight, all 15 scored tasks were development-exposed, and the simulator
+assumes isolated sampled demand remains stable after a time shift. It does not
+establish predictor accuracy, live interference safety, or cross-repository
+generality.
 
 ## 6. Closed directions
 
