@@ -754,7 +754,7 @@ actions, and committed evaluator SHA. The ignored trace directories themselves
 have no immutable content digest, so preserving those collection directories is
 required for byte-level reproduction.
 
-### 5.10 Frozen robust survival-clock development protocol
+### 5.10 Robust survival-clock development NO-GO
 
 This protocol was fixed before computing either robust-clock arm. It reuses the
 Section 5.9 populations, task order, complete-command/work keys, whole-task-final
@@ -801,6 +801,36 @@ release had positive memory-time value without added stall. Thus the observed
 dominant blocker is an objective mismatch, not task stability or the Pareto
 guard. This does not authorize fitting a memory-time trigger on the same exposed
 SWE outcomes; that action needs a new preregistration and genuinely fresh data.
+
+### 5.11 Frozen direct memory-time development protocol
+
+This protocol was fixed before loading or scoring the selected PennyLane action
+outcomes. The development cohort is every locally complete GPT-5.6 PennyLane
+trace: the oldest 15 task IDs are settled fit history and the next 26 are
+causally replayed in numeric PR order. Exact trace paths and IDs are frozen in
+`pennylane-survival-action-split.json`. These old traces are development-exposed,
+but have not been used by the survival-action artifacts above. The separate
+PennyLane 16-task warm-up and 16-task validation cohorts in
+`offline-tool-semantics-splits.json` remain uncollected and untouched.
+
+The new trigger directly matches the action objective. For exact-command and
+work-signature histories separately, require at least two settled tasks. The
+candidate trigger is zero when there is no historical duration at or below five
+seconds, otherwise the largest such duration. Accept it only when every task's
+history predicts strictly positive released GiB-seconds and zero added stall
+versus five-second feedback under the measured A100 transfer costs. Otherwise
+wait five seconds. There is no similarity, parent fallback, state feature,
+support threshold beyond the two-task identifiability requirement, or runtime
+agent. Five-second feedback, immediate exact/work actions, the exact-key direct
+trigger, and realized survival are controls.
+
+The primary work-signature arm advances only if it releases strictly more
+GiB-seconds than feedback, adds no aggregate critical-path stall, and changes at
+least 8 of the 26 replay tasks. Exact uses the same gate as an ablation; if both
+pass, prefer exact unless work strictly Pareto-dominates it on release and
+stall. Failure closes this action on the frozen PennyLane development cohort
+without changing the split, trigger, or gate. Passing only authorizes collection
+and separately frozen evaluation of the untouched PennyLane 16+16 cohorts.
 
 ## 6. Closed directions
 
@@ -905,6 +935,9 @@ Docs-only compiler development artifact:
 
 Task split authority:
 `analysis/development/sqlglot-relational-task-split.json`.
+
+PennyLane survival-action development split:
+`analysis/development/pennylane-survival-action-split.json`.
 
 ## 9. Non-negotiable task contract
 
