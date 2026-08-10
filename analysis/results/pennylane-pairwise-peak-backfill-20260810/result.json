@@ -1,0 +1,273 @@
+{
+  "schema_version": 1,
+  "status": "development_no_go",
+  "generated": "2026-08-11T00:21:33+02:00",
+  "git_sha": "997bb17db67365f7ad1f0e34908bca7aa829ee2b",
+  "protocol_git_sha": "dff3af4b1501853233dcf33ccb7f0a4325627ce3",
+  "protocol": "tool-resource-canonical-objective.md Section 5.14",
+  "config": {
+    "split": "/home/chiyu/workspace/agent-sched-bench/analysis/development/pennylane-survival-action-split.json",
+    "cpu_capacity": 8.0,
+    "rss_capacity_mb": 16000.0,
+    "task_selection": "all evidence-valid replay tasks; no subsampling",
+    "arrival_model": "one concurrent task-start wave with recorded first-command delays",
+    "pairwise_rules": {
+      "mean": "foreground mean CPU + candidate mean CPU <= 8",
+      "exact_peak": "foreground exact peak CPU + candidate exact peak CPU <= 8",
+      "canonical_bucket": "foreground and candidate peak labels map to upper bounds 2/4/8 whose sum <= 8"
+    },
+    "rss_rule": "observed composed upper bound only"
+  },
+  "evidence": {
+    "fit_tasks_read": 0,
+    "replay_tasks": 15,
+    "excluded_replay_tasks": [
+      {
+        "task_id": "PennyLaneAI__pennylane-3104",
+        "collection_validity": "invalid",
+        "telemetry_quality": "unavailable",
+        "cleanup": "ok"
+      },
+      {
+        "task_id": "PennyLaneAI__pennylane-3477",
+        "collection_validity": "invalid",
+        "telemetry_quality": "unavailable",
+        "cleanup": "unknown"
+      },
+      {
+        "task_id": "PennyLaneAI__pennylane-3483",
+        "collection_validity": "invalid",
+        "telemetry_quality": "unavailable",
+        "cleanup": "unknown"
+      },
+      {
+        "task_id": "PennyLaneAI__pennylane-3579",
+        "collection_validity": "invalid",
+        "telemetry_quality": "unavailable",
+        "cleanup": "unknown"
+      },
+      {
+        "task_id": "PennyLaneAI__pennylane-3921",
+        "collection_validity": "invalid",
+        "telemetry_quality": "unavailable",
+        "cleanup": "unknown"
+      },
+      {
+        "task_id": "PennyLaneAI__pennylane-4161",
+        "collection_validity": "invalid",
+        "telemetry_quality": "unavailable",
+        "cleanup": "unknown"
+      },
+      {
+        "task_id": "PennyLaneAI__pennylane-4251",
+        "collection_validity": "invalid",
+        "telemetry_quality": "unavailable",
+        "cleanup": "unknown"
+      },
+      {
+        "task_id": "PennyLaneAI__pennylane-4295",
+        "collection_validity": "invalid",
+        "telemetry_quality": "unavailable",
+        "cleanup": "unknown"
+      },
+      {
+        "task_id": "PennyLaneAI__pennylane-4328",
+        "collection_validity": "invalid",
+        "telemetry_quality": "unavailable",
+        "cleanup": "unknown"
+      },
+      {
+        "task_id": "PennyLaneAI__pennylane-4343",
+        "collection_validity": "invalid",
+        "telemetry_quality": "unavailable",
+        "cleanup": "unknown"
+      },
+      {
+        "task_id": "PennyLaneAI__pennylane-4366",
+        "collection_validity": "invalid",
+        "telemetry_quality": "unavailable",
+        "cleanup": "unknown"
+      }
+    ],
+    "exec_commands": 570,
+    "rss_safe_commands": 330,
+    "rss_source_counts": {
+      "full_fallback": 240,
+      "observed_upper_bound": 330
+    },
+    "reserved_tasks_read": 0
+  },
+  "arms": {
+    "serial8": {
+      "command_count": 570,
+      "recorded_command_service_s": 31342.10164475441,
+      "total_command_service_s": 31342.101644754617,
+      "added_service_s": 2.0736479200422764e-10,
+      "makespan_s": 31424.000531196794,
+      "mean_task_completion_s": 25278.17963949857,
+      "total_command_queue_s": 343398.8992338202,
+      "reserved_rss_mb_s": 292334657.2541034,
+      "max_concurrent_commands": 1,
+      "normal_starts": 570,
+      "speculative_starts": 0,
+      "speculative_completions": 0,
+      "promotions": 0,
+      "speculative_cpu_work_core_s": 0.0,
+      "total_cpu_work_core_s": 109041.795882,
+      "served_cpu_work_core_s": 109041.79588200068,
+      "capacity_violation": false,
+      "physical_capacity_violation": false,
+      "modeled_capacity_exposure_events": 0,
+      "max_modeled_rss_demand_mb": 16000.0,
+      "rss_unverified_overlap_events": 0
+    },
+    "rss_safe_fcfs": {
+      "command_count": 570,
+      "recorded_command_service_s": 31342.10164475441,
+      "total_command_service_s": 34336.34627480019,
+      "added_service_s": 2994.2446300457814,
+      "makespan_s": 26021.782911881404,
+      "mean_task_completion_s": 19341.950659611746,
+      "total_command_queue_s": 251361.21990547236,
+      "reserved_rss_mb_s": 297415344.37553734,
+      "max_concurrent_commands": 2,
+      "normal_starts": 270,
+      "speculative_starts": 300,
+      "speculative_completions": 201,
+      "promotions": 99,
+      "speculative_cpu_work_core_s": 18532.457749186153,
+      "total_cpu_work_core_s": 109041.795882,
+      "served_cpu_work_core_s": 109041.79588199918,
+      "capacity_violation": false,
+      "physical_capacity_violation": false,
+      "modeled_capacity_exposure_events": 0,
+      "max_modeled_rss_demand_mb": 16000.000000000004,
+      "rss_unverified_overlap_events": 0
+    },
+    "pairwise_mean_fcfs": {
+      "command_count": 570,
+      "recorded_command_service_s": 31342.10164475441,
+      "total_command_service_s": 33323.361939649505,
+      "added_service_s": 1981.2602948950953,
+      "makespan_s": 26166.784253588183,
+      "mean_task_completion_s": 21116.76774326101,
+      "total_command_queue_s": 278996.46049536206,
+      "reserved_rss_mb_s": 294684488.4374659,
+      "max_concurrent_commands": 2,
+      "normal_starts": 302,
+      "speculative_starts": 268,
+      "speculative_completions": 218,
+      "promotions": 50,
+      "speculative_cpu_work_core_s": 13825.102362600552,
+      "total_cpu_work_core_s": 109041.795882,
+      "served_cpu_work_core_s": 109041.7958820004,
+      "capacity_violation": false,
+      "physical_capacity_violation": false,
+      "modeled_capacity_exposure_events": 0,
+      "max_modeled_rss_demand_mb": 16000.000000000002,
+      "rss_unverified_overlap_events": 0
+    },
+    "pairwise_exact_peak_fcfs": {
+      "command_count": 570,
+      "recorded_command_service_s": 31342.10164475441,
+      "total_command_service_s": 31342.101644754497,
+      "added_service_s": 8.731149137020111e-11,
+      "makespan_s": 30316.31688976298,
+      "mean_task_completion_s": 24728.251085329168,
+      "total_command_queue_s": 335149.9709212799,
+      "reserved_rss_mb_s": 292334657.2540986,
+      "max_concurrent_commands": 2,
+      "normal_starts": 374,
+      "speculative_starts": 196,
+      "speculative_completions": 126,
+      "promotions": 70,
+      "speculative_cpu_work_core_s": 2106.070652447807,
+      "total_cpu_work_core_s": 109041.795882,
+      "served_cpu_work_core_s": 109041.79588200092,
+      "capacity_violation": false,
+      "physical_capacity_violation": false,
+      "modeled_capacity_exposure_events": 0,
+      "max_modeled_rss_demand_mb": 16000.0,
+      "rss_unverified_overlap_events": 0
+    },
+    "pairwise_canonical_bucket_fcfs": {
+      "command_count": 570,
+      "recorded_command_service_s": 31342.10164475441,
+      "total_command_service_s": 31342.101644754614,
+      "added_service_s": 2.0372681319713593e-10,
+      "makespan_s": 30678.48741769813,
+      "mean_task_completion_s": 24992.382195488823,
+      "total_command_queue_s": 339111.93757367384,
+      "reserved_rss_mb_s": 292334657.25410336,
+      "max_concurrent_commands": 2,
+      "normal_starts": 413,
+      "speculative_starts": 157,
+      "speculative_completions": 103,
+      "promotions": 54,
+      "speculative_cpu_work_core_s": 1257.257346570803,
+      "total_cpu_work_core_s": 109041.795882,
+      "served_cpu_work_core_s": 109041.7958820011,
+      "capacity_violation": false,
+      "physical_capacity_violation": false,
+      "modeled_capacity_exposure_events": 0,
+      "max_modeled_rss_demand_mb": 16000.0,
+      "rss_unverified_overlap_events": 0
+    }
+  },
+  "comparisons_vs_serial8": {
+    "rss_safe_fcfs": {
+      "baseline": "serial8",
+      "candidate": "rss_safe_fcfs",
+      "mean_task_completion_reduction": 0.2348360943923008,
+      "service_inflation": 0.09553426454881375,
+      "makespan_reduction": 0.17191374516278513
+    },
+    "pairwise_mean_fcfs": {
+      "baseline": "serial8",
+      "candidate": "pairwise_mean_fcfs",
+      "mean_task_completion_reduction": 0.16462466663284248,
+      "service_inflation": 0.06321402174466795,
+      "makespan_reduction": 0.16729939500826463
+    },
+    "pairwise_exact_peak_fcfs": {
+      "baseline": "serial8",
+      "candidate": "pairwise_exact_peak_fcfs",
+      "mean_task_completion_reduction": 0.02175506947146255,
+      "service_inflation": 2.886579864025407e-15,
+      "makespan_reduction": 0.03524960611982353
+    },
+    "pairwise_canonical_bucket_fcfs": {
+      "baseline": "serial8",
+      "candidate": "pairwise_canonical_bucket_fcfs",
+      "mean_task_completion_reduction": 0.011306092767976561,
+      "service_inflation": 6.439293542825908e-15,
+      "makespan_reduction": 0.023724322202659853
+    }
+  },
+  "gates": {
+    "pairwise_exact_peak_fcfs": {
+      "mean_task_completion_reduction_at_least_5_percent": false,
+      "service_inflation_at_most_5_percent": true,
+      "zero_capacity_or_work_violations": true,
+      "go": false
+    },
+    "pairwise_canonical_bucket_fcfs": {
+      "mean_task_completion_reduction_at_least_5_percent": false,
+      "service_inflation_at_most_5_percent": true,
+      "zero_capacity_or_work_violations": true,
+      "go": false
+    }
+  },
+  "go_to_causal_predictor": false,
+  "cost": {
+    "prediction_time_agent_calls": 0,
+    "gpu_runtime_s": 0.0,
+    "evaluator_wall_s": 6.045259816106409
+  },
+  "limitations": [
+    "All 15 scored PennyLane tasks are development-exposed.",
+    "Mean CPU, peak CPU, canonical labels, and RSS safety are hindsight oracles, not deployable predictions.",
+    "The action-space ceiling contains one physically defined arrival wave, not workload-order uncertainty.",
+    "The deterministic replay preserves recorded commands but models CPU sharing."
+  ]
+}

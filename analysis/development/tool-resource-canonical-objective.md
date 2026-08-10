@@ -14,7 +14,7 @@ artifacts retain that history.
 |---|---|
 | Prediction | Keep the target-specific Task-Aware Command Predictor below as the selected development candidate. It is exposed evidence, not confirmation or deployed code. |
 | Runtime feedback | **KEEP causal command-level eBPF feedback as a measured mechanism and control.** Neither tested admission action passed its frozen utility gate, so it is not a runtime scheduler candidate. |
-| CPU execution | Keep equal-share burstable execution as a physical control. PennyLane exposes substantial strict-priority backfill headroom, but pairwise whole-command mean CPU still violates the service-cost gate. Test the exact pairwise peak ceiling before building a causal predictor or physical `cpu.idle` calibration. |
+| CPU execution | Keep equal-share burstable execution as a physical control. Whole-command mean CPU violates the service-cost gate, while exact peak is safe but too conservative. Test phase-shape compatibility before building a causal predictor or physical `cpu.idle` calibration. |
 | Saturated quartet result | Frozen claim verdict is NO-GO because 8/12, not 9/12, groups improved. This is not a module-retirement decision. |
 | Fresh counterbalanced queue | **Inconclusive because 7/1,818 paired tool calls changed terminal class.** Timing-only improvement was 0.929% with 2/4 queues improving, below the frozen gate even before the quality failure. |
 | Prediction contribution to feedback | Not established. Task-Aware seeding did not improve the frozen reservation/service operating point over feedback alone. |
@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Freeze and run the PennyLane exact pairwise peak ceiling. This tests whether burst-smearing, rather than absent action headroom, caused the Section 5.13 failure; the separate byte-aware KV loan remains a lower-ceiling candidate. |
+| Next research step | Freeze and run the PennyLane phase-shape compatibility ceiling. It tests whether non-overlapping within-command bursts recover safe backfill headroom; the separate byte-aware KV loan remains a lower-ceiling candidate. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1022,6 +1022,17 @@ three-class predictor action. Only both passing authorizes a separately frozen
 causal evaluation using fit-task predictions and runtime foreground feedback.
 No peak threshold, bucket boundary, candidate order, or service gate may change
 after the outcome is read.
+
+**Result and decision.** Exact-peak admission had effectively zero service
+inflation and no violations, but reduced mean task completion by only 2.176%
+and makespan by 3.525%. Canonical 2/4/8 bucket upper bounds were more
+conservative: 1.131% completion and 2.372% makespan reduction, also at
+effectively zero service inflation. Both miss the frozen 5% completion gate,
+so this experiment does not authorize a peak/bucket predictor. Together with
+Section 5.13, the result exposes a static-summary tradeoff: whole-command mean
+admits useful work but hides bursts, while whole-command peak preserves service
+but assumes worst phases coincide. The next mechanism question is therefore
+within-command phase alignment, not another scalar threshold.
 
 ## 6. Closed directions
 
