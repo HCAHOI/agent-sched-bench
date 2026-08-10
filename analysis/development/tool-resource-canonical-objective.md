@@ -26,7 +26,8 @@ artifacts retain that history.
 | GPU tool-gap action | The profile-only early clock and pre-restore are closed by the Section 5.1 offline gate. The load-8 live action test remains unresolved. The load-32 hard-pin control in Section 5.3 was invalid; Section 5.4 compares the unchanged five-second action with stock evictable prefix caching. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
-| Next research step | Run the separately registered Section 5.7 predictive tool-gap loan. It tests whether latency prediction advances the same backfill action beyond causal elapsed-time feedback without request queueing. |
+| Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
+| Next research step | Any successor action must first demonstrate broader label-free activation and outcome-stable replay on existing data. Do not spend fresh tasks on the current latency-bucket lower-edge loan. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -650,40 +651,39 @@ The failed development gate means these tasks must not be collected or opened
 for this action. The full machine-readable result is in
 `analysis/results/fixed-trajectory-phase-aware-admission-20260810/result.json`.
 
-### 5.7 Registered predictive tool-gap loan
+### 5.7 Predictive tool-gap loan — insufficient activation
 
-**Open amendment, 2026-08-10, before implementation or action-outcome
-access.** Four foreground tasks may each start one non-recursive waiting task.
-No LLM request is gated. For each tool call, `B` is the maximum full response
-latency among causally completed foreground LLM calls, available only after all
-four foreground tasks have completed one call. The predictor arm lends
-immediately when the selected Task-Aware latency bucket's lower edge `L` is
-greater than `B`; otherwise it lends when causal tool elapsed time exceeds
-that same frozen `B`. The feedback arm only uses the elapsed-time rule; the
-fixed arm never lends. CPU, RSS, and Disk predictions do not participate.
+The frozen six-cell `Fixed, Feedback, Predictor, Predictor, Feedback, Fixed`
+run completed on the registered eight SQLGlot tasks. Every cell preserved 664
+actions, 336 LLM calls, 328 tool calls, 50,972 requested and returned completion
+tokens, exact source tool identity and arguments, two-core containers, valid
+eBPF collection with zero loss or integrity errors, and no logged OOM or
+thermal slowdown. The 16 IDs reserved in Section 5.6 remain untouched.
 
-The initial design named the Section 5.6 tasks, but they contributed fit
-evidence to Task-Aware. Before code or action outcomes, the workload was
-corrected to the first eight tasks in the frozen predictor-validation order:
-SQLGlot 2337, 2794, 3230, 3765, 2619, 3333, 2754, and 3549. Runtime prediction
-input contains no labels or target telemetry. These tasks are
-development-exposed; the 16 IDs reserved in Section 5.6 remain untouched.
+Both Predictor cells made one early loan, but it was the same SQLGlot-3765
+`make test` action in both repetitions; the frozen gate required four distinct
+actions. Its hard latency bucket had a 30 s lower edge against causal budgets
+of 11.636/11.589 s, but the tool actually ended after 4.242/4.377 s. It
+therefore would not have triggered feedback. Relative to paired Feedback, the
+action admitted task 2619 only 0.76/0.21 s earlier; FIFO borrower remapping
+admitted task 3333 56.11/55.04 s earlier.
 
-The fixed six-cell order is `Fixed, Feedback, Predictor, Predictor, Feedback,
-Fixed`, paired as cells 1/2/3 and 6/5/4. All cells use prepared containers,
-two-core tool execution, eBPF, exact source actions and completion-token counts,
-fresh Llama-3.1-8B-Instruct A100-80GB vLLM/KV state, and no request semaphore.
-Both Predictor cells must activate an early loan and at least four distinct
-command/action IDs must activate across them; otherwise the result is
-`insufficient_action_activation`, not a performance verdict.
+Performance is descriptive only. Predictor makespan was 2,157.268 s versus
+2,108.062 s Feedback and 2,152.259 s Fixed in pair one, then 1,012.330 s versus
+2,154.300 s and 2,155.777 s in pair two. Pooled mean task JCT was 603.629 s,
+11.414% below Feedback and 26.835% below Fixed, but pairwise p99 end-to-end TTFT
+ratios versus Fixed were 1.152 and 1.079, both above 1.05. The pair-two outlier
+was dominated by two task-2337 pytest calls that exited after 37.79/26.28 s
+instead of timing out near 600 s as in the other five cells; six tool calls
+changed terminal class across cells. Terminal-class identity was not a frozen
+validity condition, so registered validity passes, but these numbers cannot
+identify a causal performance effect.
 
-GO requires complete validity; lower Predictor makespan than both paired arms
-in both repetitions; pooled Predictor mean task JCT at least 5% below both
-arms; paired Predictor/Fixed p95 task-JCT ratios at most 1.05; and paired
-Predictor/Fixed p99 end-to-end TTFT ratios at most 1.05. Any failure stops
-without changing thresholds, bucket handling, task order, task subset, or
-vLLM settings. Full implementation and logging semantics are frozen in
-`docs/superpowers/specs/2026-08-10-predictive-tool-gap-loan-design.md`.
+The status is `insufficient_action_activation`, not GO or performance NO-GO.
+Do not tune the rule, reuse another exposed subset, or open fresh confirmation.
+Formal execution took 12,023 s, the smoke 2,180 s, and the six formal GPU traces
+integrated to 381.619 Wh; host energy was not instrumented. Full evidence is in
+`analysis/results/predictive-tool-gap-loan-20260810/result.json`.
 
 ## 6. Closed directions
 
@@ -774,6 +774,8 @@ Result root:
 - CPU-idle short-null sensitivity: `sqlglot50-cpu-idle-short-null-v1/result.json`
 - GPU tool-gap offline gate:
   `../gpu-tool-gap-actions-a100-instruct-20260809/result.json`
+- Predictive tool-gap loan:
+  `../predictive-tool-gap-loan-20260810/result.json`
 
 Docs-only compiler development artifact:
 `analysis/results/offline-tool-semantics-sqlglot-v1/result.json`.

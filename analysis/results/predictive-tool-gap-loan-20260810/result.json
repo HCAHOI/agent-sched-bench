@@ -1,0 +1,1324 @@
+{
+  "schema_version": 1,
+  "experiment": "predictive-tool-gap-loan",
+  "date": "2026-08-10",
+  "decision": "insufficient_action_activation",
+  "decision_reason": "Both Predictor repetitions activated the same single early command/action ID; the frozen gate required at least four distinct early IDs. Performance is descriptive only.",
+  "protocol": {
+    "task_order": [
+      "tobymao__sqlglot-2337",
+      "tobymao__sqlglot-2794",
+      "tobymao__sqlglot-3230",
+      "tobymao__sqlglot-3765",
+      "tobymao__sqlglot-2619",
+      "tobymao__sqlglot-3333",
+      "tobymao__sqlglot-2754",
+      "tobymao__sqlglot-3549"
+    ],
+    "cell_order": [
+      "cell_01_fixed",
+      "cell_02_feedback",
+      "cell_03_predictor",
+      "cell_04_predictor",
+      "cell_05_feedback",
+      "cell_06_fixed"
+    ],
+    "pairing": [
+      [
+        "cell_03_predictor",
+        "cell_02_feedback",
+        "cell_01_fixed"
+      ],
+      [
+        "cell_04_predictor",
+        "cell_05_feedback",
+        "cell_06_fixed"
+      ]
+    ],
+    "container_cpu_cap": 2,
+    "percentile": "linear interpolation",
+    "hardware": "NVIDIA A100 80GB at 250 W",
+    "remote_root": "/home/Ubuntu/shadow-sqlglot-tool-gap-loan-20260810T123512Z",
+    "local_code_commit": "33674c5",
+    "remote_code_commit": "b696962c69dba14ca23a4b9a0e166582d3cf7e2c"
+  },
+  "activation": {
+    "predictor_cells_with_early_loan": 2,
+    "required_predictor_cells_with_early_loan": 2,
+    "distinct_early_command_action_ids": 1,
+    "required_distinct_early_command_action_ids": 4,
+    "distinct_ids": [
+      {
+        "task_id": "tobymao__sqlglot-3765",
+        "call_id": "call_kCRICDqUwUnJU9msRvjYLHt3"
+      }
+    ],
+    "pass": false
+  },
+  "validity": {
+    "all_checks_pass": true,
+    "formal_driver_exit_code": 0,
+    "cell_driver_exit_codes": {
+      "cell_01_fixed": 0,
+      "cell_02_feedback": 0,
+      "cell_03_predictor": 0,
+      "cell_04_predictor": 0,
+      "cell_05_feedback": 0,
+      "cell_06_fixed": 0
+    },
+    "cell_wrapper_exit_codes": {
+      "cell_01_fixed": 0,
+      "cell_02_feedback": 0,
+      "cell_03_predictor": 0,
+      "cell_04_predictor": 0,
+      "cell_05_feedback": 0,
+      "cell_06_fixed": 0
+    },
+    "exact_source_replay_identity": true,
+    "no_host_request_admission_fields": true,
+    "all_container_cpu_caps_exactly_two": true,
+    "loan_controller_contract_pass": true,
+    "terminal_class_divergent_calls_across_cells": 6,
+    "terminal_class_divergences": [
+      {
+        "task_id": "tobymao__sqlglot-2337",
+        "call_id": "call_Eq0YqlIYVeQjpGbNJKu0C6yI",
+        "outcomes": {
+          "cell_01_fixed": {
+            "class": "exit_zero",
+            "exit_code": 0
+          },
+          "cell_02_feedback": {
+            "class": "exit_nonzero",
+            "exit_code": 1
+          },
+          "cell_03_predictor": {
+            "class": "exit_nonzero",
+            "exit_code": 1
+          },
+          "cell_04_predictor": {
+            "class": "exit_zero",
+            "exit_code": 0
+          },
+          "cell_05_feedback": {
+            "class": "exit_nonzero",
+            "exit_code": 1
+          },
+          "cell_06_fixed": {
+            "class": "exit_zero",
+            "exit_code": 0
+          }
+        }
+      },
+      {
+        "task_id": "tobymao__sqlglot-2337",
+        "call_id": "call_cS119SFsEuuZz9xVaScbZbGg",
+        "outcomes": {
+          "cell_01_fixed": {
+            "class": "timeout",
+            "exit_code": 124
+          },
+          "cell_02_feedback": {
+            "class": "timeout",
+            "exit_code": 124
+          },
+          "cell_03_predictor": {
+            "class": "timeout",
+            "exit_code": 124
+          },
+          "cell_04_predictor": {
+            "class": "exit_nonzero",
+            "exit_code": 1
+          },
+          "cell_05_feedback": {
+            "class": "timeout",
+            "exit_code": 124
+          },
+          "cell_06_fixed": {
+            "class": "timeout",
+            "exit_code": 124
+          }
+        }
+      },
+      {
+        "task_id": "tobymao__sqlglot-2337",
+        "call_id": "call_iQUmSRI60Q1jKFLLScC71Y16",
+        "outcomes": {
+          "cell_01_fixed": {
+            "class": "exit_nonzero",
+            "exit_code": 1
+          },
+          "cell_02_feedback": {
+            "class": "exit_nonzero",
+            "exit_code": 1
+          },
+          "cell_03_predictor": {
+            "class": "exit_zero",
+            "exit_code": 0
+          },
+          "cell_04_predictor": {
+            "class": "exit_nonzero",
+            "exit_code": 1
+          },
+          "cell_05_feedback": {
+            "class": "exit_zero",
+            "exit_code": 0
+          },
+          "cell_06_fixed": {
+            "class": "exit_nonzero",
+            "exit_code": 1
+          }
+        }
+      },
+      {
+        "task_id": "tobymao__sqlglot-2337",
+        "call_id": "call_j6xhQZWIsWYwZkMUh8iMA0oy",
+        "outcomes": {
+          "cell_01_fixed": {
+            "class": "timeout",
+            "exit_code": 124
+          },
+          "cell_02_feedback": {
+            "class": "timeout",
+            "exit_code": 124
+          },
+          "cell_03_predictor": {
+            "class": "timeout",
+            "exit_code": 124
+          },
+          "cell_04_predictor": {
+            "class": "exit_nonzero",
+            "exit_code": 1
+          },
+          "cell_05_feedback": {
+            "class": "timeout",
+            "exit_code": 124
+          },
+          "cell_06_fixed": {
+            "class": "timeout",
+            "exit_code": 124
+          }
+        }
+      },
+      {
+        "task_id": "tobymao__sqlglot-2337",
+        "call_id": "call_lGB41QAaBIJtTAtGVPUBw1sI",
+        "outcomes": {
+          "cell_01_fixed": {
+            "class": "exit_nonzero",
+            "exit_code": 1
+          },
+          "cell_02_feedback": {
+            "class": "exit_zero",
+            "exit_code": 0
+          },
+          "cell_03_predictor": {
+            "class": "exit_nonzero",
+            "exit_code": 1
+          },
+          "cell_04_predictor": {
+            "class": "exit_nonzero",
+            "exit_code": 1
+          },
+          "cell_05_feedback": {
+            "class": "exit_nonzero",
+            "exit_code": 1
+          },
+          "cell_06_fixed": {
+            "class": "exit_nonzero",
+            "exit_code": 1
+          }
+        }
+      },
+      {
+        "task_id": "tobymao__sqlglot-2794",
+        "call_id": "call_U77bPRERseNJ6BSNo5VuqhL0",
+        "outcomes": {
+          "cell_01_fixed": {
+            "class": "exit_zero",
+            "exit_code": 0
+          },
+          "cell_02_feedback": {
+            "class": "exit_zero",
+            "exit_code": 0
+          },
+          "cell_03_predictor": {
+            "class": "exit_zero",
+            "exit_code": 0
+          },
+          "cell_04_predictor": {
+            "class": "exit_zero",
+            "exit_code": 0
+          },
+          "cell_05_feedback": {
+            "class": "exit_nonzero",
+            "exit_code": 1
+          },
+          "cell_06_fixed": {
+            "class": "exit_zero",
+            "exit_code": 0
+          }
+        }
+      }
+    ],
+    "oom_log_matches": [],
+    "oom_evidence": "No explicit OOM terminal class or OOM/CUDA-OOM marker in retained formal logs; all cells and tasks completed. Kernel-message capture was not present in the retained artifacts."
+  },
+  "cells": [
+    {
+      "cell": "cell_01_fixed",
+      "arm": "fixed",
+      "repetition": 1,
+      "common_ready_makespan_s": 2152.258774948001,
+      "mean_task_jct_s": 825.036684970376,
+      "p95_task_jct_s": 1746.1878617279997,
+      "task_jct_s": {
+        "tobymao__sqlglot-2337": 2152.258774948001,
+        "tobymao__sqlglot-2794": 364.2992212309982,
+        "tobymao__sqlglot-3230": 489.458043755003,
+        "tobymao__sqlglot-3765": 199.10987414100236,
+        "tobymao__sqlglot-2619": 624.623198387002,
+        "tobymao__sqlglot-3333": 992.0561657479993,
+        "tobymao__sqlglot-2754": 822.2345035539984,
+        "tobymao__sqlglot-3549": 956.2536979990036
+      },
+      "server_ttft_ms": {
+        "mean": 215.4965357142857,
+        "p99": 707.02645
+      },
+      "end_to_end_ttft_ms": {
+        "mean": 215.4965357142857,
+        "p99": 707.02645
+      },
+      "full_llm_response_latency_ms": {
+        "mean": 2977.0883095238096,
+        "p95": 7116.69775,
+        "p99": 11021.755849999994
+      },
+      "client_wall_llm_latency_ms": {
+        "mean": 2981.3586309523807,
+        "p95": 7120.262500000001,
+        "p99": 11025.837499999994
+      },
+      "actions": 664,
+      "llm_calls": 336,
+      "tool_calls": 328,
+      "requested_completion_tokens": 50972,
+      "returned_completion_tokens": 50972,
+      "status_counts": {
+        "success": 8,
+        "action_sequence_matches": 8,
+        "provider_request_sequence_matches": 8,
+        "collection_valid": 8,
+        "complete": 2,
+        "partial": 6
+      },
+      "telemetry": {
+        "total": 203,
+        "eligible": 178,
+        "withheld": 25,
+        "loss": 0,
+        "errors": 0,
+        "integrity_failures": 0
+      },
+      "loan_count": 0,
+      "loans": [],
+      "loan_admission_from_common_ready_s": {},
+      "maximum_active_tasks": 4,
+      "gpu": {
+        "samples": 2129,
+        "duration_s": 2207.648,
+        "energy_wh_trapezoid": 72.46288211805542,
+        "max_power_w": 358.12,
+        "max_gpu_temperature_c": 71,
+        "max_memory_temperature_c": 79,
+        "max_memory_used_mib": 73735,
+        "thermal_slowdown_rows": 0
+      }
+    },
+    {
+      "cell": "cell_02_feedback",
+      "arm": "feedback",
+      "repetition": 1,
+      "common_ready_makespan_s": 2108.062314555995,
+      "mean_task_jct_s": 680.3004282746242,
+      "p95_task_jct_s": 1636.8157637543961,
+      "task_jct_s": {
+        "tobymao__sqlglot-2337": 2108.062314555995,
+        "tobymao__sqlglot-2794": 380.2660500810016,
+        "tobymao__sqlglot-3230": 486.2896920399944,
+        "tobymao__sqlglot-3765": 207.2547382710036,
+        "tobymao__sqlglot-2619": 526.4121509609977,
+        "tobymao__sqlglot-3333": 761.6435979800008,
+        "tobymao__sqlglot-2754": 479.6469141790003,
+        "tobymao__sqlglot-3549": 492.8279681290005
+      },
+      "server_ttft_ms": {
+        "mean": 226.07391071428572,
+        "p99": 805.6322999999999
+      },
+      "end_to_end_ttft_ms": {
+        "mean": 226.07391071428572,
+        "p99": 805.6322999999999
+      },
+      "full_llm_response_latency_ms": {
+        "mean": 3217.997863095238,
+        "p95": 8131.558,
+        "p99": 10976.145449999998
+      },
+      "client_wall_llm_latency_ms": {
+        "mean": 3222.2108630952384,
+        "p95": 8133.907499999999,
+        "p99": 10979.419999999998
+      },
+      "actions": 664,
+      "llm_calls": 336,
+      "tool_calls": 328,
+      "requested_completion_tokens": 50972,
+      "returned_completion_tokens": 50972,
+      "status_counts": {
+        "success": 8,
+        "action_sequence_matches": 8,
+        "provider_request_sequence_matches": 8,
+        "collection_valid": 8,
+        "complete": 2,
+        "partial": 6
+      },
+      "telemetry": {
+        "total": 203,
+        "eligible": 178,
+        "withheld": 25,
+        "loss": 0,
+        "errors": 0,
+        "integrity_failures": 0
+      },
+      "loan_count": 4,
+      "loans": [
+        {
+          "budget_s": 8.691187,
+          "call_id": "call_cS119SFsEuuZz9xVaScbZbGg",
+          "command": "/opt/conda/envs/testbed/bin/pytest -q",
+          "decision_wall_time_s": 1786370675.9974895,
+          "hard_bucket": null,
+          "lower_edge_s": null,
+          "prediction": null,
+          "task_id": "tobymao__sqlglot-2337",
+          "tool_start_wall_time_s": 1786370667.3053687,
+          "trigger": "feedback",
+          "actual_tool_duration_s": 600.1217496395111,
+          "counterfactual_feedback_would_activate": true,
+          "early_timing_advance_s": 0.0,
+          "borrower_task_id": "tobymao__sqlglot-2619",
+          "decision_to_admission_ms": 7.242441177368164
+        },
+        {
+          "budget_s": 18.449506,
+          "call_id": "call_01BooPF9F6blM8YekTrEOPN8",
+          "command": "python3 -m pip install --break-system-packages 'duckdb>=0.6' pyspark",
+          "decision_wall_time_s": 1786370746.5922575,
+          "hard_bucket": null,
+          "lower_edge_s": null,
+          "prediction": null,
+          "task_id": "tobymao__sqlglot-2794",
+          "tool_start_wall_time_s": 1786370728.1406322,
+          "trigger": "feedback",
+          "actual_tool_duration_s": 31.510300159454346,
+          "counterfactual_feedback_would_activate": true,
+          "early_timing_advance_s": 0.0,
+          "borrower_task_id": "tobymao__sqlglot-3549",
+          "decision_to_admission_ms": 7.986783981323242
+        },
+        {
+          "budget_s": 18.449506,
+          "call_id": "call_J1te0L6wtkLlBGfKABhzdXYp",
+          "command": "/opt/conda/envs/testbed/bin/python -m pytest",
+          "decision_wall_time_s": 1786370731.8433564,
+          "hard_bucket": null,
+          "lower_edge_s": null,
+          "prediction": null,
+          "task_id": "tobymao__sqlglot-3230",
+          "tool_start_wall_time_s": 1786370713.3918421,
+          "trigger": "feedback",
+          "actual_tool_duration_s": 147.95914435386658,
+          "counterfactual_feedback_would_activate": true,
+          "early_timing_advance_s": 0.0,
+          "borrower_task_id": "tobymao__sqlglot-3333",
+          "decision_to_admission_ms": 3.2541751861572266
+        },
+        {
+          "budget_s": 18.449506,
+          "call_id": "call_dVxfLZ3q6Xvbf8s2v6NPsmpB",
+          "command": "make test",
+          "decision_wall_time_s": 1786370734.9762664,
+          "hard_bucket": null,
+          "lower_edge_s": null,
+          "prediction": null,
+          "task_id": "tobymao__sqlglot-3765",
+          "tool_start_wall_time_s": 1786370716.5250592,
+          "trigger": "feedback",
+          "actual_tool_duration_s": 73.17908549308777,
+          "counterfactual_feedback_would_activate": true,
+          "early_timing_advance_s": 0.0,
+          "borrower_task_id": "tobymao__sqlglot-2754",
+          "decision_to_admission_ms": 9.792566299438477
+        }
+      ],
+      "loan_admission_from_common_ready_s": {
+        "tobymao__sqlglot-2619": 68.61784148216248,
+        "tobymao__sqlglot-3333": 124.45972013473511,
+        "tobymao__sqlglot-2754": 127.59916853904724,
+        "tobymao__sqlglot-3549": 139.2133538722992
+      },
+      "maximum_active_tasks": 8,
+      "gpu": {
+        "samples": 2081,
+        "duration_s": 2153.887,
+        "energy_wh_trapezoid": 63.8090535180556,
+        "max_power_w": 330.11,
+        "max_gpu_temperature_c": 73,
+        "max_memory_temperature_c": 80,
+        "max_memory_used_mib": 73735,
+        "thermal_slowdown_rows": 0
+      }
+    },
+    {
+      "cell": "cell_03_predictor",
+      "arm": "predictor",
+      "repetition": 1,
+      "common_ready_makespan_s": 2157.267698152995,
+      "mean_task_jct_s": 674.8097297789936,
+      "p95_task_jct_s": 1648.263829812892,
+      "task_jct_s": {
+        "tobymao__sqlglot-2337": 2157.267698152995,
+        "tobymao__sqlglot-2794": 368.68095925399393,
+        "tobymao__sqlglot-3230": 485.3026838169899,
+        "tobymao__sqlglot-3765": 202.5001860439952,
+        "tobymao__sqlglot-2619": 512.614714424999,
+        "tobymao__sqlglot-3333": 702.970931466989,
+        "tobymao__sqlglot-2754": 484.8748340399907,
+        "tobymao__sqlglot-3549": 484.26583103199664
+      },
+      "server_ttft_ms": {
+        "mean": 225.55445535714287,
+        "p99": 814.4697999999987
+      },
+      "end_to_end_ttft_ms": {
+        "mean": 225.55445535714287,
+        "p99": 814.4697999999987
+      },
+      "full_llm_response_latency_ms": {
+        "mean": 3217.754875,
+        "p95": 8366.396,
+        "p99": 11363.909149999996
+      },
+      "client_wall_llm_latency_ms": {
+        "mean": 3224.4509226190476,
+        "p95": 8369.1325,
+        "p99": 11367.255499999996
+      },
+      "actions": 664,
+      "llm_calls": 336,
+      "tool_calls": 328,
+      "requested_completion_tokens": 50972,
+      "returned_completion_tokens": 50972,
+      "status_counts": {
+        "success": 8,
+        "action_sequence_matches": 8,
+        "provider_request_sequence_matches": 8,
+        "collection_valid": 8,
+        "complete": 2,
+        "partial": 6
+      },
+      "telemetry": {
+        "total": 203,
+        "eligible": 178,
+        "withheld": 25,
+        "loss": 0,
+        "errors": 0,
+        "integrity_failures": 0
+      },
+      "loan_count": 4,
+      "loans": [
+        {
+          "budget_s": 8.65586,
+          "call_id": "call_cS119SFsEuuZz9xVaScbZbGg",
+          "command": "/opt/conda/envs/testbed/bin/pytest -q",
+          "decision_wall_time_s": 1786372829.3891542,
+          "hard_bucket": null,
+          "lower_edge_s": null,
+          "prediction": null,
+          "task_id": "tobymao__sqlglot-2337",
+          "tool_start_wall_time_s": 1786372820.7303696,
+          "trigger": "feedback",
+          "actual_tool_duration_s": 600.1174609661102,
+          "counterfactual_feedback_would_activate": true,
+          "early_timing_advance_s": 0.0,
+          "borrower_task_id": "tobymao__sqlglot-3333",
+          "decision_to_admission_ms": 4.275798797607422
+        },
+        {
+          "budget_s": 18.381444,
+          "call_id": "call_01BooPF9F6blM8YekTrEOPN8",
+          "command": "python3 -m pip install --break-system-packages 'duckdb>=0.6' pyspark",
+          "decision_wall_time_s": 1786372901.6413188,
+          "hard_bucket": 2,
+          "lower_edge_s": 2.0,
+          "prediction": {
+            "command": "python3 -m pip install --break-system-packages 'duckdb>=0.6' pyspark",
+            "hard_bucket": 2,
+            "probability_by_bucket": [
+              0,
+              0,
+              0.9047619047619049,
+              0.09523809523809525,
+              0
+            ],
+            "provenance": {
+              "source": "pip_package_overlap",
+              "support": 6,
+              "weight_sum": 1.7499999999999998
+            },
+            "sample_id": "tobymao__sqlglot-2794:14"
+          },
+          "task_id": "tobymao__sqlglot-2794",
+          "tool_start_wall_time_s": 1786372883.2576208,
+          "trigger": "feedback",
+          "actual_tool_duration_s": 31.260271787643433,
+          "counterfactual_feedback_would_activate": true,
+          "early_timing_advance_s": 0.0,
+          "borrower_task_id": "tobymao__sqlglot-3549",
+          "decision_to_admission_ms": 8.054971694946289
+        },
+        {
+          "budget_s": 18.381444,
+          "call_id": "call_J1te0L6wtkLlBGfKABhzdXYp",
+          "command": "/opt/conda/envs/testbed/bin/python -m pytest",
+          "decision_wall_time_s": 1786372887.0899217,
+          "hard_bucket": null,
+          "lower_edge_s": null,
+          "prediction": null,
+          "task_id": "tobymao__sqlglot-3230",
+          "tool_start_wall_time_s": 1786372868.7064433,
+          "trigger": "feedback",
+          "actual_tool_duration_s": 143.33510899543762,
+          "counterfactual_feedback_would_activate": true,
+          "early_timing_advance_s": 0.0,
+          "borrower_task_id": "tobymao__sqlglot-2754",
+          "decision_to_admission_ms": 4.7245025634765625
+        },
+        {
+          "budget_s": 11.636149,
+          "call_id": "call_kCRICDqUwUnJU9msRvjYLHt3",
+          "command": "ln -sf /usr/bin/python3 /usr/local/bin/python && python --version && make test",
+          "decision_wall_time_s": 1786372828.8960507,
+          "hard_bucket": 4,
+          "lower_edge_s": 30.0,
+          "prediction": {
+            "command": "ln -sf /usr/bin/python3 /usr/local/bin/python && python --version && make test",
+            "hard_bucket": 4,
+            "probability_by_bucket": [
+              0.30078125,
+              0,
+              0.2109375,
+              0.12890625,
+              0.359375
+            ],
+            "provenance": {
+              "source": "current",
+              "support": 0
+            },
+            "sample_id": "tobymao__sqlglot-3765:7"
+          },
+          "task_id": "tobymao__sqlglot-3765",
+          "tool_start_wall_time_s": 1786372828.8951929,
+          "trigger": "predictor",
+          "actual_tool_duration_s": 4.242112636566162,
+          "counterfactual_feedback_would_activate": false,
+          "early_timing_advance_s": 11.635291169952392,
+          "borrower_task_id": "tobymao__sqlglot-2619",
+          "decision_to_admission_ms": 6.509304046630859
+        }
+      ],
+      "loan_admission_from_common_ready_s": {
+        "tobymao__sqlglot-2619": 67.85563111305237,
+        "tobymao__sqlglot-3333": 68.34650111198425,
+        "tobymao__sqlglot-2754": 126.04771733283997,
+        "tobymao__sqlglot-3549": 140.60244488716125
+      },
+      "maximum_active_tasks": 8,
+      "gpu": {
+        "samples": 2129,
+        "duration_s": 2202.699,
+        "energy_wh_trapezoid": 64.40449327361121,
+        "max_power_w": 381.41,
+        "max_gpu_temperature_c": 73,
+        "max_memory_temperature_c": 80,
+        "max_memory_used_mib": 73735,
+        "thermal_slowdown_rows": 0
+      }
+    },
+    {
+      "cell": "cell_04_predictor",
+      "arm": "predictor",
+      "repetition": 2,
+      "common_ready_makespan_s": 1012.3301839919877,
+      "mean_task_jct_s": 532.44911089374,
+      "p95_task_jct_s": 905.8224789851387,
+      "task_jct_s": {
+        "tobymao__sqlglot-2337": 1012.3301839919877,
+        "tobymao__sqlglot-2794": 372.8730892149906,
+        "tobymao__sqlglot-3230": 504.7478326649871,
+        "tobymao__sqlglot-3765": 204.47891377798805,
+        "tobymao__sqlglot-2619": 511.40392937799334,
+        "tobymao__sqlglot-3333": 708.022455400991,
+        "tobymao__sqlglot-2754": 469.014426136986,
+        "tobymao__sqlglot-3549": 476.72205658399616
+      },
+      "server_ttft_ms": {
+        "mean": 228.42961607142857,
+        "p99": 747.968999999999
+      },
+      "end_to_end_ttft_ms": {
+        "mean": 228.42961607142857,
+        "p99": 747.968999999999
+      },
+      "full_llm_response_latency_ms": {
+        "mean": 3308.3787291666667,
+        "p95": 8495.67375,
+        "p99": 11549.987999999998
+      },
+      "client_wall_llm_latency_ms": {
+        "mean": 3312.6010714285712,
+        "p95": 8498.365,
+        "p99": 11553.653499999999
+      },
+      "actions": 664,
+      "llm_calls": 336,
+      "tool_calls": 328,
+      "requested_completion_tokens": 50972,
+      "returned_completion_tokens": 50972,
+      "status_counts": {
+        "success": 8,
+        "action_sequence_matches": 8,
+        "provider_request_sequence_matches": 8,
+        "collection_valid": 8,
+        "complete": 2,
+        "partial": 6
+      },
+      "telemetry": {
+        "total": 203,
+        "eligible": 177,
+        "withheld": 26,
+        "loss": 0,
+        "errors": 0,
+        "integrity_failures": 0
+      },
+      "loan_count": 4,
+      "loans": [
+        {
+          "budget_s": 8.642121,
+          "call_id": "call_cS119SFsEuuZz9xVaScbZbGg",
+          "command": "/opt/conda/envs/testbed/bin/pytest -q",
+          "decision_wall_time_s": 1786375032.2210023,
+          "hard_bucket": null,
+          "lower_edge_s": null,
+          "prediction": null,
+          "task_id": "tobymao__sqlglot-2337",
+          "tool_start_wall_time_s": 1786375023.5773947,
+          "trigger": "feedback",
+          "actual_tool_duration_s": 37.78785729408264,
+          "counterfactual_feedback_would_activate": true,
+          "early_timing_advance_s": 0.0,
+          "borrower_task_id": "tobymao__sqlglot-3333",
+          "decision_to_admission_ms": 7.792472839355469
+        },
+        {
+          "budget_s": 18.300976,
+          "call_id": "call_01BooPF9F6blM8YekTrEOPN8",
+          "command": "python3 -m pip install --break-system-packages 'duckdb>=0.6' pyspark",
+          "decision_wall_time_s": 1786375106.4860454,
+          "hard_bucket": 2,
+          "lower_edge_s": 2.0,
+          "prediction": {
+            "command": "python3 -m pip install --break-system-packages 'duckdb>=0.6' pyspark",
+            "hard_bucket": 2,
+            "probability_by_bucket": [
+              0,
+              0,
+              0.9047619047619049,
+              0.09523809523809525,
+              0
+            ],
+            "provenance": {
+              "source": "pip_package_overlap",
+              "support": 6,
+              "weight_sum": 1.7499999999999998
+            },
+            "sample_id": "tobymao__sqlglot-2794:14"
+          },
+          "task_id": "tobymao__sqlglot-2794",
+          "tool_start_wall_time_s": 1786375088.1826224,
+          "trigger": "feedback",
+          "actual_tool_duration_s": 32.24352741241455,
+          "counterfactual_feedback_would_activate": true,
+          "early_timing_advance_s": 0.0,
+          "borrower_task_id": "tobymao__sqlglot-3549",
+          "decision_to_admission_ms": 3.214597702026367
+        },
+        {
+          "budget_s": 18.300976,
+          "call_id": "call_J1te0L6wtkLlBGfKABhzdXYp",
+          "command": "/opt/conda/envs/testbed/bin/python -m pytest",
+          "decision_wall_time_s": 1786375090.1593726,
+          "hard_bucket": null,
+          "lower_edge_s": null,
+          "prediction": null,
+          "task_id": "tobymao__sqlglot-3230",
+          "tool_start_wall_time_s": 1786375071.8560975,
+          "trigger": "feedback",
+          "actual_tool_duration_s": 146.809876203537,
+          "counterfactual_feedback_would_activate": true,
+          "early_timing_advance_s": 0.0,
+          "borrower_task_id": "tobymao__sqlglot-2754",
+          "decision_to_admission_ms": 7.611513137817383
+        },
+        {
+          "budget_s": 11.588712,
+          "call_id": "call_kCRICDqUwUnJU9msRvjYLHt3",
+          "command": "ln -sf /usr/bin/python3 /usr/local/bin/python && python --version && make test",
+          "decision_wall_time_s": 1786375031.9177225,
+          "hard_bucket": 4,
+          "lower_edge_s": 30.0,
+          "prediction": {
+            "command": "ln -sf /usr/bin/python3 /usr/local/bin/python && python --version && make test",
+            "hard_bucket": 4,
+            "probability_by_bucket": [
+              0.30078125,
+              0,
+              0.2109375,
+              0.12890625,
+              0.359375
+            ],
+            "provenance": {
+              "source": "current",
+              "support": 0
+            },
+            "sample_id": "tobymao__sqlglot-3765:7"
+          },
+          "task_id": "tobymao__sqlglot-3765",
+          "tool_start_wall_time_s": 1786375031.9168067,
+          "trigger": "predictor",
+          "actual_tool_duration_s": 4.376971960067749,
+          "counterfactual_feedback_would_activate": false,
+          "early_timing_advance_s": 11.58779623423767,
+          "borrower_task_id": "tobymao__sqlglot-2619",
+          "decision_to_admission_ms": 2.3424625396728516
+        }
+      ],
+      "loan_admission_from_common_ready_s": {
+        "tobymao__sqlglot-2619": 68.40387344360352,
+        "tobymao__sqlglot-3333": 68.71260333061218,
+        "tobymao__sqlglot-2754": 126.65079259872437,
+        "tobymao__sqlglot-3549": 142.97306847572327
+      },
+      "maximum_active_tasks": 8,
+      "gpu": {
+        "samples": 1021,
+        "duration_s": 1057.03,
+        "energy_wh_trapezoid": 43.25333776805548,
+        "max_power_w": 375.68,
+        "max_gpu_temperature_c": 73,
+        "max_memory_temperature_c": 80,
+        "max_memory_used_mib": 73735,
+        "thermal_slowdown_rows": 0
+      }
+    },
+    {
+      "cell": "cell_05_feedback",
+      "arm": "feedback",
+      "repetition": 2,
+      "common_ready_makespan_s": 2154.3003300959826,
+      "mean_task_jct_s": 682.5019342104897,
+      "p95_task_jct_s": 1669.4717262566853,
+      "task_jct_s": {
+        "tobymao__sqlglot-2337": 2154.3003300959826,
+        "tobymao__sqlglot-2794": 384.41742184698523,
+        "tobymao__sqlglot-3230": 480.5568940219964,
+        "tobymao__sqlglot-3765": 213.87898004999442,
+        "tobymao__sqlglot-2619": 500.5093798569869,
+        "tobymao__sqlglot-3333": 769.0757476979925,
+        "tobymao__sqlglot-2754": 464.12033529499604,
+        "tobymao__sqlglot-3549": 493.1563848189835
+      },
+      "server_ttft_ms": {
+        "mean": 221.47742857142856,
+        "p99": 778.3615499999997
+      },
+      "end_to_end_ttft_ms": {
+        "mean": 221.47742857142856,
+        "p99": 778.3615499999997
+      },
+      "full_llm_response_latency_ms": {
+        "mean": 3224.2319434523806,
+        "p95": 8058.73075,
+        "p99": 10885.6984
+      },
+      "client_wall_llm_latency_ms": {
+        "mean": 3228.377261904762,
+        "p95": 8061.1175,
+        "p99": 10888.9085
+      },
+      "actions": 664,
+      "llm_calls": 336,
+      "tool_calls": 328,
+      "requested_completion_tokens": 50972,
+      "returned_completion_tokens": 50972,
+      "status_counts": {
+        "success": 8,
+        "action_sequence_matches": 8,
+        "provider_request_sequence_matches": 8,
+        "collection_valid": 8,
+        "complete": 2,
+        "partial": 6
+      },
+      "telemetry": {
+        "total": 203,
+        "eligible": 178,
+        "withheld": 25,
+        "loss": 0,
+        "errors": 0,
+        "integrity_failures": 0
+      },
+      "loan_count": 4,
+      "loans": [
+        {
+          "budget_s": 8.608903,
+          "call_id": "call_cS119SFsEuuZz9xVaScbZbGg",
+          "command": "/opt/conda/envs/testbed/bin/pytest -q",
+          "decision_wall_time_s": 1786376088.9776971,
+          "hard_bucket": null,
+          "lower_edge_s": null,
+          "prediction": null,
+          "task_id": "tobymao__sqlglot-2337",
+          "tool_start_wall_time_s": 1786376080.3674963,
+          "trigger": "feedback",
+          "actual_tool_duration_s": 600.1286404132843,
+          "counterfactual_feedback_would_activate": true,
+          "early_timing_advance_s": 0.0,
+          "borrower_task_id": "tobymao__sqlglot-2619",
+          "decision_to_admission_ms": 3.093719482421875
+        },
+        {
+          "budget_s": 18.353996,
+          "call_id": "call_01BooPF9F6blM8YekTrEOPN8",
+          "command": "python3 -m pip install --break-system-packages 'duckdb>=0.6' pyspark",
+          "decision_wall_time_s": 1786376158.986181,
+          "hard_bucket": null,
+          "lower_edge_s": null,
+          "prediction": null,
+          "task_id": "tobymao__sqlglot-2794",
+          "tool_start_wall_time_s": 1786376140.6304407,
+          "trigger": "feedback",
+          "actual_tool_duration_s": 32.00198841094971,
+          "counterfactual_feedback_would_activate": true,
+          "early_timing_advance_s": 0.0,
+          "borrower_task_id": "tobymao__sqlglot-3549",
+          "decision_to_admission_ms": 3.6449432373046875
+        },
+        {
+          "budget_s": 18.353996,
+          "call_id": "call_J1te0L6wtkLlBGfKABhzdXYp",
+          "command": "/opt/conda/envs/testbed/bin/python -m pytest",
+          "decision_wall_time_s": 1786376144.1084714,
+          "hard_bucket": null,
+          "lower_edge_s": null,
+          "prediction": null,
+          "task_id": "tobymao__sqlglot-3230",
+          "tool_start_wall_time_s": 1786376125.752332,
+          "trigger": "feedback",
+          "actual_tool_duration_s": 140.3798131942749,
+          "counterfactual_feedback_would_activate": true,
+          "early_timing_advance_s": 0.0,
+          "borrower_task_id": "tobymao__sqlglot-3333",
+          "decision_to_admission_ms": 4.713535308837891
+        },
+        {
+          "budget_s": 18.353996,
+          "call_id": "call_dVxfLZ3q6Xvbf8s2v6NPsmpB",
+          "command": "make test",
+          "decision_wall_time_s": 1786376146.583987,
+          "hard_bucket": null,
+          "lower_edge_s": null,
+          "prediction": null,
+          "task_id": "tobymao__sqlglot-3765",
+          "tool_start_wall_time_s": 1786376128.227389,
+          "trigger": "feedback",
+          "actual_tool_duration_s": 73.25702857971191,
+          "counterfactual_feedback_would_activate": true,
+          "early_timing_advance_s": 0.0,
+          "borrower_task_id": "tobymao__sqlglot-2754",
+          "decision_to_admission_ms": 2.0494461059570312
+        }
+      ],
+      "loan_admission_from_common_ready_s": {
+        "tobymao__sqlglot-2619": 68.61731910705566,
+        "tobymao__sqlglot-3333": 123.74971318244934,
+        "tobymao__sqlglot-2754": 126.22256469726562,
+        "tobymao__sqlglot-3549": 138.6263542175293
+      },
+      "maximum_active_tasks": 8,
+      "gpu": {
+        "samples": 2127,
+        "duration_s": 2198.601,
+        "energy_wh_trapezoid": 65.4179988611111,
+        "max_power_w": 352.08,
+        "max_gpu_temperature_c": 73,
+        "max_memory_temperature_c": 80,
+        "max_memory_used_mib": 73735,
+        "thermal_slowdown_rows": 0
+      }
+    },
+    {
+      "cell": "cell_06_fixed",
+      "arm": "fixed",
+      "repetition": 2,
+      "common_ready_makespan_s": 2155.777004496995,
+      "mean_task_jct_s": 825.0184453926267,
+      "p95_task_jct_s": 1748.8060464095988,
+      "task_jct_s": {
+        "tobymao__sqlglot-2337": 2155.777004496995,
+        "tobymao__sqlglot-2794": 357.33450072399864,
+        "tobymao__sqlglot-3230": 487.4500938130077,
+        "tobymao__sqlglot-3765": 193.7921670479991,
+        "tobymao__sqlglot-2619": 635.5598847990041,
+        "tobymao__sqlglot-3333": 993.0028385330079,
+        "tobymao__sqlglot-2754": 822.7386024480074,
+        "tobymao__sqlglot-3549": 954.4924712789943
+      },
+      "server_ttft_ms": {
+        "mean": 210.70957142857142,
+        "p99": 693.3298999999987
+      },
+      "end_to_end_ttft_ms": {
+        "mean": 210.70957142857142,
+        "p99": 693.3298999999987
+      },
+      "full_llm_response_latency_ms": {
+        "mean": 2963.440642857143,
+        "p95": 7069.3605,
+        "p99": 11238.435449999988
+      },
+      "client_wall_llm_latency_ms": {
+        "mean": 2969.2409523809524,
+        "p95": 7075.345,
+        "p99": 11244.976999999988
+      },
+      "actions": 664,
+      "llm_calls": 336,
+      "tool_calls": 328,
+      "requested_completion_tokens": 50972,
+      "returned_completion_tokens": 50972,
+      "status_counts": {
+        "success": 8,
+        "action_sequence_matches": 8,
+        "provider_request_sequence_matches": 8,
+        "collection_valid": 8,
+        "complete": 2,
+        "partial": 6
+      },
+      "telemetry": {
+        "total": 203,
+        "eligible": 178,
+        "withheld": 25,
+        "loss": 0,
+        "errors": 0,
+        "integrity_failures": 0
+      },
+      "loan_count": 0,
+      "loans": [],
+      "loan_admission_from_common_ready_s": {},
+      "maximum_active_tasks": 4,
+      "gpu": {
+        "samples": 2124,
+        "duration_s": 2199.331,
+        "energy_wh_trapezoid": 72.27123488472235,
+        "max_power_w": 399.2,
+        "max_gpu_temperature_c": 70,
+        "max_memory_temperature_c": 78,
+        "max_memory_used_mib": 73735,
+        "thermal_slowdown_rows": 0
+      }
+    }
+  ],
+  "paired_results": [
+    {
+      "pair": 1,
+      "predictor_cell": "cell_03_predictor",
+      "feedback_cell": "cell_02_feedback",
+      "fixed_cell": "cell_01_fixed",
+      "predictor_vs_feedback_makespan_reduction_pct": -2.334152233415538,
+      "predictor_vs_fixed_makespan_reduction_pct": -0.23272866921474528,
+      "predictor_fixed_p95_task_jct_ratio": 0.943921250364091,
+      "predictor_fixed_p99_end_to_end_ttft_ratio": 1.1519651068216736,
+      "per_task_jct_change_vs_feedback_pct": {
+        "tobymao__sqlglot-2337": -2.334152233415538,
+        "tobymao__sqlglot-2794": 3.046575108280081,
+        "tobymao__sqlglot-3230": 0.20296712826957214,
+        "tobymao__sqlglot-3765": 2.2940620159870115,
+        "tobymao__sqlglot-2619": 2.6210330652152782,
+        "tobymao__sqlglot-3333": 7.703428042803876,
+        "tobymao__sqlglot-2754": -1.0899517345876955,
+        "tobymao__sqlglot-3549": 1.737348050580336
+      },
+      "per_task_jct_change_vs_fixed_pct": {
+        "tobymao__sqlglot-2337": -0.23272866921474528,
+        "tobymao__sqlglot-2794": -1.2027854487828542,
+        "tobymao__sqlglot-3230": 0.8489716311809331,
+        "tobymao__sqlglot-3765": -1.7027341901647426,
+        "tobymao__sqlglot-2619": 17.932168425900382,
+        "tobymao__sqlglot-3333": 29.14000681232028,
+        "tobymao__sqlglot-2754": 41.02961722669333,
+        "tobymao__sqlglot-3549": 49.358017433517816
+      }
+    },
+    {
+      "pair": 2,
+      "predictor_cell": "cell_04_predictor",
+      "feedback_cell": "cell_05_feedback",
+      "fixed_cell": "cell_06_fixed",
+      "predictor_vs_feedback_makespan_reduction_pct": 53.008864648556944,
+      "predictor_vs_fixed_makespan_reduction_pct": 53.04105286027978,
+      "predictor_fixed_p95_task_jct_ratio": 0.5179662323588401,
+      "predictor_fixed_p99_end_to_end_ttft_ratio": 1.0788067844759046,
+      "per_task_jct_change_vs_feedback_pct": {
+        "tobymao__sqlglot-2337": 53.008864648556944,
+        "tobymao__sqlglot-2794": 3.003072175170501,
+        "tobymao__sqlglot-3230": -5.0339385292188465,
+        "tobymao__sqlglot-3765": 4.395039788299484,
+        "tobymao__sqlglot-2619": -2.1766923776971705,
+        "tobymao__sqlglot-3333": 7.938527834188891,
+        "tobymao__sqlglot-2754": -1.0544874830531328,
+        "tobymao__sqlglot-3549": 3.332478041629668
+      },
+      "per_task_jct_change_vs_fixed_pct": {
+        "tobymao__sqlglot-2337": 53.04105286027978,
+        "tobymao__sqlglot-2794": -4.348471378920618,
+        "tobymao__sqlglot-3230": -3.5486174013569927,
+        "tobymao__sqlglot-3765": -5.514540083212974,
+        "tobymao__sqlglot-2619": 19.53489488410287,
+        "tobymao__sqlglot-3333": 28.69884879211692,
+        "tobymao__sqlglot-2754": 42.993506717508716,
+        "tobymao__sqlglot-3549": 50.054917044531386
+      }
+    }
+  ],
+  "pooled_results": {
+    "fixed_mean_task_jct_s": 825.0275651815014,
+    "feedback_mean_task_jct_s": 681.401181242557,
+    "predictor_mean_task_jct_s": 603.6294203363668,
+    "predictor_improvement_vs_feedback_pct": 11.413505442472353,
+    "predictor_improvement_vs_fixed_pct": 26.835242140840254,
+    "posthoc_excluding_unstable_2337": {
+      "predictor_mean_task_jct_s": 463.4623459454919,
+      "feedback_mean_task_jct_s": 474.28973251635244,
+      "predictor_improvement_vs_feedback_pct": 2.2828633699101286,
+      "status": "mechanism diagnostic only; not a frozen gate or replacement cohort"
+    }
+  },
+  "gates": {
+    "all_validity_checks_pass": true,
+    "activation_pass": false,
+    "predictor_makespan_lower_than_both_paired_arms_in_both_repetitions": false,
+    "pooled_predictor_mean_jct_at_least_5pct_below_feedback_and_fixed": true,
+    "paired_predictor_fixed_p95_jct_ratios_at_most_1_05": true,
+    "paired_predictor_fixed_p99_end_to_end_ttft_ratios_at_most_1_05": false
+  },
+  "mechanism_diagnostics": {
+    "largest_tool_duration_ranges": [
+      {
+        "task_id": "tobymao__sqlglot-2337",
+        "call_id": "call_j6xhQZWIsWYwZkMUh8iMA0oy",
+        "command": "/opt/conda/envs/testbed/bin/pytest -q tests/dataframe",
+        "range_s": 573.8399,
+        "duration_s": {
+          "cell_01_fixed": 600.12,
+          "cell_02_feedback": 600.1183000000001,
+          "cell_03_predictor": 600.1184000000001,
+          "cell_04_predictor": 26.281299999999998,
+          "cell_05_feedback": 600.1179000000001,
+          "cell_06_fixed": 600.1211999999999
+        }
+      },
+      {
+        "task_id": "tobymao__sqlglot-2337",
+        "call_id": "call_cS119SFsEuuZz9xVaScbZbGg",
+        "command": "/opt/conda/envs/testbed/bin/pytest -q",
+        "range_s": 562.3412999999999,
+        "duration_s": {
+          "cell_01_fixed": 600.1245,
+          "cell_02_feedback": 600.1253,
+          "cell_03_predictor": 600.12,
+          "cell_04_predictor": 37.7903,
+          "cell_05_feedback": 600.1315999999999,
+          "cell_06_fixed": 600.127
+        }
+      },
+      {
+        "task_id": "tobymao__sqlglot-2337",
+        "call_id": "call_nvAdVTALTmJnvomohnSpdGDH",
+        "command": "PYSPARK_PYTHON=/opt/conda/envs/testbed/bin/python PYSPARK_DRIVER_PYTHON=/opt/conda/envs/testbed/bin/python /opt/conda/envs/testbed/bin/pytest -q",
+        "range_s": 27.93350000000001,
+        "duration_s": {
+          "cell_01_fixed": 57.4542,
+          "cell_02_feedback": 38.426199999999994,
+          "cell_03_predictor": 55.9351,
+          "cell_04_predictor": 66.3597,
+          "cell_05_feedback": 57.3951,
+          "cell_06_fixed": 57.6446
+        }
+      },
+      {
+        "task_id": "tobymao__sqlglot-2337",
+        "call_id": "call_Rdmz7eJ0SLJVCYIUXoY928U0",
+        "command": "/opt/conda/envs/testbed/bin/pytest -q tests/test_*.py",
+        "range_s": 15.2648,
+        "duration_s": {
+          "cell_01_fixed": 10.331299999999999,
+          "cell_02_feedback": 2.255,
+          "cell_03_predictor": 16.0898,
+          "cell_04_predictor": 1.6895,
+          "cell_05_feedback": 15.9985,
+          "cell_06_fixed": 16.9543
+        }
+      },
+      {
+        "task_id": "tobymao__sqlglot-3333",
+        "call_id": "call_yaio3qJr5i6F7xkVdwiAk3fK",
+        "command": "PYSPARK_PYTHON=/opt/conda/bin/python PYSPARK_DRIVER_PYTHON=/opt/conda/bin/python /opt/conda/bin/python -m pytest",
+        "range_s": 12.750599999999991,
+        "duration_s": {
+          "cell_01_fixed": 120.3145,
+          "cell_02_feedback": 113.2958,
+          "cell_03_predictor": 117.68719999999999,
+          "cell_04_predictor": 120.0889,
+          "cell_05_feedback": 126.04639999999999,
+          "cell_06_fixed": 123.304
+        }
+      },
+      {
+        "task_id": "tobymao__sqlglot-3333",
+        "call_id": "call_qwziDaQXHl7g1XlCzliOqo59",
+        "command": "PATH=/opt/conda/bin:$PATH PYSPARK_PYTHON=/opt/conda/bin/python PYSPARK_DRIVER_PYTHON=/opt/conda/bin/python make test",
+        "range_s": 10.123800000000003,
+        "duration_s": {
+          "cell_01_fixed": 121.1058,
+          "cell_02_feedback": 113.0541,
+          "cell_03_predictor": 111.5702,
+          "cell_04_predictor": 110.982,
+          "cell_05_feedback": 119.2835,
+          "cell_06_fixed": 120.427
+        }
+      },
+      {
+        "task_id": "tobymao__sqlglot-3230",
+        "call_id": "call_J1te0L6wtkLlBGfKABhzdXYp",
+        "command": "/opt/conda/envs/testbed/bin/python -m pytest",
+        "range_s": 9.031599999999997,
+        "duration_s": {
+          "cell_01_fixed": 141.93810000000002,
+          "cell_02_feedback": 147.96189999999999,
+          "cell_03_predictor": 143.3375,
+          "cell_04_predictor": 146.8127,
+          "cell_05_feedback": 140.3822,
+          "cell_06_fixed": 138.9303
+        }
+      },
+      {
+        "task_id": "tobymao__sqlglot-2619",
+        "call_id": "call_ESAQJ7EFnxZP3U6U13mozVtq",
+        "command": "python3 -m unittest",
+        "range_s": 7.5652999999999935,
+        "duration_s": {
+          "cell_01_fixed": 70.6172,
+          "cell_02_feedback": 74.8604,
+          "cell_03_predictor": 70.89,
+          "cell_04_predictor": 72.25710000000001,
+          "cell_05_feedback": 67.2951,
+          "cell_06_fixed": 71.9438
+        }
+      },
+      {
+        "task_id": "tobymao__sqlglot-2794",
+        "call_id": "call_2qJbYBYXkWbwmA3fMJGXYjCM",
+        "command": "python3 -m pytest",
+        "range_s": 7.411199999999994,
+        "duration_s": {
+          "cell_01_fixed": 67.28439999999999,
+          "cell_02_feedback": 68.82939999999999,
+          "cell_03_predictor": 66.1929,
+          "cell_04_predictor": 66.7715,
+          "cell_05_feedback": 64.1956,
+          "cell_06_fixed": 61.4182
+        }
+      },
+      {
+        "task_id": "tobymao__sqlglot-2754",
+        "call_id": "call_rnyl8FAkwv6tRB3Zv88gCIE4",
+        "command": "/opt/conda/envs/testbed/bin/python -m pytest",
+        "range_s": 7.065000000000005,
+        "duration_s": {
+          "cell_01_fixed": 68.0812,
+          "cell_02_feedback": 70.9586,
+          "cell_03_predictor": 69.8335,
+          "cell_04_predictor": 69.8193,
+          "cell_05_feedback": 68.02669999999999,
+          "cell_06_fixed": 63.8936
+        }
+      },
+      {
+        "task_id": "tobymao__sqlglot-2337",
+        "call_id": "call_lGB41QAaBIJtTAtGVPUBw1sI",
+        "command": "/opt/conda/envs/testbed/bin/pytest -q tests/dataframe/unit",
+        "range_s": 6.8528,
+        "duration_s": {
+          "cell_01_fixed": 8.6492,
+          "cell_02_feedback": 1.9262000000000001,
+          "cell_03_predictor": 8.779,
+          "cell_04_predictor": 2.1958,
+          "cell_05_feedback": 2.1395999999999997,
+          "cell_06_fixed": 2.0724
+        }
+      },
+      {
+        "task_id": "tobymao__sqlglot-3230",
+        "call_id": "call_k6CI6rHLFNoYTNH7ym43BbMH",
+        "command": "PYSPARK_PYTHON=/opt/conda/envs/testbed/bin/python PYSPARK_DRIVER_PYTHON=/opt/conda/envs/testbed/bin/python /opt/conda/envs/testbed/bin/python -m pytest",
+        "range_s": 5.829200000000014,
+        "duration_s": {
+          "cell_01_fixed": 136.9539,
+          "cell_02_feedback": 134.7054,
+          "cell_03_predictor": 135.5352,
+          "cell_04_predictor": 139.4665,
+          "cell_05_feedback": 133.63729999999998,
+          "cell_06_fixed": 137.2936
+        }
+      }
+    ],
+    "early_prediction_observation": "The only early prediction was the same make-test call in both repetitions. It ended after 4.24/4.38 s, below B=11.64/11.59 s, so the corresponding lender would not have triggered feedback. The action advanced task 2619 admission by only 0.76/0.21 s versus paired Feedback, but changed FIFO borrower-to-lender assignment and advanced task 3333 by 56.11/55.04 s.",
+    "repetition_instability": "Cell 04's 53% makespan reduction is dominated by two task-2337 pytest calls that ended in 37.79/26.28 s with exit 1 instead of timing out near 600 s as they did in the other five cells. Six calls changed terminal class across formal cells. The frozen protocol did not require terminal-class identity, so registered validity remains true, but causal performance attribution is not credible.",
+    "note": "The second Predictor cell's large makespan change must be interpreted against repeated tool-duration instability, not attributed to its single early loan."
+  },
+  "cost": {
+    "formal_wall_time_s": 12023.0,
+    "smoke_wall_time_s": 2180.0,
+    "formal_gpu_energy_wh_trapezoid": 381.6190004236111,
+    "host_cpu_energy": "not instrumented"
+  },
+  "interpretation": {
+    "observation": "Both Predictor cells produced one early loan, but it was the same command/action; the frozen minimum was four distinct activations.",
+    "mechanism": "The predictor added one stable scheduling decision beyond feedback, but the predicted long tool actually completed before feedback B. Its measurable effect was mostly FIFO borrower remapping, while the large second-repetition speedup came from unrelated test timeout/exit variation.",
+    "uncertainty": "There are only two repetitions, and six tool calls changed terminal class. Registered validity passes because outcome identity was not a frozen requirement, but the performance numbers cannot identify the loan's causal effect.",
+    "next_action": "Stop this frozen method without tuning or opening fresh tasks. Preserve the result as evidence that latency-bucket lower-edge loans need a workload with broader action activation and an outcome-stable replay before any fresh confirmation is justified."
+  },
+  "scope": "Development-exposed SQLGlot tasks only. Activation failure forbids a performance verdict, threshold repair, alternate exposed subset, or fresh confirmation."
+}
