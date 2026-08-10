@@ -295,6 +295,10 @@ def simulate_idle_backfill(
         str, tuple[tuple[float, float], ...]
     ]
     | None = None,
+    pairwise_foreground_profiles: Mapping[
+        str, tuple[tuple[float, float], ...]
+    ]
+    | None = None,
     rss_reservations: Mapping[str, float] | None = None,
     rss_unverified_command_ids: set[str] | None = None,
     selection: str,
@@ -321,11 +325,16 @@ def simulate_idle_backfill(
     candidate_profiles = (
         None if pairwise_candidate_profiles is None else dict(pairwise_candidate_profiles)
     )
-    if candidate_profiles is not None and (
-        not require_pairwise_profile_compatibility
-        or not speculative_eligible_command_ids <= set(candidate_profiles)
-        or not set(candidate_profiles) <= set(commands)
-        or any(
+    foreground_profiles = (
+        None
+        if pairwise_foreground_profiles is None
+        else dict(pairwise_foreground_profiles)
+    )
+
+    def invalid_profiles(
+        profiles: Mapping[str, tuple[tuple[float, float], ...]],
+    ) -> bool:
+        return not set(profiles) <= set(commands) or any(
             not profile
             or any(
                 dt <= 0.0
@@ -335,10 +344,20 @@ def simulate_idle_backfill(
                 or cpu > cpu_capacity * dt + _EPSILON
                 for dt, cpu in profile
             )
-            for profile in candidate_profiles.values()
+            for profile in profiles.values()
         )
+
+    if candidate_profiles is not None and (
+        not require_pairwise_profile_compatibility
+        or not speculative_eligible_command_ids <= set(candidate_profiles)
+        or invalid_profiles(candidate_profiles)
     ):
         raise ValueError("idle backfill requires valid eligible candidate profiles")
+    if foreground_profiles is not None and (
+        not require_pairwise_profile_compatibility
+        or invalid_profiles(foreground_profiles)
+    ):
+        raise ValueError("idle backfill requires valid foreground profiles")
     cpu_demands = None if pairwise_cpu_demands is None else dict(pairwise_cpu_demands)
     if cpu_demands is not None and (
         set(cpu_demands) != set(commands)
@@ -448,12 +467,27 @@ def simulate_idle_backfill(
             if candidate_profiles is None
             else candidate_profiles[candidate_id]
         )
+        normal_profile = normal.profile
         normal_index = normal.profile_index
-        candidate_index = 0
         normal_remaining = normal.profile_remaining_s
+        if foreground_profiles is not None:
+            normal_profile = foreground_profiles.get(normal.command.command_id, ())
+            if not normal_profile:
+                return False
+            normal_index = 0
+            normal_remaining = normal_profile[0][0]
+            elapsed = now_s - normal.start_s
+            while elapsed >= normal_remaining - _EPSILON:
+                elapsed -= normal_remaining
+                normal_index += 1
+                if normal_index == len(normal_profile):
+                    return False
+                normal_remaining = normal_profile[normal_index][0]
+            normal_remaining -= elapsed
+        candidate_index = 0
         candidate_remaining = candidate[0][0]
-        while normal_index < len(normal.profile) and candidate_index < len(candidate):
-            normal_span, normal_work = normal.profile[normal_index]
+        while normal_index < len(normal_profile) and candidate_index < len(candidate):
+            normal_span, normal_work = normal_profile[normal_index]
             candidate_span, candidate_work = candidate[candidate_index]
             if (
                 normal_work / normal_span + candidate_work / candidate_span
@@ -465,8 +499,8 @@ def simulate_idle_backfill(
             candidate_remaining -= elapsed
             if normal_remaining <= _EPSILON:
                 normal_index += 1
-                if normal_index < len(normal.profile):
-                    normal_remaining = normal.profile[normal_index][0]
+                if normal_index < len(normal_profile):
+                    normal_remaining = normal_profile[normal_index][0]
             if candidate_remaining <= _EPSILON:
                 candidate_index += 1
                 if candidate_index < len(candidate):

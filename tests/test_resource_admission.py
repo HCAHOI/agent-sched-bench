@@ -399,12 +399,26 @@ def test_idle_backfill_uses_remaining_phase_compatibility() -> None:
         require_pairwise_profile_compatibility=True,
         selection="fcfs",
     )
+    two_sided = simulate_idle_backfill(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=1_000.0,
+        cpu_work_profiles=staggered,
+        speculative_eligible_command_ids={"candidate"},
+        pairwise_candidate_profiles={"candidate": staggered["candidate"]},
+        pairwise_foreground_profiles={
+            "normal": ((1.0, 0.0), (1.0, 8.0)),
+        },
+        require_pairwise_profile_compatibility=True,
+        selection="fcfs",
+    )
 
     assert admitted["speculative_start_ids"] == ["candidate"]
     assert admitted["start_s_by_command"]["candidate"] == 0.0
     assert admitted["total_command_service_s"] == 4.0
     assert rejected["start_s_by_command"]["candidate"] == 1.0
     assert predicted["start_s_by_command"]["candidate"] == 1.0
+    assert two_sided["start_s_by_command"]["candidate"] == 1.0
 
 
 def test_idle_backfill_promotion_preserves_partial_cpu_work() -> None:

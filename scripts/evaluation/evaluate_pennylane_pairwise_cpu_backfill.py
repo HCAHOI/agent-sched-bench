@@ -31,7 +31,7 @@ from tool_resource_eval.resource_admission import (  # noqa: E402
 from trace_collect.trace_data import TraceData  # noqa: E402
 
 
-_PROTOCOL_GIT_SHA = "c9291b04ff0adc5da4c24a34b82c00a2a9cc6589"
+_PROTOCOL_GIT_SHA = "3eba9c8b2f1d77309e298192b1a8cc43a4a55855"
 _SPLIT = _ROOT / "analysis/development/pennylane-survival-action-split.json"
 _CPU_CAPACITY = 8.0
 _RSS_CAPACITY_MB = 16_000.0
@@ -45,6 +45,7 @@ _ARMS = (
     "pairwise_canonical_bucket_fcfs",
     "pairwise_phase_shape_fcfs",
     "clause_kb_phase_envelope_fcfs",
+    "two_sided_clause_kb_phase_envelope_fcfs",
 )
 
 
@@ -418,6 +419,13 @@ def _evaluate() -> dict[str, Any]:
         profiles,
         rss_safe,
     )
+    foreground_profiles, foreground_envelope_evidence = _fit_candidate_envelopes(
+        fit_commands,
+        fit_profiles,
+        commands,
+        profiles,
+        set(profiles),
+    )
     chosen = [programs[task_id] for task_id in sorted(programs)]
     peak_cpu = {
         command_id: max(cpu / span for span, cpu in profile)
@@ -489,6 +497,17 @@ def _evaluate() -> dict[str, Any]:
             require_pairwise_profile_compatibility=True,
             selection="fcfs",
         ),
+        "two_sided_clause_kb_phase_envelope_fcfs": simulate_idle_backfill(
+            chosen,
+            cpu_capacity=_CPU_CAPACITY,
+            rss_capacity_mb=_RSS_CAPACITY_MB,
+            cpu_work_profiles=profiles,
+            speculative_eligible_command_ids=set(candidate_profiles),
+            pairwise_candidate_profiles=candidate_profiles,
+            pairwise_foreground_profiles=foreground_profiles,
+            require_pairwise_profile_compatibility=True,
+            selection="fcfs",
+        ),
     }
     violation_by_arm = {}
     for arm, metrics in arms.items():
@@ -526,20 +545,20 @@ def _evaluate() -> dict[str, Any]:
             <= _MAXIMUM_SERVICE_INFLATION,
             "zero_capacity_or_work_violations": not violation_by_arm[arm],
         }
-        for arm in ("clause_kb_phase_envelope_fcfs",)
+        for arm in ("two_sided_clause_kb_phase_envelope_fcfs",)
     }
     for gate in gates.values():
         gate["go"] = all(gate.values())
-    phase_go = gates["clause_kb_phase_envelope_fcfs"]["go"]
+    phase_go = gates["two_sided_clause_kb_phase_envelope_fcfs"]["go"]
     return {
         "schema_version": 1,
-        "status": "development_go_to_foreground_feedback_feasibility"
+        "status": "development_go_to_rss_replacement"
         if phase_go
         else "development_no_go",
         "generated": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
         "git_sha": git_sha,
         "protocol_git_sha": _PROTOCOL_GIT_SHA,
-        "protocol": "tool-resource-canonical-objective.md Section 5.16",
+        "protocol": "tool-resource-canonical-objective.md Section 5.17",
         "config": {
             "split": str(_SPLIT.resolve()),
             "cpu_capacity": _CPU_CAPACITY,
@@ -552,6 +571,7 @@ def _evaluate() -> dict[str, Any]:
                 "canonical_bucket": "foreground and candidate peak labels map to upper bounds 2/4/8 whose sum <= 8",
                 "phase_shape": "aligned remaining foreground and candidate sampled CPU demand never exceeds 8",
                 "clause_kb_phase_envelope": "fit-only pointwise-max candidate envelope plus actual remaining foreground profile",
+                "two_sided_clause_kb_phase_envelope": "fit-only envelopes for both commands; foreground offset by causal wall time",
             },
             "candidate_signature_hierarchy": [
                 "exact",
@@ -572,11 +592,12 @@ def _evaluate() -> dict[str, Any]:
             "rss_source_counts": dict(sorted(rss_sources.items())),
             "reserved_tasks_read": 0,
             "candidate_envelopes": envelope_evidence,
+            "foreground_envelopes": foreground_envelope_evidence,
         },
         "arms": arms,
         "comparisons_vs_serial8": comparisons,
         "gates": gates,
-        "go_to_foreground_feedback_feasibility": phase_go,
+        "go_to_rss_replacement": phase_go,
         "cost": {
             "prediction_time_agent_calls": 0,
             "gpu_runtime_s": 0.0,
@@ -584,7 +605,7 @@ def _evaluate() -> dict[str, Any]:
         },
         "limitations": [
             "All 15 scored PennyLane tasks are development-exposed.",
-            "Candidate envelopes use fit tasks only, but foreground future shape and RSS safety remain hindsight oracles.",
+            "CPU envelope decisions use fit history and causal elapsed time only, but RSS safety remains a hindsight oracle.",
             "The action-space ceiling contains one physically defined arrival wave, not workload-order uncertainty.",
             "The deterministic replay preserves recorded commands but models CPU sharing.",
         ],
