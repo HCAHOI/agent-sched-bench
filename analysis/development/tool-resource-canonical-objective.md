@@ -821,8 +821,10 @@ history predicts strictly positive released GiB-seconds and zero added stall
 versus five-second feedback under the measured A100 transfer costs. Otherwise
 wait five seconds. There is no similarity, parent fallback, state feature,
 support threshold beyond the two-task identifiability requirement, or runtime
-agent. Five-second feedback, immediate exact/work actions, the exact-key direct
-trigger, and realized survival are controls.
+agent. KV size uses the Llama-3.1-8B-Instruct chat template, 16-token blocks,
+and the existing measured A100 transfer profile. Five-second feedback,
+immediate exact/work actions, the exact-key direct trigger, and realized
+survival are controls.
 
 The primary work-signature arm advances only if it releases strictly more
 GiB-seconds than feedback, adds no aggregate critical-path stall, and changes at
