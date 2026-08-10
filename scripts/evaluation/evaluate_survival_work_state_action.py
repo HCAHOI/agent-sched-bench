@@ -48,6 +48,8 @@ from tool_resource.pytest_semantics import (  # noqa: E402
     parse_pytest,
 )
 from tool_resource_eval.labels import repo_of  # noqa: E402
+from tool_time.policy import robust_utility_trigger_stats  # noqa: E402
+from tool_time.prior import LatencyPriorNode  # noqa: E402
 
 
 _APT_IGNORED_FLAGS = {"-y", "--yes", "--no-install-recommends"}
@@ -64,7 +66,8 @@ _ARMS = (
     "deadline_feedback",
     "exact_command",
     "work_signature",
-    "work_plus_state",
+    "exact_robust_clock",
+    "work_robust_clock",
     "exec_survival_oracle",
 )
 
@@ -270,6 +273,154 @@ class CausalDurationMemory:
         }
 
 
+class CausalGroupedDurationMemory:
+    """Exact histories partitioned by settled logical task."""
+
+    def __init__(
+        self,
+        public: Sequence[tuple[str, DurationObservation]],
+    ) -> None:
+        self._public = tuple(public)
+        self._local: dict[str, list[tuple[str, DurationObservation]]] = defaultdict(
+            list
+        )
+
+    def observe_task(
+        self,
+        task_id: str,
+        observations: Sequence[DurationObservation],
+    ) -> None:
+        for observation in observations:
+            self._local[observation.repo].append((task_id, observation))
+
+    @staticmethod
+    def _grouped(
+        rows: Sequence[tuple[str, DurationObservation]],
+        field: str,
+        key: Hashable,
+    ) -> dict[str, tuple[float, ...]]:
+        grouped: dict[str, list[float]] = defaultdict(list)
+        for task_id, observation in rows:
+            if getattr(observation, field) == key:
+                grouped[task_id].append(observation.duration_ms)
+        return {task_id: tuple(values) for task_id, values in grouped.items()}
+
+    def query(
+        self,
+        repo: str,
+        command: str,
+        work: WorkKey | None,
+    ) -> dict[str, dict[str, tuple[float, ...]]]:
+        local = self._local.get(repo, ())
+        public = tuple(row for row in self._public if row[1].repo != repo)
+
+        def select(
+            field: str,
+            key: Hashable | None,
+        ) -> dict[str, tuple[float, ...]]:
+            if key is None:
+                return {}
+            return self._grouped(local, field, key) or self._grouped(
+                public, field, key
+            )
+
+        return {
+            "exact_command": select("command", command),
+            "work_signature": select("work", work),
+        }
+
+
+def _expected_trigger_delta(
+    values: Sequence[float],
+    *,
+    trigger_ms: float,
+    deadline_ms: float,
+    size_gib: float,
+    swap_out_ms: float,
+    swap_in_ms: float,
+) -> tuple[float, float]:
+    def score(duration_ms: float, trigger: float) -> tuple[float, float]:
+        if trigger >= duration_ms:
+            return 0.0, 0.0
+        complete_ms = trigger + swap_out_ms
+        return (
+            size_gib * max(0.0, duration_ms - complete_ms) / 1000.0,
+            max(0.0, complete_ms - duration_ms) + swap_in_ms,
+        )
+
+    deltas = [
+        tuple(
+            candidate - feedback
+            for candidate, feedback in zip(
+                score(value, trigger_ms),
+                score(value, deadline_ms),
+                strict=True,
+            )
+        )
+        for value in values
+    ]
+    return (
+        math.fsum(row[0] for row in deltas) / len(deltas),
+        math.fsum(row[1] for row in deltas) / len(deltas),
+    )
+
+
+def robust_pareto_trigger_ms(
+    values_by_task: dict[str, tuple[float, ...]],
+    *,
+    deadline_ms: float,
+    size_gib: float,
+    swap_out_ms: float,
+    swap_in_ms: float,
+) -> float:
+    """Return a task-stable Pareto trigger, or the feedback deadline."""
+
+    grouped = {
+        task_id: sorted(float(value) for value in values)
+        for task_id, values in values_by_task.items()
+        if values
+    }
+    if len(grouped) < 2:
+        return deadline_ms
+    node = LatencyPriorNode(
+        values=sorted(value for values in grouped.values() for value in values),
+        values_by_task=grouped,
+        source="causal_exact_history",
+        group_key=None,
+    )
+    trigger_ms = robust_utility_trigger_stats(
+        node,
+        parent=None,
+        threshold_ms=deadline_ms,
+        kv_cost_ms=swap_out_ms,
+        restore_cost_ms=swap_in_ms,
+    ).trigger_ms
+    if trigger_ms >= deadline_ms:
+        return deadline_ms
+    models = [node.values]
+    for held_out in grouped:
+        remaining = [
+            value
+            for task_id, values in grouped.items()
+            if task_id != held_out
+            for value in values
+        ]
+        if remaining:
+            models.append(remaining)
+    for values in models:
+        released_delta, stall_delta = _expected_trigger_delta(
+            values,
+            trigger_ms=trigger_ms,
+            deadline_ms=deadline_ms,
+            size_gib=size_gib,
+            swap_out_ms=swap_out_ms,
+            swap_in_ms=swap_in_ms,
+        )
+        if released_delta <= 0.0 or stall_delta > 0.0:
+            return deadline_ms
+    return trigger_ms
+
+
 @dataclass(frozen=True)
 class ProgramContext:
     results: dict[tuple[int, int], str]
@@ -412,6 +563,33 @@ def _arm_gate(comparison: dict[str, Any]) -> dict[str, bool]:
     }
 
 
+def select_robust_arm(
+    passed: dict[str, bool],
+    comparisons: dict[str, dict[str, Any]],
+) -> tuple[bool, bool, str | None]:
+    exact = comparisons["exact_robust_clock"]
+    work = comparisons["work_robust_clock"]
+    work_dominates = (
+        work["released_gib_s_delta"] >= exact["released_gib_s_delta"]
+        and work["critical_path_stall_ms_delta"]
+        <= exact["critical_path_stall_ms_delta"]
+        and (
+            work["released_gib_s_delta"] > exact["released_gib_s_delta"]
+            or work["critical_path_stall_ms_delta"]
+            < exact["critical_path_stall_ms_delta"]
+        )
+    )
+    primary_go = passed["work_robust_clock"]
+    if not primary_go:
+        return False, work_dominates, None
+    selected = (
+        "work_robust_clock"
+        if not passed["exact_robust_clock"] or work_dominates
+        else "exact_robust_clock"
+    )
+    return True, work_dominates, selected
+
+
 def _evaluate(args: argparse.Namespace) -> dict[str, Any]:
     started = time.monotonic()
     git_sha = _git_sha()
@@ -436,6 +614,13 @@ def _evaluate(args: argparse.Namespace) -> dict[str, Any]:
         for observation in fit_contexts[task_id].observations
     )
     memory = CausalDurationMemory(public)
+    grouped_memory = CausalGroupedDurationMemory(
+        tuple(
+            (task_id, observation)
+            for task_id in fit_ids
+            for observation in fit_contexts[task_id].observations
+        )
+    )
 
     gpu_payload = json.loads(args.gpu_gaps.read_text(encoding="utf-8"))
     deadline_ms = float(gpu_payload["config"]["deadline_ms"])
@@ -454,6 +639,7 @@ def _evaluate(args: argparse.Namespace) -> dict[str, Any]:
     counters: Counter[str] = Counter()
     gap_rows: list[dict[str, Any]] = []
     examples: list[dict[str, Any]] = []
+    robust_cache: dict[tuple[Any, ...], float] = {}
     for program in replay_programs:
         context = replay_contexts[program.task_id]
         repo = repo_of(program.task_id)
@@ -478,9 +664,8 @@ def _evaluate(args: argparse.Namespace) -> dict[str, Any]:
                     triggers["exec_survival_oracle"][tool_index] = 0.0
                     counters["exec_survival_oracle_early"] += 1
                 work = command_work_key(tool.command)
-                state = context.states[(turn_index, tool_index)]
-                histories = memory.query(repo, tool.command, work, state)
-                for arm in ("exact_command", "work_signature", "work_plus_state"):
+                histories = memory.query(repo, tool.command, work, None)
+                for arm in ("exact_command", "work_signature"):
                     values = histories[arm]
                     if not values:
                         counters[f"{arm}_unavailable"] += 1
@@ -503,12 +688,69 @@ def _evaluate(args: argparse.Namespace) -> dict[str, Any]:
                                     "arm": arm,
                                     "command": tool.command,
                                     "work": repr(work),
-                                    "state": repr(state),
                                     "history_count": len(values),
                                     "observed_duration_ms": duration_ms,
                                     **action,
                                 }
                             )
+                grouped_histories = grouped_memory.query(
+                    repo,
+                    tool.command,
+                    work,
+                )
+                for history_arm, robust_arm in (
+                    ("exact_command", "exact_robust_clock"),
+                    ("work_signature", "work_robust_clock"),
+                ):
+                    grouped = grouped_histories[history_arm]
+                    if not grouped:
+                        counters[f"{robust_arm}_unavailable"] += 1
+                        continue
+                    counters[f"{robust_arm}_available"] += 1
+                    cache_key = (
+                        history_arm,
+                        tuple(sorted(grouped.items())),
+                        deadline_ms,
+                        physical["swap_out_ms"],
+                        physical["swap_in_ms"],
+                    )
+                    trigger_ms = robust_cache.get(cache_key)
+                    if trigger_ms is None:
+                        trigger_ms = robust_pareto_trigger_ms(
+                            grouped,
+                            deadline_ms=deadline_ms,
+                            **physical,
+                        )
+                        robust_cache[cache_key] = trigger_ms
+                    if trigger_ms >= deadline_ms:
+                        counters[f"{robust_arm}_feedback"] += 1
+                        continue
+                    triggers[robust_arm][tool_index] = trigger_ms
+                    counters[f"{robust_arm}_early"] += 1
+                    counters[f"{robust_arm}_actual_long"] += int(
+                        duration_ms > deadline_ms
+                    )
+                    counters[f"{robust_arm}_actual_short"] += int(
+                        duration_ms <= deadline_ms
+                    )
+                    counters[f"{robust_arm}_advance_ms"] += int(
+                        round(deadline_ms - trigger_ms)
+                    )
+                    if len(examples) < 100:
+                        examples.append(
+                            {
+                                "task_id": program.task_id,
+                                "turn_index": turn_index,
+                                "tool_index": tool_index,
+                                "arm": robust_arm,
+                                "command": tool.command,
+                                "work": repr(work),
+                                "history_task_count": len(grouped),
+                                "history_count": sum(map(len, grouped.values())),
+                                "trigger_ms": trigger_ms,
+                                "observed_duration_ms": duration_ms,
+                            }
+                        )
             no_prerestore = (None,) * len(turn.tools)
             arms = {
                 arm: score_gap_action(
@@ -535,6 +777,7 @@ def _evaluate(args: argparse.Namespace) -> dict[str, Any]:
                 }
             )
         memory.observe_task(context.observations)
+        grouped_memory.observe_task(program.task_id, context.observations)
     if gap_by_key or counters["exec_gap_tools"] != 5799:
         raise ValueError("the frozen action population was not scored exactly once")
 
@@ -546,33 +789,21 @@ def _evaluate(args: argparse.Namespace) -> dict[str, Any]:
     }
     gates = {
         arm: _arm_gate(comparisons[arm])
-        for arm in ("exact_command", "work_signature", "work_plus_state")
+        for arm in ("exact_robust_clock", "work_robust_clock")
     }
     passed = {arm: all(checks.values()) for arm, checks in gates.items()}
-    work = comparisons["work_signature"]
-    state = comparisons["work_plus_state"]
-    state_pareto_dominates = (
-        state["released_gib_s_delta"] >= work["released_gib_s_delta"]
-        and state["critical_path_stall_ms_delta"]
-        <= work["critical_path_stall_ms_delta"]
-        and (
-            state["released_gib_s_delta"] > work["released_gib_s_delta"]
-            or state["critical_path_stall_ms_delta"]
-            < work["critical_path_stall_ms_delta"]
-        )
+    primary_go, work_pareto_dominates_exact, selected_arm = select_robust_arm(
+        passed,
+        comparisons,
     )
-    state_justified = passed["work_plus_state"] and (
-        not passed["work_signature"] or state_pareto_dominates
-    )
-    any_go = any(passed.values())
     return {
-        "schema_version": 1,
-        "status": "development_go" if any_go else "development_no_go",
+        "schema_version": 2,
+        "status": "development_go" if primary_go else "development_no_go",
         "generated": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
         "git_sha": git_sha,
         "protocol": (
-            "One-shot exposed-data attribution of exact complete-command, exact "
-            "tool-work, and causal work-state survival evidence"
+            "Frozen exposed-data attribution of immediate versus task-stable "
+            "robust survival clocks over exact-command and exact tool-work history"
         ),
         "config": {
             "task_rows": str(args.task_rows.resolve()),
@@ -584,11 +815,11 @@ def _evaluate(args: argparse.Namespace) -> dict[str, Any]:
             "deadline_ms": deadline_ms,
             "bytes_per_token": bytes_per_token,
             "history_update": "whole-task-final only",
-            "state_visibility": "causally completed prior commands in current task",
             "matching": "exact only; no similarity or minimum support",
             "action": (
-                "early iff expected released GiB*s delta > 0 and expected "
-                "critical-path stall delta <= 0; otherwise five-second feedback"
+                "robust continuous trigger iff full and every non-empty "
+                "leave-one-task-out history unanimously prefer it and predict "
+                "positive release with non-positive stall; otherwise feedback"
             ),
         },
         "evidence": {
@@ -604,6 +835,7 @@ def _evaluate(args: argparse.Namespace) -> dict[str, Any]:
                 for context in replay_contexts.values()
             ),
             "gap_count": len(gap_rows),
+            "robust_trigger_cache_entry_count": len(robust_cache),
             **dict(sorted(counters.items())),
         },
         "arms": summaries,
@@ -613,12 +845,12 @@ def _evaluate(args: argparse.Namespace) -> dict[str, Any]:
                 arm: {"checks": gates[arm], "passed": passed[arm]}
                 for arm in gates
             },
-            "any_arm_passed": any_go,
-            "state_pareto_dominates_work_signature": state_pareto_dominates,
-            "state_justified": state_justified,
+            "primary_work_robust_passed": primary_go,
+            "work_pareto_dominates_exact_robust": work_pareto_dominates_exact,
+            "selected_arm": selected_arm,
             "selection_rule": (
-                "Report all passing arms; retain state only if it passes and the "
-                "simpler work arm fails or is Pareto-dominated"
+                "Primary work robust must pass; if exact also passes, prefer "
+                "exact unless work strictly Pareto-dominates it"
             ),
         },
         "decision_examples": examples,
@@ -630,7 +862,6 @@ def _evaluate(args: argparse.Namespace) -> dict[str, Any]:
         "limitations": [
             "All SWE evidence is development-exposed; this is not confirmation.",
             "The deterministic apt/pip/pytest model is a manual positive control, not a general shipped mechanism.",
-            "State is limited to prior invocation and explicit successful install facts; initial image and cache contents remain unknown.",
             "Recorded gaps and measured A100 transfer costs are replayed rather than live serving.",
             "The realized survival oracle is hindsight-only.",
         ],

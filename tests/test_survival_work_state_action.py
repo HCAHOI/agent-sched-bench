@@ -7,6 +7,7 @@ import sys
 
 from spike.multitenant import ToolSpan, TraceProgram, TraceTurn
 
+from scripts.evaluation import evaluate_survival_work_state_action as survival
 from scripts.evaluation.evaluate_survival_work_state_action import (
     AptWork,
     CausalDurationMemory,
@@ -134,6 +135,77 @@ def test_duration_observations_capture_pre_command_state() -> None:
     assert rows[0].state is not None and rows[1].state is not None
     assert rows[0].state[0][1:] == (False, "unknown", ("numpy",))
     assert rows[1].state[0][1:] == (True, "present", ())
+
+
+def test_grouped_memory_preserves_tasks_and_prefers_settled_repo_history() -> None:
+    command = "pytest tests/test_x.py"
+    work = command_work_key(command)
+    assert work is not None
+    state = (("pytest", False),)
+    repo_a = DurationObservation("repo-a", command, work, state, 9000.0)
+    repo_b = DurationObservation("repo-b", command, work, state, 7000.0)
+    memory = survival.CausalGroupedDurationMemory(
+        (("public-a", repo_a), ("public-b", repo_b))
+    )
+
+    assert memory.query("repo-a", command, work) == {
+        "exact_command": {"public-b": (7000.0,)},
+        "work_signature": {"public-b": (7000.0,)},
+    }
+    memory.observe_task(
+        "local-a",
+        (DurationObservation("repo-a", command, work, state, 6000.0),),
+    )
+    assert memory.query("repo-a", command, work) == {
+        "exact_command": {"local-a": (6000.0,)},
+        "work_signature": {"local-a": (6000.0,)},
+    }
+
+
+def test_robust_pareto_trigger_requires_task_stable_safe_gain() -> None:
+    physical = {
+        "deadline_ms": 5000.0,
+        "size_gib": 1.0,
+        "swap_out_ms": 1000.0,
+        "swap_in_ms": 200.0,
+    }
+    stable = {
+        "task-a": (5500.0, 7000.0),
+        "task-b": (5500.0, 7000.0),
+    }
+    assert survival.robust_pareto_trigger_ms(stable, **physical) == 4500.0
+    assert (
+        survival.robust_pareto_trigger_ms(
+            {"task-a": stable["task-a"]}, **physical
+        )
+        == 5000.0
+    )
+    assert survival.robust_pareto_trigger_ms(
+        {"task-a": stable["task-a"], "task-b": (4500.0, 7000.0)},
+        **physical,
+    ) == 5000.0
+    assert survival.robust_pareto_trigger_ms(
+        {"task-a": (100.0, 5100.0), "task-b": (100.0, 5100.0)},
+        **physical,
+    ) == 5000.0
+
+
+def test_robust_selection_requires_primary_and_prefers_simpler_exact() -> None:
+    exact = {"released_gib_s_delta": 4.0, "critical_path_stall_ms_delta": 0.0}
+    work = {"released_gib_s_delta": 5.0, "critical_path_stall_ms_delta": 1.0}
+    assert survival.select_robust_arm(
+        {"exact_robust_clock": True, "work_robust_clock": False},
+        {"exact_robust_clock": exact, "work_robust_clock": work},
+    ) == (False, False, None)
+    assert survival.select_robust_arm(
+        {"exact_robust_clock": True, "work_robust_clock": True},
+        {"exact_robust_clock": exact, "work_robust_clock": work},
+    ) == (True, False, "exact_robust_clock")
+    work = {"released_gib_s_delta": 5.0, "critical_path_stall_ms_delta": 0.0}
+    assert survival.select_robust_arm(
+        {"exact_robust_clock": True, "work_robust_clock": True},
+        {"exact_robust_clock": exact, "work_robust_clock": work},
+    ) == (True, True, "work_robust_clock")
 
 
 def test_frozen_order_and_gate_are_explicit() -> None:
