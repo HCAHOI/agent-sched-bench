@@ -566,6 +566,13 @@ eight-task-cap repetitions to lower common-ready makespan, aggregate mean
 ready-to-terminal JCT by at least 5%, and keep paired p95 JCT and p99 LLM TTFT
 within 1.05 times the four-task-cap arm.
 
+The excluded warm-up is one non-streaming chat-completions request after vLLM
+readiness and before replay: user text `Reply with exactly one word: ready`,
+temperature zero, seed zero, `max_tokens=32`, and `ignore_eos=true`; its request
+and response are retained outside the replay output. Pairing is fixed as cells
+one/two and four/three; the aggregate JCT comparison pools all 16 task-cell
+observations in each arm.
+
 Only a valid positive static ceiling authorizes a separately frozen causal
 admission action: at most four non-tool phases, release a foreground slot when
 a task reveals a tool call, reacquire before its next LLM request, at most eight
