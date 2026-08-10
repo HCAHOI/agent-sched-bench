@@ -24,11 +24,11 @@ artifacts retain that history.
 | Manual tool semantics | **KEEP only the pytest candidate-routing question.** A hindsight selector over existing causal candidates improved full-cohort four-target accuracy by 1.941 points for pytest, but 93/118 corrections merely restored Clause-KB; adding more pytest rules is not supported. pip missed the frozen contrast gate and its perfect-tool ceiling was only 0.392 points, so deprioritize pip-specific work. |
 | KV victim selection | Closed under the current CacheWise/C100 simulator and action model. |
 | GPU tool-gap action | The profile-only early clock and pre-restore are closed by the Section 5.1 offline gate. The load-8 live action test remains unresolved. The load-32 hard-pin control in Section 5.3 was invalid; Section 5.4 compares the unchanged five-second action with stock evictable prefix caching. |
-| Static survival KV action | Raw Clause-KB, exact-command, exact work-signature, and causal work-state histories all released more memory-time but increased stall. A task-stable robust clock then changed zero actions because its latency-utility objective cannot value earlier memory release when both triggers finish before the gap ends. The realized-survival oracle retains substantial action headroom. |
+| Static survival KV action | Cross-repository exact/work/state histories increased stall and the latency-utility robust clock abstained. On the same-repository PennyLane cohort, exact-command actions released more memory-time with zero added stall, while work-signature transfer again added stall. The primary semantic-transfer claim remains NO-GO; exact recurrence is a narrow fresh-test candidate. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | The next survival action must optimize released memory-time under stall risk directly, not reuse a latency-only utility clock. It requires genuinely fresh same-repository task outcomes; do not try alternate triggers or tune thresholds on exposed SWE. |
+| Next research step | Freeze an exact-command action on the untouched PennyLane 16+16 cohort, then test whether released KV changes real co-tenant admission or completion. Those tasks are uncollected; do not repair the failed work signature on exposed PennyLane. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -157,6 +157,7 @@ All rows below are development-exposed.
 | CacheWise/C100 KV victim selection | Task-Aware Command Predictor improved C100 recomputation 1.481%; block-aware hindsight upper bound improved 9.620% | Closed for current simulator/action model |
 | Complete-work/state survival action | Exact command: +668.981 GiB-s release, +1,236.944 ms stall; work and work+state: +794.288 GiB-s, +1,848.373 ms. State changed zero actions. | All learned arms fail the no-added-stall gate; representation-only branch closed on exposed SWE |
 | Task-stable robust survival clock | Exact and work clocks both changed zero actions and were bit-identical to five-second feedback. | NO-GO for this action objective; latency utility cannot select memory-time-only improvements |
+| PennyLane task-Pareto survival action | Exact task-Pareto: +389.756 GiB-s, zero stall, 11 tasks; work task-Pareto: +1,438.416 GiB-s, +3,611.076 ms stall, 26 tasks. Exact-immediate control: +660.664 GiB-s, zero stall, 16 tasks. | Primary semantic-transfer claim NO-GO; retain exact recurrence only as a narrow fresh/live candidate |
 | CPU+RSS admission oracle | Hindsight reservations reduced mean makespan 10.868% | Action space exists |
 | Peak-class predictor admission | Task-Aware Command Predictor was 9.630% slower than Clause-KB and both created many unverifiable capacity exposures | Direct hard-class admission closed |
 | Physical under-reservation | 2 cores were 3.928x slower than 8; 2 GiB `memory.high` did not finish within 3,600 s versus 18.493 s baseline | Under-reservation cost is real and must be charged |
@@ -837,6 +838,31 @@ stall. Failure closes this action on the frozen PennyLane development cohort
 without changing the split, trigger, or gate. Passing only authorizes collection
 and separately frozen evaluation of the untouched PennyLane 16+16 cohorts.
 
+**Result and decision.** The frozen run causally replayed 1,383 gaps and 1,024
+exec calls from 26 tasks after 637 fit observations from 15 earlier tasks. The
+primary work-signature arm released 1,438.416 additional GiB-seconds but added
+3,611.076 ms stall: 86 early calls were truly longer than five seconds and 19
+were not. It changed all 26 tasks but failed the no-added-stall gate, so the
+registered result is `development_no_go` with no selected arm.
+
+The exact-command ablation passed its own frozen arm gate: 20/20 early calls
+were truly long, yielding 389.756 additional GiB-seconds with zero added stall
+across 11 tasks; its task-bootstrap release interval was [204.668, 598.219].
+However, the predeclared exact-immediate control also had zero added stall and
+released more, 660.664 GiB-seconds across 16 tasks. Thus this run supports safe
+same-repository exact recurrence, not incremental value from the new
+task-Pareto trigger. Exact task-Pareto captured 3.4% and exact-immediate 5.8% of
+the oracle's 11,314.367 GiB-second incremental headroom, so neither yet
+establishes scheduling utility.
+
+A post-outcome read-only case attribution found that retained work false
+positives pooled `tests/drawer` with unrelated directory suites and pooled
+unrelated two-node selections by target shape. This supports semantic scope
+conflation as one failure mechanism, but the artifact retains only 13 of 19
+false-positive examples and does not prove that it caused all aggregate stall.
+Do not add scope rules on this exposed cohort. The evaluator used zero GPU and
+zero prediction-time agent calls and completed in 197.842 seconds wall time.
+
 ## 6. Closed directions
 
 - **Lookup structure alone:** trie, lattice, generic argv, pip/pytest semantic
@@ -886,6 +912,9 @@ signal, action, or fresh workload may motivate a separately frozen protocol.
   tasks had already appeared in result artifacts.
 - SWE100 and SWE277 are development-exposed. Their feedback result tests
   cross-repository breadth but is not confirmation.
+- The 41 collected PennyLane tasks in the Section 5.11 split are
+  development-exposed. The separate PennyLane 16+16 cohorts remain untouched
+  and uncollected.
 - Existing SQLGlot tasks end at 2025-04-25; no ready newer public SQLGlot image
   cohort was found.
 - Confirmation requires genuinely fresh tasks, a new time period, or another
@@ -934,6 +963,8 @@ Result root:
   `../survival-work-state-action-swe177-20260810/result.json`
 - Task-stable robust survival clock:
   `../survival-robust-clock-swe177-20260810/result.json`
+- PennyLane task-Pareto survival action:
+  `../task-pareto-survival-action-pennylane41-20260810/result.json`
 
 Docs-only compiler development artifact:
 `analysis/results/offline-tool-semantics-sqlglot-v1/result.json`.

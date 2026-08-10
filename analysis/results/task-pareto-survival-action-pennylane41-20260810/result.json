@@ -1,0 +1,1612 @@
+{
+  "schema_version": 1,
+  "status": "development_no_go",
+  "generated": "2026-08-10T23:10:09+02:00",
+  "git_sha": "55159e236e063ab6eab8be40a6306b38a55cf774",
+  "protocol_git_sha": "5cc9ff96aa2274707772ab2c3545a75b0806adaf",
+  "protocol": "tool-resource-canonical-objective.md Section 5.11",
+  "config": {
+    "split": "/home/chiyu/workspace/agent-sched-bench/analysis/development/pennylane-survival-action-split.json",
+    "kv_profile": "/home/chiyu/workspace/agent-sched-bench/analysis/serving/tool-time-rho-measurement-a100-instruct-20260809/kv_swap.json",
+    "model": "meta-llama/Llama-3.1-8B-Instruct",
+    "block_size": 16,
+    "tokenizer_repo": "RedHatAI/Meta-Llama-3.1-8B-Instruct-quantized.w4a16",
+    "tokenizer_revision": "6a426ef8adc0b4b96408001a9628d71f01c9ceca",
+    "tokenizer_git_blob_oids": {
+      "tokenizer.json": "5cc5f00a5b203e90a27a3bd60d1ec393b07971e8",
+      "tokenizer_config.json": "db88166e2bc4c799fd5d1ae643b75e84d03ee70e",
+      "special_tokens_map.json": "02ee80b6196926a5ad790a004d9efd6ab1ba6542"
+    },
+    "transformers_version": "4.57.6",
+    "deadline_ms": 5000.0,
+    "minimum_changed_tasks": 8,
+    "history_update": "whole-task-final in numeric PR order",
+    "matching": "exact command and exact work signature; no fallback"
+  },
+  "evidence": {
+    "fit_task_count": 15,
+    "fit_exec_observations": 637,
+    "fit_omitted_terminal_tool_count": 0,
+    "replay_task_count": 26,
+    "replay_omitted_terminal_tool_count": 2,
+    "gap_count": 1383,
+    "exact_command_available": 91,
+    "exact_command_unavailable": 933,
+    "exact_immediate_early": 34,
+    "exact_task_pareto_actual_long": 20,
+    "exact_task_pareto_actual_short": 0,
+    "exact_task_pareto_early": 20,
+    "exact_task_pareto_feedback": 71,
+    "exec_gap_tools": 1024,
+    "exec_survival_oracle_early": 403,
+    "non_exec_gap_tools": 359,
+    "work_immediate_early": 56,
+    "work_signature_available": 318,
+    "work_signature_unavailable": 706,
+    "work_task_pareto_actual_long": 86,
+    "work_task_pareto_actual_short": 19,
+    "work_task_pareto_early": 105,
+    "work_task_pareto_feedback": 213
+  },
+  "arms": {
+    "deadline_feedback": {
+      "gap_count": 1383,
+      "offload_count": 403,
+      "prerestore_plan_count": 0,
+      "prerestore_fired_count": 0,
+      "released_gib_s": 365975.9107911022,
+      "critical_path_stall_ms": 124259.87636756897,
+      "hidden_reload_ms": 0.0,
+      "wasted_reload_ms": 0.0,
+      "early_residency_gib_s": 0.0
+    },
+    "exact_immediate": {
+      "gap_count": 1383,
+      "offload_count": 403,
+      "prerestore_plan_count": 0,
+      "prerestore_fired_count": 0,
+      "released_gib_s": 366636.5748536022,
+      "critical_path_stall_ms": 124259.87636756897,
+      "hidden_reload_ms": 0.0,
+      "wasted_reload_ms": 0.0,
+      "early_residency_gib_s": 0.0
+    },
+    "work_immediate": {
+      "gap_count": 1383,
+      "offload_count": 414,
+      "prerestore_plan_count": 0,
+      "prerestore_fired_count": 0,
+      "released_gib_s": 367179.03261602524,
+      "critical_path_stall_ms": 127151.93114471436,
+      "hidden_reload_ms": 0.0,
+      "wasted_reload_ms": 0.0,
+      "early_residency_gib_s": 0.0
+    },
+    "exact_task_pareto": {
+      "gap_count": 1383,
+      "offload_count": 403,
+      "prerestore_plan_count": 0,
+      "prerestore_fired_count": 0,
+      "released_gib_s": 366365.6666504772,
+      "critical_path_stall_ms": 124259.87636756897,
+      "hidden_reload_ms": 0.0,
+      "wasted_reload_ms": 0.0,
+      "early_residency_gib_s": 0.0
+    },
+    "work_task_pareto": {
+      "gap_count": 1383,
+      "offload_count": 417,
+      "prerestore_plan_count": 0,
+      "prerestore_fired_count": 0,
+      "released_gib_s": 367414.3271719642,
+      "critical_path_stall_ms": 127870.95272445679,
+      "hidden_reload_ms": 0.0,
+      "wasted_reload_ms": 0.0,
+      "early_residency_gib_s": 0.0
+    },
+    "exec_survival_oracle": {
+      "gap_count": 1383,
+      "offload_count": 403,
+      "prerestore_plan_count": 0,
+      "prerestore_fired_count": 0,
+      "released_gib_s": 377290.278219275,
+      "critical_path_stall_ms": 122393.09656524658,
+      "hidden_reload_ms": 0.0,
+      "wasted_reload_ms": 0.0,
+      "early_residency_gib_s": 0.0
+    }
+  },
+  "comparisons_vs_deadline_feedback": {
+    "exact_immediate": {
+      "candidate": "exact_immediate",
+      "baseline": "deadline_feedback",
+      "released_gib_s_delta": 660.6640625,
+      "critical_path_stall_ms_delta": 0.0,
+      "critical_path_stall_reduction_fraction": -0.0,
+      "changed_gap_count": 34,
+      "changed_task_count": 16,
+      "task_bootstrap_95pct": {
+        "released_gib_s_delta": [
+          417.468994140625,
+          921.1147460937499
+        ],
+        "critical_path_stall_ms_delta": [
+          0.0,
+          0.0
+        ]
+      },
+      "largest_signature_deltas": [
+        {
+          "command_family": "python3",
+          "released_gib_s_delta": 341.5234375,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "python",
+          "released_gib_s_delta": 177.83203124999997,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "apt-get",
+          "released_gib_s_delta": 110.439453125,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "conda",
+          "released_gib_s_delta": 30.869140625,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "__no_action__",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "apt-get+python3",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "cat",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "df+tail",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "PY+jax,+jaxlib,+print+python+tensorflow,+torch,",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "PY+do+done+echo+except+f{mod}: MISSING ({e})+f{mod}: OK {getattr(m, \"__version__\", \"\")}+mod+print+python3+true",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        }
+      ]
+    },
+    "work_immediate": {
+      "candidate": "work_immediate",
+      "baseline": "deadline_feedback",
+      "released_gib_s_delta": 1203.1218249229976,
+      "critical_path_stall_ms_delta": 2892.0547771453857,
+      "critical_path_stall_reduction_fraction": -0.023274244765788238,
+      "changed_gap_count": 56,
+      "changed_task_count": 22,
+      "task_bootstrap_95pct": {
+        "released_gib_s_delta": [
+          755.8405747978102,
+          1743.2413925380883
+        ],
+        "critical_path_stall_ms_delta": [
+          160.04532623291016,
+          6737.574607849121
+        ]
+      },
+      "largest_signature_deltas": [
+        {
+          "command_family": "python",
+          "released_gib_s_delta": 605.6583559631891,
+          "critical_path_stall_ms_delta": 2286.681095123291
+        },
+        {
+          "command_family": "python3",
+          "released_gib_s_delta": 289.41469025003164,
+          "critical_path_stall_ms_delta": 498.0066947937012
+        },
+        {
+          "command_family": "apt-get",
+          "released_gib_s_delta": 153.427734375,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "python+uv",
+          "released_gib_s_delta": 52.6972162097767,
+          "critical_path_stall_ms_delta": 107.36698722839355
+        },
+        {
+          "command_family": "apt-get+python3",
+          "released_gib_s_delta": 30.78125,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "PY+python+xdist,",
+          "released_gib_s_delta": 21.30859375,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "kill+pgrep+python+sleep+true",
+          "released_gib_s_delta": 20.56640625,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "python3+tee",
+          "released_gib_s_delta": 19.599609375,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "grep+python+tail",
+          "released_gib_s_delta": 9.667968749999996,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "__no_action__",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        }
+      ]
+    },
+    "exact_task_pareto": {
+      "candidate": "exact_task_pareto",
+      "baseline": "deadline_feedback",
+      "released_gib_s_delta": 389.755859375,
+      "critical_path_stall_ms_delta": 0.0,
+      "critical_path_stall_reduction_fraction": -0.0,
+      "changed_gap_count": 20,
+      "changed_task_count": 11,
+      "task_bootstrap_95pct": {
+        "released_gib_s_delta": [
+          204.66796875,
+          598.2189941406249
+        ],
+        "critical_path_stall_ms_delta": [
+          0.0,
+          0.0
+        ]
+      },
+      "largest_signature_deltas": [
+        {
+          "command_family": "python3",
+          "released_gib_s_delta": 283.564453125,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "apt-get",
+          "released_gib_s_delta": 77.05078125,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "python",
+          "released_gib_s_delta": 29.140625,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "__no_action__",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "apt-get+python3",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "conda",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "cat",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "df+tail",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "PY+jax,+jaxlib,+print+python+tensorflow,+torch,",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "PY+do+done+echo+except+f{mod}: MISSING ({e})+f{mod}: OK {getattr(m, \"__version__\", \"\")}+mod+print+python3+true",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        }
+      ]
+    },
+    "work_task_pareto": {
+      "candidate": "work_task_pareto",
+      "baseline": "deadline_feedback",
+      "released_gib_s_delta": 1438.4163808620046,
+      "critical_path_stall_ms_delta": 3611.0763568878174,
+      "critical_path_stall_reduction_fraction": -0.029060678816434787,
+      "changed_gap_count": 100,
+      "changed_task_count": 26,
+      "task_bootstrap_95pct": {
+        "released_gib_s_delta": [
+          1017.324839964767,
+          1927.6377058360492
+        ],
+        "critical_path_stall_ms_delta": [
+          962.5246276855469,
+          7138.782651901245
+        ]
+      },
+      "largest_signature_deltas": [
+        {
+          "command_family": "python",
+          "released_gib_s_delta": 647.4616783213913,
+          "critical_path_stall_ms_delta": 1157.3531303405762
+        },
+        {
+          "command_family": "python3",
+          "released_gib_s_delta": 522.2022356173168,
+          "critical_path_stall_ms_delta": 1462.783992767334
+        },
+        {
+          "command_family": "apt-get",
+          "released_gib_s_delta": 119.599609375,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "exit+python+tail",
+          "released_gib_s_delta": 23.83100430752337,
+          "critical_path_stall_ms_delta": 160.04532623291016
+        },
+        {
+          "command_family": "python+uv",
+          "released_gib_s_delta": 22.4628412097767,
+          "critical_path_stall_ms_delta": 107.36698722839355
+        },
+        {
+          "command_family": "PY+python+xdist,",
+          "released_gib_s_delta": 21.30859375,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "kill+pgrep+python+sleep+true",
+          "released_gib_s_delta": 20.56640625,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "python3+tee",
+          "released_gib_s_delta": 19.599609375,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "PY+default.qubit,+print+python3+qml.__version__,+qml.device",
+          "released_gib_s_delta": 18.31315538380295,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "apt-get+python3",
+          "released_gib_s_delta": 16.787109375,
+          "critical_path_stall_ms_delta": 0.0
+        }
+      ]
+    },
+    "exec_survival_oracle": {
+      "candidate": "exec_survival_oracle",
+      "baseline": "deadline_feedback",
+      "released_gib_s_delta": 11314.36742817279,
+      "critical_path_stall_ms_delta": -1866.7798023223877,
+      "critical_path_stall_reduction_fraction": 0.015023190565555762,
+      "changed_gap_count": 403,
+      "changed_task_count": 26,
+      "task_bootstrap_95pct": {
+        "released_gib_s_delta": [
+          8923.977934146156,
+          13860.287330321878
+        ],
+        "critical_path_stall_ms_delta": [
+          -3573.066985464096,
+          -481.6271095275879
+        ]
+      },
+      "largest_signature_deltas": [
+        {
+          "command_family": "python",
+          "released_gib_s_delta": 4741.056604549971,
+          "critical_path_stall_ms_delta": -1011.9420318603516
+        },
+        {
+          "command_family": "python3",
+          "released_gib_s_delta": 4093.7683353233747,
+          "critical_path_stall_ms_delta": -802.1594314575195
+        },
+        {
+          "command_family": "cat+else+fi+if+ps+sleep+tail+then+true",
+          "released_gib_s_delta": 466.93359375,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "apt-get",
+          "released_gib_s_delta": 213.291015625,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "python+uv",
+          "released_gib_s_delta": 118.80030079944432,
+          "critical_path_stall_ms_delta": -52.6783390045166
+        },
+        {
+          "command_family": "pip+python",
+          "released_gib_s_delta": 106.630859375,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "conda",
+          "released_gib_s_delta": 88.564453125,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "exit+python+tail",
+          "released_gib_s_delta": 71.572265625,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "python+python3",
+          "released_gib_s_delta": 69.07226562499999,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "PY+autograd,+numpy,+print+python3+scipy,",
+          "released_gib_s_delta": 54.72656249999999,
+          "critical_path_stall_ms_delta": 0.0
+        }
+      ]
+    }
+  },
+  "gates": {
+    "by_arm": {
+      "exact_task_pareto": {
+        "checks": {
+          "released_gib_s_strictly_higher": true,
+          "critical_path_stall_not_higher": true,
+          "changed_at_least_8_tasks": true
+        },
+        "passed": true
+      },
+      "work_task_pareto": {
+        "checks": {
+          "released_gib_s_strictly_higher": true,
+          "critical_path_stall_not_higher": false,
+          "changed_at_least_8_tasks": true
+        },
+        "passed": false
+      }
+    },
+    "primary_work_task_pareto_passed": false,
+    "work_pareto_dominates_exact": false,
+    "selected_arm": null
+  },
+  "decision_examples": [
+    {
+      "task_id": "PennyLaneAI__pennylane-2601",
+      "turn_index": 29,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest",
+      "history_task_count": 7,
+      "history_count": 14,
+      "trigger_ms": 9.63735580444336,
+      "observed_duration_ms": 29741.16039276123
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2601",
+      "turn_index": 31,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest",
+      "history_task_count": 7,
+      "history_count": 14,
+      "trigger_ms": 9.63735580444336,
+      "observed_duration_ms": 600061.4190101624
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2601",
+      "turn_index": 45,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest tests/devices",
+      "history_task_count": 7,
+      "history_count": 22,
+      "trigger_ms": 1952.8992176055908,
+      "observed_duration_ms": 7352.89192199707
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2601",
+      "turn_index": 46,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest pennylane/devices/tests",
+      "history_task_count": 7,
+      "history_count": 22,
+      "trigger_ms": 1952.8992176055908,
+      "observed_duration_ms": 600049.6821403503
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2603",
+      "turn_index": 17,
+      "tool_index": 0,
+      "arm": "exact_task_pareto",
+      "command": "apt-get update && apt-get install -y python3-pip",
+      "history_task_count": 6,
+      "history_count": 6,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 13701.637268066406
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2603",
+      "turn_index": 17,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "apt-get update && apt-get install -y python3-pip",
+      "history_task_count": 8,
+      "history_count": 8,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 13701.637268066406
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2603",
+      "turn_index": 22,
+      "tool_index": 0,
+      "arm": "exact_task_pareto",
+      "command": "python3 -m pytest -q",
+      "history_task_count": 5,
+      "history_count": 11,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 600048.5215187073
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2603",
+      "turn_index": 22,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest -q",
+      "history_task_count": 8,
+      "history_count": 16,
+      "trigger_ms": 9.63735580444336,
+      "observed_duration_ms": 600048.5215187073
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2603",
+      "turn_index": 24,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest -x -vv --tb=long",
+      "history_task_count": 2,
+      "history_count": 2,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 9866.018295288086
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2654",
+      "turn_index": 28,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/bin/python -m pytest -q tests",
+      "history_task_count": 8,
+      "history_count": 24,
+      "trigger_ms": 1952.8992176055908,
+      "observed_duration_ms": 320265.72847366333
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2668",
+      "turn_index": 26,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest -q tests/drawer",
+      "history_task_count": 9,
+      "history_count": 25,
+      "trigger_ms": 1952.8992176055908,
+      "observed_duration_ms": 2601.54390335083
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2668",
+      "turn_index": 29,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest -q tests/drawer",
+      "history_task_count": 9,
+      "history_count": 25,
+      "trigger_ms": 1952.8992176055908,
+      "observed_duration_ms": 2534.0347290039062
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2668",
+      "turn_index": 32,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pip uninstall --break-system-packages -y pennylane-lightning && python3 -m pip install --break-system-packages --no-deps 'pennylane-lightning==0.24.0' && python3 -m pytest -q tests/drawer",
+      "history_task_count": 9,
+      "history_count": 25,
+      "trigger_ms": 1952.8992176055908,
+      "observed_duration_ms": 3922.544002532959
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2668",
+      "turn_index": 36,
+      "tool_index": 0,
+      "arm": "exact_task_pareto",
+      "command": "python3 -m pytest -q tests",
+      "history_task_count": 4,
+      "history_count": 10,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 22910.38465499878
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2668",
+      "turn_index": 36,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest -q tests",
+      "history_task_count": 9,
+      "history_count": 25,
+      "trigger_ms": 1952.8992176055908,
+      "observed_duration_ms": 22910.38465499878
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2834",
+      "turn_index": 43,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/usr/bin/python3 -m pytest -q tests/gradients",
+      "history_task_count": 10,
+      "history_count": 29,
+      "trigger_ms": 3922.544002532959,
+      "observed_duration_ms": 13680.63497543335
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2834",
+      "turn_index": 44,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/usr/bin/python3 -m pytest -q tests",
+      "history_task_count": 10,
+      "history_count": 29,
+      "trigger_ms": 3922.544002532959,
+      "observed_duration_ms": 23765.340089797974
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2834",
+      "turn_index": 46,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/usr/bin/python3 -m pytest -q tests",
+      "history_task_count": 10,
+      "history_count": 29,
+      "trigger_ms": 3922.544002532959,
+      "observed_duration_ms": 340903.2769203186
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2947",
+      "turn_index": 16,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/envs/testbed/bin/python -m pytest -q tests",
+      "history_task_count": 11,
+      "history_count": 32,
+      "trigger_ms": 3922.544002532959,
+      "observed_duration_ms": 36839.308738708496
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2947",
+      "turn_index": 19,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/envs/testbed/bin/python -m pytest -q tests",
+      "history_task_count": 11,
+      "history_count": 32,
+      "trigger_ms": 3922.544002532959,
+      "observed_duration_ms": 600100.4326343536
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2947",
+      "turn_index": 31,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/envs/testbed/bin/python -m pytest -q tests/returntypes > /tmp/pennylane-returntypes.log 2>&1; status=$?; tail -120 /tmp/pennylane-returntypes.log; exit $status",
+      "history_task_count": 11,
+      "history_count": 32,
+      "trigger_ms": 3922.544002532959,
+      "observed_duration_ms": 99131.73508644104
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2947",
+      "turn_index": 32,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "../../opt/conda/envs/testbed/bin/python -m pytest -q > /tmp/pennylane-returntypes-rooted.log 2>&1; status=$?; tail -120 /tmp/pennylane-returntypes-rooted.log; exit $status",
+      "history_task_count": 9,
+      "history_count": 17,
+      "trigger_ms": 9.63735580444336,
+      "observed_duration_ms": 8.868932723999023
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2947",
+      "turn_index": 33,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/envs/testbed/bin/python -m pytest -q > /tmp/pennylane-returntypes-rooted.log 2>&1; status=$?; tail -120 /tmp/pennylane-returntypes-rooted.log; exit $status",
+      "history_task_count": 9,
+      "history_count": 17,
+      "trigger_ms": 9.63735580444336,
+      "observed_duration_ms": 524.4221687316895
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2947",
+      "turn_index": 34,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "PYTHONPATH=/testbed /opt/conda/envs/testbed/bin/python -m pytest -q > /tmp/pennylane-returntypes-rooted.log 2>&1; status=$?; tail -120 /tmp/pennylane-returntypes-rooted.log; exit $status",
+      "history_task_count": 9,
+      "history_count": 17,
+      "trigger_ms": 9.63735580444336,
+      "observed_duration_ms": 98698.10056686401
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2964",
+      "turn_index": 35,
+      "tool_index": 0,
+      "arm": "exact_task_pareto",
+      "command": "apt-get update && apt-get install -y python3-pip",
+      "history_task_count": 7,
+      "history_count": 7,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 13508.962631225586
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2964",
+      "turn_index": 35,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "apt-get update && apt-get install -y python3-pip",
+      "history_task_count": 9,
+      "history_count": 9,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 13508.962631225586
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2964",
+      "turn_index": 41,
+      "tool_index": 0,
+      "arm": "exact_task_pareto",
+      "command": "python3 -m pytest -q",
+      "history_task_count": 6,
+      "history_count": 12,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 600067.1389102936
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2964",
+      "turn_index": 41,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest -q",
+      "history_task_count": 10,
+      "history_count": 20,
+      "trigger_ms": 524.4221687316895,
+      "observed_duration_ms": 600067.1389102936
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3024",
+      "turn_index": 21,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest tests/transforms/test_optimization -q",
+      "history_task_count": 12,
+      "history_count": 35,
+      "trigger_ms": 3922.544002532959,
+      "observed_duration_ms": 4266.755104064941
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3024",
+      "turn_index": 24,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest tests/transforms/test_optimization -q",
+      "history_task_count": 12,
+      "history_count": 35,
+      "trigger_ms": 3922.544002532959,
+      "observed_duration_ms": 36522.897481918335
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3024",
+      "turn_index": 25,
+      "tool_index": 0,
+      "arm": "exact_task_pareto",
+      "command": "python3 -m pytest -q",
+      "history_task_count": 7,
+      "history_count": 13,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 37303.128242492676
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3024",
+      "turn_index": 25,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest -q",
+      "history_task_count": 11,
+      "history_count": 21,
+      "trigger_ms": 524.4221687316895,
+      "observed_duration_ms": 37303.128242492676
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3024",
+      "turn_index": 27,
+      "tool_index": 0,
+      "arm": "exact_task_pareto",
+      "command": "python3 -m pytest -q",
+      "history_task_count": 7,
+      "history_count": 13,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 600065.1683807373
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3024",
+      "turn_index": 27,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest -q",
+      "history_task_count": 11,
+      "history_count": 21,
+      "trigger_ms": 524.4221687316895,
+      "observed_duration_ms": 600065.1683807373
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3033",
+      "turn_index": 12,
+      "tool_index": 0,
+      "arm": "exact_task_pareto",
+      "command": "apt-get update && apt-get install -y python3-pip",
+      "history_task_count": 8,
+      "history_count": 8,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 14149.833679199219
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3033",
+      "turn_index": 12,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "apt-get update && apt-get install -y python3-pip",
+      "history_task_count": 10,
+      "history_count": 10,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 14149.833679199219
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3033",
+      "turn_index": 15,
+      "tool_index": 0,
+      "arm": "exact_task_pareto",
+      "command": "python3 -m pytest -q tests",
+      "history_task_count": 5,
+      "history_count": 11,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 402185.0485801697
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3033",
+      "turn_index": 15,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest -q tests",
+      "history_task_count": 13,
+      "history_count": 37,
+      "trigger_ms": 4266.755104064941,
+      "observed_duration_ms": 402185.0485801697
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3033",
+      "turn_index": 16,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest -q tests --maxfail=12 -x 2>&1 | tee /tmp/pytest-first-failure.log",
+      "history_task_count": 2,
+      "history_count": 2,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 11779.212474822998
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3057",
+      "turn_index": 16,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/envs/testbed/bin/python -m pytest -q tests/ops/op_math",
+      "history_task_count": 14,
+      "history_count": 38,
+      "trigger_ms": 4266.755104064941,
+      "observed_duration_ms": 13091.892004013062
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3057",
+      "turn_index": 20,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/envs/testbed/bin/python -m pytest -q tests/ops/op_math",
+      "history_task_count": 14,
+      "history_count": 38,
+      "trigger_ms": 4266.755104064941,
+      "observed_duration_ms": 5454.199314117432
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3057",
+      "turn_index": 21,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/envs/testbed/bin/python -m pytest -q tests",
+      "history_task_count": 14,
+      "history_count": 38,
+      "trigger_ms": 4266.755104064941,
+      "observed_duration_ms": 36697.609424591064
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3057",
+      "turn_index": 24,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/envs/testbed/bin/python -m pytest -q tests",
+      "history_task_count": 14,
+      "history_count": 38,
+      "trigger_ms": 4266.755104064941,
+      "observed_duration_ms": 486635.6611251831
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3104",
+      "turn_index": 13,
+      "tool_index": 0,
+      "arm": "exact_task_pareto",
+      "command": "apt-get update && apt-get install -y python3-pip",
+      "history_task_count": 9,
+      "history_count": 9,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 12606.643676757812
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3104",
+      "turn_index": 13,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "apt-get update && apt-get install -y python3-pip",
+      "history_task_count": 11,
+      "history_count": 11,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 12606.643676757812
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3104",
+      "turn_index": 19,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest -q tests/transforms",
+      "history_task_count": 15,
+      "history_count": 42,
+      "trigger_ms": 4266.755104064941,
+      "observed_duration_ms": 152310.71615219116
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3104",
+      "turn_index": 23,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest -q tests/transforms",
+      "history_task_count": 15,
+      "history_count": 42,
+      "trigger_ms": 4266.755104064941,
+      "observed_duration_ms": 156645.61319351196
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3104",
+      "turn_index": 24,
+      "tool_index": 0,
+      "arm": "exact_task_pareto",
+      "command": "python3 -m pytest -q",
+      "history_task_count": 8,
+      "history_count": 15,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 600053.136587143
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3104",
+      "turn_index": 24,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest -q",
+      "history_task_count": 12,
+      "history_count": 23,
+      "trigger_ms": 524.4221687316895,
+      "observed_duration_ms": 600053.136587143
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3104",
+      "turn_index": 25,
+      "tool_index": 0,
+      "arm": "exact_task_pareto",
+      "command": "python3 -m pytest -q -n auto",
+      "history_task_count": 2,
+      "history_count": 2,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 600163.9444828033
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3104",
+      "turn_index": 25,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest -q -n auto",
+      "history_task_count": 2,
+      "history_count": 2,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 600163.9444828033
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3182",
+      "turn_index": 21,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "apt-get update && apt-get install -y python3-pip && python3 -m pip install --break-system-packages -e . -r requirements-dev.txt",
+      "history_task_count": 12,
+      "history_count": 12,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 38070.74809074402
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3182",
+      "turn_index": 25,
+      "tool_index": 0,
+      "arm": "exact_task_pareto",
+      "command": "python3 -m pytest -q",
+      "history_task_count": 9,
+      "history_count": 16,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 600094.6309566498
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3182",
+      "turn_index": 25,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest -q",
+      "history_task_count": 13,
+      "history_count": 24,
+      "trigger_ms": 524.4221687316895,
+      "observed_duration_ms": 600094.6309566498
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3182",
+      "turn_index": 29,
+      "tool_index": 0,
+      "arm": "exact_task_pareto",
+      "command": "python3 -m pip install --break-system-packages -r requirements.txt",
+      "history_task_count": 2,
+      "history_count": 2,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 19627.033710479736
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3182",
+      "turn_index": 41,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest -q tests/returntypes && python3 -m pytest -q tests/interfaces/test_autograd.py tests/interfaces/test_autograd_qnode.py --deselect=tests/interfaces/test_autograd.py::TestOverridingShots::test_changing_shots --deselect=tests/interfaces/test_autograd_qnode.py::TestShotsIntegration::test_changing_shots",
+      "history_task_count": 16,
+      "history_count": 44,
+      "trigger_ms": 4266.755104064941,
+      "observed_duration_ms": 76580.79814910889
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3182",
+      "turn_index": 42,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest -q tests/returntypes | tail -5; set -o pipefail; python3 -m pytest -q tests/interfaces/test_autograd.py tests/interfaces/test_autograd_qnode.py --deselect=interfaces/test_autograd.py::TestOverridingShots::test_changing_shots --deselect=interfaces/test_autograd_qnode.py::TestShotsIntegration::test_changing_shots | tail -8",
+      "history_task_count": 16,
+      "history_count": 44,
+      "trigger_ms": 4266.755104064941,
+      "observed_duration_ms": 67241.11557006836
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3266",
+      "turn_index": 26,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/tmp/pennylane-test-env/bin/python -m pytest -q",
+      "history_task_count": 14,
+      "history_count": 25,
+      "trigger_ms": 524.4221687316895,
+      "observed_duration_ms": 600095.029592514
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3278",
+      "turn_index": 41,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/bin/python -m pytest -q",
+      "history_task_count": 15,
+      "history_count": 26,
+      "trigger_ms": 524.4221687316895,
+      "observed_duration_ms": 47339.258670806885
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3278",
+      "turn_index": 49,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/tmp/pl-py310/bin/python -m pytest -q",
+      "history_task_count": 15,
+      "history_count": 26,
+      "trigger_ms": 524.4221687316895,
+      "observed_duration_ms": 600071.6977119446
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3278",
+      "turn_index": 50,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/tmp/pl-py310/bin/python -m pytest -q -n auto",
+      "history_task_count": 3,
+      "history_count": 3,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 600272.5586891174
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3381",
+      "turn_index": 35,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/envs/pltest/bin/python -m pytest -q",
+      "history_task_count": 16,
+      "history_count": 28,
+      "trigger_ms": 524.4221687316895,
+      "observed_duration_ms": 600070.5740451813
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3381",
+      "turn_index": 36,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/envs/pltest/bin/python -m pytest -q -n auto",
+      "history_task_count": 4,
+      "history_count": 4,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 600307.9996109009
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3381",
+      "turn_index": 41,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/envs/pltest/bin/python -m pytest -q tests/devices",
+      "history_task_count": 17,
+      "history_count": 46,
+      "trigger_ms": 4266.755104064941,
+      "observed_duration_ms": 199383.39853286743
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3381",
+      "turn_index": 42,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/envs/pltest/bin/python -m pytest -q tests/ops tests/measurements tests/returntypes",
+      "history_task_count": 2,
+      "history_count": 2,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 478354.95615005493
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3386",
+      "turn_index": 39,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/tmp/pl-test/bin/python -m pytest -q tests",
+      "history_task_count": 18,
+      "history_count": 47,
+      "trigger_ms": 4266.755104064941,
+      "observed_duration_ms": 600241.6067123413
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3477",
+      "turn_index": 35,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/bin/python -m pytest -q tests",
+      "history_task_count": 19,
+      "history_count": 48,
+      "trigger_ms": 4266.755104064941,
+      "observed_duration_ms": 44771.55900001526
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3477",
+      "turn_index": 46,
+      "tool_index": 0,
+      "arm": "exact_task_pareto",
+      "command": "/opt/conda/envs/testbed/bin/python -m pytest -q tests",
+      "history_task_count": 2,
+      "history_count": 4,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 600055.6282997131
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3477",
+      "turn_index": 46,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/envs/testbed/bin/python -m pytest -q tests",
+      "history_task_count": 19,
+      "history_count": 48,
+      "trigger_ms": 4266.755104064941,
+      "observed_duration_ms": 600055.6282997131
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3477",
+      "turn_index": 69,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "JAX_ENABLE_X64=True /opt/conda/envs/testbed/bin/python -m pytest -q tests/qinfo",
+      "history_task_count": 19,
+      "history_count": 48,
+      "trigger_ms": 4266.755104064941,
+      "observed_duration_ms": 271923.92897605896
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3477",
+      "turn_index": 77,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "JAX_ENABLE_X64=True /opt/conda/envs/testbed/bin/python -m pytest -q tests/transforms",
+      "history_task_count": 19,
+      "history_count": 48,
+      "trigger_ms": 4266.755104064941,
+      "observed_duration_ms": 316951.6143798828
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3483",
+      "turn_index": 44,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": ".venv/bin/python -m pytest tests",
+      "history_task_count": 20,
+      "history_count": 52,
+      "trigger_ms": 4266.755104064941,
+      "observed_duration_ms": 600070.3046321869
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3483",
+      "turn_index": 45,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": ".venv/bin/python -m pytest -n auto tests",
+      "history_task_count": 2,
+      "history_count": 3,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 494627.71248817444
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3483",
+      "turn_index": 50,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": ".venv/bin/python -m pytest tests/returntypes",
+      "history_task_count": 20,
+      "history_count": 52,
+      "trigger_ms": 4266.755104064941,
+      "observed_duration_ms": 564638.9284133911
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3483",
+      "turn_index": 61,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": ".venv/bin/python -m pytest -n auto tests",
+      "history_task_count": 2,
+      "history_count": 3,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 390776.59487724304
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3579",
+      "turn_index": 25,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/envs/testbed/bin/python -m pytest -q",
+      "history_task_count": 17,
+      "history_count": 29,
+      "trigger_ms": 524.4221687316895,
+      "observed_duration_ms": 56445.21403312683
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3579",
+      "turn_index": 28,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/envs/testbed/bin/python -m pytest -q",
+      "history_task_count": 17,
+      "history_count": 29,
+      "trigger_ms": 524.4221687316895,
+      "observed_duration_ms": 600062.0687007904
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3579",
+      "turn_index": 29,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/envs/testbed/bin/python -m pytest --version; /opt/conda/envs/testbed/bin/python - <<'PY'\nimport xdist\nprint('xdist', xdist.__version__)\nPY\n/opt/conda/envs/testbed/bin/python -m pytest -q -n auto",
+      "history_task_count": 5,
+      "history_count": 5,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 600276.6790390015
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3921",
+      "turn_index": 22,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python -m pytest tests/measurements/test_sample.py tests/returntypes/jax/test_jax_jit_new.py::TestVectorValuedJIT::test_qnode_sample_wire_subset -q",
+      "history_task_count": 2,
+      "history_count": 2,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 6.360769271850586
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3921",
+      "turn_index": 23,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest tests/measurements/test_sample.py tests/returntypes/jax/test_jax_jit_new.py::TestVectorValuedJIT::test_qnode_sample_wire_subset -q",
+      "history_task_count": 2,
+      "history_count": 2,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 26.181697845458984
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3921",
+      "turn_index": 27,
+      "tool_index": 0,
+      "arm": "exact_task_pareto",
+      "command": "apt-get update && apt-get install -y python3-pip",
+      "history_task_count": 10,
+      "history_count": 10,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 12727.370262145996
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3921",
+      "turn_index": 27,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "apt-get update && apt-get install -y python3-pip",
+      "history_task_count": 13,
+      "history_count": 13,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 12727.370262145996
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3921",
+      "turn_index": 32,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": ".venv/bin/python -m pytest tests/measurements/test_sample.py tests/returntypes/jax/test_jax_jit_new.py::TestVectorValuedJIT::test_qnode_sample_wire_subset -q",
+      "history_task_count": 2,
+      "history_count": 2,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 973.9887714385986
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3921",
+      "turn_index": 33,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "uv pip install --python .venv/bin/python 'setuptools<81' && .venv/bin/python -m pytest tests/measurements/test_sample.py tests/returntypes/jax/test_jax_jit_new.py::TestVectorValuedJIT::test_qnode_sample_wire_subset -q",
+      "history_task_count": 2,
+      "history_count": 2,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 1379.0884017944336
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3921",
+      "turn_index": 34,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "uv pip install --python .venv/bin/python 'autoray==0.3.1' && .venv/bin/python -m pytest tests/measurements/test_sample.py tests/returntypes/jax/test_jax_jit_new.py::TestVectorValuedJIT::test_qnode_sample_wire_subset -q",
+      "history_task_count": 2,
+      "history_count": 2,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 5148.965120315552
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3921",
+      "turn_index": 36,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": ".venv/bin/python -m pytest tests/measurements/test_sample.py tests/returntypes/jax/test_jax_jit_new.py::TestVectorValuedJIT::test_qnode_sample_wire_subset -q",
+      "history_task_count": 2,
+      "history_count": 2,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 3888.7150287628174
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3921",
+      "turn_index": 44,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": ".venv/bin/python -m pytest tests/measurements/test_sample.py tests/returntypes/jax/test_jax_jit_new.py::TestVectorValuedJIT::test_qnode_sample_wire_subset -q",
+      "history_task_count": 2,
+      "history_count": 2,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 2499.044895172119
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3921",
+      "turn_index": 52,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": ".venv/bin/python -m pytest -q",
+      "history_task_count": 18,
+      "history_count": 31,
+      "trigger_ms": 524.4221687316895,
+      "observed_duration_ms": 52513.01383972168
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3921",
+      "turn_index": 54,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": ".venv/bin/python -m pytest -q",
+      "history_task_count": 18,
+      "history_count": 31,
+      "trigger_ms": 524.4221687316895,
+      "observed_duration_ms": 600056.088924408
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3921",
+      "turn_index": 55,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": ".venv/bin/python -m pytest tests/measurements/test_sample.py tests/interfaces/test_jax.py tests/returntypes/jax/test_jax_jit_new.py tests/returntypes/core/test_new_qscript.py -q",
+      "history_task_count": 2,
+      "history_count": 5,
+      "trigger_ms": 356.4107418060303,
+      "observed_duration_ms": 23062.34121322632
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3921",
+      "turn_index": 58,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": ".venv/bin/python -m pytest -q tests/circuit_graph tests/collections tests/data tests/docs tests/drawer tests/fourier tests/grouping tests/kernels tests/math",
+      "history_task_count": 2,
+      "history_count": 2,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 39460.55865287781
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4161",
+      "turn_index": 27,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "apt-get update && apt-get install -y python3-pip python3-pytest",
+      "history_task_count": 2,
+      "history_count": 2,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 16465.74330329895
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4161",
+      "turn_index": 36,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest tests/ops/qubit/test_hamiltonian.py tests/pauli/grouping/test_pauli_group_observables.py tests/transforms/test_hamiltonian_expand.py tests/test_qnode.py -q",
+      "history_task_count": 3,
+      "history_count": 6,
+      "trigger_ms": 356.4107418060303,
+      "observed_duration_ms": 5465.706348419189
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4161",
+      "turn_index": 38,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest tests/ops/qubit/test_hamiltonian.py tests/pauli/grouping/test_pauli_group_observables.py tests/transforms/test_hamiltonian_expand.py tests/test_qnode.py -q",
+      "history_task_count": 3,
+      "history_count": 6,
+      "trigger_ms": 356.4107418060303,
+      "observed_duration_ms": 4232.415676116943
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4161",
+      "turn_index": 39,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest tests -q",
+      "history_task_count": 21,
+      "history_count": 54,
+      "trigger_ms": 4266.755104064941,
+      "observed_duration_ms": 50811.707973480225
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4161",
+      "turn_index": 41,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest tests -q",
+      "history_task_count": 21,
+      "history_count": 54,
+      "trigger_ms": 4266.755104064941,
+      "observed_duration_ms": 600097.341299057
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4161",
+      "turn_index": 42,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest tests -q -n auto",
+      "history_task_count": 3,
+      "history_count": 5,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 322116.5735721588
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4161",
+      "turn_index": 44,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest tests -q -n auto",
+      "history_task_count": 3,
+      "history_count": 5,
+      "trigger_ms": 0.0,
+      "observed_duration_ms": 324944.9019432068
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4161",
+      "turn_index": 46,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "python3 -m pytest tests -q -n 4",
+      "history_task_count": 2,
+      "history_count": 4,
+      "trigger_ms": 11.451005935668945,
+      "observed_duration_ms": 521766.86000823975
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4251",
+      "turn_index": 16,
+      "tool_index": 0,
+      "arm": "work_task_pareto",
+      "command": "/opt/conda/envs/testbed/bin/python -m pytest -q",
+      "history_task_count": 19,
+      "history_count": 33,
+      "trigger_ms": 524.4221687316895,
+      "observed_duration_ms": 70574.85246658325
+    }
+  ],
+  "cost": {
+    "prediction_time_agent_calls": 0,
+    "gpu_runtime_s": 0.0,
+    "evaluator_wall_s": 197.84224307676777
+  },
+  "limitations": [
+    "All 41 collected PennyLane tasks are development-exposed.",
+    "The work parser is a manual positive control, not a shipped general mechanism.",
+    "Recorded gaps and measured A100 transfer costs are replayed rather than live serving.",
+    "The realized survival oracle is hindsight-only."
+  ]
+}
