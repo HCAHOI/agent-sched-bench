@@ -421,6 +421,41 @@ def test_idle_backfill_uses_remaining_phase_compatibility() -> None:
     assert two_sided["start_s_by_command"]["candidate"] == 1.0
 
 
+def test_idle_backfill_waits_for_causal_foreground_sample() -> None:
+    programs = [
+        AdmissionProgram(
+            "normal",
+            0.0,
+            (AdmissionCommand("normal", 2.0, 4.0, 100.0, 0.0),),
+            0.0,
+        ),
+        AdmissionProgram(
+            "candidate",
+            0.0,
+            (AdmissionCommand("candidate", 1.0, 4.0, 100.0, 0.0),),
+            0.0,
+        ),
+    ]
+    profiles = {
+        "normal": ((0.5, 2.0),) * 4,
+        "candidate": ((0.5, 2.0),) * 2,
+    }
+
+    result = simulate_idle_backfill(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=1_000.0,
+        cpu_work_profiles=profiles,
+        speculative_eligible_command_ids={"candidate"},
+        pairwise_cpu_demands={"normal": 4.0, "candidate": 4.0},
+        reactive_foreground_observation_delay_s=0.14132007875,
+        selection="fcfs",
+    )
+
+    assert result["start_s_by_command"]["candidate"] == 1.0
+    assert result["total_command_service_s"] == 3.0
+
+
 def test_idle_backfill_promotion_preserves_partial_cpu_work() -> None:
     programs = [
         AdmissionProgram(

@@ -10,6 +10,7 @@ import statistics
 
 _EPSILON = 1e-9
 _MAX_CPU_SHARE_RATIO = 1e12
+_CPU_SAMPLE_INTERVAL_S = 0.5
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,7 @@ class _IdleRunning:
     profile_index: int = 0
     profile_remaining_s: float = 0.0
     speculative: bool = False
+    started_speculative: bool = False
 
 
 def simulate_admission(
@@ -299,6 +301,7 @@ def simulate_idle_backfill(
         str, tuple[tuple[float, float], ...]
     ]
     | None = None,
+    reactive_foreground_observation_delay_s: float | None = None,
     rss_reservations: Mapping[str, float] | None = None,
     rss_unverified_command_ids: set[str] | None = None,
     selection: str,
@@ -369,6 +372,12 @@ def simulate_idle_backfill(
         )
     ):
         raise ValueError("idle backfill requires complete in-capacity pairwise CPU demands")
+    if reactive_foreground_observation_delay_s is not None and (
+        cpu_demands is None
+        or reactive_foreground_observation_delay_s < 0.0
+        or not math.isfinite(reactive_foreground_observation_delay_s)
+    ):
+        raise ValueError("reactive idle backfill requires CPU demands and a valid delay")
     unverified_ids = set(rss_unverified_command_ids or ())
     if not unverified_ids <= set(commands):
         raise ValueError("idle backfill RSS uncertainty contains an unknown command")
@@ -507,6 +516,30 @@ def simulate_idle_backfill(
                     candidate_remaining = candidate[candidate_index][0]
         return True
 
+    def cpu_pair_fits(normal: _IdleRunning, candidate_id: str) -> bool:
+        if reactive_foreground_observation_delay_s is None:
+            return cpu_demands is None or (
+                cpu_demands[normal.command.command_id] + cpu_demands[candidate_id]
+                <= cpu_capacity + _EPSILON
+            )
+        if normal.started_speculative:
+            return False
+        available_s = (
+            now_s - normal.start_s - reactive_foreground_observation_delay_s
+        )
+        elapsed = 0.0
+        observed_rate = None
+        for span, work in normal.profile:
+            elapsed += span
+            if elapsed > available_s + _EPSILON:
+                break
+            if span >= _CPU_SAMPLE_INTERVAL_S - _EPSILON:
+                observed_rate = work / span
+        return observed_rate is not None and (
+            observed_rate + cpu_demands[candidate_id]
+            <= cpu_capacity + _EPSILON
+        )
+
     def start(index: int, *, speculative: bool) -> None:
         nonlocal used_rss, modeled_rss, queue_s, normal_starts
         nonlocal speculative_starts, exposure_events, max_modeled_rss
@@ -523,6 +556,7 @@ def simulate_idle_backfill(
                 requested_rss_mb=reservation_by_id[command.command_id],
                 profile_remaining_s=profile[0][0],
                 speculative=speculative,
+                started_speculative=speculative,
             )
         )
         session.running = True
@@ -594,15 +628,9 @@ def simulate_idle_backfill(
                     item[1].program.commands[item[1].command_index].command_id
                 ]
                 <= rss_capacity_mb + _EPSILON
-                and (
-                    cpu_demands is None
-                    or cpu_demands[normal.command.command_id]
-                    + cpu_demands[
-                        item[1].program.commands[
-                            item[1].command_index
-                        ].command_id
-                    ]
-                    <= cpu_capacity + _EPSILON
+                and cpu_pair_fits(
+                    normal,
+                    item[1].program.commands[item[1].command_index].command_id,
                 )
                 and (
                     not require_pairwise_profile_compatibility

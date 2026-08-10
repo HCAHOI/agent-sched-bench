@@ -22,7 +22,10 @@ from tool_resource.runtime_kb import (  # noqa: E402
     _command_stages,
     parse_command_clauses,
 )
-from tool_resource_eval.early_cpu_reservation import cpu_work_profile  # noqa: E402
+from tool_resource_eval.early_cpu_reservation import (  # noqa: E402
+    CPU_UPDATE_DELAY_S,
+    cpu_work_profile,
+)
 from tool_resource_eval.resource_admission import (  # noqa: E402
     AdmissionCommand,
     AdmissionProgram,
@@ -31,7 +34,7 @@ from tool_resource_eval.resource_admission import (  # noqa: E402
 from trace_collect.trace_data import TraceData  # noqa: E402
 
 
-_PROTOCOL_GIT_SHA = "3eba9c8b2f1d77309e298192b1a8cc43a4a55855"
+_PROTOCOL_GIT_SHA = "4347a2ea725be17243982102ed16e1ab03d3ddfa"
 _SPLIT = _ROOT / "analysis/development/pennylane-survival-action-split.json"
 _CPU_CAPACITY = 8.0
 _RSS_CAPACITY_MB = 16_000.0
@@ -46,6 +49,7 @@ _ARMS = (
     "pairwise_phase_shape_fcfs",
     "clause_kb_phase_envelope_fcfs",
     "two_sided_clause_kb_phase_envelope_fcfs",
+    "reactive_current_exact_peak_fcfs",
 )
 
 
@@ -508,6 +512,16 @@ def _evaluate() -> dict[str, Any]:
             require_pairwise_profile_compatibility=True,
             selection="fcfs",
         ),
+        "reactive_current_exact_peak_fcfs": simulate_idle_backfill(
+            chosen,
+            cpu_capacity=_CPU_CAPACITY,
+            rss_capacity_mb=_RSS_CAPACITY_MB,
+            cpu_work_profiles=profiles,
+            speculative_eligible_command_ids=rss_safe,
+            pairwise_cpu_demands=peak_cpu,
+            reactive_foreground_observation_delay_s=CPU_UPDATE_DELAY_S,
+            selection="fcfs",
+        ),
     }
     violation_by_arm = {}
     for arm, metrics in arms.items():
@@ -545,20 +559,20 @@ def _evaluate() -> dict[str, Any]:
             <= _MAXIMUM_SERVICE_INFLATION,
             "zero_capacity_or_work_violations": not violation_by_arm[arm],
         }
-        for arm in ("two_sided_clause_kb_phase_envelope_fcfs",)
+        for arm in ("reactive_current_exact_peak_fcfs",)
     }
     for gate in gates.values():
         gate["go"] = all(gate.values())
-    phase_go = gates["two_sided_clause_kb_phase_envelope_fcfs"]["go"]
+    phase_go = gates["reactive_current_exact_peak_fcfs"]["go"]
     return {
         "schema_version": 1,
-        "status": "development_go_to_rss_replacement"
+        "status": "development_go_to_fit_candidate_peak"
         if phase_go
         else "development_no_go",
         "generated": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
         "git_sha": git_sha,
         "protocol_git_sha": _PROTOCOL_GIT_SHA,
-        "protocol": "tool-resource-canonical-objective.md Section 5.17",
+        "protocol": "tool-resource-canonical-objective.md Section 5.18",
         "config": {
             "split": str(_SPLIT.resolve()),
             "cpu_capacity": _CPU_CAPACITY,
@@ -572,7 +586,9 @@ def _evaluate() -> dict[str, Any]:
                 "phase_shape": "aligned remaining foreground and candidate sampled CPU demand never exceeds 8",
                 "clause_kb_phase_envelope": "fit-only pointwise-max candidate envelope plus actual remaining foreground profile",
                 "two_sided_clause_kb_phase_envelope": "fit-only envelopes for both commands; foreground offset by causal wall time",
+                "reactive_current_exact_peak": "latest causally available foreground sample plus candidate exact peak <= 8",
             },
+            "foreground_observation_update_delay_s": CPU_UPDATE_DELAY_S,
             "candidate_signature_hierarchy": [
                 "exact",
                 "depth_4",
@@ -597,7 +613,7 @@ def _evaluate() -> dict[str, Any]:
         "arms": arms,
         "comparisons_vs_serial8": comparisons,
         "gates": gates,
-        "go_to_rss_replacement": phase_go,
+        "go_to_fit_candidate_peak": phase_go,
         "cost": {
             "prediction_time_agent_calls": 0,
             "gpu_runtime_s": 0.0,
@@ -605,7 +621,7 @@ def _evaluate() -> dict[str, Any]:
         },
         "limitations": [
             "All 15 scored PennyLane tasks are development-exposed.",
-            "CPU envelope decisions use fit history and causal elapsed time only, but RSS safety remains a hindsight oracle.",
+            "The reactive arm uses causal foreground samples, but candidate peak and RSS safety are hindsight oracles.",
             "The action-space ceiling contains one physically defined arrival wave, not workload-order uncertainty.",
             "The deterministic replay preserves recorded commands but models CPU sharing.",
         ],
