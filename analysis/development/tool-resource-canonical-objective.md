@@ -556,15 +556,25 @@ tokens were preserved, source terminal-class differences were zero, and 161 of
 SQLGlot-3799 unexecuted static branch. This validates the harness only; timing
 is non-evidentiary.
 
-The staging implementation gate is therefore satisfied, but the formal static
-comparison has not run. Its protocol must use ABBA order `4, 8, 8, 4`, a fresh
-vLLM/KV state and identical excluded warm-up per cell, fresh containers from
-pinned image digests, and action-ID-aligned equality of tool terminal class in
-each pair. Byte-identical tool output is not required because replay output
-never enters the shadow prompt. Any formal claim also requires both
-eight-task-cap repetitions to lower common-ready makespan, aggregate mean
-ready-to-terminal JCT by at least 5%, and keep paired p95 JCT and p99 LLM TTFT
-within 1.05 times the four-task-cap arm.
+The formal static comparison then ran in ABBA order `4, 8, 8, 4`, with a fresh
+vLLM/KV state, identical excluded warm-up, and fresh pinned-image containers in
+each cell. All four cells were valid: each completed eight tasks and 480 exact
+source actions, returned all 43,439 requested shadow tokens, enforced the
+declared active-task cap and two-core container cap, retained the same 161/162
+eligible eBPF coverage, and recorded no OOM or thermal slowdown. Byte-identical
+tool output was not required because replay output never enters the shadow
+prompt.
+
+Cap eight lowered common-ready makespan in both pairs, from 638.08 to 567.50 s
+and from 647.23 to 570.80 s. It lowered pooled mean ready-to-terminal JCT by
+21.77%, and paired p95 JCT ratios were 0.786 and 0.799. The registered decision
+still failed because paired p99 LLM TTFT ratios were 1.262 and 1.131, above the
+1.05 ceiling. This was not one outlier: cap eight increased TTFT for 188/244
+and 170/244 aligned requests. For the same 12,457-token SQLGlot-3820 request,
+TTFT was 603/597 ms with two or three overlapping LLM calls at cap four, versus
+1,107/1,081 ms with eight overlaps at cap eight. The measured result is a
+completion-time versus LLM-tail tradeoff; shared-GPU contention is the likely
+mechanism, not a directly observed cause.
 
 The excluded warm-up is one non-streaming chat-completions request after vLLM
 readiness and before replay: user text `Reply with exactly one word: ready`,
@@ -573,15 +583,16 @@ and response are retained outside the replay output. Pairing is fixed as cells
 one/two and four/three; the aggregate JCT comparison pools all 16 task-cell
 observations in each arm.
 
-Only a valid positive static ceiling authorizes a separately frozen causal
-admission action: at most four non-tool phases, release a foreground slot when
-a task reveals a tool call, reacquire before its next LLM request, at most eight
-active tasks, and an independently enforced four-tool ceiling. The smoke must
-verify the global limits across worker processes. A tool-sleep shadow control
-may then separate GPU batching from real-tool overlap; it cannot rescue a
-failed primary result. Predictor contribution remains unclaimed until another
-pre-outcome protocol names a prediction-dependent action. All SQLGlot evidence
-in this section is development-exposed.
+The frozen decision tree required every static gate to pass before the proposed
+phase-aware admission action, so this run does not authorize that experiment.
+It closes only unconditional cap-eight promotion under this protocol; it does
+not invalidate the staged replay harness or erase the measured JCT gain. A
+future open amendment may preregister a tail-aware action on fresh tasks, but
+cannot reinterpret this static result as a GO. Predictor contribution remains
+unclaimed until another pre-outcome protocol names a prediction-dependent
+action. All SQLGlot evidence in this section is development-exposed; the full
+machine-readable result is in
+`analysis/results/fixed-trajectory-static-ceiling-20260810/result.json`.
 
 ## 6. Closed directions
 

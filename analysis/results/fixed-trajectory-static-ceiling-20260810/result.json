@@ -1,0 +1,134 @@
+{
+  "status": "development_exposed",
+  "question": "Does raising the common-ready static active-task cap from four to eight improve completion without harming task or LLM tails?",
+  "protocol": {
+    "objective_commit": "cbc5056f3c15fc75759928de28119a888a6bbaba",
+    "remote_code_commit": "5d071c3afa75a333e21728177d04c141e6af40ff",
+    "remote_artifact": "/home/Ubuntu/shadow-sqlglot-first8-staged-abba-formal-20260810T072624Z",
+    "order": [4, 8, 8, 4],
+    "pairing": [
+      ["cell_01_c4", "cell_02_c8"],
+      ["cell_04_c4", "cell_03_c8"]
+    ],
+    "tasks_per_cell": 8,
+    "container_cpus": 2,
+    "workers": 1,
+    "prep_concurrency": 8,
+    "stage_all_before_replay": true,
+    "gpu": "A100 80GB",
+    "gpu_power_limit_w": 250,
+    "model": "meta-llama/Llama-3.1-8B-Instruct",
+    "percentile_method": "numpy linear interpolation",
+    "excluded_warmup_completion_tokens": 32
+  },
+  "validity": {
+    "valid": true,
+    "driver_exit_codes": [0, 0, 0, 0],
+    "completed_tasks_per_cell": [8, 8, 8, 8],
+    "actions_per_cell": [480, 480, 480, 480],
+    "source_trajectory_mismatches_per_cell": [0, 0, 0, 0],
+    "requested_tokens_per_cell": [43439, 43439, 43439, 43439],
+    "returned_tokens_per_cell": [43439, 43439, 43439, 43439],
+    "ebpf_eligible_total_per_cell": [
+      [161, 162],
+      [161, 162],
+      [161, 162],
+      [161, 162]
+    ],
+    "ebpf_withheld_reason": "SQLGlot-3799 unmatched_static_clause for an unexecuted cat patch.txt branch",
+    "max_active_tasks_per_cell": [4, 8, 8, 4],
+    "startup_margin_ms_ranges": [
+      [100.39758682250977, 161.64064407348633],
+      [100.66390037536621, 127.63786315917969],
+      [100.59547424316406, 143.84937286376953],
+      [100.52847862243652, 123.29244613647461]
+    ],
+    "thermal_slowdown_samples_per_cell": [0, 0, 0, 0],
+    "max_temperature_c_per_cell": [73.0, 75.0, 73.0, 75.0],
+    "peak_gpu_memory_mib_per_cell": [73721.0, 73721.0, 73721.0, 73721.0],
+    "observed_power_limit_w_per_cell": [[250.0], [250.0], [250.0], [250.0]],
+    "note": "Shadow completion-token IDs differed for 146 of 244 request keys across cells. This was not a frozen validity condition: generated text is discarded, source actions are fixed, and completion lengths matched exactly."
+  },
+  "cells": {
+    "cell_01_c4": {
+      "cap": 4,
+      "ready_makespan_s": 638.076540324997,
+      "mean_ready_jct_s": 393.3268481597479,
+      "p95_ready_jct_s": 603.9000700893968,
+      "p99_ttft_ms": 703.9941299999999
+    },
+    "cell_02_c8": {
+      "cap": 8,
+      "ready_makespan_s": 567.5039587010033,
+      "mean_ready_jct_s": 305.7780685293792,
+      "p95_ready_jct_s": 474.46491907635306,
+      "p99_ttft_ms": 888.244849999999
+    },
+    "cell_03_c8": {
+      "cap": 8,
+      "ready_makespan_s": 570.7962294050012,
+      "mean_ready_jct_s": 312.12666639262716,
+      "p95_ready_jct_s": 485.2516038438515,
+      "p99_ttft_ms": 805.0050199999998
+    },
+    "cell_04_c4": {
+      "cap": 4,
+      "ready_makespan_s": 647.2327536849989,
+      "mean_ready_jct_s": 396.56236575037656,
+      "p95_ready_jct_s": 607.2456467360487,
+      "p99_ttft_ms": 712.0671299999998
+    }
+  },
+  "registered_gates": {
+    "both_cap8_makespans_lower": {
+      "pass": true,
+      "pair_reductions_fraction": [0.11060206286231494, 0.11809742916255209]
+    },
+    "pooled_mean_ready_jct_at_least_5pct_lower": {
+      "pass": true,
+      "cap4_mean_s": 394.9446069550622,
+      "cap8_mean_s": 308.9523674610032,
+      "reduction_fraction": 0.21773240596204282
+    },
+    "paired_p95_ready_jct_within_1_05": {
+      "pass": true,
+      "ratios": [0.7856679317922862, 0.7991026472599411]
+    },
+    "paired_p99_ttft_within_1_05": {
+      "pass": false,
+      "ratios": [1.2617219549827767, 1.1305184386196847]
+    }
+  },
+  "diagnosis": {
+    "paired_ttft": [
+      {
+        "pair": ["cell_01_c4", "cell_02_c8"],
+        "median_delta_ms": 23.235999999999997,
+        "cap8_slower_requests": 188,
+        "request_count": 244
+      },
+      {
+        "pair": ["cell_04_c4", "cell_03_c8"],
+        "median_delta_ms": 18.170499999999997,
+        "cap8_slower_requests": 170,
+        "request_count": 244
+      }
+    ],
+    "stable_tail_case": {
+      "request": "tobymao__sqlglot-3820/llm_5",
+      "prompt_tokens": 12457,
+      "cap4_ttft_ms": [602.643, 597.3],
+      "cap8_ttft_ms": [1106.944, 1080.914],
+      "overlapping_llm_calls_at_start_cap4": [3, 2],
+      "overlapping_llm_calls_at_start_cap8": [8, 8]
+    },
+    "observation": "Higher static concurrency improved makespan and JCT but shifted the TTFT distribution upward in both repetitions.",
+    "inference": "Shared-GPU prefill and queue contention is the most likely mechanism; the stable aligned tail request and broad paired slowdown argue against a one-off outlier."
+  },
+  "decision": {
+    "registered_go": false,
+    "failed_gate": "paired_p99_ttft_within_1_05",
+    "meaning": "The static cap-eight setting exposes useful throughput headroom but is not an acceptable unqualified replacement for cap four under the frozen tail-SLO gate.",
+    "next_action_authorized_by_protocol": false
+  }
+}
