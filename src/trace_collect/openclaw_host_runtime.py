@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import ipaddress
 import json
 import math
@@ -89,6 +90,16 @@ def _tool_name(record: dict[str, Any]) -> str | None:
     if isinstance(data, dict) and data.get("tool_name"):
         return str(data["tool_name"])
     return None
+
+
+def _canonical_json_sha256(value: Any) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _replayable_source_actions(
@@ -427,6 +438,7 @@ class OpenClawReplayProvider(LLMProvider):
             )
 
         action = self._llm_actions[self._index]
+        source_action_index = action.get("_source_action_index", self._index)
         self._index += 1
         data = dict(action.get("data") or {})
         start_s = float(action.get("ts_start", 0.0) or 0.0)
@@ -438,7 +450,20 @@ class OpenClawReplayProvider(LLMProvider):
             sleep_s, timing_fields = self._duration_s(data, source_duration_s)
             sleep_record = await self._sleep(sleep_s, phase="llm_replay")
         else:
-            shadow_metrics = await self._shadow_generate(data)
+            source_action_id = action.get("action_id")
+            if not isinstance(source_action_id, str) or not source_action_id:
+                raise RuntimeError("shadow generation source action has no action_id")
+            if (
+                not isinstance(source_action_index, int)
+                or isinstance(source_action_index, bool)
+                or source_action_index < 0
+            ):
+                raise RuntimeError("shadow generation source action has no valid index")
+            shadow_metrics = await self._shadow_generate(
+                data,
+                source_action_id=source_action_id,
+                source_action_index=source_action_index,
+            )
             sleep_record = None
             timing_fields = {"llm_timing_mode": "shadow_generation"}
         wall_end = time.time()
@@ -511,7 +536,13 @@ class OpenClawReplayProvider(LLMProvider):
         if self._shadow_client is not None:
             await self._shadow_client.aclose()
 
-    async def _shadow_generate(self, data: dict[str, Any]) -> dict[str, Any]:
+    async def _shadow_generate(
+        self,
+        data: dict[str, Any],
+        *,
+        source_action_id: str,
+        source_action_index: int,
+    ) -> dict[str, Any]:
         assert self._shadow_generation is not None
         assert self._shadow_client is not None
         requested_tokens = _coerce_completion_tokens(data.get("completion_tokens", 0))
@@ -519,6 +550,8 @@ class OpenClawReplayProvider(LLMProvider):
         started_at = time.monotonic()
         first_token_at: float | None = None
         token_ids: list[int] = []
+        prompt_token_ids: list[int] | None = None
+        request_id: str | None = None
         finish_reason: str | None = None
         usage: dict[str, Any] = {}
         request = {
@@ -547,6 +580,36 @@ class OpenClawReplayProvider(LLMProvider):
                     raise RuntimeError("shadow generation returned invalid SSE JSON") from exc
                 if not isinstance(chunk, dict):
                     raise RuntimeError("shadow generation returned a non-object SSE chunk")
+                raw_request_id = chunk.get("id")
+                if raw_request_id is not None:
+                    if not isinstance(raw_request_id, str) or not raw_request_id:
+                        raise RuntimeError(
+                            "shadow generation returned a malformed request ID"
+                        )
+                    if request_id is None:
+                        request_id = raw_request_id
+                    elif request_id != raw_request_id:
+                        raise RuntimeError(
+                            "shadow generation returned conflicting request IDs: "
+                            f"{request_id!r} and {raw_request_id!r}"
+                        )
+                raw_prompt_token_ids = chunk.get("prompt_token_ids")
+                if raw_prompt_token_ids is not None:
+                    if not isinstance(raw_prompt_token_ids, list) or any(
+                        not isinstance(token_id, int) or isinstance(token_id, bool)
+                        for token_id in raw_prompt_token_ids
+                    ):
+                        raise RuntimeError(
+                            "shadow generation returned malformed prompt token IDs"
+                        )
+                    if (
+                        prompt_token_ids is not None
+                        and prompt_token_ids != raw_prompt_token_ids
+                    ):
+                        raise RuntimeError(
+                            "shadow generation returned conflicting prompt token IDs"
+                        )
+                    prompt_token_ids = list(raw_prompt_token_ids)
                 raw_usage = chunk.get("usage")
                 if isinstance(raw_usage, dict):
                     usage = raw_usage
@@ -576,15 +639,52 @@ class OpenClawReplayProvider(LLMProvider):
                 "shadow generation token count mismatch: "
                 f"expected {requested_tokens}, got {len(token_ids)}"
             )
+        if request_id is None:
+            raise RuntimeError("shadow generation returned no request ID")
+        if prompt_token_ids is None:
+            raise RuntimeError("shadow generation returned no prompt token IDs")
+        raw_prompt_tokens = usage.get("prompt_tokens")
+        if (
+            not isinstance(raw_prompt_tokens, int)
+            or isinstance(raw_prompt_tokens, bool)
+            or raw_prompt_tokens < 0
+        ):
+            raise RuntimeError("shadow generation returned no valid prompt token count")
+        if raw_prompt_tokens != len(prompt_token_ids):
+            raise RuntimeError(
+                "shadow generation prompt token count mismatch: "
+                f"usage reported {raw_prompt_tokens}, got {len(prompt_token_ids)} IDs"
+            )
+        cached_prompt_tokens: int | None = None
+        prompt_token_details = usage.get("prompt_tokens_details")
+        if isinstance(prompt_token_details, dict):
+            raw_cached_prompt_tokens = prompt_token_details.get("cached_tokens")
+            if raw_cached_prompt_tokens is not None:
+                if (
+                    not isinstance(raw_cached_prompt_tokens, int)
+                    or isinstance(raw_cached_prompt_tokens, bool)
+                    or raw_cached_prompt_tokens < 0
+                ):
+                    raise RuntimeError(
+                        "shadow generation returned malformed cached prompt tokens"
+                    )
+                cached_prompt_tokens = raw_cached_prompt_tokens
         finished_at = time.monotonic()
         return {
             "model": self._shadow_generation.model,
             "seed": self._shadow_generation.seed,
+            "source_action_id": source_action_id,
+            "source_action_index": source_action_index,
+            "request_id": request_id,
+            "messages_sha256": _canonical_json_sha256(request["messages"]),
+            "prompt_tokens": raw_prompt_tokens,
+            "prompt_token_ids_sha256": _canonical_json_sha256(prompt_token_ids),
+            "cached_prompt_tokens": cached_prompt_tokens,
             "requested_completion_tokens": requested_tokens,
             "returned_completion_tokens": len(token_ids),
             "completion_token_ids": token_ids,
+            "completion_token_ids_sha256": _canonical_json_sha256(token_ids),
             "finish_reason": finish_reason,
-            "prompt_tokens": _coerce_nonnegative_int(usage.get("prompt_tokens", 0)),
             "ttft_ms": round(
                 ((first_token_at or finished_at) - started_at) * 1000.0, 3
             ),
@@ -1155,7 +1255,9 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
 
     source_actions = list(request["source_actions"])
     llm_actions = [
-        action for action in source_actions if action.get("action_type") == "llm_call"
+        {**action, "_source_action_index": action_index}
+        for action_index, action in enumerate(source_actions)
+        if action.get("action_type") == "llm_call"
     ]
     container_id = str(request["container_id"])
     container_executable = str(request["container_executable"])

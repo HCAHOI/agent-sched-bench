@@ -675,8 +675,10 @@ def test_openclaw_replay_provider_charges_streamed_shadow_generation(
             pass
 
         async def aiter_lines(self):
-            yield 'data: {"choices":[{"delta":{"content":"shadow","token_ids":[101,102]}}]}'
-            yield 'data: {"choices":[{"delta":{"token_ids":[103]},"finish_reason":"length"}],"usage":{"prompt_tokens":12,"completion_tokens":3}}'
+            yield 'data: {"id":"chatcmpl-shadow-1","prompt_token_ids":[11,12,13,14],"choices":[{"index":0,"delta":{"content":""},"token_ids":[]}]}'
+            yield 'data: {"id":"chatcmpl-shadow-1","choices":[{"index":0,"delta":{"content":"shadow"},"token_ids":[101,102]}]}'
+            yield 'data: {"id":"chatcmpl-shadow-1","choices":[{"index":0,"delta":{},"token_ids":[103],"finish_reason":"length"}]}'
+            yield 'data: {"id":"chatcmpl-shadow-1","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":3,"total_tokens":7,"prompt_tokens_details":{"cached_tokens":2}}}'
             yield "data: [DONE]"
 
     class _FakeStream:
@@ -732,6 +734,8 @@ def test_openclaw_replay_provider_charges_streamed_shadow_generation(
     ]
     source_action = {
         "action_type": "llm_call",
+        "action_id": "source-llm-17",
+        "_source_action_index": 17,
         "data": {
             "messages_in": source_messages,
             "completion_tokens": 3,
@@ -813,12 +817,21 @@ def test_openclaw_replay_provider_charges_streamed_shadow_generation(
     } == {
         "model": "meta-llama/Llama-3.1-8B-Instruct",
         "seed": 7,
+        "source_action_id": "source-llm-17",
+        "source_action_index": 17,
+        "request_id": "chatcmpl-shadow-1",
+        "messages_sha256": "931c14a7ef9572cf8ed6f2731ea220338260aed780487ca2401121275fdea865",
+        "prompt_tokens": 4,
+        "prompt_token_ids_sha256": "15225829a74894d4d186cc6d46095a2847e22d6223b6ec9ecc74e9e1d043175b",
+        "cached_prompt_tokens": 2,
         "requested_completion_tokens": 3,
         "returned_completion_tokens": 3,
         "completion_token_ids": [101, 102, 103],
+        "completion_token_ids_sha256": "6251b266c29efaa1b7377992b2bde7fd92eb600e6eec9bd11745c33866e854a0",
         "finish_reason": "length",
-        "prompt_tokens": 12,
     }
+    assert "prompt_token_ids" not in shadow_metrics
+    assert "messages" not in shadow_metrics
     assert shadow_metrics["ttft_ms"] >= 0
     assert shadow_metrics["latency_ms"] >= shadow_metrics["ttft_ms"]
     assert captured["client_kwargs"] == {"timeout": 12.0, "trust_env": False}
@@ -865,6 +878,7 @@ def test_openclaw_replay_provider_rejects_shadow_token_count_mismatch(
         llm_actions=[
             {
                 "action_type": "llm_call",
+                "action_id": "source-mismatch",
                 "data": {
                     "messages_in": [],
                     "completion_tokens": 2,
@@ -884,6 +898,72 @@ def test_openclaw_replay_provider_rejects_shadow_token_count_mismatch(
 
     try:
         with pytest.raises(RuntimeError, match="expected 2, got 1"):
+            asyncio.run(provider.chat([]))
+    finally:
+        asyncio.run(provider.aclose())
+
+
+def test_openclaw_replay_provider_rejects_conflicting_stream_request_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trace_collect.openclaw_host_runtime import (
+        OpenClawReplayProvider,
+        ShadowGenerationConfig,
+    )
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        async def aiter_lines(self):
+            yield 'data: {"id":"chatcmpl-a","prompt_token_ids":[11],"choices":[{"index":0,"delta":{},"token_ids":[101]}]}'
+            yield 'data: {"id":"chatcmpl-b","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"prompt_tokens_details":{"cached_tokens":0}}}'
+            yield "data: [DONE]"
+
+    class _FakeStream:
+        async def __aenter__(self):
+            return _FakeResponse()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _FakeClient:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def stream(self, *_args, **_kwargs):
+            return _FakeStream()
+
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "trace_collect.openclaw_host_runtime.httpx.AsyncClient", _FakeClient
+    )
+    provider = OpenClawReplayProvider(
+        llm_actions=[
+            {
+                "action_type": "llm_call",
+                "action_id": "source-conflicting-id",
+                "data": {
+                    "messages_in": [{"role": "user", "content": "source"}],
+                    "completion_tokens": 1,
+                    "raw_response": {"choices": []},
+                },
+            }
+        ],
+        replay_speed=1.0,
+        timing_mode="source_scaled",
+        shadow_generation=ShadowGenerationConfig(
+            api_base="http://127.0.0.1:8000/v1",
+            model="meta-llama/Llama-3.1-8B-Instruct",
+            timeout_s=12.0,
+            seed=7,
+        ),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="conflicting request IDs"):
             asyncio.run(provider.chat([]))
     finally:
         asyncio.run(provider.aclose())
@@ -944,7 +1024,18 @@ def test_openclaw_host_replay_request_closes_provider_after_runner_failure(
     status = asyncio.run(
         run_openclaw_host_replay_request(
             {
-                "source_actions": [],
+                "source_actions": [
+                    {
+                        "action_type": "tool_exec",
+                        "action_id": "source-tool-0",
+                        "data": {"tool_name": "exec"},
+                    },
+                    {
+                        "action_type": "llm_call",
+                        "action_id": "source-llm-1",
+                        "data": {"messages_in": [], "completion_tokens": 1},
+                    },
+                ],
                 "container_id": "cid",
                 "container_executable": "docker",
                 "output_trace": str(tmp_path / "replay.jsonl"),
@@ -977,6 +1068,8 @@ def test_openclaw_host_replay_request_closes_provider_after_runner_failure(
     assert shadow_generation.model == "meta-llama/Llama-3.1-8B-Instruct"
     assert shadow_generation.timeout_s == 12.0
     assert shadow_generation.seed == 7
+    assert captured["llm_actions"][0]["action_id"] == "source-llm-1"
+    assert captured["llm_actions"][0]["_source_action_index"] == 1
     assert json.loads(status_path.read_text(encoding="utf-8"))["success"] is False
 
 

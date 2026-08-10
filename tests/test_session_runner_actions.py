@@ -449,11 +449,18 @@ async def _drive_persists_shadow_generation_metrics(tmp_path: Path) -> None:
     shadow_generation = {
         "model": "meta-llama/Llama-3.1-8B-Instruct",
         "seed": 7,
+        "source_action_id": "source-llm-17",
+        "source_action_index": 17,
+        "request_id": "chatcmpl-shadow-1",
+        "messages_sha256": "931c14a7ef9572cf8ed6f2731ea220338260aed780487ca2401121275fdea865",
+        "prompt_tokens": 4,
+        "prompt_token_ids_sha256": "15225829a74894d4d186cc6d46095a2847e22d6223b6ec9ecc74e9e1d043175b",
+        "cached_prompt_tokens": 2,
         "requested_completion_tokens": 3,
         "returned_completion_tokens": 3,
         "completion_token_ids": [101, 102, 103],
+        "completion_token_ids_sha256": "6251b266c29efaa1b7377992b2bde7fd92eb600e6eec9bd11745c33866e854a0",
         "finish_reason": "length",
-        "prompt_tokens": 12,
         "ttft_ms": 10.5,
         "latency_ms": 20.5,
     }
@@ -477,6 +484,9 @@ async def _drive_persists_shadow_generation_metrics(tmp_path: Path) -> None:
         if record.get("type") == "action" and record.get("action_type") == "llm_call"
     )
     assert llm_call["data"]["shadow_generation"] == shadow_generation
+    assert llm_call["data"]["messages_in"] == messages
+    assert "messages" not in llm_call["data"]["shadow_generation"]
+    assert "prompt_token_ids" not in llm_call["data"]["shadow_generation"]
 
 
 async def _drive_openrouter_latency_fields(tmp_path: Path) -> None:
