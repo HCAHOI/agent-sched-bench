@@ -1034,6 +1034,34 @@ admits useful work but hides bursts, while whole-command peak preserves service
 but assumes worst phases coincide. The next mechanism question is therefore
 within-command phase alignment, not another scalar threshold.
 
+### 5.15 Frozen PennyLane phase-shape ceiling
+
+The exact-peak result assumes two commands' worst CPU bursts coincide. Test the
+smallest alternative that removes only that assumption. Reuse the Section 5.14
+population, single task-start wave, observed RSS filter, FCFS candidate order,
+strict foreground priority, and Serial-8 baseline without changing any command,
+delay, or CPU work.
+
+At each backfill decision, the phase-shape oracle aligns the running
+foreground command's remaining sampled CPU-work profile with a ready
+candidate's profile from its first sample. It admits the candidate only if the
+sum of their sampled core demands never exceeds eight cores before either
+command finishes. Profiles use the existing 0.5 s telemetry intervals; partial
+foreground progress is retained exactly. The check is repeated at every later
+admission. This is a hindsight compatibility ceiling that assumes an isolated
+profile remains stable when shifted in time, not a causal predictor or a live
+feedback policy.
+
+GO requires at least 5% lower mean task completion than Serial-8, at most 5%
+aggregate command-service inflation, and zero logical/physical capacity or
+CPU-work violations. Exact-peak FCFS remains the fixed scalar control. A pass
+authorizes a separately frozen feasibility test for predicting phase envelopes
+from fit-task clause and timeline evidence plus locating the foreground phase
+from causal runtime feedback. A failure closes this single-start, pairwise
+CPU-backfill action under the present PennyLane wave; it does not rule out a
+preemptive or differently timed action. No phase smoothing, tolerance,
+candidate reordering, or gate may change after the outcome is read.
+
 ## 6. Closed directions
 
 - **Lookup structure alone:** trie, lattice, generic argv, pip/pytest semantic
