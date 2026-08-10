@@ -24,11 +24,11 @@ artifacts retain that history.
 | Manual tool semantics | **KEEP only the pytest candidate-routing question.** A hindsight selector over existing causal candidates improved full-cohort four-target accuracy by 1.941 points for pytest, but 93/118 corrections merely restored Clause-KB; adding more pytest rules is not supported. pip missed the frozen contrast gate and its perfect-tool ceiling was only 0.392 points, so deprioritize pip-specific work. |
 | KV victim selection | Closed under the current CacheWise/C100 simulator and action model. |
 | GPU tool-gap action | The profile-only early clock and pre-restore are closed by the Section 5.1 offline gate. The load-8 live action test remains unresolved. The load-32 hard-pin control in Section 5.3 was invalid; Section 5.4 compares the unchanged five-second action with stock evictable prefix caching. |
-| Static survival KV action | Raw Clause-KB, exact-command, exact work-signature, and causal work-state histories all released more memory-time but increased stall. Work state never changed an action beyond work signature. The realized-survival oracle retains substantial action headroom. |
+| Static survival KV action | Raw Clause-KB, exact-command, exact work-signature, and causal work-state histories all released more memory-time but increased stall. A task-stable robust clock then changed zero actions because its latency-utility objective cannot value earlier memory release when both triggers finish before the gap ends. The realized-survival oracle retains substantial action headroom. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Representation alone did not control costly false positives. Before fresh evaluation, freeze a risk-aware abstention rule that exposes uncertainty in duration history; do not tune support or probability thresholds on exposed SWE. |
+| Next research step | The next survival action must optimize released memory-time under stall risk directly, not reuse a latency-only utility clock. It requires genuinely fresh same-repository task outcomes; do not try alternate triggers or tune thresholds on exposed SWE. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -156,6 +156,7 @@ All rows below are development-exposed.
 |---|---|---|
 | CacheWise/C100 KV victim selection | Task-Aware Command Predictor improved C100 recomputation 1.481%; block-aware hindsight upper bound improved 9.620% | Closed for current simulator/action model |
 | Complete-work/state survival action | Exact command: +668.981 GiB-s release, +1,236.944 ms stall; work and work+state: +794.288 GiB-s, +1,848.373 ms. State changed zero actions. | All learned arms fail the no-added-stall gate; representation-only branch closed on exposed SWE |
+| Task-stable robust survival clock | Exact and work clocks both changed zero actions and were bit-identical to five-second feedback. | NO-GO for this action objective; latency utility cannot select memory-time-only improvements |
 | CPU+RSS admission oracle | Hindsight reservations reduced mean makespan 10.868% | Action space exists |
 | Peak-class predictor admission | Task-Aware Command Predictor was 9.630% slower than Clause-KB and both created many unverifiable capacity exposures | Direct hard-class admission closed |
 | Physical under-reservation | 2 cores were 3.928x slower than 8; 2 GiB `memory.high` did not finish within 3,600 s versus 18.493 s baseline | Under-reservation cost is real and must be charged |
@@ -781,6 +782,26 @@ SWE without trying thresholds or alternate trigger rules. A passing development
 arm only authorizes a separately frozen evaluation on genuinely fresh task
 outcomes; it is not confirmation itself.
 
+**Result and decision.** The formal development run used the frozen 82-task fit
+population and 177-task replay population. Both robust arms chose the
+five-second feedback time for every available query, so each was bit-identical
+to feedback: zero additional GiB-seconds, zero added stall, and zero changed
+tasks. Both therefore failed the release and 20-task activation gates. The run
+took 113.125 CPU seconds and used no GPU or prediction-time agent calls. No
+fresh split was opened.
+
+A post-outcome read-only attribution separates three causes. Exact history had
+255 queries with fewer than two independent tasks and 905 utility fallbacks;
+work history had 173 thin-history queries and 1,206 utility fallbacks. Only two
+work queries reached an early raw trigger and were rejected by the Pareto guard,
+so relaxing that guard could not meet the 20-task gate. Among the full-history
+utility failures, 47 exact and 88 work queries were pure far-tail histories:
+earlier and five-second triggers tied on latency utility even though earlier
+release had positive memory-time value without added stall. Thus the observed
+dominant blocker is an objective mismatch, not task stability or the Pareto
+guard. This does not authorize fitting a memory-time trigger on the same exposed
+SWE outcomes; that action needs a new preregistration and genuinely fresh data.
+
 ## 6. Closed directions
 
 - **Lookup structure alone:** trie, lattice, generic argv, pip/pytest semantic
@@ -876,6 +897,8 @@ Result root:
   `../static-survival-gap-action-swe177-20260810/result.json`
 - Complete-work and causal-state survival attribution:
   `../survival-work-state-action-swe177-20260810/result.json`
+- Task-stable robust survival clock:
+  `../survival-robust-clock-swe177-20260810/result.json`
 
 Docs-only compiler development artifact:
 `analysis/results/offline-tool-semantics-sqlglot-v1/result.json`.
