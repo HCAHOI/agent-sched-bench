@@ -823,9 +823,11 @@ wait five seconds. There is no similarity, parent fallback, state feature,
 support threshold beyond the two-task identifiability requirement, or runtime
 agent. KV size uses the Llama-3.1-8B-Instruct chat-template prompt plus the
 just-finished recorded completion, retains complete 16-token blocks, and uses
-the existing measured A100 transfer profile. Five-second feedback, immediate
-exact/work actions, the exact-key direct trigger, and realized survival are
-controls.
+the existing measured A100 transfer profile. The evaluator pins the public
+RedHatAI W4A16 mirror at revision `6a426ef8` and verifies that its tokenizer,
+chat-template config, and special-token blobs equal the official Meta listing.
+Five-second feedback, immediate exact/work actions, the exact-key direct
+trigger, and realized survival are controls.
 
 The primary work-signature arm advances only if it releases strictly more
 GiB-seconds than feedback, adds no aggregate critical-path stall, and changes at
