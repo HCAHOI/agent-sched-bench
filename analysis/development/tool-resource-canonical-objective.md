@@ -1121,6 +1121,35 @@ passes and therefore authorizes only replacing the actual foreground future
 profile. Candidate prediction is causal, but foreground shape and RSS safety
 remain hindsight controls; this is not yet a deployable scheduler result.
 
+### 5.17 Frozen two-sided causal CPU-envelope feasibility
+
+Remove foreground-future hindsight without changing the Clause-KB
+representation. Build the same fit-only envelopes from the fixed 15 fit tasks
+for every matched replay command. The coverage audit found envelopes for
+398/570 commands and for the foreground in 250/287 one-sided speculative
+starts. These counts are exposed diagnostics, not a result gate.
+
+At each admission, locate the running foreground solely by elapsed wall time
+since its observed command start and slice its fit envelope at that offset.
+Align the predicted remaining foreground envelope with the ready candidate's
+fit envelope from time zero. Admit only when their predicted sum never exceeds
+eight cores. If either command has no fit envelope, or the foreground is still
+running after its envelope ends, fail closed. Do not consult the foreground's
+actual profile index, remaining segment, current replay CPU rate, or future
+samples. A command promoted after speculative execution uses the same causal
+wall-time position; no hidden correction restores its isolated phase.
+
+The physical simulator still executes both replay profiles, so every two-sided
+prediction error is charged as service inflation. Candidate eligibility remains
+the observed RSS-safe set; RSS is the sole remaining hindsight admission
+control. Compare with Serial-8, the full-profile oracle, and the one-sided
+candidate-envelope arm in the same wave. GO requires at least 5% lower mean
+task completion, at most 5% aggregate service inflation, and zero capacity or
+CPU-work violations. A pass authorizes a separately frozen RSS replacement and
+then physical validation; a failure stops this phase-envelope scheduler. No
+profile tail, feedback correction, key, order, or gate may change after reading
+the outcome.
+
 ## 6. Closed directions
 
 - **Lookup structure alone:** trie, lattice, generic argv, pip/pytest semantic
