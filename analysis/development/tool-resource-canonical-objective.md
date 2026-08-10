@@ -26,7 +26,7 @@ artifacts retain that history.
 | GPU tool-gap action | The profile-only early clock and pre-restore are closed by the Section 5.1 offline gate. The load-8 live action test remains unresolved. The load-32 hard-pin control in Section 5.3 was invalid; Section 5.4 compares the unchanged five-second action with stock evictable prefix caching. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
-| Next research step | Run the Section 5.4 load-32 stock-cache versus `deadline/reactive` A/B only if its bounded cache smoke completes. Do not implement the failed robust clock or pre-restore. Admit a new CPU experiment only if it supplies the missing causal RSS-safety signal or a genuinely different action. |
+| Next research step | Finish the Section 5.4 load-32 stock-cache versus `deadline/reactive` A/B, then run only the Section 5.5 fixed-trajectory bridge smoke. Do not implement the failed robust clock or pre-restore. Observation-driven CPU admission is gated on a positive static-concurrency ceiling. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -517,6 +517,54 @@ draw, temperatures, SM clock, and both thermal flags; any formal sample with a
 thermal-slowdown flag makes timing comparisons invalid. Workload, order,
 policies, outputs, and every Section 5.2 gate remain unchanged. The default
 300 W limit is restored after the run.
+
+### 5.5 Frozen fixed-trajectory CPU/GPU bridge
+
+**Question.** Can the existing exact-tool replay charge real shared-GPU Llama
+work without letting generated text change the recorded trajectory, and does
+static higher agent concurrency leave enough physical headroom to justify an
+observation-driven admission scheduler?
+
+Each source `llm_call` sends its recorded `messages_in` to one shared local
+Llama-3.1-8B-Instruct vLLM server with temperature zero, `ignore_eos`, and the
+recorded completion-token count. The generated token IDs and TTFT are recorded
+but the text is discarded; the provider returns the source `raw_response`, so
+the existing OpenClaw runner executes the exact source action IDs, tool-call
+IDs, arguments, order, and task-container state. This is fixed-trajectory
+shadow inference, not autonomous-agent correctness. The recorded completion
+count is workload specification and is never policy input.
+
+The only authorized first run is a non-evidentiary smoke over the first eight
+SQLGlot100 manifest tasks, once at maximum active-task counts four and eight.
+Both use fresh two-core-capped task containers, the same cached image digests,
+the same fixed task order, required eBPF finalization, one otherwise-unshared
+A100 at 250 W, and a fresh vLLM process. The smoke passes only if every expected
+LLM call emits exactly its requested token count, every exact source action is
+emitted in order, all tool arguments match, all telemetry is valid, every
+container reports the two-core cap, and there is no framework error, OOM, or
+thermal slowdown. Smoke timing is not evidence.
+
+The four-versus-eight contrast is explicitly a **static concurrency ceiling**,
+not an observation or prediction contribution. A formal static comparison is
+not authorized until all jobs can be staged before a shared cell-zero and JCT
+can include admission wait from that common ready time. Its protocol must use
+ABBA order `4, 8, 8, 4`, a fresh vLLM/KV state and identical excluded warm-up
+per cell, fresh containers from pinned image digests, and action-ID-aligned
+equality of tool terminal class in each pair. Byte-identical tool output is not
+required because replay output never enters the shadow prompt. Any formal claim
+also requires both eight-task-cap repetitions to lower makespan, aggregate mean
+ready-to-terminal JCT by at least 5%, and keep paired p95 JCT and p99 LLM TTFT
+within 1.05 times the four-task-cap arm.
+
+Only a valid positive static ceiling authorizes a separately frozen causal
+admission action: at most four non-tool phases, release a foreground slot when
+a task reveals a tool call, reacquire before its next LLM request, at most eight
+active tasks, and an independently enforced four-tool ceiling. The smoke must
+verify the global limits across worker processes. A tool-sleep shadow control
+may then separate GPU batching from real-tool overlap; it cannot rescue a
+failed primary result. Predictor contribution remains unclaimed until another
+pre-outcome protocol names a prediction-dependent action. All SQLGlot evidence
+in this section is development-exposed.
 
 ## 6. Closed directions
 
