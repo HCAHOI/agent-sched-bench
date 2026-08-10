@@ -759,6 +759,16 @@ def _expansion_plan(
     def refuse(reason: str) -> _ExpansionPlan:
         return _ExpansionPlan(intents, (), in_loop, reason)
 
+    has_literal_argument_anchor = any(
+        index > 0
+        and isinstance(intent.get("components"), list)
+        and bool(intent["components"])
+        and all(
+            component.get("kind") == "literal"
+            for component in intent["components"]
+        )
+        for index, intent in enumerate(intents)
+    )
     segments_by_word: list[tuple[str, ...] | None] = []
     for intent in intents:
         components = intent.get("components")
@@ -790,7 +800,20 @@ def _expansion_plan(
             return refuse("invalid_quoted_pathname_expansion")
         if dynamic:
             segments = _dynamic_segments(intent)
-            if segments is None or (not in_loop and not any(segments)):
+            unanchored_command_substitution = (
+                dynamic == {"command_substitution"}
+                and has_literal_argument_anchor
+                and all(
+                    component.get("quoted") is True
+                    for component in components
+                    if component.get("kind") == "command_substitution"
+                )
+            )
+            if segments is None or (
+                not in_loop
+                and not any(segments)
+                and not unanchored_command_substitution
+            ):
                 return refuse("unsupported_dynamic_expansion")
             segments_by_word.append(segments)
         else:

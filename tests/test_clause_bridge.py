@@ -2800,6 +2800,34 @@ def test_unanchored_parameter_expansion_is_refused_outside_a_loop() -> None:
     assert not result.observations
 
 
+def test_unanchored_expansion_maps_when_other_arguments_anchor_invocation() -> None:
+    images = [
+        _img(
+            100,
+            0,
+            "ln",
+            0,
+            5 * _MS,
+            terminal=True,
+            cores=0.1,
+            argv=("ln", "-sf", "/usr/bin/python3", "/tmp/test-bin/python"),
+        ),
+    ]
+    result = bridge_command(
+        "r1",
+        'ln -sf "$(command -v python3)" /tmp/test-bin/python',
+        images,
+        entry_pid=99,
+        fork_parent={100: 99},
+    )
+
+    assert result.data_valid
+    assert not result.coverage_gaps
+    assert result.bridged[0].mapping_evidence == (
+        "initial_invocation_unique_expansion"
+    )
+
+
 def test_anchored_command_substitution_maps_unique_invocation() -> None:
     images = [
         _img(
