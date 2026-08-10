@@ -26,7 +26,7 @@ artifacts retain that history.
 | GPU tool-gap action | The profile-only early clock and pre-restore are closed by the Section 5.1 offline gate. The load-8 live action test remains unresolved. The load-32 hard-pin control in Section 5.3 was invalid; Section 5.4 compares the unchanged five-second action with stock evictable prefix caching. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
-| Next research step | Run the separately registered Section 5.6 phase-aware shadow-request admission experiment. It is a new action test, not a reinterpretation of the failed static cap-eight gate. |
+| Next research step | Do not confirm or tune the Section 5.6 action. Its throughput/JCT headroom is real, but blind request-slot queueing violates the tail SLO; a successor must name a different prediction-dependent action and fresh protocol before outcomes. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -594,58 +594,46 @@ action. All SQLGlot evidence in this section is development-exposed; the full
 machine-readable result is in
 `analysis/results/fixed-trajectory-static-ceiling-20260810/result.json`.
 
-### 5.6 Registered phase-aware shadow-request admission
+### 5.6 Phase-aware shadow-request admission — development NO-GO
 
-**Open amendment, 2026-08-10, before implementation or outcome access.** The
-Section 5.5 static cap-eight result is and remains a NO-GO under its frozen
-tail gate. This separate experiment tests the diagnosed mechanism: eight task
-containers may remain resident and execute tools, while no more than four
-shadow LLM requests may be in flight. It does not claim observation or
-prediction contribution.
+This experiment was registered before implementation or outcome access and
+does not alter the Section 5.5 static NO-GO. The control admitted four tasks
+and four shadow requests; the candidate admitted eight tasks while retaining a
+four-request cap. The host acquired one cross-process slot immediately before
+each real HTTP request, released it in `finally`, and charged the wait to
+end-to-end TTFT. No prediction, task identity, tool property, future duration,
+or vLLM-internal state affected admission.
 
-The control admits at most four tasks and four shadow requests. The candidate
-admits all eight tasks but still admits at most four shadow requests. A task
-waits immediately before the real HTTP request and releases its slot in a
-`finally` block immediately after that request. The action therefore uses only
-the causally available request boundary. No tool type, tool duration,
-prediction, output, future completion length, task identity, or vLLM-internal
-state affects admission. Both arms use the same lock path and instrumentation.
+The fixed development ABBA was `task4/llm4, task8/llm4, task8/llm4,
+task4/llm4` on the already exposed SQLGlot first eight. Every cell preserved
+all 480 actions, 244 LLM calls, 236 tool calls, and 43,439 requested/returned
+completion tokens. Exact source/replay action identity held for all tasks;
+request occupancy peaked at four and returned to zero. Each cell had 161/162
+eBPF calls eligible, with the same SQLGlot-3799 `unmatched_static_clause`
+withheld fail-closed. All 32 task executions succeeded with valid collection,
+two-core containers, no telemetry-integrity failure, no OOM, and no thermal
+slowdown.
 
-Each request records request-ready, slot-acquired, first-token, request-end,
-and slot-release times. Server TTFT starts at slot acquisition. End-to-end
-TTFT starts before slot acquisition and equals admission wait plus server TTFT;
-this is the tail metric used by the gate, so queueing cannot be hidden outside
-the reported SLO. Task JCT remains common-ready to terminal completion.
+The candidate reduced common-ready makespan by 3.541% and 9.063% in the two
+pairs and reduced pooled mean task JCT by 13.465%. Its paired p95 task-JCT
+ratios were 0.883 and 0.839. It nevertheless failed the frozen tail gate:
+p99 end-to-end TTFT ratios were 22.231 and 15.984, versus the allowed 1.05.
+Candidate request-slot wait p99 was 16.717 s and 11.490 s, while server p99
+TTFT remained 0.753 s and 0.769 s. Host admission queueing therefore dominates
+the tail failure; the smaller server-service movement does not explain its
+magnitude.
 
-Development uses only the already exposed first eight Section 5.5 tasks, with
-the same source trajectories, manifest order, two-core containers, eBPF,
-Llama-3.1-8B-Instruct A100-80GB server at 250 W, warm-up, and fresh vLLM/KV
-state per cell. After a bounded plumbing smoke, the fixed order is
-`task4/llm4, task8/llm4, task8/llm4, task4/llm4`; pairing is cells one/two and
-four/three. No setting or threshold changes after any cell outcome is read.
+The action redistributes completion time rather than improving every task: the
+first four manifest tasks became 9.97%--30.31% slower, while the later four
+became 23.82%--43.56% faster. The throughput/JCT opportunity is retained as
+mechanism evidence and the implementation remains available, but the frozen
+joint gate is **NO-GO**. No alternate slot count, task order, or exposed subset
+may be tried, and this result does not authorize fresh confirmation or a
+prediction contribution claim.
 
-All four cells must preserve the exact source action IDs, types, tool names,
-tool-call IDs, arguments, order, requested and returned token counts, two-core
-container cap, telemetry validity, and absence of framework error, OOM, or
-thermal slowdown. Reconstructed shadow-request occupancy must never exceed
-four, every acquisition must have one release, and each candidate cell must
-reach eight active tasks and four simultaneous shadow requests.
-
-The development result is GO only if, in both pairs separately, the candidate
-has lower common-ready makespan; pooled mean task JCT is at least 5% lower;
-paired p95 task-JCT ratios are at most 1.05; and paired p99 end-to-end TTFT
-ratios are at most 1.05. The repository's existing linear-interpolation
-percentile is used. Server TTFT, slot-wait distribution, per-cell absolute
-metrics, and all validity counts are reported but do not replace these gates.
-Any failure stops without trying another slot count, ordering, task subset, or
-vLLM setting.
-
-Only a development GO permits fresh confirmation. A metadata-only audit of the
-official `nebius/SWE-rebench` filtered split found 88 SQLGlot IDs absent from
-all current local trace directories, analysis/config mentions, and the
-authoritative 200-task split. Seed 42 reserved these 16 IDs before development
-outcomes. Only identifiers were extracted; no patch, result, or outcome field
-was displayed or used:
+A pre-outcome metadata-only audit had reserved the following 16 SQLGlot IDs.
+They remain untouched: no patch, result, or outcome field was displayed or
+used.
 
 ```text
 tobymao__sqlglot-884   tobymao__sqlglot-1367
@@ -658,10 +646,9 @@ tobymao__sqlglot-2226  tobymao__sqlglot-1089
 tobymao__sqlglot-1670  tobymao__sqlglot-1782
 ```
 
-Fresh source collection and confirmation require a separate costed launch
-decision after the development gate. Merely listing identifiers does not expose
-their outcomes. Predictor-gated release is a later attribution arm only if
-observation-free request admission first establishes useful action headroom.
+The failed development gate means these tasks must not be collected or opened
+for this action. The full machine-readable result is in
+`analysis/results/fixed-trajectory-phase-aware-admission-20260810/result.json`.
 
 ## 6. Closed directions
 

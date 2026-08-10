@@ -1,0 +1,224 @@
+{
+  "schema_version": 1,
+  "experiment": "phase-aware-shadow-request-admission",
+  "date": "2026-08-10",
+  "decision": "NO-GO",
+  "decision_reason": "The candidate passed validity, makespan, mean task JCT, and p95 task JCT gates, but failed the frozen p99 end-to-end TTFT gate in both pairs.",
+  "protocol": {
+    "development_tasks": "Already exposed SQLGlot first eight from Section 5.5",
+    "order": [
+      "task4_llm4",
+      "task8_llm4",
+      "task8_llm4",
+      "task4_llm4"
+    ],
+    "pairing": [
+      [
+        "cell_02_c8",
+        "cell_01_c4"
+      ],
+      [
+        "cell_03_c8",
+        "cell_04_c4"
+      ]
+    ],
+    "container_cpu_cap": 2,
+    "shadow_request_cap": 4,
+    "percentile": "linear interpolation",
+    "hardware": "NVIDIA A100 80GB at 250 W",
+    "remote_root": "/home/Ubuntu/shadow-sqlglot-phase-aware-abba-20260810T0920Z",
+    "formal_wall_time_s": 2571
+  },
+  "validity": {
+    "all_checks_pass": true,
+    "driver_exit_code": 0,
+    "tasks_successful_per_cell": 8,
+    "actions_per_cell": 480,
+    "llm_calls_per_cell": 244,
+    "tool_calls_per_cell": 236,
+    "requested_completion_tokens_per_cell": 43439,
+    "returned_completion_tokens_per_cell": 43439,
+    "exact_source_replay_action_identity_tasks_per_cell": 8,
+    "action_sequence_matches_tasks_per_cell": 8,
+    "provider_request_sequence_matches_tasks_per_cell": 8,
+    "collection_valid_tasks_per_cell": 8,
+    "formal_completeness_per_cell": {
+      "complete": 7,
+      "partial": 1
+    },
+    "telemetry_calls_per_cell": {
+      "total": 162,
+      "eligible": 161,
+      "withheld": 1,
+      "withheld_reason": "unmatched_static_clause"
+    },
+    "telemetry_integrity_failures": 0,
+    "max_shadow_requests_in_flight_per_cell": 4,
+    "final_shadow_requests_in_flight_per_cell": 0,
+    "candidate_reached_eight_active_tasks": true,
+    "all_containers_ready_before_common_ready": true,
+    "all_container_cpu_caps_exactly_two": true,
+    "kernel_oom_messages_since_launch": 0,
+    "thermal_slowdown_rows": 0,
+    "constant_background_note": "Two containers from an invalid smoke remained at sleep infinity in every formal cell, at 0 CPU and about 47 MiB combined; they were removed only after all cells completed."
+  },
+  "cells": [
+    {
+      "cell": "cell_01_c4",
+      "arm": "control",
+      "task_cap": 4,
+      "common_ready_makespan_s": 608.8308361030067,
+      "mean_task_jct_s": 392.97346493100486,
+      "p95_task_jct_s": 580.8235322557549,
+      "server_ttft_ms": {
+        "mean": 216.57463114754094,
+        "p99": 762.7942199999998
+      },
+      "end_to_end_ttft_ms": {
+        "mean": 216.64654508196716,
+        "p99": 762.8768099999998
+      },
+      "admission_wait_ms": {
+        "mean": 0.07191393442622951,
+        "p95": 0.12084999999999999,
+        "p99": 0.2289599999999998,
+        "max": 0.459
+      }
+    },
+    {
+      "cell": "cell_02_c8",
+      "arm": "candidate",
+      "task_cap": 8,
+      "common_ready_makespan_s": 587.2735962570005,
+      "mean_task_jct_s": 346.5747305665036,
+      "p95_task_jct_s": 512.8269525607519,
+      "server_ttft_ms": {
+        "mean": 231.60489344262305,
+        "p99": 752.9216599999997
+      },
+      "end_to_end_ttft_ms": {
+        "mean": 1984.0467909836066,
+        "p99": 16959.141489999987
+      },
+      "admission_wait_ms": {
+        "mean": 1752.4418975409833,
+        "p95": 8134.702299999999,
+        "p99": 16716.65136999999,
+        "max": 20540.58
+      }
+    },
+    {
+      "cell": "cell_03_c8",
+      "arm": "candidate",
+      "task_cap": 8,
+      "common_ready_makespan_s": 569.2777733250041,
+      "mean_task_jct_s": 340.8742095203761,
+      "p95_task_jct_s": 495.1243689097015,
+      "server_ttft_ms": {
+        "mean": 225.07518442622947,
+        "p99": 768.7973099999997
+      },
+      "end_to_end_ttft_ms": {
+        "mean": 1849.032061475409,
+        "p99": 11794.773219999992
+      },
+      "admission_wait_ms": {
+        "mean": 1623.9568770491803,
+        "p95": 7266.094700000001,
+        "p99": 11489.808449999993,
+        "max": 21907.003
+      }
+    },
+    {
+      "cell": "cell_04_c4",
+      "arm": "control",
+      "task_cap": 4,
+      "common_ready_makespan_s": 626.0099613249986,
+      "mean_task_jct_s": 401.4451785145002,
+      "p95_task_jct_s": 589.9223330763001,
+      "server_ttft_ms": {
+        "mean": 213.4339918032787,
+        "p99": 737.8126799999993
+      },
+      "end_to_end_ttft_ms": {
+        "mean": 213.51044262295076,
+        "p99": 737.8925899999992
+      },
+      "admission_wait_ms": {
+        "mean": 0.07645081967213113,
+        "p95": 0.12955,
+        "p99": 0.32808999999999977,
+        "max": 0.553
+      }
+    }
+  ],
+  "paired_results": [
+    {
+      "pair": 1,
+      "candidate_cell": "cell_02_c8",
+      "control_cell": "cell_01_c4",
+      "makespan_reduction_pct": 3.5407601861938254,
+      "p95_task_jct_ratio": 0.8829307424392338,
+      "p99_end_to_end_ttft_ratio": 22.230511227625325
+    },
+    {
+      "pair": 2,
+      "candidate_cell": "cell_03_c8",
+      "control_cell": "cell_04_c4",
+      "makespan_reduction_pct": 9.062505631686179,
+      "p95_task_jct_ratio": 0.8393043306696824,
+      "p99_end_to_end_ttft_ratio": 15.984403936079646
+    }
+  ],
+  "pooled_results": {
+    "control_mean_task_jct_s": 397.2093217227525,
+    "candidate_mean_task_jct_s": 343.72447004343985,
+    "mean_task_jct_improvement_pct": 13.465155210190272
+  },
+  "task_position_effect": [
+    {
+      "task_id": "tobymao__sqlglot-3785",
+      "candidate_jct_change_pct": 12.50
+    },
+    {
+      "task_id": "tobymao__sqlglot-3792",
+      "candidate_jct_change_pct": 20.25
+    },
+    {
+      "task_id": "tobymao__sqlglot-3798",
+      "candidate_jct_change_pct": 30.31
+    },
+    {
+      "task_id": "tobymao__sqlglot-3799",
+      "candidate_jct_change_pct": 9.97
+    },
+    {
+      "task_id": "tobymao__sqlglot-3806",
+      "candidate_jct_change_pct": -29.00
+    },
+    {
+      "task_id": "tobymao__sqlglot-3820",
+      "candidate_jct_change_pct": -23.82
+    },
+    {
+      "task_id": "tobymao__sqlglot-3839",
+      "candidate_jct_change_pct": -27.41
+    },
+    {
+      "task_id": "tobymao__sqlglot-3842",
+      "candidate_jct_change_pct": -43.56
+    }
+  ],
+  "gates": {
+    "all_validity_checks_pass": true,
+    "candidate_makespan_lower_in_both_pairs": true,
+    "pooled_mean_task_jct_improvement_at_least_5pct": true,
+    "paired_p95_task_jct_ratios_at_most_1_05": true,
+    "paired_p99_end_to_end_ttft_ratios_at_most_1_05": false
+  },
+  "interpretation": {
+    "observation": "Admitting all eight tasks lets the later four overlap tool work and cuts pooled mean task JCT, but makes the earlier four slower and creates multi-second request-slot queues.",
+    "mechanism": "Server p99 TTFT stayed near 0.74-0.77 s, while candidate admission-wait p99 reached 11.49-16.72 s. Host admission queueing therefore dominates the failed tail gate; the smaller server-service movement does not explain its magnitude.",
+    "scope": "Development evidence only. The failed frozen gate does not authorize collection or evaluation of the 16 reserved fresh SQLGlot tasks, and no alternate slot count may be tried on this exposed set."
+  }
+}
