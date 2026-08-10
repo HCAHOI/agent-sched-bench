@@ -594,6 +594,7 @@ class TraceCollectorHook(AgentHook):
             "openrouter_metadata_initial_fetch_ms",
             "codex_metadata",
             "openrouter_metadata",
+            "shadow_generation",
         ):
             if key in extra:
                 result[key] = extra[key]

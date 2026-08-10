@@ -820,7 +820,145 @@ def test_openclaw_replay_provider_charges_streamed_shadow_generation(
     }
     assert shadow_metrics["ttft_ms"] >= 0
     assert shadow_metrics["latency_ms"] >= shadow_metrics["ttft_ms"]
+    assert captured["client_kwargs"] == {"timeout": 12.0, "trust_env": False}
     assert captured["closed"] is True
+
+
+def test_openclaw_replay_provider_rejects_shadow_token_count_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trace_collect.openclaw_host_runtime import (
+        OpenClawReplayProvider,
+        ShadowGenerationConfig,
+    )
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        async def aiter_lines(self):
+            yield 'data: {"choices":[{"delta":{"token_ids":[101]}}]}'
+            yield "data: [DONE]"
+
+    class _FakeStream:
+        async def __aenter__(self):
+            return _FakeResponse()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _FakeClient:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def stream(self, *_args, **_kwargs):
+            return _FakeStream()
+
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "trace_collect.openclaw_host_runtime.httpx.AsyncClient", _FakeClient
+    )
+    provider = OpenClawReplayProvider(
+        llm_actions=[
+            {
+                "action_type": "llm_call",
+                "data": {
+                    "messages_in": [],
+                    "completion_tokens": 2,
+                    "raw_response": {"choices": []},
+                },
+            }
+        ],
+        replay_speed=1.0,
+        timing_mode="source_scaled",
+        shadow_generation=ShadowGenerationConfig(
+            api_base="http://127.0.0.1:8000/v1",
+            model="meta-llama/Llama-3.1-8B-Instruct",
+            timeout_s=12.0,
+            seed=7,
+        ),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="expected 2, got 1"):
+            asyncio.run(provider.chat([]))
+    finally:
+        asyncio.run(provider.aclose())
+
+
+def test_openclaw_host_replay_request_closes_provider_after_runner_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from trace_collect.openclaw_host_runtime import run_openclaw_host_replay_request
+
+    closed: list[bool] = []
+    stopped: list[bool] = []
+
+    class _FakeAgent:
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            stopped.append(True)
+
+    class _FailingRunner:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def run(self, **_kwargs):
+            raise RuntimeError("runner failed")
+
+    async def fake_proof(*_args, **_kwargs) -> dict[str, object]:
+        return {}
+
+    async def fake_aclose(_self) -> None:
+        closed.append(True)
+
+    monkeypatch.setattr(
+        "trace_collect.openclaw_host_runtime.ContainerAgent",
+        lambda *_args, **_kwargs: _FakeAgent(),
+    )
+    monkeypatch.setattr(
+        "trace_collect.openclaw_host_runtime.container_runtime_proof", fake_proof
+    )
+    monkeypatch.setattr(
+        "agents.openclaw._session_runner.SessionRunner", _FailingRunner
+    )
+    monkeypatch.setattr(
+        "trace_collect.openclaw_host_runtime.OpenClawReplayProvider.aclose",
+        fake_aclose,
+    )
+    status_path = tmp_path / "status.json"
+
+    status = asyncio.run(
+        run_openclaw_host_replay_request(
+            {
+                "source_actions": [],
+                "container_id": "cid",
+                "container_executable": "docker",
+                "output_trace": str(tmp_path / "replay.jsonl"),
+                "runtime_dir": str(tmp_path / "runtime"),
+                "workspace": str(tmp_path),
+                "status_path": str(status_path),
+                "replay_speed": 1.0,
+                "llm_timing": {"mode": "source_scaled"},
+                "command_timeout_s": 60.0,
+                "run_instance_id": "close-on-failure",
+                "task_instance_id": "close-on-failure",
+                "source_action_agent_id": "source-agent",
+                "prompt": "replay",
+            }
+        )
+    )
+
+    assert status["success"] is False
+    assert "runner failed" in status["error"]
+    assert closed == [True]
+    assert stopped == [True]
+    assert json.loads(status_path.read_text(encoding="utf-8"))["success"] is False
 
 
 def test_shadow_generation_config_rejects_non_loopback_api_base() -> None:

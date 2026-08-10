@@ -437,6 +437,47 @@ def test_trace_collector_records_openrouter_latency_fields(tmp_path: Path) -> No
     asyncio.run(_drive_openrouter_latency_fields(tmp_path))
 
 
+def test_trace_collector_persists_shadow_generation_metrics(tmp_path: Path) -> None:
+    asyncio.run(_drive_persists_shadow_generation_metrics(tmp_path))
+
+
+async def _drive_persists_shadow_generation_metrics(tmp_path: Path) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    hook = TraceCollectorHook(trace_file, instance_id="test-shadow")
+    messages = [{"role": "user", "content": "Ping"}]
+    await hook.before_iteration(_StubContext(iteration=0, messages=messages))
+    shadow_generation = {
+        "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "requested_completion_tokens": 3,
+        "returned_completion_tokens": 3,
+        "completion_token_ids": [101, 102, 103],
+        "finish_reason": "length",
+        "prompt_tokens": 12,
+        "ttft_ms": 10.5,
+        "latency_ms": 20.5,
+    }
+    await hook.after_iteration(
+        _StubContext(
+            iteration=0,
+            messages=[*messages, {"role": "assistant", "content": "source"}],
+            usage={"prompt_tokens": 1, "completion_tokens": 1},
+            response=_StubResponse(
+                content="source",
+                extra={"shadow_generation": shadow_generation},
+            ),
+        )
+    )
+    hook.close()
+
+    records = [json.loads(line) for line in trace_file.read_text().splitlines()]
+    llm_call = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "llm_call"
+    )
+    assert llm_call["data"]["shadow_generation"] == shadow_generation
+
+
 async def _drive_openrouter_latency_fields(tmp_path: Path) -> None:
     trace_file = tmp_path / "trace.jsonl"
     hook = TraceCollectorHook(trace_file, instance_id="test-openrouter")
