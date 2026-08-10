@@ -1073,6 +1073,45 @@ assumes isolated sampled demand remains stable after a time shift. It does not
 establish predictor accuracy, live interference safety, or cross-repository
 generality.
 
+### 5.16 Frozen one-sided causal phase-envelope feasibility
+
+A post-Section-5.15 coverage audit found that raw exact commands and the
+tool-specific work key cover only 16 and 114 of 330 RSS-safe replay commands.
+The existing generic Clause-KB argv hierarchy covers 302/330 and 277/301 of
+the phase oracle's starts. This audit exposed only coverage and a
+hindsight-compatibility restriction; it did not evaluate a predicted profile.
+
+Test candidate-profile transfer while leaving foreground future shape and RSS
+safety as explicit hindsight controls. Build history solely from the fixed 15
+fit tasks. Parse every command with the existing shell parser and form
+whole-command signatures from control operators, clause structural context,
+binary names, and argv tails. Query the current raw hierarchy in fixed order:
+exact, shared prefix depths 4, 3, and 2, then binary. Interpreter paths are
+excluded exactly as in Clause-KB. A compound command matches only when every
+clause and its shell structure match at the same level.
+
+For the most-specific fit-supported signature, form one deterministic candidate
+profile: take the pointwise maximum CPU rate across every matching fit profile
+on their absolute 0.5 s timeline, split at all observed segment boundaries, and
+end at the longest fit duration. Completed fit profiles contribute zero after
+completion. There is no smoothing, normalized-time alignment, support cutoff,
+exemplar selection, or replay update. An unmatched command is not eligible for
+speculation. If a replay command outlasts its envelope, the predictor supplies
+no synthetic tail; any resulting interference is charged by the physical
+actual-profile replay and reported.
+
+At each admission, align the predicted candidate envelope with the running
+foreground's actual remaining profile and require their summed rate never to
+exceed eight cores over the predicted overlap. The unchanged simulator executes
+the actual candidate profile, so prediction errors appear as service inflation.
+Compare this arm with Serial-8, exact peak, and the full-profile phase oracle on
+the same 15 replay tasks and one wave. GO requires at least 5% lower mean task
+completion than Serial-8, at most 5% aggregate service inflation, and zero
+capacity or CPU-work violations. A pass authorizes only the next test replacing
+foreground-future hindsight with causal feedback; a failure closes this
+Clause-KB phase-envelope representation. Replay results may not change keys,
+envelope construction, candidate order, or gates.
+
 ## 6. Closed directions
 
 - **Lookup structure alone:** trie, lattice, generic argv, pip/pytest semantic
