@@ -30,6 +30,9 @@ from scripts.evaluation.evaluate_cpu_work_admission import (
     _cpu_floor_programs,
 )
 from scripts.evaluation.evaluate_cpu_throughput_oracle import _bucket_cpu
+from scripts.evaluation.evaluate_pennylane_pairwise_cpu_backfill import (
+    _bucket_upper,
+)
 from scripts.evaluation.evaluate_cpu_feedback_admission import (
     _assert_frozen_protocol,
     _file_identities,
@@ -1500,6 +1503,17 @@ def test_clause_cpu_work_rejects_duplicate_identity() -> None:
 
 def test_cpu_throughput_target_uses_existing_request_classes() -> None:
     assert [_bucket_cpu(value) for value in (0.0, 2.0, 2.01, 4.0, 4.01, 8.1)] == [
+        2.0,
+        2.0,
+        4.0,
+        4.0,
+        8.0,
+        8.0,
+    ]
+
+
+def test_pairwise_peak_uses_canonical_cpu_upper_bounds() -> None:
+    assert [_bucket_upper(value) for value in (0.0, 2.0, 2.01, 4.0, 4.01, 8.0)] == [
         2.0,
         2.0,
         4.0,

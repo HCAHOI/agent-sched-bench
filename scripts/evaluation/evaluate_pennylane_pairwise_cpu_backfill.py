@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate the frozen PennyLane pairwise mean-CPU backfill ceiling."""
+"""Evaluate frozen PennyLane pairwise CPU backfill ceilings."""
 
 from __future__ import annotations
 
@@ -28,13 +28,19 @@ from tool_resource_eval.resource_admission import (  # noqa: E402
 from trace_collect.trace_data import TraceData  # noqa: E402
 
 
-_PROTOCOL_GIT_SHA = "d8a505b0e2efddaf4253cd5c8a2ba94d6782c2de"
+_PROTOCOL_GIT_SHA = "dff3af4b1501853233dcf33ccb7f0a4325627ce3"
 _SPLIT = _ROOT / "analysis/development/pennylane-survival-action-split.json"
 _CPU_CAPACITY = 8.0
 _RSS_CAPACITY_MB = 16_000.0
 _MINIMUM_REDUCTION = 0.05
 _MAXIMUM_SERVICE_INFLATION = 0.05
-_ARMS = ("serial8", "rss_safe_fcfs", "pairwise_mean_fcfs")
+_ARMS = (
+    "serial8",
+    "rss_safe_fcfs",
+    "pairwise_mean_fcfs",
+    "pairwise_exact_peak_fcfs",
+    "pairwise_canonical_bucket_fcfs",
+)
 
 
 def _require_clean_checkout() -> str:
@@ -238,6 +244,14 @@ def _comparison(
     }
 
 
+def _bucket_upper(peak_cpu: float) -> float:
+    if peak_cpu <= 2.0:
+        return 2.0
+    if peak_cpu <= 4.0:
+        return 4.0
+    return _CPU_CAPACITY
+
+
 def _evaluate() -> dict[str, Any]:
     started = time.monotonic()
     git_sha = _require_clean_checkout()
@@ -248,6 +262,13 @@ def _evaluate() -> dict[str, Any]:
     if len(programs) != 15 or len(profiles) != 570 or len(excluded) != 11:
         raise ValueError("PennyLane evidence-valid population changed")
     chosen = [programs[task_id] for task_id in sorted(programs)]
+    peak_cpu = {
+        command_id: max(cpu / span for span, cpu in profile)
+        for command_id, profile in profiles.items()
+    }
+    bucket_cpu = {
+        command_id: _bucket_upper(value) for command_id, value in peak_cpu.items()
+    }
     arms = {
         "serial8": simulate_idle_backfill(
             chosen,
@@ -274,10 +295,28 @@ def _evaluate() -> dict[str, Any]:
             pairwise_cpu_demands=mean_cpu,
             selection="fcfs",
         ),
+        "pairwise_exact_peak_fcfs": simulate_idle_backfill(
+            chosen,
+            cpu_capacity=_CPU_CAPACITY,
+            rss_capacity_mb=_RSS_CAPACITY_MB,
+            cpu_work_profiles=profiles,
+            speculative_eligible_command_ids=rss_safe,
+            pairwise_cpu_demands=peak_cpu,
+            selection="fcfs",
+        ),
+        "pairwise_canonical_bucket_fcfs": simulate_idle_backfill(
+            chosen,
+            cpu_capacity=_CPU_CAPACITY,
+            rss_capacity_mb=_RSS_CAPACITY_MB,
+            cpu_work_profiles=profiles,
+            speculative_eligible_command_ids=rss_safe,
+            pairwise_cpu_demands=bucket_cpu,
+            selection="fcfs",
+        ),
     }
-    violation = False
-    for metrics in arms.values():
-        violation |= bool(
+    violation_by_arm = {}
+    for arm, metrics in arms.items():
+        violation_by_arm[arm] = bool(
             metrics["capacity_violation"]
             or metrics["physical_capacity_violation"]
             or metrics["modeled_capacity_exposure_events"]
@@ -299,33 +338,48 @@ def _evaluate() -> dict[str, Any]:
     comparisons = {
         arm: _comparison(arms, arm) for arm in _ARMS if arm != "serial8"
     }
-    primary = comparisons["pairwise_mean_fcfs"]
-    gate = {
-        "mean_task_completion_reduction_at_least_5_percent": primary[
-            "mean_task_completion_reduction"
-        ]
-        >= _MINIMUM_REDUCTION,
-        "service_inflation_at_most_5_percent": primary["service_inflation"]
-        <= _MAXIMUM_SERVICE_INFLATION,
-        "zero_capacity_or_work_violations": not violation,
+    gates = {
+        arm: {
+            "mean_task_completion_reduction_at_least_5_percent": comparisons[arm][
+                "mean_task_completion_reduction"
+            ]
+            >= _MINIMUM_REDUCTION,
+            "service_inflation_at_most_5_percent": comparisons[arm][
+                "service_inflation"
+            ]
+            <= _MAXIMUM_SERVICE_INFLATION,
+            "zero_capacity_or_work_violations": not violation_by_arm[arm],
+        }
+        for arm in ("pairwise_exact_peak_fcfs", "pairwise_canonical_bucket_fcfs")
     }
-    gate["go"] = all(gate.values())
+    for gate in gates.values():
+        gate["go"] = all(gate.values())
+    exact_go = gates["pairwise_exact_peak_fcfs"]["go"]
+    predictor_go = exact_go and gates["pairwise_canonical_bucket_fcfs"]["go"]
     return {
         "schema_version": 1,
-        "status": "development_go_to_causal_predictor"
-        if gate["go"]
-        else "development_no_go",
+        "status": (
+            "development_go_to_causal_predictor"
+            if predictor_go
+            else "development_mechanism_only"
+            if exact_go
+            else "development_no_go"
+        ),
         "generated": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
         "git_sha": git_sha,
         "protocol_git_sha": _PROTOCOL_GIT_SHA,
-        "protocol": "tool-resource-canonical-objective.md Section 5.13",
+        "protocol": "tool-resource-canonical-objective.md Section 5.14",
         "config": {
             "split": str(_SPLIT.resolve()),
             "cpu_capacity": _CPU_CAPACITY,
             "rss_capacity_mb": _RSS_CAPACITY_MB,
             "task_selection": "all evidence-valid replay tasks; no subsampling",
             "arrival_model": "one concurrent task-start wave with recorded first-command delays",
-            "pairwise_rule": "foreground mean CPU + candidate mean CPU <= 8",
+            "pairwise_rules": {
+                "mean": "foreground mean CPU + candidate mean CPU <= 8",
+                "exact_peak": "foreground exact peak CPU + candidate exact peak CPU <= 8",
+                "canonical_bucket": "foreground and candidate peak labels map to upper bounds 2/4/8 whose sum <= 8",
+            },
             "rss_rule": "observed composed upper bound only",
         },
         "evidence": {
@@ -339,7 +393,8 @@ def _evaluate() -> dict[str, Any]:
         },
         "arms": arms,
         "comparisons_vs_serial8": comparisons,
-        "gate": gate,
+        "gates": gates,
+        "go_to_causal_predictor": predictor_go,
         "cost": {
             "prediction_time_agent_calls": 0,
             "gpu_runtime_s": 0.0,
@@ -347,7 +402,7 @@ def _evaluate() -> dict[str, Any]:
         },
         "limitations": [
             "All 15 scored PennyLane tasks are development-exposed.",
-            "Mean CPU and RSS safety are hindsight oracles, not deployable predictions.",
+            "Mean CPU, peak CPU, canonical labels, and RSS safety are hindsight oracles, not deployable predictions.",
             "The action-space ceiling contains one physically defined arrival wave, not workload-order uncertainty.",
             "The deterministic replay preserves recorded commands but models CPU sharing.",
         ],
@@ -361,7 +416,12 @@ def main() -> None:
     result = _evaluate()
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2), encoding="utf-8")
-    print(json.dumps({"output": str(args.out), "status": result["status"], "gate": result["gate"]}, indent=2))
+    print(
+        json.dumps(
+            {"output": str(args.out), "status": result["status"], "gates": result["gates"]},
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":
