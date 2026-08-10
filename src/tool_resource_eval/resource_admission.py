@@ -289,6 +289,7 @@ def simulate_idle_backfill(
     rss_capacity_mb: float,
     cpu_work_profiles: Mapping[str, tuple[tuple[float, float], ...]],
     speculative_eligible_command_ids: set[str],
+    pairwise_cpu_demands: Mapping[str, float] | None = None,
     rss_reservations: Mapping[str, float] | None = None,
     rss_unverified_command_ids: set[str] | None = None,
     selection: str,
@@ -312,6 +313,17 @@ def simulate_idle_backfill(
         raise ValueError("idle backfill requires complete CPU work profiles")
     if not speculative_eligible_command_ids <= set(commands):
         raise ValueError("idle backfill eligibility contains an unknown command")
+    cpu_demands = None if pairwise_cpu_demands is None else dict(pairwise_cpu_demands)
+    if cpu_demands is not None and (
+        set(cpu_demands) != set(commands)
+        or any(
+            demand < 0.0
+            or demand > cpu_capacity + _EPSILON
+            or not math.isfinite(demand)
+            for demand in cpu_demands.values()
+        )
+    ):
+        raise ValueError("idle backfill requires complete in-capacity pairwise CPU demands")
     unverified_ids = set(rss_unverified_command_ids or ())
     if not unverified_ids <= set(commands):
         raise ValueError("idle backfill RSS uncertainty contains an unknown command")
@@ -491,6 +503,16 @@ def simulate_idle_backfill(
                     item[1].program.commands[item[1].command_index].command_id
                 ]
                 <= rss_capacity_mb + _EPSILON
+                and (
+                    cpu_demands is None
+                    or cpu_demands[normal.command.command_id]
+                    + cpu_demands[
+                        item[1].program.commands[
+                            item[1].command_index
+                        ].command_id
+                    ]
+                    <= cpu_capacity + _EPSILON
+                )
             ]
             if fitting:
                 if selection == "shortest":

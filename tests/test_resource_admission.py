@@ -321,6 +321,31 @@ def test_idle_backfill_uses_only_cpu_left_by_normal_command() -> None:
     assert not result["physical_capacity_violation"]
 
 
+def test_idle_backfill_skips_pairwise_cpu_incompatible_candidate() -> None:
+    programs = [
+        AdmissionProgram(
+            task_id,
+            0.0,
+            (AdmissionCommand(task_id, 2.0, 4.0, 100.0, 0.0),),
+            0.0,
+        )
+        for task_id in ("normal", "too_large", "fits")
+    ]
+    profiles = {task_id: ((2.0, 4.0),) for task_id in ("normal", "too_large", "fits")}
+
+    result = simulate_idle_backfill(
+        programs,
+        cpu_capacity=8.0,
+        rss_capacity_mb=1_000.0,
+        cpu_work_profiles=profiles,
+        speculative_eligible_command_ids=set(profiles),
+        pairwise_cpu_demands={"normal": 6.0, "too_large": 3.0, "fits": 2.0},
+        selection="fcfs",
+    )
+
+    assert result["speculative_start_ids"][0] == "fits"
+
+
 def test_idle_backfill_promotion_preserves_partial_cpu_work() -> None:
     programs = [
         AdmissionProgram(
