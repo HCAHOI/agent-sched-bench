@@ -14,7 +14,7 @@ artifacts retain that history.
 |---|---|
 | Prediction | Keep the target-specific Task-Aware Command Predictor below as the selected development candidate. It is exposed evidence, not confirmation or deployed code. |
 | Runtime feedback | **KEEP causal command-level eBPF feedback as a measured mechanism and control.** Neither tested admission action passed its frozen utility gate, so it is not a runtime scheduler candidate. |
-| CPU execution | Keep equal-share burstable execution as a physical control. PennyLane exposes substantial strict-priority backfill headroom, but candidate-only peak/latency predictions do not satisfy the completion/fairness gate. Test pairwise CPU-work compatibility before any physical `cpu.idle` calibration. |
+| CPU execution | Keep equal-share burstable execution as a physical control. PennyLane exposes substantial strict-priority backfill headroom, but pairwise whole-command mean CPU still violates the service-cost gate. Test the exact pairwise peak ceiling before building a causal predictor or physical `cpu.idle` calibration. |
 | Saturated quartet result | Frozen claim verdict is NO-GO because 8/12, not 9/12, groups improved. This is not a module-retirement decision. |
 | Fresh counterbalanced queue | **Inconclusive because 7/1,818 paired tool calls changed terminal class.** Timing-only improvement was 0.929% with 2/4 queues improving, below the frozen gate even before the quality failure. |
 | Prediction contribution to feedback | Not established. Task-Aware seeding did not improve the frozen reservation/service operating point over feedback alone. |
@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Run the frozen PennyLane pairwise mean-CPU backfill ceiling in Section 5.13. Only a pass authorizes a causal CPU-work predictor; the separate byte-aware KV loan remains a lower-ceiling candidate. |
+| Next research step | Freeze and run the PennyLane exact pairwise peak ceiling. This tests whether burst-smearing, rather than absent action headroom, caused the Section 5.13 failure; the separate byte-aware KV loan remains a lower-ceiling candidate. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -972,6 +972,23 @@ ready time before its tie-break. No formal outcome had been run or read. Rather
 than invent an external arrival process or detach first-command delay from its
 task, the frozen evaluation therefore uses the single physically defined wave
 above and removes the vacuous every-order gate.
+
+**Result and decision.** Pairwise-mean FCFS reduced mean task completion by
+16.462% and makespan by 16.730%, with zero modeled capacity or CPU-work
+violations, but aggregate command service increased by 6.321%. This exceeds
+the frozen 5% ceiling, so the present pairwise-mean action model is NO-GO and
+does not authorize a causal predictor. Unrestricted FCFS was faster but worse:
+23.484% completion reduction at 9.553% service inflation. The scored population
+was the fixed 15 valid tasks and 570 commands; 11 pre-invalid tasks were
+excluded and no reserved task was read.
+
+Post-outcome diagnosis attributes the miss to phase bursts hidden by the mean.
+Of 268 admitted speculative commands, 101 stretched; eight commands account
+for half of the 1,981.260 added service seconds. For the 101 stretched pairs,
+the median sum of whole-command mean demand was 6.396 cores, while the median
+sum of realized peak demand was 11.813 cores; every pair's realized peak sum
+exceeded eight cores. This is mechanism evidence for testing a fixed exact-peak
+ceiling, not a retrospective change to the failed gate.
 
 Dependency prewarming is not part of this experiment. The repeated
 `python3-pip` setup gain was real (about 11--12 s per invocation), but the task
