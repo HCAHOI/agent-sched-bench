@@ -14,7 +14,7 @@ artifacts retain that history.
 |---|---|
 | Prediction | Keep the target-specific Task-Aware Command Predictor below as the selected development candidate. It is exposed evidence, not confirmation or deployed code. |
 | Runtime feedback | **KEEP causal command-level eBPF feedback as a measured mechanism and control.** Neither tested admission action passed its frozen utility gate, so it is not a runtime scheduler candidate. |
-| CPU execution | Keep equal-share burstable execution as a physical control. Fit-only candidate envelopes expose phase headroom, but the two-sided causal CPU arm misses the completion gate. Close this absolute-time phase-envelope scheduler for the present PennyLane wave. |
+| CPU execution | Keep equal-share burstable execution as a physical control. Phase oracle and one-sided transfer expose headroom, but both tested causal foreground actions miss the completion gate. Close further CPU-policy tuning on the exposed PennyLane wave. |
 | Saturated quartet result | Frozen claim verdict is NO-GO because 8/12, not 9/12, groups improved. This is not a module-retirement decision. |
 | Fresh counterbalanced queue | **Inconclusive because 7/1,818 paired tool calls changed terminal class.** Timing-only improvement was 0.929% with 2/4 queues improving, below the frozen gate even before the quality failure. |
 | Prediction contribution to feedback | Not established. Task-Aware seeding did not improve the frozen reservation/service operating point over feedback alone. |
@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Run the reactive-current/peak ceiling in Section 5.18; it removes foreground forecasting rather than tuning the closed phase-envelope arm. |
+| Next research step | Stop CPU-policy tuning on exposed PennyLane. Any next scheduler claim needs a separately frozen preemptive/differently timed action and untouched tasks, or physical validation of an already-passing mechanism. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -176,7 +176,7 @@ All rows below are development-exposed.
 | CPU-idle FCFS backfill | Versus Serial-8, mean per-order completion improved 14.620%; all 32 orders improved, makespan improved 17.226%, and service inflation was 3.073% | Action gate passed under strict-priority CPU and hindsight RSS safety; requires causal RSS safety and physical calibration |
 | CPU-idle shortest-safe selection | Hindsight shortest selection changed completion by -0.137% versus FCFS; 17/32 orders improved and the paired interval [-51.549, 70.048] s crossed zero | Ordering predictor has no headroom; do not build a latency/shortest selector |
 | CPU-idle predicted RSS safety | Conservative null handling produced 12,390/12,439 Clause-KB/Task-Aware exposures. The open short-null amendment reduced these to 2,638/2,702, but both remained nonzero; utility was 33.392%/25.984% | Amendment gate still failed; do not calibrate physical `cpu.idle` or add another exposed-data exception |
-| PennyLane phase-aware CPU backfill | Full-profile oracle: 10.699% completion gain at zero service cost. Fit-only candidate envelope: 6.707% at 0.0835%. Fully CPU-causal two-sided envelope: 4.461% at 1.757%. | Phase headroom and candidate transfer are real; absolute-time foreground transfer misses the gate, so this scheduler is closed before RSS replacement |
+| PennyLane phase-aware CPU backfill | Full-profile oracle: 10.699% completion gain at zero service cost. Fit-only candidate envelope: 6.707% at 0.0835%. Two-sided envelope: 4.461% at 1.757%. Reactive-current plus oracle peak: 3.853% at 3.457%. | Phase headroom and candidate transfer are real, but both causal foreground actions miss the gate; close tuning on exposed PennyLane |
 | Prediction-weighted CPU shares | Task-Aware reduced mean completion by 0.0056%; a true-demand oracle reduced it by only 0.0527% | Closed: recorded-duration floor leaves no useful share-allocation headroom |
 | Ready-queue priority | Exact-duration aging oracle reduced mean completion 3.991% with 0.301% makespan cost | Below the frozen 5% gate; retain only as a diagnosed tradeoff |
 
@@ -1190,6 +1190,16 @@ capacity or CPU-work violations. A pass authorizes replacing candidate peak
 with the frozen fit envelope; a failure closes this reactive-current/static-
 candidate action. Do not change the sample interval, delay, peak definition,
 candidate order, or gates after reading the outcome.
+
+**Result and decision.** Reactive-current/peak FCFS reduced mean task completion
+by 3.853% and makespan by 7.358%, with 3.457% service inflation and no capacity
+or CPU-work violation. It made 230 speculative starts but missed the frozen 5%
+completion floor, so candidate-peak prediction is not authorized. Together
+with Section 5.17, this closes both tested causal foreground consumers on the
+exposed PennyLane wave: absolute-time envelope transfer is too brittle, while
+latest-sample feedback plus a static candidate bound admits work without enough
+mean-completion benefit. This does not close runtime feedback generally or a
+separately frozen preemptive/differently timed action on untouched tasks.
 
 ## 6. Closed directions
 
