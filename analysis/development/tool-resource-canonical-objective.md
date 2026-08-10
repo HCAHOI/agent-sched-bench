@@ -956,14 +956,22 @@ CPU work is conserved. Full realized profiles and observed RSS make this a
 hindsight action-space ceiling, not a predictor.
 
 Compare Serial-8, unrestricted RSS-safe FCFS, and pairwise-mean FCFS on all 15
-valid tasks under 32 deterministic full-task permutations (seeds 0--31). The
-primary gate requires pairwise-mean FCFS to reduce mean per-order task
-completion by at least 5%, keep aggregate service inflation at or below 5%,
-improve every order, and introduce zero logical/physical capacity or CPU-work
-violations. A pass authorizes a separately frozen causal predictor using
-fit-task command CPU work plus runtime foreground feedback. A failure closes
-CPU-idle backfill for the present PennyLane action model. It does not amend any
-earlier survival, work-signature, or SQLGlot result.
+valid tasks in one concurrent task-start wave while preserving every task's
+recorded delay before its first command becomes ready. The primary gate
+requires pairwise-mean FCFS to reduce mean task completion by at least 5%, keep
+aggregate service inflation at or below 5%, and introduce zero logical/physical
+capacity or CPU-work violations. A pass authorizes a separately frozen causal
+predictor using fit-task command CPU work plus runtime foreground feedback. A
+failure closes CPU-idle backfill for the present PennyLane action model. It does
+not amend any earlier survival, work-signature, or SQLGlot result.
+
+Pre-outcome correction (2026-08-10): independent review found that the proposed
+32 list shuffles could not change scheduling order because all recorded
+first-command ready times are distinct and the simulator correctly sorts by
+ready time before its tie-break. No formal outcome had been run or read. Rather
+than invent an external arrival process or detach first-command delay from its
+task, the frozen evaluation therefore uses the single physically defined wave
+above and removes the vacuous every-order gate.
 
 Dependency prewarming is not part of this experiment. The repeated
 `python3-pip` setup gain was real (about 11--12 s per invocation), but the task
