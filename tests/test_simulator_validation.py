@@ -659,6 +659,182 @@ def test_openclaw_replay_provider_rejects_ttft_tpot_with_replay_speed() -> None:
         )
 
 
+def test_openclaw_replay_provider_charges_streamed_shadow_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shadow generation uses the frozen source prompt but replays source actions."""
+    from trace_collect.openclaw_host_runtime import (
+        OpenClawReplayProvider,
+        ShadowGenerationConfig,
+    )
+
+    captured: dict[str, object] = {}
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        async def aiter_lines(self):
+            yield 'data: {"choices":[{"delta":{"content":"shadow","token_ids":[101,102]}}]}'
+            yield 'data: {"choices":[{"delta":{"token_ids":[103]},"finish_reason":"length"}],"usage":{"prompt_tokens":12,"completion_tokens":3}}'
+            yield "data: [DONE]"
+
+    class _FakeStream:
+        async def __aenter__(self):
+            return _FakeResponse()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _FakeClient:
+        def __init__(self, **kwargs):
+            captured["client_kwargs"] = kwargs
+
+        def stream(self, method, url, *, json):
+            captured.update(method=method, url=url, request=json)
+            return _FakeStream()
+
+        async def aclose(self) -> None:
+            captured["closed"] = True
+
+    monkeypatch.setattr(
+        "trace_collect.openclaw_host_runtime.httpx.AsyncClient", _FakeClient
+    )
+    source_messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-first",
+                    "type": "function",
+                    "function": {"name": "exec", "arguments": '{"command":"one"}'},
+                },
+                {
+                    "id": "call-second",
+                    "type": "function",
+                    "function": {"name": "exec", "arguments": '{"command":"two"}'},
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call-first",
+            "name": "exec",
+            "content": {"stdout": "one"},
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call-second",
+            "name": "exec",
+            "content": ["two"],
+        },
+    ]
+    source_action = {
+        "action_type": "llm_call",
+        "data": {
+            "messages_in": source_messages,
+            "completion_tokens": 3,
+            "raw_response": {
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "source-call",
+                                    "function": {
+                                        "name": "exec",
+                                        "arguments": '{"command":"source"}',
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ]
+            },
+        },
+    }
+    provider = OpenClawReplayProvider(
+        llm_actions=[source_action],
+        replay_speed=1.0,
+        timing_mode="source_scaled",
+        shadow_generation=ShadowGenerationConfig(
+            api_base="http://127.0.0.1:8000/v1",
+            model="meta-llama/Llama-3.1-8B-Instruct",
+            timeout_s=12.0,
+            seed=7,
+        ),
+    )
+
+    response = asyncio.run(
+        provider.chat([{"role": "user", "content": "live runner prompt"}])
+    )
+    asyncio.run(provider.aclose())
+
+    request = captured["request"]
+    assert captured["method"] == "POST"
+    assert captured["url"] == "http://127.0.0.1:8000/v1/chat/completions"
+    assert request == {
+        "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": source_messages[0]["tool_calls"],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-first",
+                "content": '{"stdout":"one"}',
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-second",
+                "content": '["two"]',
+            },
+        ],
+        "temperature": 0,
+        "max_tokens": 3,
+        "ignore_eos": True,
+        "return_token_ids": True,
+        "seed": 7,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    assert response.tool_calls[0].id == "source-call"
+    assert response.tool_calls[0].arguments == {"command": "source"}
+    shadow_metrics = response.extra["shadow_generation"]
+    assert {
+        key: value
+        for key, value in shadow_metrics.items()
+        if key not in {"ttft_ms", "latency_ms"}
+    } == {
+        "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "requested_completion_tokens": 3,
+        "returned_completion_tokens": 3,
+        "completion_token_ids": [101, 102, 103],
+        "finish_reason": "length",
+        "prompt_tokens": 12,
+    }
+    assert shadow_metrics["ttft_ms"] >= 0
+    assert shadow_metrics["latency_ms"] >= shadow_metrics["ttft_ms"]
+    assert captured["closed"] is True
+
+
+def test_shadow_generation_config_rejects_non_loopback_api_base() -> None:
+    from trace_collect.openclaw_host_runtime import ShadowGenerationConfig
+
+    with pytest.raises(ValueError, match="loopback"):
+        ShadowGenerationConfig(
+            api_base="https://vllm.example.test/v1",
+            model="meta-llama/Llama-3.1-8B-Instruct",
+            timeout_s=12.0,
+            seed=7,
+        )
+
+
 def test_paired_replay_contract_pins_pytest_seed_and_preserves_failed_timeout() -> None:
     from trace_collect.simulate_openclaw import _paired_replay_actions
 

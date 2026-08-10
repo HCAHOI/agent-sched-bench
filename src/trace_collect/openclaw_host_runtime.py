@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
+import math
 import os
 import re
 import time
@@ -9,6 +11,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
+from urllib.parse import urlparse
+
+import httpx
 
 from agents.openclaw.eval.types import EvalResult
 from agents.openclaw.tools.container import build_container_tool_overrides
@@ -51,6 +56,30 @@ class ReplayActionFailureCounts:
     replay_failed_actions: int
     unexpected_replay_failed_actions: int
     action_sequence_matches: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ShadowGenerationConfig:
+    """Loopback vLLM settings for fixed-trajectory shadow generation."""
+
+    api_base: str
+    model: str
+    timeout_s: float
+    seed: int
+
+    def __post_init__(self) -> None:
+        parsed = urlparse(self.api_base)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        try:
+            is_loopback = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            is_loopback = host == "localhost"
+        if parsed.scheme not in {"http", "https"} or not is_loopback:
+            raise ValueError("shadow api_base must be an http(s) loopback URL")
+        if not self.model:
+            raise ValueError("shadow model must be non-empty")
+        if not math.isfinite(self.timeout_s) or self.timeout_s <= 0:
+            raise ValueError("shadow timeout_s must be finite and > 0")
 
 
 def _tool_name(record: dict[str, Any]) -> str | None:
@@ -318,6 +347,7 @@ class OpenClawReplayProvider(LLMProvider):
         llm_tpot_ms: float | None = None,
         model: str = "replay-openclaw",
         stop_before_final_tool_calls: bool = False,
+        shadow_generation: ShadowGenerationConfig | None = None,
     ) -> None:
         super().__init__(api_key=None, api_base=None)
         validate_llm_replay_timing(
@@ -334,6 +364,12 @@ class OpenClawReplayProvider(LLMProvider):
         self._model = model
         self._index = 0
         self._stop_before_final_tool_calls = stop_before_final_tool_calls
+        self._shadow_generation = shadow_generation
+        self._shadow_client = (
+            httpx.AsyncClient(timeout=shadow_generation.timeout_s, trust_env=False)
+            if shadow_generation is not None
+            else None
+        )
         self.source_terminal_boundary_reached = False
         self.unexpected_request_count = 0
         self._replayed_action_count = 0
@@ -394,9 +430,15 @@ class OpenClawReplayProvider(LLMProvider):
         start_s = float(action.get("ts_start", 0.0) or 0.0)
         end_s = float(action.get("ts_end", start_s) or start_s)
         source_duration_s = max(0.0, end_s - start_s)
-        sleep_s, timing_fields = self._duration_s(data, source_duration_s)
         wall_start = time.time()
-        sleep_record = await self._sleep(sleep_s, phase="llm_replay")
+        shadow_metrics: dict[str, Any] | None = None
+        if self._shadow_generation is None:
+            sleep_s, timing_fields = self._duration_s(data, source_duration_s)
+            sleep_record = await self._sleep(sleep_s, phase="llm_replay")
+        else:
+            shadow_metrics = await self._shadow_generate(data)
+            sleep_record = None
+            timing_fields = {"llm_timing_mode": "shadow_generation"}
         wall_end = time.time()
 
         raw_response = (
@@ -428,7 +470,11 @@ class OpenClawReplayProvider(LLMProvider):
             "llm_call_time_ms": round((wall_end - wall_start) * 1000, 3),
             "llm_latency_ms": round((wall_end - wall_start) * 1000, 3),
             "llm_wall_ts_end": wall_end,
-            "llm_timing_source": "openclaw_replay_provider_sleep",
+            "llm_timing_source": (
+                "shadow_generation"
+                if shadow_metrics is not None
+                else "openclaw_replay_provider_sleep"
+            ),
             "source_llm_latency_ms": data.get("llm_latency_ms"),
             "replay_speed": self._replay_speed,
             **timing_fields,
@@ -442,6 +488,8 @@ class OpenClawReplayProvider(LLMProvider):
             )
         if sleep_record is not None:
             extra["replay_sleep"] = sleep_record.to_dict()
+        if shadow_metrics is not None:
+            extra["shadow_generation"] = shadow_metrics
         response = LLMResponse(
             content=content,
             tool_calls=tool_calls,
@@ -456,6 +504,127 @@ class OpenClawReplayProvider(LLMProvider):
         )
         self._replayed_action_count += 1
         return response
+
+    async def aclose(self) -> None:
+        if self._shadow_client is not None:
+            await self._shadow_client.aclose()
+
+    async def _shadow_generate(self, data: dict[str, Any]) -> dict[str, Any]:
+        assert self._shadow_generation is not None
+        assert self._shadow_client is not None
+        requested_tokens = _coerce_completion_tokens(data.get("completion_tokens", 0))
+        messages = self._shadow_messages(data.get("messages_in"))
+        started_at = time.monotonic()
+        first_token_at: float | None = None
+        token_ids: list[int] = []
+        finish_reason: str | None = None
+        usage: dict[str, Any] = {}
+        request = {
+            "model": self._shadow_generation.model,
+            "messages": messages,
+            "temperature": 0,
+            "max_tokens": requested_tokens,
+            "ignore_eos": True,
+            "return_token_ids": True,
+            "seed": self._shadow_generation.seed,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        url = f"{self._shadow_generation.api_base.rstrip('/')}/chat/completions"
+        async with self._shadow_client.stream("POST", url, json=request) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(payload)
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError("shadow generation returned invalid SSE JSON") from exc
+                if not isinstance(chunk, dict):
+                    raise RuntimeError("shadow generation returned a non-object SSE chunk")
+                raw_usage = chunk.get("usage")
+                if isinstance(raw_usage, dict):
+                    usage = raw_usage
+                choices = chunk.get("choices")
+                if not isinstance(choices, list) or not choices:
+                    continue
+                choice = choices[0]
+                if not isinstance(choice, dict):
+                    raise RuntimeError("shadow generation returned a malformed choice")
+                raw_ids = choice.get("token_ids")
+                delta = choice.get("delta")
+                if isinstance(delta, dict):
+                    raw_ids = delta.get("token_ids", raw_ids)
+                if raw_ids is not None:
+                    if not isinstance(raw_ids, list) or any(
+                        not isinstance(token_id, int) or isinstance(token_id, bool)
+                        for token_id in raw_ids
+                    ):
+                        raise RuntimeError("shadow generation returned malformed token IDs")
+                    if raw_ids and first_token_at is None:
+                        first_token_at = time.monotonic()
+                    token_ids.extend(raw_ids)
+                if isinstance(choice.get("finish_reason"), str):
+                    finish_reason = choice["finish_reason"]
+        if len(token_ids) != requested_tokens:
+            raise RuntimeError(
+                "shadow generation token count mismatch: "
+                f"expected {requested_tokens}, got {len(token_ids)}"
+            )
+        finished_at = time.monotonic()
+        return {
+            "model": self._shadow_generation.model,
+            "requested_completion_tokens": requested_tokens,
+            "returned_completion_tokens": len(token_ids),
+            "completion_token_ids": token_ids,
+            "finish_reason": finish_reason,
+            "prompt_tokens": _coerce_nonnegative_int(usage.get("prompt_tokens", 0)),
+            "ttft_ms": round(
+                ((first_token_at or finished_at) - started_at) * 1000.0, 3
+            ),
+            "latency_ms": round((finished_at - started_at) * 1000.0, 3),
+        }
+
+    @staticmethod
+    def _shadow_messages(raw_messages: Any) -> list[dict[str, Any]]:
+        if not isinstance(raw_messages, list):
+            raise RuntimeError("shadow generation source messages_in is missing")
+        messages: list[dict[str, Any]] = []
+        for raw_message in raw_messages:
+            if not isinstance(raw_message, dict):
+                raise RuntimeError("shadow generation source message is malformed")
+            role = raw_message.get("role")
+            if not isinstance(role, str):
+                raise RuntimeError("shadow generation source message has no role")
+            if role == "tool":
+                tool_call_id = raw_message.get("tool_call_id")
+                if not isinstance(tool_call_id, str) or not tool_call_id:
+                    raise RuntimeError("shadow generation tool message has no tool_call_id")
+                content = raw_message.get("content")
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": (
+                            content
+                            if isinstance(content, str)
+                            else json.dumps(
+                                content, ensure_ascii=False, separators=(",", ":")
+                            )
+                        ),
+                    }
+                )
+                continue
+            message: dict[str, Any] = {"role": role, "content": raw_message.get("content")}
+            if role == "assistant" and isinstance(raw_message.get("tool_calls"), list):
+                message["tool_calls"] = raw_message["tool_calls"]
+                if not message["content"]:
+                    message["content"] = None
+            messages.append(message)
+        return messages
 
     def _duration_s(
         self,
@@ -1049,6 +1218,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
         ),
     }
     telemetry_errors: list[str] = []
+    provider: OpenClawReplayProvider | None = None
 
     def finalize_resource_trace(replay_execution: str) -> None:
         nonlocal resource_trace_finalized
@@ -1272,20 +1442,29 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             if resource_trace is not None and not resource_trace_finalized:
                 finalize_resource_trace("failed")
         finally:
-            await agent.stop()
-            status["telemetry_integrity_failed"] = bool(
-                status.get("telemetry_integrity_failed")
-                or telemetry_errors
-                or telemetry_run_status["collection_validity"] == "invalid"
-            )
-            status["telemetry_quality"] = telemetry_run_status["telemetry_quality"]
-            status["formal_completeness"] = telemetry_run_status["formal_completeness"]
-            status["call_coverage"] = telemetry_run_status["call_coverage"]
-            status["collection_validity"] = telemetry_run_status["collection_validity"]
-            status["telemetry_errors"] = telemetry_errors
-            status_path.parent.mkdir(parents=True, exist_ok=True)
-            status_path.write_text(
-                json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
+            try:
+                if provider is not None:
+                    await provider.aclose()
+            finally:
+                await agent.stop()
+                status["telemetry_integrity_failed"] = bool(
+                    status.get("telemetry_integrity_failed")
+                    or telemetry_errors
+                    or telemetry_run_status["collection_validity"] == "invalid"
+                )
+                status["telemetry_quality"] = telemetry_run_status["telemetry_quality"]
+                status["formal_completeness"] = telemetry_run_status[
+                    "formal_completeness"
+                ]
+                status["call_coverage"] = telemetry_run_status["call_coverage"]
+                status["collection_validity"] = telemetry_run_status[
+                    "collection_validity"
+                ]
+                status["telemetry_errors"] = telemetry_errors
+                status_path.parent.mkdir(parents=True, exist_ok=True)
+                status_path.write_text(
+                    json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True)
+                    + "\n",
+                    encoding="utf-8",
+                )
     return status
