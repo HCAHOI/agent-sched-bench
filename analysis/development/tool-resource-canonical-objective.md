@@ -24,11 +24,11 @@ artifacts retain that history.
 | Manual tool semantics | **KEEP only the pytest candidate-routing question.** A hindsight selector over existing causal candidates improved full-cohort four-target accuracy by 1.941 points for pytest, but 93/118 corrections merely restored Clause-KB; adding more pytest rules is not supported. pip missed the frozen contrast gate and its perfect-tool ceiling was only 0.392 points, so deprioritize pip-specific work. |
 | KV victim selection | Closed under the current CacheWise/C100 simulator and action model. |
 | GPU tool-gap action | The profile-only early clock and pre-restore are closed by the Section 5.1 offline gate. The load-8 live action test remains unresolved. The load-32 hard-pin control in Section 5.3 was invalid; Section 5.4 compares the unchanged five-second action with stock evictable prefix caching. |
-| Static survival KV action | Cross-repository exact/work/state histories increased stall and the latency-utility robust clock abstained. On the same-repository PennyLane cohort, exact-command actions released more memory-time with zero added stall, while work-signature transfer again added stall. The primary semantic-transfer claim remains NO-GO; exact recurrence is a narrow fresh-test candidate. |
+| Static survival KV action | Cross-repository semantic transfer remains NO-GO. On fixed-history PennyLane, exact recurrence safely advanced the first physical loan for 8/26 tasks by 5 s each; every changed command was recurring `apt-get` setup. This passes the development actionability gate but does not yet establish live completion benefit. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Freeze an exact-command action on the untouched PennyLane 16+16 cohort, then test whether released KV changes real co-tenant admission or completion. Those tasks are uncollected; do not repair the failed work signature on exposed PennyLane. |
+| Next research step | Specify a byte-aware live loan whose primary metric is waiting-request admission/TTFT, then use the untouched PennyLane 16+16 only if the expected 5 s action advance justifies GPU cost. Do not repair the failed work signature on exposed PennyLane. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -884,9 +884,9 @@ first loan each policy would emit. A loan becomes usable after the measured
 A100 swap-out completes, not at the trigger instant. The scorer retains the
 recorded next-request time and charges measured swap-in stall. If a policy
 emits no loan, its next admission opportunity is the recorded task-terminal
-capacity release. Report the
-number of tasks whose first usable loan advances, total/median/p95 admission
-advance under an always-nonempty waiting queue, freed-KV sizes, and the full
+capacity release. Report the number of tasks whose first usable loan advances,
+total/median/p95 admission advance under an always-nonempty waiting queue,
+freed-KV sizes, and the full
 pairwise coverage of other replay tasks' first recorded prompt-plus-completion
 KV demand. Coverage is descriptive: it cannot rescue an inactive or unsafe
 policy, and admission advance is an upper bound rather than a completion-time
@@ -898,6 +898,30 @@ stall is no higher than feedback. A pass authorizes a separately frozen fresh
 live A/B with byte-aware admission and mean completion/makespan metrics; a
 failure stops this exact action without changing the history, trigger, task
 order, or gate. No fixed SLO is assumed.
+
+**Result and decision.** The reviewed formal evaluator used the fixed 15-task
+fit history and scored 26 replay tasks without updates. Exact-immediate advanced
+the first physical loan for exactly 8 tasks, meeting the frozen activation
+threshold. Every advance was 5,000 ms, for a 40,000 ms admission upper bound;
+candidate and feedback aggregate stall were identical at 3,763.355 ms. The
+gate therefore passes and authorizes a separately frozen fresh live test. The
+run took 212.900 s wall time with zero GPU and zero prediction-time agent calls.
+
+All eight changed first loans were recurring `apt-get update && apt-get install`
+commands. Six used the same `python3-pip` command with six fit observations;
+the other two setup commands had one exact fit observation each. They freed
+between 1.324 and 4.000 GiB, enough for every other replay task's first recorded
+prompt-plus-completion demand: 200/200 lender-borrower pairs fit. Independent
+review reproduced the split, counts, advances, stalls, capacity edges, gate,
+and zero overlap with the untouched 16+16 IDs.
+
+The pass is about action activation, not task completion. A post-outcome upper
+bound under the existing four-foreground/four-waiter loan runtime is at most
+four distinct 5 s borrower advances, or 2.5 s off the eight-task mean JCT even
+if every foreground task hits and every advance propagates fully. The live
+action must therefore account for bytes and should measure waiting-request
+admission/TTFT directly; an expensive task-JCT run alone is unlikely to resolve
+such a small ceiling.
 
 ## 6. Closed directions
 
