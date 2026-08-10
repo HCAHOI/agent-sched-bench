@@ -11,6 +11,7 @@ from typing import Any
 
 from harness.trace_logger import TraceLogger
 from trace_collect.openclaw_host_runtime import (
+    ShadowGenerationConfig,
     replay_action_failure_counts,
     replay_framework_failure_count,
 )
@@ -290,6 +291,7 @@ async def _run_openclaw_replay_session(
     *,
     trace_logger: TraceLogger,
     replay_speed: float,
+    shadow_generation: ShadowGenerationConfig | None = None,
     llm_timing: LLMTimingConfig,
     command_timeout_s: float,
     warmup_skip_iterations: int = 0,
@@ -371,6 +373,16 @@ async def _run_openclaw_replay_session(
         "container_python_runtime": ctr.python_runtime,
         "container_pythonpath": ctr.pythonpath,
         "replay_speed": replay_speed,
+        "shadow_generation": (
+            {
+                "api_base": shadow_generation.api_base,
+                "model": shadow_generation.model,
+                "timeout_s": shadow_generation.timeout_s,
+                "seed": shadow_generation.seed,
+            }
+            if shadow_generation is not None
+            else None
+        ),
         "llm_timing": {
             "mode": llm_timing.mode,
             "ttft_ms": llm_timing.ttft_ms,

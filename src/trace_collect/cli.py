@@ -263,6 +263,12 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         help="Container executable for container-mode trace replay.",
     )
     parser.add_argument(
+        "--container-cpus",
+        type=positive_float_arg,
+        default=None,
+        help="CPU cap passed to each replay task container.",
+    )
+    parser.add_argument(
         "--network-mode",
         default="host",
         help="Container network mode (default: host). Use 'none' for isolated replay.",
@@ -294,6 +300,28 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
             "It never scales command execution, timeouts, or telemetry clocks. "
             "Fixed TTFT/TPOT LLM timing requires --replay-speed 1.0."
         ),
+    )
+    parser.add_argument(
+        "--shadow-llm-api-base",
+        default=None,
+        help="Loopback vLLM API base for fixed-trajectory shadow generation.",
+    )
+    parser.add_argument(
+        "--shadow-llm-model",
+        default=None,
+        help="Local vLLM model for fixed-trajectory shadow generation.",
+    )
+    parser.add_argument(
+        "--shadow-llm-timeout-s",
+        type=positive_float_arg,
+        default=120.0,
+        help="Per-request shadow LLM timeout in seconds (default: 120).",
+    )
+    parser.add_argument(
+        "--shadow-llm-seed",
+        type=int,
+        default=0,
+        help="Seed sent to the shadow LLM server (default: 0).",
     )
     parser.add_argument(
         "--llm-timing",
@@ -553,6 +581,11 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "mode": args.mode,
         "container_executable": args.container,
         "network_mode": args.network_mode,
+        "container_start_extra_args": (
+            ("--cpus", format(args.container_cpus, "g"))
+            if args.container_cpus is not None
+            else ()
+        ),
         "workers": args.workers,
         "prep_concurrency": args.prep_concurrency,
         "resource_monitoring": args.resource_monitoring,
@@ -561,6 +594,10 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "command_timeout_s": args.command_timeout,
         "warmup_skip_iterations": args.warmup_skip_iterations,
         "replay_speed": args.replay_speed,
+        "shadow_llm_api_base": args.shadow_llm_api_base,
+        "shadow_llm_model": args.shadow_llm_model,
+        "shadow_llm_timeout_s": args.shadow_llm_timeout_s,
+        "shadow_llm_seed": args.shadow_llm_seed,
         "llm_timing_mode": args.llm_timing.replace("-", "_"),
         "llm_ttft_ms": args.llm_ttft_ms,
         "llm_tpot_ms": args.llm_tpot_ms,

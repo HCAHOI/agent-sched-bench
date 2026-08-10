@@ -897,6 +897,7 @@ def test_openclaw_host_replay_request_closes_provider_after_runner_failure(
 
     closed: list[bool] = []
     stopped: list[bool] = []
+    captured: dict[str, object] = {}
 
     class _FakeAgent:
         async def start(self) -> None:
@@ -915,8 +916,15 @@ def test_openclaw_host_replay_request_closes_provider_after_runner_failure(
     async def fake_proof(*_args, **_kwargs) -> dict[str, object]:
         return {}
 
-    async def fake_aclose(_self) -> None:
-        closed.append(True)
+    class _FakeProvider:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        async def aclose(self) -> None:
+            closed.append(True)
+
+        def get_default_model(self) -> str:
+            return "replay-openclaw"
 
     monkeypatch.setattr(
         "trace_collect.openclaw_host_runtime.ContainerAgent",
@@ -929,8 +937,7 @@ def test_openclaw_host_replay_request_closes_provider_after_runner_failure(
         "agents.openclaw._session_runner.SessionRunner", _FailingRunner
     )
     monkeypatch.setattr(
-        "trace_collect.openclaw_host_runtime.OpenClawReplayProvider.aclose",
-        fake_aclose,
+        "trace_collect.openclaw_host_runtime.OpenClawReplayProvider", _FakeProvider
     )
     status_path = tmp_path / "status.json"
 
@@ -946,6 +953,12 @@ def test_openclaw_host_replay_request_closes_provider_after_runner_failure(
                 "status_path": str(status_path),
                 "replay_speed": 1.0,
                 "llm_timing": {"mode": "source_scaled"},
+                "shadow_generation": {
+                    "api_base": "http://127.0.0.1:8000/v1",
+                    "model": "meta-llama/Llama-3.1-8B-Instruct",
+                    "timeout_s": 12.0,
+                    "seed": 7,
+                },
                 "command_timeout_s": 60.0,
                 "run_instance_id": "close-on-failure",
                 "task_instance_id": "close-on-failure",
@@ -959,6 +972,11 @@ def test_openclaw_host_replay_request_closes_provider_after_runner_failure(
     assert "runner failed" in status["error"]
     assert closed == [True]
     assert stopped == [True]
+    shadow_generation = captured["shadow_generation"]
+    assert shadow_generation.api_base == "http://127.0.0.1:8000/v1"
+    assert shadow_generation.model == "meta-llama/Llama-3.1-8B-Instruct"
+    assert shadow_generation.timeout_s == 12.0
+    assert shadow_generation.seed == 7
     assert json.loads(status_path.read_text(encoding="utf-8"))["success"] is False
 
 
@@ -972,6 +990,163 @@ def test_shadow_generation_config_rejects_non_loopback_api_base() -> None:
             timeout_s=12.0,
             seed=7,
         )
+
+
+def test_simulate_cli_parses_shadow_generation_options() -> None:
+    from trace_collect.cli import parse_simulate_args
+
+    args = parse_simulate_args(
+        [
+            "--manifest",
+            "manifest.yaml",
+            "--shadow-llm-api-base",
+            "http://127.0.0.1:8000/v1",
+            "--shadow-llm-model",
+            "meta-llama/Llama-3.1-8B-Instruct",
+            "--shadow-llm-timeout-s",
+            "12",
+            "--shadow-llm-seed",
+            "7",
+        ]
+    )
+
+    assert args.shadow_llm_api_base == "http://127.0.0.1:8000/v1"
+    assert args.shadow_llm_model == "meta-llama/Llama-3.1-8B-Instruct"
+    assert args.shadow_llm_timeout_s == 12.0
+    assert args.shadow_llm_seed == 7
+
+
+def test_simulate_cli_passes_container_cpu_cap(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from trace_collect.cli import _run_simulate, parse_simulate_args
+
+    captured: dict[str, object] = {}
+
+    async def fake_simulate(**kwargs: object) -> Path:
+        captured.update(kwargs)
+        return tmp_path / "out.jsonl"
+
+    monkeypatch.setattr("trace_collect.simulator.simulate", fake_simulate)
+    args = parse_simulate_args(
+        [
+            "--manifest",
+            "manifest.yaml",
+            "--container-cpus",
+            "2",
+            "--shadow-llm-api-base",
+            "http://127.0.0.1:8000/v1",
+            "--shadow-llm-model",
+            "meta-llama/Llama-3.1-8B-Instruct",
+        ]
+    )
+
+    _run_simulate(args)
+
+    assert captured["container_start_extra_args"] == ("--cpus", "2")
+    assert captured["shadow_llm_api_base"] == "http://127.0.0.1:8000/v1"
+    assert captured["shadow_llm_model"] == "meta-llama/Llama-3.1-8B-Instruct"
+    assert captured["shadow_llm_timeout_s"] == 120.0
+    assert captured["shadow_llm_seed"] == 0
+
+
+@pytest.mark.parametrize(
+    ("shadow_kwargs", "match"),
+    [
+        ({"shadow_llm_api_base": "http://127.0.0.1:8000/v1"}, "together"),
+        ({"shadow_llm_model": "meta-llama/Llama-3.1-8B-Instruct"}, "together"),
+        (
+            {
+                "shadow_llm_api_base": "http://127.0.0.1:8000/v1",
+                "shadow_llm_model": "meta-llama/Llama-3.1-8B-Instruct",
+                "replay_speed": 2.0,
+            },
+            "replay_speed=1.0",
+        ),
+    ],
+)
+def test_simulate_validates_shadow_generation_configuration(
+    tmp_path: Path,
+    shadow_kwargs: dict[str, object],
+    match: str,
+) -> None:
+    trace_path = _write_host_trace(tmp_path / "trace.jsonl", "task-a")
+
+    with pytest.raises(ValueError, match=match):
+        asyncio.run(
+            simulate(
+                manifest=_single_trace_manifest(tmp_path, trace_path),
+                output_dir=tmp_path / "out",
+                **shadow_kwargs,
+            )
+        )
+
+
+def test_combined_worker_trace_records_shadow_generation_metadata(tmp_path: Path) -> None:
+    from trace_collect.simulate_outputs import _write_combined_worker_trace
+    from trace_collect.simulate_types import (
+        LLMTimingConfig,
+        LoadedTraceSession,
+        WorkerReplayResult,
+    )
+
+    worker_trace = tmp_path / "worker.jsonl"
+    worker_trace.write_text("", encoding="utf-8")
+    session = LoadedTraceSession(
+        source_trace=tmp_path / "source.jsonl",
+        task_source=tmp_path / "tasks.json",
+        task_instance_id="task-a",
+        source_action_agent_id="source-a",
+        run_instance_id="run-a",
+        manifest_index=0,
+        scaffold="openclaw",
+        metadata={"execution_environment": "container", "model": "source-model"},
+        summary=None,
+        task={},
+        actions=[],
+        iterations={},
+    )
+    combined_trace = tmp_path / "combined.jsonl"
+
+    _write_combined_worker_trace(
+        trace_file=combined_trace,
+        worker_results=[
+            WorkerReplayResult(
+                wave_index=0,
+                worker_index=0,
+                trace_file=str(worker_trace),
+                task_stats=[],
+                task_output_dirs={},
+            )
+        ],
+        sessions=[session],
+        mode="cloud_model",
+        replay_speed=1.0,
+        llm_timing=LLMTimingConfig(),
+        manifest=tmp_path / "manifest.yaml",
+        concurrency=2,
+        workers=2,
+        prep_concurrency=0,
+        network_mode="host",
+        model=None,
+        monitoring_policy={},
+        exec_timeout_floor_s=None,
+        shadow_generation={
+            "api_base": "http://127.0.0.1:8000/v1",
+            "model": "meta-llama/Llama-3.1-8B-Instruct",
+            "timeout_s": 12.0,
+            "seed": 7,
+        },
+    )
+
+    metadata = json.loads(combined_trace.read_text(encoding="utf-8").splitlines()[0])
+    assert metadata["shadow_generation"] == {
+        "api_base": "http://127.0.0.1:8000/v1",
+        "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "timeout_s": 12.0,
+        "seed": 7,
+    }
 
 
 def test_paired_replay_contract_pins_pytest_seed_and_preserves_failed_timeout() -> None:
@@ -1747,7 +1922,11 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
             output_dir=tmp_path / "out",
             mode="cloud_model",
             container_executable="docker",
-            replay_speed=2.0,
+            replay_speed=1.0,
+            shadow_llm_api_base="http://127.0.0.1:8000/v1",
+            shadow_llm_model="meta-llama/Llama-3.1-8B-Instruct",
+            shadow_llm_timeout_s=12.0,
+            shadow_llm_seed=7,
         )
     )
 
@@ -1764,6 +1943,12 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
     assert summary["sleep_drift"]["by_phase"]["llm_replay"]["sample_count"] == 1
     assert summary["source_model"] == "qwen/qwen3.7-max"
     assert metadata["exec_timeout_floor_s"] == 3_600.0
+    assert metadata["shadow_generation"] == {
+        "api_base": "http://127.0.0.1:8000/v1",
+        "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "timeout_s": 12.0,
+        "seed": 7,
+    }
     import sys
 
     assert len(launched_commands) == 1
@@ -1779,6 +1964,7 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
     assert request["source_action_agent_id"] == "fc_openclaw_replay"
     assert request["source_model"] == "qwen/qwen3.7-max"
     assert request["exec_timeout_floor_s"] == 3_600.0
+    assert request["shadow_generation"] == metadata["shadow_generation"]
     assert request["paired_workload_contract"] is True
     assert request["replay_action_contract"]["require_source_outcome_match"] is False
 

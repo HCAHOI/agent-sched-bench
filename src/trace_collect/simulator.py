@@ -46,6 +46,7 @@ from trace_collect.runtime.task_container import (
     resolve_task_container_exec_config,
 )
 from trace_collect.openclaw_host_runtime import (
+    ShadowGenerationConfig,
     llm_replay_duration_s,
     validate_llm_replay_timing,
 )
@@ -2282,6 +2283,7 @@ async def _run_cloud_model_queue(
     network_mode: str,
     container_resource_recorder: ContainerResourceRecorder | None,
     replay_speed: float,
+    shadow_generation: ShadowGenerationConfig | None = None,
     llm_timing: LLMTimingConfig,
     command_timeout_s: float,
     warmup_skip_iterations: int,
@@ -2392,6 +2394,7 @@ async def _run_cloud_model_queue(
                             prepared,
                             trace_logger=trace_logger,
                             replay_speed=replay_speed,
+                            shadow_generation=shadow_generation,
                             llm_timing=llm_timing,
                             command_timeout_s=command_timeout_s,
                             warmup_skip_iterations=warmup_skip_iterations,
@@ -2481,6 +2484,7 @@ async def _run_prepared_cloud_model_sessions(
     trace_logger: TraceLogger,
     replay_zero_monotonic: float,
     replay_speed: float,
+    shadow_generation: ShadowGenerationConfig | None = None,
     llm_timing: LLMTimingConfig,
     command_timeout_s: float,
     warmup_skip_iterations: int,
@@ -2492,6 +2496,7 @@ async def _run_prepared_cloud_model_sessions(
                 trace_logger=trace_logger,
                 replay_zero_monotonic=replay_zero_monotonic,
                 replay_speed=replay_speed,
+                shadow_generation=shadow_generation,
                 llm_timing=llm_timing,
                 command_timeout_s=command_timeout_s,
                 warmup_skip_iterations=warmup_skip_iterations,
@@ -2523,6 +2528,7 @@ async def _run_worker_wave_async(
     container_executable: str | None,
     network_mode: str,
     replay_speed: float,
+    shadow_generation: ShadowGenerationConfig | None = None,
     llm_timing: LLMTimingConfig,
     command_timeout_s: float,
     warmup_skip_iterations: int,
@@ -2630,6 +2636,11 @@ async def _run_worker_wave_async(
                 "monitoring": monitoring_policy or {},
                 "container_start_extra_args": list(container_start_extra_args),
                 "exec_timeout_floor_s": replay_exec_timeout_floor_s(),
+                **(
+                    {"shadow_generation": dataclasses.asdict(shadow_generation)}
+                    if shadow_generation is not None
+                    else {}
+                ),
             },
         )
         replay_zero_monotonic = await _wait_for_global_replay_start(
@@ -2655,6 +2666,7 @@ async def _run_worker_wave_async(
                 trace_logger=trace_logger,
                 replay_zero_monotonic=replay_zero_monotonic,
                 replay_speed=replay_speed,
+                shadow_generation=shadow_generation,
                 llm_timing=llm_timing,
                 command_timeout_s=command_timeout_s,
                 warmup_skip_iterations=warmup_skip_iterations,
@@ -2696,6 +2708,7 @@ def _run_worker_wave_sync(
     container_executable: str | None,
     network_mode: str,
     replay_speed: float,
+    shadow_generation: ShadowGenerationConfig | None = None,
     llm_timing: LLMTimingConfig,
     command_timeout_s: float,
     warmup_skip_iterations: int,
@@ -2726,6 +2739,7 @@ def _run_worker_wave_sync(
             container_executable=container_executable,
             network_mode=network_mode,
             replay_speed=replay_speed,
+            shadow_generation=shadow_generation,
             llm_timing=llm_timing,
             command_timeout_s=command_timeout_s,
             warmup_skip_iterations=warmup_skip_iterations,
@@ -2753,6 +2767,7 @@ async def _run_cloud_model_worker_waves(
     container_executable: str | None,
     network_mode: str,
     replay_speed: float,
+    shadow_generation: ShadowGenerationConfig | None = None,
     llm_timing: LLMTimingConfig,
     command_timeout_s: float,
     warmup_skip_iterations: int,
@@ -2814,6 +2829,7 @@ async def _run_cloud_model_worker_waves(
                             container_executable=container_executable,
                             network_mode=network_mode,
                             replay_speed=replay_speed,
+                            shadow_generation=shadow_generation,
                             llm_timing=llm_timing,
                             command_timeout_s=command_timeout_s,
                             warmup_skip_iterations=warmup_skip_iterations,
@@ -3231,6 +3247,7 @@ async def _replay_cloud_model_session(
     trace_logger: TraceLogger,
     replay_zero_monotonic: float | None = None,
     replay_speed: float,
+    shadow_generation: ShadowGenerationConfig | None = None,
     llm_timing: LLMTimingConfig,
     command_timeout_s: float,
     warmup_skip_iterations: int,
@@ -3253,6 +3270,7 @@ async def _replay_cloud_model_session(
             prepared_session,
             trace_logger=trace_logger,
             replay_speed=replay_speed,
+            shadow_generation=shadow_generation,
             llm_timing=llm_timing,
             command_timeout_s=command_timeout_s,
             warmup_skip_iterations=warmup_skip_iterations,
@@ -3405,6 +3423,10 @@ async def simulate(
     command_timeout_s: float = 120.0,
     warmup_skip_iterations: int = 0,
     replay_speed: float = 1.0,
+    shadow_llm_api_base: str | None = None,
+    shadow_llm_model: str | None = None,
+    shadow_llm_timeout_s: float = 120.0,
+    shadow_llm_seed: int = 0,
     resource_monitoring: MonitoringMode = "auto",
     pmu_monitoring: MonitoringMode = "auto",
     memory_bandwidth_monitoring: MonitoringMode = "auto",
@@ -3424,6 +3446,18 @@ async def simulate(
         raise ValueError("workers must be >= 1")
     if prep_concurrency < 0:
         raise ValueError("prep_concurrency must be >= 0")
+    if (shadow_llm_api_base is None) != (shadow_llm_model is None):
+        raise ValueError("shadow_llm_api_base and shadow_llm_model must be supplied together")
+    shadow_generation = None
+    if shadow_llm_api_base is not None:
+        if replay_speed != 1.0:
+            raise ValueError("shadow generation requires replay_speed=1.0")
+        shadow_generation = ShadowGenerationConfig(
+            api_base=shadow_llm_api_base,
+            model=shadow_llm_model,
+            timeout_s=shadow_llm_timeout_s,
+            seed=shadow_llm_seed,
+        )
     exec_timeout_floor_s = replay_exec_timeout_floor_s()
     resolved_tool_resource_profile: Path | None = None
     if tool_resource_profile is None:
@@ -3591,6 +3625,11 @@ async def simulate(
                     "monitoring": monitoring_policy_dict,
                     "container_start_extra_args": list(container_start_extra_args),
                     "exec_timeout_floor_s": exec_timeout_floor_s,
+                    **(
+                        {"shadow_generation": dataclasses.asdict(shadow_generation)}
+                        if shadow_generation is not None
+                        else {}
+                    ),
                     "tool_resource": {
                         "profile": (
                             str(tool_resource_profile.resolve())
@@ -3625,6 +3664,7 @@ async def simulate(
                 network_mode=network_mode,
                 container_resource_recorder=container_resource_recorder,
                 replay_speed=replay_speed,
+                shadow_generation=shadow_generation,
                 llm_timing=llm_timing,
                 command_timeout_s=command_timeout_s,
                 warmup_skip_iterations=warmup_skip_iterations,
@@ -3646,6 +3686,7 @@ async def simulate(
                 container_executable=container_executable,
                 network_mode=network_mode,
                 replay_speed=replay_speed,
+                shadow_generation=shadow_generation,
                 llm_timing=llm_timing,
                 command_timeout_s=command_timeout_s,
                 warmup_skip_iterations=warmup_skip_iterations,
@@ -3680,6 +3721,11 @@ async def simulate(
                 model=model,
                 monitoring_policy=monitoring_policy_dict,
                 exec_timeout_floor_s=exec_timeout_floor_s,
+                shadow_generation=(
+                    dataclasses.asdict(shadow_generation)
+                    if shadow_generation is not None
+                    else None
+                ),
             )
             _split_combined_worker_trace_by_agent(
                 combined_path=combined_trace_file,

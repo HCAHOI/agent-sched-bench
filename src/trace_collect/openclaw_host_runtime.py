@@ -1163,6 +1163,12 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
     status_path = Path(request["status_path"])
     replay_speed = float(request["replay_speed"])
     llm_timing = dict(request["llm_timing"])
+    shadow_payload = request.get("shadow_generation")
+    shadow_generation = (
+        ShadowGenerationConfig(**dict(shadow_payload))
+        if shadow_payload is not None
+        else None
+    )
     tool_resource_profile = request.get("tool_resource_profile")
     if tool_resource_profile is not None:
         tool_resource_profile = str(tool_resource_profile)
@@ -1298,6 +1304,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             stop_before_final_tool_calls=(
                 source_terminal_reason == "trace_ended_before_tools"
             ),
+            shadow_generation=shadow_generation,
         )
         runner = SessionRunner(
             provider,
@@ -1328,6 +1335,18 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 request.get("paired_workload_contract", False)
             ),
             "replay_action_contract": replay_action_contract,
+            **(
+                {
+                    "shadow_generation": {
+                        "api_base": shadow_generation.api_base,
+                        "model": shadow_generation.model,
+                        "timeout_s": shadow_generation.timeout_s,
+                        "seed": shadow_generation.seed,
+                    }
+                }
+                if shadow_generation is not None
+                else {}
+            ),
             "tool_resource": {
                 "profile": tool_resource_profile,
                 "service_enabled": bool(tool_resource_profile),

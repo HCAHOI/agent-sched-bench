@@ -519,6 +519,7 @@ def _write_combined_worker_trace(
     model: str | None,
     monitoring_policy: dict[str, object] | None,
     exec_timeout_floor_s: float | None,
+    shadow_generation: dict[str, object] | None,
 ) -> None:
     """Concatenate worker JSONL files behind one global metadata header."""
     if trace_file.exists():
@@ -544,6 +545,11 @@ def _write_combined_worker_trace(
                 "worker_trace_files": [result.trace_file for result in worker_results],
                 "monitoring": monitoring_policy or {},
                 "exec_timeout_floor_s": exec_timeout_floor_s,
+                **(
+                    {"shadow_generation": shadow_generation}
+                    if shadow_generation is not None
+                    else {}
+                ),
             },
         )
     finally:
