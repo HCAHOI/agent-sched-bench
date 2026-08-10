@@ -2027,21 +2027,20 @@ def test_command_not_found_path_heads_must_agree_exactly() -> None:
     "command",
     ["python; true", "python; echo ok"],
 )
-def test_exit_zero_command_not_found_requires_pipeline_masking(command: str) -> None:
+def test_later_sequential_command_can_mask_command_not_found(command: str) -> None:
     diagnostic = "/bin/sh: 1: python: not found"
-    assert (
-        shell_command_lookup_failure_evidence(
-            command=command,
-            source_tool_call_id="source-1",
-            replay_tool_call_id="replay-1",
-            source_command=command,
-            source_tool_result=f"{diagnostic}\n\nExit code: 0",
-            replay_result=diagnostic,
-            replay_stderr=diagnostic,
-            replay_exit_code=0,
-        )
-        is None
+    evidence = shell_command_lookup_failure_evidence(
+        command=command,
+        source_tool_call_id="source-1",
+        replay_tool_call_id="replay-1",
+        source_command=command,
+        source_tool_result=f"{diagnostic}\n\nExit code: 0",
+        replay_result=diagnostic,
+        replay_stderr=diagnostic,
+        replay_exit_code=0,
     )
+    assert evidence is not None
+    assert evidence.exit_code_semantics == "later_sequential_command_masked_0"
 
 
 def test_exit_zero_command_not_found_accepts_explicit_or_true() -> None:

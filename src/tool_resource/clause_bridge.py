@@ -437,6 +437,13 @@ def _lookup_exit_semantics(
         for edge in control_edges
     ):
         return "or_true_masked_0"
+    if (
+        index + 1 < len(static)
+        and not clause.get("structural_context")
+        and not static[index + 1].get("structural_context")
+        and not clause.get("in_pipe")
+    ):
+        return "later_sequential_command_masked_0"
     return None
 
 
