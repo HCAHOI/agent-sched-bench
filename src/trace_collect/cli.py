@@ -333,6 +333,15 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         help="Seed sent to the shadow LLM server (default: 0).",
     )
     parser.add_argument(
+        "--shadow-llm-max-concurrency",
+        type=positive_int_arg,
+        default=None,
+        help=(
+            "Maximum concurrent fixed-trajectory shadow LLM requests. "
+            "Omit to leave request admission unconstrained."
+        ),
+    )
+    parser.add_argument(
         "--llm-timing",
         choices=["source-scaled", "ttft-tpot"],
         default="source-scaled",
@@ -608,6 +617,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "shadow_llm_model": args.shadow_llm_model,
         "shadow_llm_timeout_s": args.shadow_llm_timeout_s,
         "shadow_llm_seed": args.shadow_llm_seed,
+        "shadow_llm_max_concurrency": args.shadow_llm_max_concurrency,
         "llm_timing_mode": args.llm_timing.replace("-", "_"),
         "llm_ttft_ms": args.llm_ttft_ms,
         "llm_tpot_ms": args.llm_tpot_ms,

@@ -659,8 +659,30 @@ def test_openclaw_replay_provider_rejects_ttft_tpot_with_replay_speed() -> None:
         )
 
 
+def test_shadow_request_slot_pool_waits_for_release(tmp_path: Path) -> None:
+    from trace_collect.openclaw_host_runtime import _ShadowRequestSlotPool
+
+    slot_path = tmp_path / "slot-000.lock"
+    slot_path.touch()
+
+    async def exercise() -> None:
+        first = _ShadowRequestSlotPool((str(slot_path),))
+        second = _ShadowRequestSlotPool((str(slot_path),))
+        first_lease = await first.acquire()
+        waiter = asyncio.create_task(second.acquire())
+        await asyncio.sleep(0.02)
+        assert not waiter.done()
+        first_lease.release()
+        second_lease = await asyncio.wait_for(waiter, timeout=1.0)
+        assert second_lease.slot_index == 0
+        second_lease.release()
+
+    asyncio.run(exercise())
+
+
 def test_openclaw_replay_provider_charges_streamed_shadow_generation(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Shadow generation uses the frozen source prompt but replays source actions."""
     from trace_collect.openclaw_host_runtime import (
@@ -760,6 +782,8 @@ def test_openclaw_replay_provider_charges_streamed_shadow_generation(
             },
         },
     }
+    slot_path = tmp_path / "slot-000.lock"
+    slot_path.touch()
     provider = OpenClawReplayProvider(
         llm_actions=[source_action],
         replay_speed=1.0,
@@ -769,6 +793,7 @@ def test_openclaw_replay_provider_charges_streamed_shadow_generation(
             model="meta-llama/Llama-3.1-8B-Instruct",
             timeout_s=12.0,
             seed=7,
+            admission_slot_paths=(str(slot_path),),
         ),
     )
 
@@ -813,7 +838,16 @@ def test_openclaw_replay_provider_charges_streamed_shadow_generation(
     assert {
         key: value
         for key, value in shadow_metrics.items()
-        if key not in {"ttft_ms", "latency_ms"}
+        if key
+        not in {
+            "ttft_ms",
+            "latency_ms",
+            "admission_wait_ms",
+            "end_to_end_ttft_ms",
+            "request_ready_wall_time_s",
+            "slot_acquired_wall_time_s",
+            "slot_released_wall_time_s",
+        }
     } == {
         "model": "meta-llama/Llama-3.1-8B-Instruct",
         "seed": 7,
@@ -829,21 +863,33 @@ def test_openclaw_replay_provider_charges_streamed_shadow_generation(
         "completion_token_ids": [101, 102, 103],
         "completion_token_ids_sha256": "6251b266c29efaa1b7377992b2bde7fd92eb600e6eec9bd11745c33866e854a0",
         "finish_reason": "length",
+        "admission_slot_index": 0,
     }
     assert "prompt_token_ids" not in shadow_metrics
     assert "messages" not in shadow_metrics
     assert shadow_metrics["ttft_ms"] >= 0
     assert shadow_metrics["latency_ms"] >= shadow_metrics["ttft_ms"]
+    assert shadow_metrics["end_to_end_ttft_ms"] == pytest.approx(
+        shadow_metrics["admission_wait_ms"] + shadow_metrics["ttft_ms"],
+        abs=0.002,
+    )
+    assert (
+        shadow_metrics["request_ready_wall_time_s"]
+        <= shadow_metrics["slot_acquired_wall_time_s"]
+        <= shadow_metrics["slot_released_wall_time_s"]
+    )
     assert captured["client_kwargs"] == {"timeout": 12.0, "trust_env": False}
     assert captured["closed"] is True
 
 
 def test_openclaw_replay_provider_rejects_shadow_token_count_mismatch(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     from trace_collect.openclaw_host_runtime import (
         OpenClawReplayProvider,
         ShadowGenerationConfig,
+        _ShadowRequestSlotPool,
     )
 
     class _FakeResponse:
@@ -874,6 +920,8 @@ def test_openclaw_replay_provider_rejects_shadow_token_count_mismatch(
     monkeypatch.setattr(
         "trace_collect.openclaw_host_runtime.httpx.AsyncClient", _FakeClient
     )
+    slot_path = tmp_path / "slot-000.lock"
+    slot_path.touch()
     provider = OpenClawReplayProvider(
         llm_actions=[
             {
@@ -893,6 +941,7 @@ def test_openclaw_replay_provider_rejects_shadow_token_count_mismatch(
             model="meta-llama/Llama-3.1-8B-Instruct",
             timeout_s=12.0,
             seed=7,
+            admission_slot_paths=(str(slot_path),),
         ),
     )
 
@@ -901,6 +950,14 @@ def test_openclaw_replay_provider_rejects_shadow_token_count_mismatch(
             asyncio.run(provider.chat([]))
     finally:
         asyncio.run(provider.aclose())
+
+    async def acquire_after_failure() -> None:
+        lease = await asyncio.wait_for(
+            _ShadowRequestSlotPool((str(slot_path),)).acquire(), timeout=1.0
+        )
+        lease.release()
+
+    asyncio.run(acquire_after_failure())
 
 
 def test_openclaw_replay_provider_rejects_conflicting_stream_request_ids(
@@ -1186,6 +1243,8 @@ def test_simulate_cli_parses_shadow_generation_options() -> None:
             "12",
             "--shadow-llm-seed",
             "7",
+            "--shadow-llm-max-concurrency",
+            "4",
         ]
     )
 
@@ -1193,6 +1252,7 @@ def test_simulate_cli_parses_shadow_generation_options() -> None:
     assert args.shadow_llm_model == "meta-llama/Llama-3.1-8B-Instruct"
     assert args.shadow_llm_timeout_s == 12.0
     assert args.shadow_llm_seed == 7
+    assert args.shadow_llm_max_concurrency == 4
 
 
 def test_simulate_cli_passes_container_cpu_cap(
@@ -1218,6 +1278,8 @@ def test_simulate_cli_passes_container_cpu_cap(
             "http://127.0.0.1:8000/v1",
             "--shadow-llm-model",
             "meta-llama/Llama-3.1-8B-Instruct",
+            "--shadow-llm-max-concurrency",
+            "4",
         ]
     )
 
@@ -1228,11 +1290,13 @@ def test_simulate_cli_passes_container_cpu_cap(
     assert captured["shadow_llm_model"] == "meta-llama/Llama-3.1-8B-Instruct"
     assert captured["shadow_llm_timeout_s"] == 120.0
     assert captured["shadow_llm_seed"] == 0
+    assert captured["shadow_llm_max_concurrency"] == 4
 
 
 @pytest.mark.parametrize(
     ("shadow_kwargs", "match"),
     [
+        ({"shadow_llm_max_concurrency": 4}, "requires shadow generation"),
         ({"shadow_llm_api_base": "http://127.0.0.1:8000/v1"}, "together"),
         ({"shadow_llm_model": "meta-llama/Llama-3.1-8B-Instruct"}, "together"),
         (
@@ -2250,6 +2314,7 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
             shadow_llm_model="meta-llama/Llama-3.1-8B-Instruct",
             shadow_llm_timeout_s=12.0,
             shadow_llm_seed=7,
+            shadow_llm_max_concurrency=4,
         )
     )
 
@@ -2266,11 +2331,23 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
     assert summary["sleep_drift"]["by_phase"]["llm_replay"]["sample_count"] == 1
     assert summary["source_model"] == "qwen/qwen3.7-max"
     assert metadata["exec_timeout_floor_s"] == 3_600.0
+    slot_paths = [
+        str(
+            (
+                tmp_path
+                / "out"
+                / ".shadow-llm-admission"
+                / f"slot-{slot_index:03d}.lock"
+            ).resolve()
+        )
+        for slot_index in range(4)
+    ]
     assert metadata["shadow_generation"] == {
         "api_base": "http://127.0.0.1:8000/v1",
         "model": "meta-llama/Llama-3.1-8B-Instruct",
         "timeout_s": 12.0,
         "seed": 7,
+        "admission_slot_paths": slot_paths,
     }
     import sys
 

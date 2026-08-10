@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import hashlib
 import ipaddress
 import json
@@ -11,7 +12,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any
+from typing import Any, TextIO
 from urllib.parse import urlparse
 
 import httpx
@@ -67,6 +68,7 @@ class ShadowGenerationConfig:
     model: str
     timeout_s: float
     seed: int
+    admission_slot_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         parsed = urlparse(self.api_base)
@@ -83,6 +85,54 @@ class ShadowGenerationConfig:
             raise ValueError("shadow model must be non-empty")
         if not math.isfinite(self.timeout_s) or self.timeout_s <= 0:
             raise ValueError("shadow timeout_s must be finite and > 0")
+        slot_paths = tuple(self.admission_slot_paths)
+        if any(not path for path in slot_paths) or len(set(slot_paths)) != len(
+            slot_paths
+        ):
+            raise ValueError("shadow admission slot paths must be unique and non-empty")
+        object.__setattr__(self, "admission_slot_paths", slot_paths)
+
+
+@dataclass(slots=True)
+class _ShadowRequestSlotLease:
+    slot_index: int
+    _handle: TextIO | None
+
+    def release(self) -> None:
+        handle = self._handle
+        if handle is None:
+            return
+        self._handle = None
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
+class _ShadowRequestSlotPool:
+    """Cross-process request slots backed by kernel-released file locks."""
+
+    def __init__(self, slot_paths: tuple[str, ...]) -> None:
+        if not slot_paths:
+            raise ValueError("shadow request slot pool requires at least one slot")
+        self._slot_paths = slot_paths
+
+    async def acquire(self) -> _ShadowRequestSlotLease:
+        # ponytail: polling is bounded to staged replay workers; add a broker
+        # only if measured starvation makes lock ordering insufficient.
+        while True:
+            for slot_index, slot_path in enumerate(self._slot_paths):
+                handle = open(slot_path, "r+", encoding="utf-8")
+                try:
+                    fcntl.flock(
+                        handle.fileno(),
+                        fcntl.LOCK_EX | fcntl.LOCK_NB,
+                    )
+                except BlockingIOError:
+                    handle.close()
+                    continue
+                return _ShadowRequestSlotLease(slot_index, handle)
+            await asyncio.sleep(0.005)
 
 
 def _tool_name(record: dict[str, Any]) -> str | None:
@@ -383,6 +433,12 @@ class OpenClawReplayProvider(LLMProvider):
             if shadow_generation is not None
             else None
         )
+        self._shadow_slot_pool = (
+            _ShadowRequestSlotPool(shadow_generation.admission_slot_paths)
+            if shadow_generation is not None
+            and shadow_generation.admission_slot_paths
+            else None
+        )
         self.source_terminal_boundary_reached = False
         self.unexpected_request_count = 0
         self._replayed_action_count = 0
@@ -459,11 +515,43 @@ class OpenClawReplayProvider(LLMProvider):
                 or source_action_index < 0
             ):
                 raise RuntimeError("shadow generation source action has no valid index")
-            shadow_metrics = await self._shadow_generate(
-                data,
-                source_action_id=source_action_id,
-                source_action_index=source_action_index,
+            request_ready_monotonic = time.monotonic()
+            request_ready_wall_time_s = time.time()
+            lease = (
+                await self._shadow_slot_pool.acquire()
+                if self._shadow_slot_pool is not None
+                else None
             )
+            slot_acquired_monotonic = time.monotonic()
+            slot_acquired_wall_time_s = time.time()
+            try:
+                shadow_metrics = await self._shadow_generate(
+                    data,
+                    source_action_id=source_action_id,
+                    source_action_index=source_action_index,
+                )
+            finally:
+                slot_released_wall_time_s = time.time()
+                if lease is not None:
+                    lease.release()
+            if lease is not None:
+                admission_wait_ms = round(
+                    (slot_acquired_monotonic - request_ready_monotonic) * 1000.0,
+                    3,
+                )
+                shadow_metrics.update(
+                    {
+                        "admission_slot_index": lease.slot_index,
+                        "admission_wait_ms": admission_wait_ms,
+                        "end_to_end_ttft_ms": round(
+                            admission_wait_ms + float(shadow_metrics["ttft_ms"]),
+                            3,
+                        ),
+                        "request_ready_wall_time_s": request_ready_wall_time_s,
+                        "slot_acquired_wall_time_s": slot_acquired_wall_time_s,
+                        "slot_released_wall_time_s": slot_released_wall_time_s,
+                    }
+                )
             sleep_record = None
             timing_fields = {"llm_timing_mode": "shadow_generation"}
         wall_end = time.time()

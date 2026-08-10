@@ -391,6 +391,7 @@ def test_parse_simulate_args_accepts_cloud_model_manifest_without_llm_args() -> 
     assert args.llm_timing == "source-scaled"
     assert args.llm_ttft_ms is None
     assert args.llm_tpot_ms is None
+    assert args.shadow_llm_max_concurrency is None
     assert args.stage_all_before_replay is False
 
 
@@ -1407,6 +1408,7 @@ def test_run_simulate_cloud_model_bypasses_llm_config(monkeypatch, tmp_path: Pat
     assert seen["llm_timing_mode"] == "source_scaled"
     assert seen["llm_ttft_ms"] is None
     assert seen["llm_tpot_ms"] is None
+    assert seen["shadow_llm_max_concurrency"] is None
     assert seen["stage_all_before_replay"] is True
 
 

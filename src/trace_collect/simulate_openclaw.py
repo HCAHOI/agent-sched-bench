@@ -379,6 +379,7 @@ async def _run_openclaw_replay_session(
                 "model": shadow_generation.model,
                 "timeout_s": shadow_generation.timeout_s,
                 "seed": shadow_generation.seed,
+                "admission_slot_paths": list(shadow_generation.admission_slot_paths),
             }
             if shadow_generation is not None
             else None

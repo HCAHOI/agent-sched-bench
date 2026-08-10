@@ -3588,6 +3588,7 @@ async def simulate(
     shadow_llm_model: str | None = None,
     shadow_llm_timeout_s: float = 120.0,
     shadow_llm_seed: int = 0,
+    shadow_llm_max_concurrency: int | None = None,
     resource_monitoring: MonitoringMode = "auto",
     pmu_monitoring: MonitoringMode = "auto",
     memory_bandwidth_monitoring: MonitoringMode = "auto",
@@ -3612,6 +3613,14 @@ async def simulate(
         raise ValueError("prep_concurrency must be >= 0")
     if (shadow_llm_api_base is None) != (shadow_llm_model is None):
         raise ValueError("shadow_llm_api_base and shadow_llm_model must be supplied together")
+    if shadow_llm_max_concurrency is not None:
+        if (
+            isinstance(shadow_llm_max_concurrency, bool)
+            or shadow_llm_max_concurrency < 1
+        ):
+            raise ValueError("shadow_llm_max_concurrency must be >= 1")
+        if shadow_llm_api_base is None:
+            raise ValueError("shadow_llm_max_concurrency requires shadow generation")
     shadow_generation = None
     if shadow_llm_api_base is not None:
         if replay_speed != 1.0:
@@ -3749,6 +3758,18 @@ async def simulate(
     run_wall_end: float | None = None
     common_ready_wall_time_s: float | None = None
     output_path.mkdir(parents=True, exist_ok=True)
+    if shadow_generation is not None and shadow_llm_max_concurrency is not None:
+        slot_dir = output_path / ".shadow-llm-admission"
+        slot_dir.mkdir(exist_ok=True)
+        slot_paths: list[str] = []
+        for slot_index in range(shadow_llm_max_concurrency):
+            slot_path = slot_dir / f"slot-{slot_index:03d}.lock"
+            slot_path.touch(exist_ok=True)
+            slot_paths.append(str(slot_path.resolve()))
+        shadow_generation = dataclasses.replace(
+            shadow_generation,
+            admission_slot_paths=tuple(slot_paths),
+        )
     if has_dependencies and workers > 1:
         raise SimulateError(
             "Dependency-aware simulation currently requires workers=1; "
