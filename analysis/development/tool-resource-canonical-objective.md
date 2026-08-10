@@ -14,7 +14,7 @@ artifacts retain that history.
 |---|---|
 | Prediction | Keep the target-specific Task-Aware Command Predictor below as the selected development candidate. It is exposed evidence, not confirmation or deployed code. |
 | Runtime feedback | **KEEP causal command-level eBPF feedback as a measured mechanism and control.** Neither tested admission action passed its frozen utility gate, so it is not a runtime scheduler candidate. |
-| CPU execution | Keep equal-share burstable execution as a physical control. Fit-only Clause-KB candidate envelopes pass under a hindsight foreground control. Next replace foreground future shape with a fit-only profile at causal elapsed position. |
+| CPU execution | Keep equal-share burstable execution as a physical control. Fit-only candidate envelopes expose phase headroom, but the two-sided causal CPU arm misses the completion gate. Close this absolute-time phase-envelope scheduler for the present PennyLane wave. |
 | Saturated quartet result | Frozen claim verdict is NO-GO because 8/12, not 9/12, groups improved. This is not a module-retirement decision. |
 | Fresh counterbalanced queue | **Inconclusive because 7/1,818 paired tool calls changed terminal class.** Timing-only improvement was 0.929% with 2/4 queues improving, below the frozen gate even before the quality failure. |
 | Prediction contribution to feedback | Not established. Task-Aware seeding did not improve the frozen reservation/service operating point over feedback alone. |
@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Freeze the two-sided fit-envelope test: predict both commands from fit history and locate the running foreground only by causal elapsed time. Keep RSS as the last isolated oracle control. |
+| Next research step | Consolidate the action frontier, then test only a materially different action with a larger end-to-end ceiling; do not tune the closed two-sided phase-envelope arm. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1149,6 +1149,18 @@ CPU-work violations. A pass authorizes a separately frozen RSS replacement and
 then physical validation; a failure stops this phase-envelope scheduler. No
 profile tail, feedback correction, key, order, or gate may change after reading
 the outcome.
+
+**Result and decision.** The two-sided arm reduced mean task completion by
+4.461% and makespan by 2.868%, with 1.757% service inflation and no capacity or
+CPU-work violation. It therefore fails the frozen completion gate and does not
+authorize RSS replacement. Relative to the one-sided control, speculative
+starts fell from 287 to 116, while added service rose from 26.175 s to
+550.804 s and mean completion worsened by 567.716 s. Absolute-time foreground
+transfer both rejects useful alignments and misaligns some admitted phases.
+Close this phase-envelope scheduler under the present single-wave action model;
+do not add a post-outcome alignment or feedback correction on these replay
+tasks. This does not negate the 10.699% hindsight phase-shape headroom or rule
+out a preemptive/differently timed action.
 
 ## 6. Closed directions
 
