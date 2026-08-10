@@ -410,7 +410,7 @@ def _trace_program(path: Path, *, command_field: str) -> TraceProgram:
 
 
 def load_trace_programs(
-    trace_root: str | Path,
+    trace_root: str | Path | Sequence[str | Path],
     *,
     task_ids: Sequence[str] | None = None,
     limit: int | None = None,
@@ -420,7 +420,12 @@ def load_trace_programs(
     """Load a deterministic real-program sample, failing on identity drift."""
     if limit is not None and limit <= 0:
         raise ValueError("limit must be > 0")
-    paths = discover_trace_files([Path(trace_root)])
+    roots = (
+        [Path(trace_root)]
+        if isinstance(trace_root, (str, Path))
+        else [Path(item) for item in trace_root]
+    )
+    paths = discover_trace_files(roots)
     by_task: dict[str, Path] = {}
     for path in paths:
         trace = TraceData.load(path)

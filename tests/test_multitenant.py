@@ -496,6 +496,63 @@ def test_trace_loader_preserves_prompts_lengths_and_real_tool_gap(
     assert program.turns[0].tools[0].end_offset_ms == pytest.approx(1100.0)
 
 
+def test_trace_loader_accepts_explicit_trace_files(tmp_path: Path) -> None:
+    trace_paths = []
+    for index in range(2):
+        trace_path = tmp_path / f"task-{index}" / "trace.jsonl"
+        trace_path.parent.mkdir(parents=True)
+        rows = [
+            {
+                "type": "trace_metadata",
+                "trace_format_version": 5,
+                "instance_id": f"task-{index}",
+            },
+            {
+                "type": "action",
+                "action_type": "llm_call",
+                "action_id": "a0",
+                "agent_id": f"task-{index}",
+                "iteration": 0,
+                "ts_start": 1.0,
+                "ts_end": 2.0,
+                "data": {
+                    "messages_in": [],
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                },
+            },
+            {
+                "type": "action",
+                "action_type": "tool_exec",
+                "action_id": "x0",
+                "agent_id": f"task-{index}",
+                "iteration": 0,
+                "ts_start": 2.0,
+                "ts_end": 3.0,
+                "data": {"tool_name": "exec", "tool_args": {"command": "true"}},
+            },
+            {
+                "type": "action",
+                "action_type": "llm_call",
+                "action_id": "a1",
+                "agent_id": f"task-{index}",
+                "iteration": 1,
+                "ts_start": 3.0,
+                "ts_end": 4.0,
+                "data": {
+                    "messages_in": [],
+                    "prompt_tokens": 1,
+                    "completion_tokens": 0,
+                },
+            },
+        ]
+        trace_path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        trace_paths.append(trace_path)
+
+    programs = load_trace_programs(trace_paths, task_ids=["task-1", "task-0"])
+    assert [program.task_id for program in programs] == ["task-1", "task-0"]
+
+
 def test_transfer_totals_exclude_control_events() -> None:
     assert _transfer_totals(
         [
