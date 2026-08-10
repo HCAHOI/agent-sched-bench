@@ -882,7 +882,9 @@ signature, prefix, state, threshold, or agent.
 For each replay task, order actions on its recorded timeline and keep only the
 first loan each policy would emit. A loan becomes usable after the measured
 A100 swap-out completes, not at the trigger instant. The scorer retains the
-recorded next-request time and charges measured swap-in stall. Report the
+recorded next-request time and charges measured swap-in stall. If a policy
+emits no loan, its next admission opportunity is the recorded task-terminal
+capacity release. Report the
 number of tasks whose first usable loan advances, total/median/p95 admission
 advance under an always-nonempty waiting queue, freed-KV sizes, and the full
 pairwise coverage of other replay tasks' first recorded prompt-plus-completion
