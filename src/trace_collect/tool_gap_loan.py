@@ -27,12 +27,22 @@ class ToolGapPrediction:
         probabilities = self.probability_by_bucket
         if len(probabilities) != len(LATENCY_BUCKET_LOWER_EDGES_S):
             raise ValueError("tool-gap prediction must have five latency buckets")
+        if any(
+            not isinstance(value, (int, float)) or isinstance(value, bool)
+            for value in probabilities
+        ):
+            raise ValueError("tool-gap prediction probabilities must be numbers")
         if any(not math.isfinite(value) or value < 0.0 for value in probabilities):
             raise ValueError("tool-gap prediction probabilities must be finite and nonnegative")
         if not math.isclose(sum(probabilities), 1.0, abs_tol=1e-6):
             raise ValueError("tool-gap prediction probabilities must sum to one")
         if self.hard_bucket not in range(len(probabilities)):
             raise ValueError("tool-gap prediction hard bucket is out of range")
+        expected_hard_bucket = max(
+            range(len(probabilities)), key=probabilities.__getitem__
+        )
+        if self.hard_bucket != expected_hard_bucket:
+            raise ValueError("tool-gap hard bucket must match the PMF argmax")
 
 
 @dataclass(frozen=True)

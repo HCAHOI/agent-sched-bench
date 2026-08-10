@@ -342,6 +342,17 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--tool-gap-loan-arm",
+        choices=["fixed", "feedback", "predictor"],
+        default=None,
+        help="Enable the registered staged tool-gap loan experiment arm.",
+    )
+    parser.add_argument(
+        "--tool-gap-predictions",
+        default=None,
+        help="Strict label-free prediction JSON used only by the predictor arm.",
+    )
+    parser.add_argument(
         "--llm-timing",
         choices=["source-scaled", "ttft-tpot"],
         default="source-scaled",
@@ -618,6 +629,10 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "shadow_llm_timeout_s": args.shadow_llm_timeout_s,
         "shadow_llm_seed": args.shadow_llm_seed,
         "shadow_llm_max_concurrency": args.shadow_llm_max_concurrency,
+        "tool_gap_loan_arm": args.tool_gap_loan_arm,
+        "tool_gap_predictions": (
+            Path(args.tool_gap_predictions) if args.tool_gap_predictions else None
+        ),
         "llm_timing_mode": args.llm_timing.replace("-", "_"),
         "llm_ttft_ms": args.llm_ttft_ms,
         "llm_tpot_ms": args.llm_tpot_ms,

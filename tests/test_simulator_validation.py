@@ -898,6 +898,62 @@ def test_openclaw_replay_provider_charges_streamed_shadow_generation(
     assert responses[0]["latency_ms"] == shadow_metrics["latency_ms"]
 
 
+def test_shadow_generation_records_tool_gap_without_request_slots(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from trace_collect.openclaw_host_runtime import (
+        OpenClawReplayProvider,
+        ShadowGenerationConfig,
+    )
+    from trace_collect.tool_gap_loan import ToolGapLoanConfig, ToolGapLoanRuntime
+
+    runtime = ToolGapLoanRuntime(
+        ToolGapLoanConfig(
+            arm="fixed",
+            state_dir=str(tmp_path),
+            task_id="task-0",
+            foreground_task_ids=("task-0", "task-1", "task-2", "task-3"),
+            can_lend=True,
+        )
+    )
+    provider = OpenClawReplayProvider(
+        llm_actions=[
+            {
+                "action_type": "llm_call",
+                "action_id": "llm-0",
+                "data": {
+                    "messages_in": [],
+                    "completion_tokens": 1,
+                    "raw_response": {"choices": [{"message": {"content": "ok"}}]},
+                },
+            }
+        ],
+        replay_speed=1.0,
+        timing_mode="source_scaled",
+        shadow_generation=ShadowGenerationConfig(
+            api_base="http://127.0.0.1:8000/v1",
+            model="model",
+            timeout_s=12.0,
+            seed=0,
+        ),
+        tool_gap_loan=runtime,
+    )
+
+    async def fake_generate(*_args, **_kwargs) -> dict[str, object]:
+        return {"latency_ms": 3.0, "ttft_ms": 1.0}
+
+    monkeypatch.setattr(provider, "_shadow_generate", fake_generate)
+    try:
+        response = asyncio.run(provider.chat([]))
+    finally:
+        asyncio.run(provider.aclose())
+
+    assert response.content == "ok"
+    records = json.loads((tmp_path / "responses" / "task-0.json").read_text())
+    assert records[0]["action_id"] == "llm-0"
+
+
 def test_container_exec_tool_brackets_tool_gap_without_changing_request(
     tmp_path: Path,
 ) -> None:
@@ -1366,6 +1422,94 @@ def test_simulate_cli_parses_shadow_generation_options() -> None:
     assert args.shadow_llm_timeout_s == 12.0
     assert args.shadow_llm_seed == 7
     assert args.shadow_llm_max_concurrency == 4
+
+
+def test_simulate_cli_parses_tool_gap_loan_options() -> None:
+    from trace_collect.cli import parse_simulate_args
+
+    args = parse_simulate_args(
+        [
+            "--manifest",
+            "manifest.yaml",
+            "--tool-gap-loan-arm",
+            "predictor",
+            "--tool-gap-predictions",
+            "predictions.json",
+        ]
+    )
+
+    assert args.tool_gap_loan_arm == "predictor"
+    assert args.tool_gap_predictions == "predictions.json"
+
+
+def test_tool_gap_prediction_file_accepts_only_ordered_exec_subsequence(
+    tmp_path: Path,
+) -> None:
+    from trace_collect.simulate_types import LoadedTraceSession
+    from trace_collect.simulator import _load_tool_gap_predictions
+
+    session = LoadedTraceSession(
+        source_trace=tmp_path / "trace.jsonl",
+        task_source=tmp_path / "tasks.json",
+        task_instance_id="task-0",
+        source_action_agent_id="task-0",
+        run_instance_id="task-0",
+        manifest_index=0,
+        scaffold="openclaw",
+        metadata={},
+        summary=None,
+        task={},
+        actions=[
+            {
+                "action_type": "tool_exec",
+                "data": {
+                    "tool_name": "exec",
+                    "tool_args": json.dumps({"command": "echo ignored"}),
+                },
+            },
+            {
+                "action_type": "tool_exec",
+                "data": {
+                    "tool_name": "read_file",
+                    "tool_args": json.dumps({"path": "x"}),
+                },
+            },
+            {
+                "action_type": "tool_exec",
+                "data": {
+                    "tool_name": "exec",
+                    "tool_args": json.dumps({"command": "pytest -q"}),
+                },
+            },
+        ],
+        iterations={},
+    )
+    prediction_path = tmp_path / "predictions.json"
+    prediction_path.write_text(
+        json.dumps(
+            {
+                "task-0": [
+                    {
+                        "sample_id": "sample-0",
+                        "command": "pytest -q",
+                        "probability_by_bucket": [0, 0, 0, 1, 0],
+                        "hard_bucket": 3,
+                        "provenance": {"head": "task-aware"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    predictions = _load_tool_gap_predictions(prediction_path, [session])
+    assert predictions["task-0"][0].command == "pytest -q"
+
+    payload = json.loads(prediction_path.read_text())
+    payload["task-0"][0]["label"] = 4
+    prediction_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="prediction fields"):
+        _load_tool_gap_predictions(prediction_path, [session])
 
 
 def test_simulate_cli_passes_container_cpu_cap(

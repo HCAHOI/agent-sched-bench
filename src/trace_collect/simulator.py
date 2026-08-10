@@ -102,8 +102,89 @@ from trace_collect.simulate_utils import (
     _summarize_sleep_drifts,
     _utc_now_iso,
 )
+from trace_collect.tool_gap_loan import (
+    ToolGapLoanConfig,
+    ToolGapPrediction,
+)
 
 _TOOL_RESOURCE_RUN_TOKENS_ENV = "TOOL_RESOURCE_RUN_TOKENS"
+
+
+def _source_exec_commands(session: LoadedTraceSession) -> list[str]:
+    commands: list[str] = []
+    for action in session.actions:
+        if action.get("action_type") != "tool_exec":
+            continue
+        data = action.get("data")
+        if not isinstance(data, dict) or data.get("tool_name") != "exec":
+            continue
+        arguments = data.get("tool_args")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                continue
+        if isinstance(arguments, dict) and isinstance(arguments.get("command"), str):
+            commands.append(arguments["command"])
+    return commands
+
+
+def _load_tool_gap_predictions(
+    path: Path,
+    sessions: list[LoadedTraceSession],
+) -> dict[str, tuple[ToolGapPrediction, ...]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("tool-gap prediction file must be a task-keyed object")
+    expected_ids = {session.task_instance_id for session in sessions}
+    if set(payload) != expected_ids:
+        raise ValueError("tool-gap prediction task IDs must exactly match the manifest")
+    allowed_fields = {
+        "sample_id",
+        "command",
+        "probability_by_bucket",
+        "hard_bucket",
+        "provenance",
+    }
+    result: dict[str, tuple[ToolGapPrediction, ...]] = {}
+    for session in sessions:
+        raw_predictions = payload[session.task_instance_id]
+        if not isinstance(raw_predictions, list):
+            raise ValueError("tool-gap task predictions must be a list")
+        predictions: list[ToolGapPrediction] = []
+        for raw in raw_predictions:
+            if not isinstance(raw, dict) or set(raw) != allowed_fields:
+                raise ValueError("tool-gap prediction fields do not match the schema")
+            if (
+                not isinstance(raw["sample_id"], str)
+                or not isinstance(raw["command"], str)
+                or not isinstance(raw["probability_by_bucket"], list)
+                or not isinstance(raw["hard_bucket"], int)
+                or isinstance(raw["hard_bucket"], bool)
+                or not isinstance(raw["provenance"], dict)
+            ):
+                raise ValueError("tool-gap prediction has invalid field types")
+            predictions.append(
+                ToolGapPrediction(
+                    sample_id=raw["sample_id"],
+                    command=raw["command"],
+                    probability_by_bucket=tuple(raw["probability_by_bucket"]),
+                    hard_bucket=raw["hard_bucket"],
+                    provenance=raw["provenance"],
+                )
+            )
+        source_commands = _source_exec_commands(session)
+        cursor = 0
+        for prediction in predictions:
+            while cursor < len(source_commands) and source_commands[cursor] != prediction.command:
+                cursor += 1
+            if cursor == len(source_commands):
+                raise ValueError(
+                    "tool-gap prediction commands must be an ordered source-exec subsequence"
+                )
+            cursor += 1
+        result[session.task_instance_id] = tuple(predictions)
+    return result
 
 
 def _tool_resource_scope(loaded: LoadedTraceSession) -> str:
@@ -2317,6 +2398,8 @@ async def _run_staged_cloud_model_queue(
     container_resource_recorder: ContainerResourceRecorder | None,
     replay_speed: float,
     shadow_generation: ShadowGenerationConfig | None = None,
+    tool_gap_arm: str | None = None,
+    tool_gap_predictions: dict[str, tuple[ToolGapPrediction, ...]] | None = None,
     llm_timing: LLMTimingConfig,
     command_timeout_s: float,
     warmup_skip_iterations: int,
@@ -2329,6 +2412,11 @@ async def _run_staged_cloud_model_queue(
 ) -> tuple[list[PreparedTraceSession], list[ReplayTaskStats], float]:
     """Prepare all sessions, then replay them FIFO from one ready time."""
 
+    state_dir = output_path / ".tool-gap-loan"
+    if tool_gap_arm is not None:
+        if state_dir.exists() and any(state_dir.iterdir()):
+            raise SimulateError(f"tool-gap state directory is not empty: {state_dir}")
+        state_dir.mkdir(parents=True, exist_ok=True)
     prep_limit = _resolve_prep_concurrency(prep_concurrency, len(loaded_sessions))
     prep_semaphore = asyncio.Semaphore(prep_limit)
 
@@ -2378,6 +2466,198 @@ async def _run_staged_cloud_model_queue(
 
     common_ready_monotonic = time.monotonic() + _REPLAY_START_DELAY_S
     common_ready_wall_time_s = time.time() + _REPLAY_START_DELAY_S
+    if tool_gap_arm is not None:
+        foreground_ids = tuple(
+            prepared.loaded.task_instance_id
+            for prepared in prepared_sessions[:concurrency]
+        )
+        predictions_by_task = tool_gap_predictions or {}
+        task_stats: dict[str, ReplayTaskStats] = {}
+        active: dict[
+            asyncio.Task[ReplayTaskStats],
+            tuple[PreparedTraceSession, float, str, str | None],
+        ] = {}
+        admissions: list[dict[str, object]] = []
+        loan_releases: list[dict[str, object]] = []
+        next_index = 0
+        max_active = 0
+        observed_lenders: set[str] = set()
+        consumed_lenders: set[str] = set()
+        loan_records: dict[str, dict[str, object]] = {}
+
+        def refresh_loans() -> None:
+            loan_dir = state_dir / "loans"
+            if not loan_dir.exists():
+                return
+            for loan_path in loan_dir.glob("*.json"):
+                record = json.loads(loan_path.read_text(encoding="utf-8"))
+                task_id = record.get("task_id")
+                if task_id not in foreground_ids:
+                    raise SimulateError(f"invalid tool-gap lender: {task_id!r}")
+                decision_wall_time_s = record.get("decision_wall_time_s")
+                if (
+                    not isinstance(decision_wall_time_s, (int, float))
+                    or isinstance(decision_wall_time_s, bool)
+                ):
+                    raise SimulateError("tool-gap loan has no valid decision time")
+                lender = str(task_id)
+                observed_lenders.add(lender)
+                loan_records[lender] = record
+
+        async def replay_one(
+            prepared: PreparedTraceSession,
+            admitted_monotonic: float,
+            config: ToolGapLoanConfig,
+        ) -> ReplayTaskStats:
+            stats = await _replay_cloud_model_session(
+                prepared,
+                trace_logger=trace_logger,
+                replay_zero_monotonic=common_ready_monotonic,
+                replay_speed=replay_speed,
+                shadow_generation=shadow_generation,
+                tool_gap_loan=config,
+                llm_timing=llm_timing,
+                command_timeout_s=command_timeout_s,
+                warmup_skip_iterations=warmup_skip_iterations,
+            )
+            terminal_monotonic = time.monotonic()
+            return dataclasses.replace(
+                stats,
+                admission_wait_s=max(
+                    0.0,
+                    admitted_monotonic - common_ready_monotonic,
+                ),
+                ready_to_terminal_s=max(
+                    0.0,
+                    terminal_monotonic - common_ready_monotonic,
+                ),
+            )
+
+        def admit_to_capacity() -> None:
+            nonlocal next_index, max_active
+            while next_index < len(prepared_sessions):
+                base_active = sum(slot == "base" for _, _, slot, _ in active.values())
+                lender: str | None = None
+                if base_active < concurrency:
+                    admission_kind = "base"
+                else:
+                    pending_lenders = sorted(
+                        observed_lenders - consumed_lenders,
+                        key=lambda task_id: (
+                            float(loan_records[task_id]["decision_wall_time_s"]),
+                            task_id,
+                        ),
+                    )
+                    if not pending_lenders:
+                        break
+                    lender = pending_lenders[0]
+                    consumed_lenders.add(lender)
+                    admission_kind = "loan"
+                prepared = prepared_sessions[next_index]
+                task_id = prepared.loaded.task_instance_id
+                admitted_monotonic = time.monotonic()
+                admitted_wall_time_s = time.time()
+                config = ToolGapLoanConfig(
+                    arm=tool_gap_arm,
+                    state_dir=str(state_dir),
+                    task_id=task_id,
+                    foreground_task_ids=foreground_ids,
+                    can_lend=next_index < concurrency,
+                    predictions=predictions_by_task.get(task_id, ()),
+                )
+                task = asyncio.create_task(
+                    replay_one(prepared, admitted_monotonic, config)
+                )
+                active[task] = (
+                    prepared,
+                    admitted_monotonic,
+                    admission_kind,
+                    lender,
+                )
+                admissions.append(
+                    {
+                        "task_id": task_id,
+                        "run_instance_id": prepared.loaded.run_instance_id,
+                        "admitted_wall_time_s": admitted_wall_time_s,
+                        "admission_kind": admission_kind,
+                        "lender_task_id": lender,
+                        "active_after": len(active),
+                        "observed_lenders": sorted(observed_lenders),
+                    }
+                )
+                if lender is not None:
+                    lender_record = loan_records[lender]
+                    loan_releases.append(
+                        {
+                            "lender_task_id": lender,
+                            "borrower_task_id": task_id,
+                            "lender_call_id": lender_record.get("call_id"),
+                            "trigger": lender_record.get("trigger"),
+                            "lender_decision_wall_time_s": lender_record[
+                                "decision_wall_time_s"
+                            ],
+                            "borrower_admitted_wall_time_s": admitted_wall_time_s,
+                        }
+                    )
+                next_index += 1
+                max_active = max(max_active, len(active))
+
+        await _sleep_until_monotonic(common_ready_monotonic)
+        admit_to_capacity()
+        failure: BaseException | None = None
+        while active:
+            done, _ = await asyncio.wait(
+                active,
+                timeout=0.01,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            try:
+                refresh_loans()
+            except BaseException as exc:
+                failure = exc
+                break
+            for task in done:
+                prepared, _admitted, _slot, _lender = active.pop(task)
+                try:
+                    stats = task.result()
+                except BaseException as exc:
+                    failure = exc
+                    break
+                task_stats[prepared.loaded.run_instance_id] = stats
+            if failure is not None:
+                break
+            admit_to_capacity()
+        if failure is not None:
+            for task in active:
+                task.cancel()
+            await asyncio.gather(*active, return_exceptions=True)
+            await _cleanup_staged_sessions(prepared_sessions, cleanup_state)
+            raise SimulateError("staged tool-gap replay failed") from failure
+        summary = {
+            "arm": tool_gap_arm,
+            "state_dir": str(state_dir),
+            "foreground_task_ids": list(foreground_ids),
+            "waiting_task_ids": [
+                prepared.loaded.task_instance_id
+                for prepared in prepared_sessions[concurrency:]
+            ],
+            "observed_loan_count": len(observed_lenders),
+            "observed_lender_task_ids": sorted(observed_lenders),
+            "consumed_lender_task_ids": sorted(consumed_lenders),
+            "effective_max_concurrency": max_active,
+            "admissions": admissions,
+            "loan_releases": loan_releases,
+        }
+        (state_dir / "summary.json").write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        ordered_stats = [
+            task_stats[prepared.loaded.run_instance_id]
+            for prepared in prepared_sessions
+        ]
+        return prepared_sessions, ordered_stats, common_ready_wall_time_s
+
     queue: asyncio.Queue[PreparedTraceSession] = asyncio.Queue()
     for prepared in prepared_sessions:
         queue.put_nowait(prepared)
@@ -3409,6 +3689,7 @@ async def _replay_cloud_model_session(
     replay_zero_monotonic: float | None = None,
     replay_speed: float,
     shadow_generation: ShadowGenerationConfig | None = None,
+    tool_gap_loan: ToolGapLoanConfig | None = None,
     llm_timing: LLMTimingConfig,
     command_timeout_s: float,
     warmup_skip_iterations: int,
@@ -3432,6 +3713,7 @@ async def _replay_cloud_model_session(
             trace_logger=trace_logger,
             replay_speed=replay_speed,
             shadow_generation=shadow_generation,
+            tool_gap_loan=tool_gap_loan,
             llm_timing=llm_timing,
             command_timeout_s=command_timeout_s,
             warmup_skip_iterations=warmup_skip_iterations,
@@ -3589,6 +3871,8 @@ async def simulate(
     shadow_llm_timeout_s: float = 120.0,
     shadow_llm_seed: int = 0,
     shadow_llm_max_concurrency: int | None = None,
+    tool_gap_loan_arm: str | None = None,
+    tool_gap_predictions: Path | None = None,
     resource_monitoring: MonitoringMode = "auto",
     pmu_monitoring: MonitoringMode = "auto",
     memory_bandwidth_monitoring: MonitoringMode = "auto",
@@ -3621,6 +3905,12 @@ async def simulate(
             raise ValueError("shadow_llm_max_concurrency must be >= 1")
         if shadow_llm_api_base is None:
             raise ValueError("shadow_llm_max_concurrency requires shadow generation")
+    if tool_gap_loan_arm not in {None, "fixed", "feedback", "predictor"}:
+        raise ValueError(f"unknown tool-gap loan arm: {tool_gap_loan_arm}")
+    if tool_gap_loan_arm == "predictor" and tool_gap_predictions is None:
+        raise ValueError("predictor tool-gap loan requires a prediction file")
+    if tool_gap_loan_arm != "predictor" and tool_gap_predictions is not None:
+        raise ValueError("tool-gap predictions are only valid for the predictor arm")
     shadow_generation = None
     if shadow_llm_api_base is not None:
         if replay_speed != 1.0:
@@ -3665,6 +3955,26 @@ async def simulate(
         for entry in manifest_entries
     ]
     _assign_replay_instance_ids(loaded_sessions)
+    tool_gap_prediction_map: dict[str, tuple[ToolGapPrediction, ...]] | None = None
+    if tool_gap_loan_arm is not None:
+        if workers != 1 or not stage_all_before_replay:
+            raise ValueError(
+                "tool-gap loan requires workers=1 and stage_all_before_replay"
+            )
+        if concurrency != 4 or len(loaded_sessions) != 8:
+            raise ValueError("tool-gap loan requires concurrency=4 and exactly 8 traces")
+        if shadow_generation is None:
+            raise ValueError("tool-gap loan requires shadow generation")
+        if shadow_llm_max_concurrency is not None:
+            raise ValueError("tool-gap loan forbids shadow request admission caps")
+        if tool_gap_loan_arm == "predictor":
+            assert tool_gap_predictions is not None
+            tool_gap_prediction_map = _load_tool_gap_predictions(
+                tool_gap_predictions,
+                loaded_sessions,
+            )
+        else:
+            tool_gap_prediction_map = {}
     _validate_loaded_sessions(
         loaded_sessions,
         mode=mode,
@@ -3776,7 +4086,9 @@ async def simulate(
             "multi-process worker waves cannot release children immediately "
             "after each parent finishes"
         )
-    if stage_all_before_replay:
+    if tool_gap_loan_arm is not None:
+        scheduler_mode = "staged_tool_gap_loan"
+    elif stage_all_before_replay:
         scheduler_mode = "staged_bounded_queue"
     elif has_dependencies:
         scheduler_mode = "dependency_queue"
@@ -3848,6 +4160,27 @@ async def simulate(
                         if shadow_generation is not None
                         else {}
                     ),
+                    **(
+                        {
+                            "tool_gap_loan": {
+                                "arm": tool_gap_loan_arm,
+                                "state_dir": str(output_path / ".tool-gap-loan"),
+                                "foreground_task_ids": [
+                                    item.task_instance_id for item in loaded_sessions[:4]
+                                ],
+                                "waiting_task_ids": [
+                                    item.task_instance_id for item in loaded_sessions[4:]
+                                ],
+                                "prediction_file": (
+                                    str(tool_gap_predictions)
+                                    if tool_gap_predictions is not None
+                                    else None
+                                ),
+                            }
+                        }
+                        if tool_gap_loan_arm is not None
+                        else {}
+                    ),
                     "tool_resource": {
                         "profile": (
                             str(tool_resource_profile.resolve())
@@ -3904,6 +4237,8 @@ async def simulate(
                     loaded_sessions,
                     prep_concurrency=prep_concurrency,
                     cleanup_state=cleanup_state,
+                    tool_gap_arm=tool_gap_loan_arm,
+                    tool_gap_predictions=tool_gap_prediction_map,
                     **queue_kwargs,
                 )
             else:
@@ -4033,6 +4368,13 @@ async def simulate(
     if run_wall_start is None or run_wall_end is None:
         raise AssertionError("simulate wall-clock measurement was not recorded")
     trace_file = output_path / f"{run_id}.jsonl"
+    tool_gap_summary = None
+    if tool_gap_loan_arm is not None:
+        tool_gap_summary = json.loads(
+            (output_path / ".tool-gap-loan" / "summary.json").read_text(
+                encoding="utf-8"
+            )
+        )
     _write_throughput_summary(
         output_path=output_path,
         run_id=run_id,
@@ -4049,6 +4391,7 @@ async def simulate(
         container_resources=container_resource_summary,
         monitoring_policy=monitoring_policy_dict,
         common_ready_wall_time_s=common_ready_wall_time_s,
+        tool_gap_loan=tool_gap_summary,
     )
     if cleanup_state is not None:
         logger.info(

@@ -283,6 +283,7 @@ def _write_throughput_summary(
     container_resources: dict[str, Any] | None = None,
     monitoring_policy: dict[str, object] | None = None,
     common_ready_wall_time_s: float | None = None,
+    tool_gap_loan: dict[str, object] | None = None,
 ) -> Path:
     attempted = len(task_stats)
     completed = sum(1 for stat in task_stats if stat.success)
@@ -301,7 +302,10 @@ def _write_throughput_summary(
         "prep_concurrency": prep_concurrency,
         "effective_prep_concurrency": (
             _resolve_prep_concurrency(prep_concurrency, attempted)
-            if (workers > 1 or scheduler_mode == "staged_bounded_queue")
+            if (
+                workers > 1
+                or scheduler_mode in {"staged_bounded_queue", "staged_tool_gap_loan"}
+            )
             and attempted
             else None
         ),
@@ -327,6 +331,8 @@ def _write_throughput_summary(
         ]
         payload["common_ready_wall_time_s"] = common_ready_wall_time_s
         payload["ready_to_all_terminal_s"] = max(ready_to_terminal, default=0.0)
+    if tool_gap_loan is not None:
+        payload["tool_gap_loan"] = tool_gap_loan
     if llm_timing.mode == "ttft_tpot":
         payload["llm_ttft_ms"] = llm_timing.ttft_ms
         payload["llm_tpot_ms"] = llm_timing.tpot_ms

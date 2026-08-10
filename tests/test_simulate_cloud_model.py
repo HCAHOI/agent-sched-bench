@@ -595,6 +595,138 @@ def test_staged_queue_prepares_every_task_before_fifo_admission(
     )
 
 
+def test_tool_gap_loan_staged_queue_admits_one_waiter_per_loan(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    sessions = [
+        LoadedTraceSession(
+            source_trace=tmp_path / f"trace-{index}.jsonl",
+            task_source=tmp_path / "tasks.json",
+            task_instance_id=f"task-{index}",
+            source_action_agent_id=f"task-{index}",
+            run_instance_id=f"task-{index}",
+            manifest_index=index,
+            scaffold="openclaw",
+            metadata={"source_model": "model"},
+            summary=None,
+            task={"instance_id": f"task-{index}"},
+            actions=[],
+            iterations={},
+        )
+        for index in range(8)
+    ]
+    admitted: list[str] = []
+    configs: dict[str, object] = {}
+    active = 0
+    max_active = 0
+    four_started = asyncio.Event()
+    borrower_finished = asyncio.Event()
+    release_foreground = asyncio.Event()
+    reused_loan = False
+
+    async def fake_prepare(
+        loaded: LoadedTraceSession,
+        **_kwargs,
+    ) -> PreparedTraceSession:
+        return PreparedTraceSession(loaded=loaded)
+
+    async def fake_replay(
+        prepared: PreparedTraceSession,
+        *,
+        tool_gap_loan: object,
+        **_kwargs,
+    ) -> ReplayTaskStats:
+        nonlocal active, max_active, reused_loan
+        task_id = prepared.loaded.task_instance_id
+        admitted.append(task_id)
+        configs[task_id] = tool_gap_loan
+        active += 1
+        max_active = max(max_active, active)
+        if len(admitted) == 4:
+            four_started.set()
+        if task_id == "task-0":
+            await four_started.wait()
+            loan_dir = tmp_path / "out" / ".tool-gap-loan" / "loans"
+            loan_dir.mkdir(parents=True)
+            (loan_dir / "task-0.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": "task-0",
+                        "trigger": "feedback",
+                        "decision_wall_time_s": 2.0,
+                        "call_id": "call-0",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            await release_foreground.wait()
+        elif task_id == "task-1":
+            await borrower_finished.wait()
+            await asyncio.sleep(0.03)
+            reused_loan = "task-5" in admitted
+            release_foreground.set()
+        elif task_id in {"task-2", "task-3"}:
+            await release_foreground.wait()
+        elif task_id == "task-4":
+            borrower_finished.set()
+        await asyncio.sleep(0)
+        active -= 1
+        loaded = prepared.loaded
+        return ReplayTaskStats(
+            agent_id=loaded.agent_id,
+            run_instance_id=loaded.run_instance_id,
+            source_agent_id=loaded.source_action_agent_id,
+            manifest_index=loaded.manifest_index,
+            label=loaded.label,
+            source_trace=str(loaded.source_trace),
+            success=True,
+            elapsed_s=0.01,
+            action_count=0,
+            llm_call_count=0,
+            tool_exec_count=0,
+        )
+
+    monkeypatch.setattr(simulator_module, "_prepare_replay_session", fake_prepare)
+    monkeypatch.setattr(simulator_module, "_replay_cloud_model_session", fake_replay)
+    monkeypatch.setattr(simulator_module, "_REPLAY_START_DELAY_S", 0.001)
+
+    asyncio.run(
+        simulator_module._run_staged_cloud_model_queue(
+            sessions,
+            output_path=tmp_path / "out",
+            trace_logger=object(),
+            concurrency=4,
+            prep_concurrency=8,
+            container_executable=None,
+            network_mode="host",
+            container_resource_recorder=None,
+            replay_speed=1.0,
+            llm_timing=LLMTimingConfig(),
+            command_timeout_s=1.0,
+            warmup_skip_iterations=0,
+            tool_gap_arm="feedback",
+            tool_gap_predictions={},
+        )
+    )
+
+    assert admitted[:5] == ["task-0", "task-1", "task-2", "task-3", "task-4"]
+    assert max_active == 5
+    assert reused_loan is False
+    assert configs["task-0"].can_lend is True
+    assert configs["task-4"].can_lend is False
+    summary = json.loads(
+        (tmp_path / "out" / ".tool-gap-loan" / "summary.json").read_text()
+    )
+    assert summary["effective_max_concurrency"] == 5
+    assert summary["observed_loan_count"] == 1
+    assert [
+        (release["lender_task_id"], release["borrower_task_id"])
+        for release in summary["loan_releases"]
+    ] == [("task-0", "task-4")]
+
+
 def test_staged_queue_cleans_successful_preparations_when_one_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

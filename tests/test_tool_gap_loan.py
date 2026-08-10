@@ -4,6 +4,8 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
+
 from trace_collect.tool_gap_loan import (
     ToolGapLoanConfig,
     ToolGapLoanRuntime,
@@ -157,3 +159,34 @@ def test_unmatched_prediction_falls_back_to_feedback(tmp_path: Path) -> None:
         await runtime.finish_tool(unmatched, wall_end_s=20.1)
 
     asyncio.run(exercise())
+
+
+def test_prediction_rejects_hard_bucket_inconsistent_with_pmf() -> None:
+    with pytest.raises(ValueError, match="hard bucket must match"):
+        ToolGapPrediction(
+            sample_id="sample-0",
+            command="pytest -q",
+            probability_by_bucket=(1.0, 0.0, 0.0, 0.0, 0.0),
+            hard_bucket=3,
+            provenance={},
+        )
+
+
+@pytest.mark.parametrize(
+    "probabilities",
+    [
+        (True, False, False, False, False),
+        ("1", 0.0, 0.0, 0.0, 0.0),
+    ],
+)
+def test_prediction_rejects_non_numeric_pmf_elements(
+    probabilities: tuple[object, ...],
+) -> None:
+    with pytest.raises(ValueError, match="numbers"):
+        ToolGapPrediction(
+            sample_id="sample-0",
+            command="pytest -q",
+            probability_by_bucket=probabilities,  # type: ignore[arg-type]
+            hard_bucket=0,
+            provenance={},
+        )
