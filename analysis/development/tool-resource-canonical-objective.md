@@ -26,7 +26,7 @@ artifacts retain that history.
 | GPU tool-gap action | The profile-only early clock and pre-restore are closed by the Section 5.1 offline gate. The load-8 live action test remains unresolved. The load-32 hard-pin control in Section 5.3 was invalid; Section 5.4 compares the unchanged five-second action with stock evictable prefix caching. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
-| Next research step | Do not confirm or tune the Section 5.6 action. Its throughput/JCT headroom is real, but blind request-slot queueing violates the tail SLO; a successor must name a different prediction-dependent action and fresh protocol before outcomes. |
+| Next research step | Run the separately registered Section 5.7 predictive tool-gap loan. It tests whether latency prediction advances the same backfill action beyond causal elapsed-time feedback without request queueing. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -649,6 +649,41 @@ tobymao__sqlglot-1670  tobymao__sqlglot-1782
 The failed development gate means these tasks must not be collected or opened
 for this action. The full machine-readable result is in
 `analysis/results/fixed-trajectory-phase-aware-admission-20260810/result.json`.
+
+### 5.7 Registered predictive tool-gap loan
+
+**Open amendment, 2026-08-10, before implementation or action-outcome
+access.** Four foreground tasks may each start one non-recursive waiting task.
+No LLM request is gated. For each tool call, `B` is the maximum full response
+latency among causally completed foreground LLM calls, available only after all
+four foreground tasks have completed one call. The predictor arm lends
+immediately when the selected Task-Aware latency bucket's lower edge `L` is
+greater than `B`; otherwise it lends when causal tool elapsed time exceeds
+that same frozen `B`. The feedback arm only uses the elapsed-time rule; the
+fixed arm never lends. CPU, RSS, and Disk predictions do not participate.
+
+The initial design named the Section 5.6 tasks, but they contributed fit
+evidence to Task-Aware. Before code or action outcomes, the workload was
+corrected to the first eight tasks in the frozen predictor-validation order:
+SQLGlot 2337, 2794, 3230, 3765, 2619, 3333, 2754, and 3549. Runtime prediction
+input contains no labels or target telemetry. These tasks are
+development-exposed; the 16 IDs reserved in Section 5.6 remain untouched.
+
+The fixed six-cell order is `Fixed, Feedback, Predictor, Predictor, Feedback,
+Fixed`, paired as cells 1/2/3 and 6/5/4. All cells use prepared containers,
+two-core tool execution, eBPF, exact source actions and completion-token counts,
+fresh Llama-3.1-8B-Instruct A100-80GB vLLM/KV state, and no request semaphore.
+Both Predictor cells must activate an early loan and at least four distinct
+command/action IDs must activate across them; otherwise the result is
+`insufficient_action_activation`, not a performance verdict.
+
+GO requires complete validity; lower Predictor makespan than both paired arms
+in both repetitions; pooled Predictor mean task JCT at least 5% below both
+arms; paired Predictor/Fixed p95 task-JCT ratios at most 1.05; and paired
+Predictor/Fixed p99 end-to-end TTFT ratios at most 1.05. Any failure stops
+without changing thresholds, bucket handling, task order, task subset, or
+vLLM settings. Full implementation and logging semantics are frozen in
+`docs/superpowers/specs/2026-08-10-predictive-tool-gap-loan-design.md`.
 
 ## 6. Closed directions
 

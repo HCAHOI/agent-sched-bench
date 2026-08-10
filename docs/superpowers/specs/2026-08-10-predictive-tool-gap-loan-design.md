@@ -8,8 +8,27 @@ without increasing p99 end-to-end LLM TTFT by more than 5%?
 
 This is a new development experiment. It does not reinterpret or tune the
 failed static cap-eight or phase-aware request-cap experiments. The SQLGlot
-first eight are development-exposed; the previously reserved 16 SQLGlot task
-IDs remain untouched unless this protocol passes unchanged.
+validation first eight are development-exposed; the previously reserved 16
+SQLGlot task IDs remain untouched unless this protocol passes unchanged.
+
+**Pre-outcome amendment, 2026-08-10.** The initial written spec named the
+original development first eight used by Section 5.6. Those tasks contributed
+fit evidence to the selected Task-Aware predictor, so using them would leak
+target-task labels into a predictor-dependent action. Before implementation,
+prediction-map generation, or action-outcome access, the workload was changed
+to the first eight tasks in the already exposed predictor-validation order:
+
+```text
+tobymao__sqlglot-2337  tobymao__sqlglot-2794
+tobymao__sqlglot-3230  tobymao__sqlglot-3765
+tobymao__sqlglot-2619  tobymao__sqlglot-3333
+tobymao__sqlglot-2754  tobymao__sqlglot-3549
+```
+
+The task order is fixed as listed. The runtime input contains only command
+identity, latency PMF, hard bucket, and provenance copied from the frozen
+validation rows; labels and target telemetry are not copied or opened by the
+runtime.
 
 ## Action
 
@@ -70,10 +89,10 @@ remains available but is disabled in every arm.
 
 ## Development Protocol
 
-Use the same SQLGlot first-eight source trajectories, manifest order,
-two-core containers, eBPF, Llama-3.1-8B-Instruct A100-80GB server at 250 W,
-warm-up, and fresh vLLM/KV state per cell as Section 5.6. Run the symmetric
-six-cell order:
+Use the amended SQLGlot validation-first-eight source trajectories and fixed
+order above, with the same two-core containers, eBPF,
+Llama-3.1-8B-Instruct A100-80GB server at 250 W, warm-up, and fresh vLLM/KV
+state per cell as Section 5.6. Run the symmetric six-cell order:
 
 ```text
 Fixed, Feedback, Predictor, Predictor, Feedback, Fixed
@@ -82,7 +101,8 @@ Fixed, Feedback, Predictor, Predictor, Feedback, Fixed
 Pair cells 1/2/3 and 6/5/4. Before the formal run, one bounded smoke may check
 plumbing and decision logs but cannot contribute performance evidence. After
 the smoke, report measured wall time and memory; the already approved formal
-run is expected to take about 65 minutes.
+run is expected to take roughly one hour, with the smoke providing the final
+estimate.
 
 Action activation is valid only if both Predictor cells contain at least one
 early loan and at least four distinct command/action IDs create early loans
