@@ -275,6 +275,7 @@ class ProgramContext:
     results: dict[tuple[int, int], str]
     states: dict[tuple[int, int], StateKey | None]
     observations: tuple[DurationObservation, ...]
+    omitted_terminal_tool_count: int
 
 
 def _raw_tool_results(program: TraceProgram) -> list[tuple[str, str, str]]:
@@ -311,11 +312,11 @@ def _program_context(program: TraceProgram) -> ProgramContext:
         for tool_index, tool in enumerate(turn.tools)
     ]
     raw = _raw_tool_results(program)
-    if len(raw) != len(indexed_tools):
+    if len(raw) < len(indexed_tools):
         raise ValueError(f"{program.task_id}: source/raw tool counts differ")
     results: dict[tuple[int, int], str] = {}
     for (turn_index, tool_index, tool), (name, command, result) in zip(
-        indexed_tools, raw, strict=True
+        indexed_tools, raw[: len(indexed_tools)], strict=True
     ):
         if name != tool.tool_name or (name == "exec" and command != tool.command):
             raise ValueError(f"{program.task_id}: source/raw tool identity differs")
@@ -363,7 +364,12 @@ def _program_context(program: TraceProgram) -> ProgramContext:
             )
         for _end, _index, command, result in sorted(pending):
             state.observe(command, result)
-    return ProgramContext(results, states, tuple(observations))
+    return ProgramContext(
+        results,
+        states,
+        tuple(observations),
+        len(raw) - len(indexed_tools),
+    )
 
 
 def _git_sha() -> str:
@@ -588,7 +594,15 @@ def _evaluate(args: argparse.Namespace) -> dict[str, Any]:
         "evidence": {
             "fit_population_task_count": len(fit_programs),
             "fit_exec_observations": len(public),
+            "fit_omitted_terminal_tool_count": sum(
+                context.omitted_terminal_tool_count
+                for context in fit_contexts.values()
+            ),
             "replay_task_count": len(replay_programs),
+            "replay_omitted_terminal_tool_count": sum(
+                context.omitted_terminal_tool_count
+                for context in replay_contexts.values()
+            ),
             "gap_count": len(gap_rows),
             **dict(sorted(counters.items())),
         },

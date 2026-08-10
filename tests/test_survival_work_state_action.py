@@ -181,6 +181,17 @@ def test_program_context_does_not_leak_overlapping_sibling_state(
         }
         for _ in range(3)
     ]
+    actions.append(
+        {
+            "type": "action",
+            "action_type": "tool_exec",
+            "data": {
+                "tool_name": "edit_file",
+                "tool_args": json.dumps({"path": "/testbed/x"}),
+                "tool_result": "edited",
+            },
+        }
+    )
     trace.write_text("".join(json.dumps(row) + "\n" for row in actions))
     program = TraceProgram(
         "repo-1",
@@ -207,5 +218,6 @@ def test_program_context_does_not_leak_overlapping_sibling_state(
     )
 
     context = _program_context(program)
+    assert context.omitted_terminal_tool_count == 1
     assert context.states[(0, 1)][0][1] is False
     assert context.states[(1, 0)][0][1] is True
