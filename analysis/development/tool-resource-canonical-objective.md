@@ -545,14 +545,24 @@ container reports the two-core cap, and there is no framework error, OOM, or
 thermal slowdown. Smoke timing is not evidence.
 
 The four-versus-eight contrast is explicitly a **static concurrency ceiling**,
-not an observation or prediction contribution. A formal static comparison is
-not authorized until all jobs can be staged before a shared cell-zero and JCT
-can include admission wait from that common ready time. Its protocol must use
-ABBA order `4, 8, 8, 4`, a fresh vLLM/KV state and identical excluded warm-up
-per cell, fresh containers from pinned image digests, and action-ID-aligned
-equality of tool terminal class in each pair. Byte-identical tool output is not
-required because replay output never enters the shadow prompt. Any formal claim
-also requires both eight-task-cap repetitions to lower makespan, aggregate mean
+not an observation or prediction contribution. The opt-in staged replay path
+now prepares every task before one common ready time, admits tasks FIFO under a
+single active-task cap, and records admission wait and ready-to-terminal JCT.
+Its 2026-08-10 first-eight cap-four plumbing smoke exited zero: all eight
+container startups ended 100--129 ms before common ready, reconstructed maximum
+active concurrency was four, all 480 actions and 43,439 requested completion
+tokens were preserved, source terminal-class differences were zero, and 161 of
+162 eBPF calls were eligible. The one withheld call was the already-known
+SQLGlot-3799 unexecuted static branch. This validates the harness only; timing
+is non-evidentiary.
+
+The staging implementation gate is therefore satisfied, but the formal static
+comparison has not run. Its protocol must use ABBA order `4, 8, 8, 4`, a fresh
+vLLM/KV state and identical excluded warm-up per cell, fresh containers from
+pinned image digests, and action-ID-aligned equality of tool terminal class in
+each pair. Byte-identical tool output is not required because replay output
+never enters the shadow prompt. Any formal claim also requires both
+eight-task-cap repetitions to lower common-ready makespan, aggregate mean
 ready-to-terminal JCT by at least 5%, and keep paired p95 JCT and p99 LLM TTFT
 within 1.05 times the four-task-cap arm.
 
