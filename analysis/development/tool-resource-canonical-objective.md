@@ -997,6 +997,32 @@ replaces the image PATH. Treat that setup recurrence as a runtime confounder,
 not a research claim; changing PATH would require a separate trace-regime
 decision.
 
+### 5.14 Frozen PennyLane pairwise peak ceiling
+
+Section 5.13 failed because whole-command mean CPU hid realized bursts. Before
+building another predictor, test whether a static per-command peak can express
+a useful and safe action. Reuse the same fixed 15-task, 570-command population,
+single concurrent task-start wave, observed RSS safety filter, strict-priority
+simulator, and Serial-8 baseline. No reserved task is read.
+
+The exact-peak oracle assigns each command the maximum instantaneous core
+demand in its recorded CPU-work profile and admits a pair only when foreground
+plus candidate peaks sum to at most eight cores. The canonical-bucket oracle
+first maps that same peak to the frozen CPU classes in Section 2, then uses the
+class upper bounds Low=2, Medium=4, and High=8 cores for the identical pairwise
+test. The latter tests the expressiveness of the current predictor output, not
+prediction accuracy. Both peak values and RSS safety remain hindsight oracles.
+
+For each oracle independently, GO requires at least 5% lower mean task
+completion than Serial-8, at most 5% aggregate command-service inflation, and
+zero logical/physical capacity or CPU-work violations. If exact peak fails,
+close static pairwise command summaries. If exact peak passes but canonical
+buckets fail, retain the mechanism result but do not build the current
+three-class predictor action. Only both passing authorizes a separately frozen
+causal evaluation using fit-task predictions and runtime foreground feedback.
+No peak threshold, bucket boundary, candidate order, or service gate may change
+after the outcome is read.
+
 ## 6. Closed directions
 
 - **Lookup structure alone:** trie, lattice, generic argv, pip/pytest semantic
