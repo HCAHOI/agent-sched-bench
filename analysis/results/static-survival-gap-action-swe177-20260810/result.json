@@ -1,0 +1,1017 @@
+{
+  "schema_version": 1,
+  "status": "development_no_go",
+  "generated": "2026-08-10T21:38:49+02:00",
+  "git_sha": "d445b4c0f5c69bd564d2a8410fc23864cf8e281d",
+  "protocol": "Frozen CPU-only action-specific survival evaluation on exposed SWE traces; no canonical predictor change and no runtime agent",
+  "config": {
+    "task_rows": "/home/chiyu/workspace/agent-sched-bench/analysis/results/tool-resource-5-3-3-3-20260804/swe100-277-cpu-feedback-generality-v1/task_rows.jsonl",
+    "fit_telemetry": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+    "eval_telemetry": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl",
+    "source_root": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/fresh-seed42-skip150-n200",
+    "task_ids": "/home/chiyu/workspace/agent-sched-bench/analysis/serving/w5-multitenant/inputs/swe-rebench-fresh277-task-ids.txt",
+    "gpu_gaps": "/home/chiyu/workspace/agent-sched-bench/analysis/results/gpu-tool-gap-actions-a100-instruct-20260809/result.json",
+    "kv_profile": "/home/chiyu/workspace/agent-sched-bench/analysis/serving/tool-time-rho-measurement-a100-instruct-20260809/kv_swap.json",
+    "deadline_ms": 5000.0,
+    "bytes_per_token": 131072,
+    "task_update": "whole-task-final only; strictly before next task",
+    "primary_arm": "expected_pareto",
+    "early_decision": "expected released GiB*s delta > 0 and expected critical-path stall delta <= 0"
+  },
+  "evidence": {
+    "fit_population_task_count": 82,
+    "fit_tasks_with_eligible_clauses": 81,
+    "fit_tasks_without_eligible_clauses": [
+      "pytorch__ignite-242"
+    ],
+    "fit_clause_count": 2605,
+    "replay_task_count": 177,
+    "replay_clause_count": 6260,
+    "gap_count": 8273,
+    "exec_gap_tools": 5799,
+    "exec_survival_oracle_early": 362,
+    "exec_with_evidence": 5798,
+    "exec_without_evidence": 1,
+    "expected_pareto_early": 26,
+    "hard_b4_early": 22,
+    "non_exec_gap_tools": 2893,
+    "survival_majority_early": 171,
+    "selected_evidence_provenance": {
+      "public:bin": 422,
+      "public:global": 12,
+      "public:shell_execution_graph": 4265,
+      "repo+public:shell_execution_graph": 1002,
+      "repo:argv_prefix_depth_2": 30,
+      "repo:argv_prefix_depth_3": 4,
+      "repo:bin": 19,
+      "repo:exact_clause": 10,
+      "repo:shell_execution_graph": 34
+    }
+  },
+  "arms": {
+    "deadline_feedback": {
+      "gap_count": 8273,
+      "offload_count": 362,
+      "prerestore_plan_count": 0,
+      "prerestore_fired_count": 0,
+      "released_gib_s": 19447.69023700895,
+      "critical_path_stall_ms": 51823.56186532974,
+      "hidden_reload_ms": 0.0,
+      "wasted_reload_ms": 0.0,
+      "early_residency_gib_s": 0.0
+    },
+    "hard_b4": {
+      "gap_count": 8273,
+      "offload_count": 382,
+      "prerestore_plan_count": 0,
+      "prerestore_fired_count": 0,
+      "released_gib_s": 19504.71157063064,
+      "critical_path_stall_ms": 56567.009294986725,
+      "hidden_reload_ms": 0.0,
+      "wasted_reload_ms": 0.0,
+      "early_residency_gib_s": 0.0
+    },
+    "survival_majority": {
+      "gap_count": 8273,
+      "offload_count": 420,
+      "prerestore_plan_count": 0,
+      "prerestore_fired_count": 0,
+      "released_gib_s": 20504.882469221957,
+      "critical_path_stall_ms": 60632.84752702713,
+      "hidden_reload_ms": 0.0,
+      "wasted_reload_ms": 0.0,
+      "early_residency_gib_s": 0.0
+    },
+    "expected_pareto": {
+      "gap_count": 8273,
+      "offload_count": 372,
+      "prerestore_plan_count": 0,
+      "prerestore_fired_count": 0,
+      "released_gib_s": 19651.11389870022,
+      "critical_path_stall_ms": 53274.09004640579,
+      "hidden_reload_ms": 0.0,
+      "wasted_reload_ms": 0.0,
+      "early_residency_gib_s": 0.0
+    },
+    "exec_survival_oracle": {
+      "gap_count": 8273,
+      "offload_count": 362,
+      "prerestore_plan_count": 0,
+      "prerestore_fired_count": 0,
+      "released_gib_s": 23873.366655057136,
+      "critical_path_stall_ms": 51049.49536943436,
+      "hidden_reload_ms": 0.0,
+      "wasted_reload_ms": 0.0,
+      "early_residency_gib_s": 0.0
+    }
+  },
+  "comparisons_vs_deadline_feedback": {
+    "hard_b4": {
+      "candidate": "hard_b4",
+      "baseline": "deadline_feedback",
+      "released_gib_s_delta": 57.02133362169189,
+      "critical_path_stall_ms_delta": 4743.447429656982,
+      "critical_path_stall_reduction_fraction": -0.09153071033564707,
+      "changed_gap_count": 22,
+      "changed_task_count": 17,
+      "task_bootstrap_95pct": {
+        "released_gib_s_delta": [
+          0.0,
+          170.3162052599228
+        ],
+        "critical_path_stall_ms_delta": [
+          2340.3500658035277,
+          7662.404181432724
+        ]
+      },
+      "largest_signature_deltas": [
+        {
+          "command_family": "cd+python3+tail",
+          "released_gib_s_delta": 52.67029178492722,
+          "critical_path_stall_ms_delta": 644.6866455078125
+        },
+        {
+          "command_family": "cd+head+python3",
+          "released_gib_s_delta": 3.603246231611818,
+          "critical_path_stall_ms_delta": 160.04532623291016
+        },
+        {
+          "command_family": "conda+export+python+tail",
+          "released_gib_s_delta": 0.7477956051528454,
+          "critical_path_stall_ms_delta": 80.02799987792969
+        },
+        {
+          "command_family": "__no_action__",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "cd+pytest+tail",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "apt-get+tail",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "cd+tail+timeout",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "cd+grep+python3+tail",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "cd+grep+head+python3",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "cd+pip3+tail",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        }
+      ]
+    },
+    "survival_majority": {
+      "candidate": "survival_majority",
+      "baseline": "deadline_feedback",
+      "released_gib_s_delta": 1057.1922322130092,
+      "critical_path_stall_ms_delta": 8809.285661697388,
+      "critical_path_stall_reduction_fraction": -0.16998610949570508,
+      "changed_gap_count": 171,
+      "changed_task_count": 138,
+      "task_bootstrap_95pct": {
+        "released_gib_s_delta": [
+          890.6384121318526,
+          1247.462261790686
+        ],
+        "critical_path_stall_ms_delta": [
+          5885.0471210956575,
+          12090.89162569046
+        ]
+      },
+      "largest_signature_deltas": [
+        {
+          "command_family": "apt-get+tail",
+          "released_gib_s_delta": 780.9751019221695,
+          "critical_path_stall_ms_delta": 1500.5004558563232
+        },
+        {
+          "command_family": "apt-get",
+          "released_gib_s_delta": 87.93224338452518,
+          "critical_path_stall_ms_delta": 160.05599975585938
+        },
+        {
+          "command_family": "apt-get+cd+tail",
+          "released_gib_s_delta": 80.19535965015366,
+          "critical_path_stall_ms_delta": 640.1813049316406
+        },
+        {
+          "command_family": "cd+python3+tail",
+          "released_gib_s_delta": 52.67029178492722,
+          "critical_path_stall_ms_delta": 644.6866455078125
+        },
+        {
+          "command_family": "cd+pip3+tail",
+          "released_gib_s_delta": 21.71875,
+          "critical_path_stall_ms_delta": 181.31623458862305
+        },
+        {
+          "command_family": "cd+pip+tail",
+          "released_gib_s_delta": 12.750178306389603,
+          "critical_path_stall_ms_delta": 1023.6202583312988
+        },
+        {
+          "command_family": "cd+pip3",
+          "released_gib_s_delta": 8.18359375,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "apt-get+which",
+          "released_gib_s_delta": 5.183862691819668,
+          "critical_path_stall_ms_delta": 80.02799987792969
+        },
+        {
+          "command_family": "cd+head+python3",
+          "released_gib_s_delta": 3.603246231611818,
+          "critical_path_stall_ms_delta": 160.04532623291016
+        },
+        {
+          "command_family": "apt-get+cd+python3+tail",
+          "released_gib_s_delta": 2.9316349307000635,
+          "critical_path_stall_ms_delta": 160.04532623291016
+        }
+      ]
+    },
+    "expected_pareto": {
+      "candidate": "expected_pareto",
+      "baseline": "deadline_feedback",
+      "released_gib_s_delta": 203.42366169127448,
+      "critical_path_stall_ms_delta": 1450.5281810760498,
+      "critical_path_stall_reduction_fraction": -0.027989743060221058,
+      "changed_gap_count": 26,
+      "changed_task_count": 15,
+      "task_bootstrap_95pct": {
+        "released_gib_s_delta": [
+          80.50089610937565,
+          373.39244124395344
+        ],
+        "critical_path_stall_ms_delta": [
+          170.94262323379542,
+          3460.1321239471436
+        ]
+      },
+      "largest_signature_deltas": [
+        {
+          "command_family": "apt-get+tail",
+          "released_gib_s_delta": 96.03428654021025,
+          "critical_path_stall_ms_delta": 400.1293258666992
+        },
+        {
+          "command_family": "cd+python3+tail",
+          "released_gib_s_delta": 52.67029178492722,
+          "critical_path_stall_ms_delta": 644.6866455078125
+        },
+        {
+          "command_family": "apt-get",
+          "released_gib_s_delta": 25.13927463452518,
+          "critical_path_stall_ms_delta": 160.05599975585938
+        },
+        {
+          "command_family": "cd+pip3+tail",
+          "released_gib_s_delta": 14.169921875,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "apt-get+cd+tail",
+          "released_gib_s_delta": 11.806640625000002,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "cd+head+python3",
+          "released_gib_s_delta": 3.603246231611818,
+          "critical_path_stall_ms_delta": 160.04532623291016
+        },
+        {
+          "command_family": "__no_action__",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "cd+pytest+tail",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "cd+tail+timeout",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "cd+grep+python3+tail",
+          "released_gib_s_delta": 0.0,
+          "critical_path_stall_ms_delta": 0.0
+        }
+      ]
+    },
+    "exec_survival_oracle": {
+      "candidate": "exec_survival_oracle",
+      "baseline": "deadline_feedback",
+      "released_gib_s_delta": 4425.676418048188,
+      "critical_path_stall_ms_delta": -774.0664958953857,
+      "critical_path_stall_reduction_fraction": 0.014936574562491442,
+      "changed_gap_count": 362,
+      "changed_task_count": 136,
+      "task_bootstrap_95pct": {
+        "released_gib_s_delta": [
+          3151.7321109015943,
+          6070.368000181232
+        ],
+        "critical_path_stall_ms_delta": [
+          -1639.0868320465088,
+          -129.81302642822266
+        ]
+      },
+      "largest_signature_deltas": [
+        {
+          "command_family": "cd+python3+tail",
+          "released_gib_s_delta": 1512.987394866109,
+          "critical_path_stall_ms_delta": -309.9756164550781
+        },
+        {
+          "command_family": "apt-get+tail",
+          "released_gib_s_delta": 776.4961514797732,
+          "critical_path_stall_ms_delta": -105.31853866577148
+        },
+        {
+          "command_family": "cd+pip3+tail",
+          "released_gib_s_delta": 514.8794472008348,
+          "critical_path_stall_ms_delta": -160.6746425628662
+        },
+        {
+          "command_family": "cd+python+tail",
+          "released_gib_s_delta": 237.841796875,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "cd+python3",
+          "released_gib_s_delta": 204.609375,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "cd+grep+python3",
+          "released_gib_s_delta": 153.896484375,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "apt-get+cd+tail",
+          "released_gib_s_delta": 87.373046875,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "cd+git+python3+tail",
+          "released_gib_s_delta": 85.81054687499997,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "apt-get",
+          "released_gib_s_delta": 80.1953125,
+          "critical_path_stall_ms_delta": 0.0
+        },
+        {
+          "command_family": "cd+pip3",
+          "released_gib_s_delta": 73.38867187500001,
+          "critical_path_stall_ms_delta": 0.0
+        }
+      ]
+    }
+  },
+  "gate": {
+    "checks": {
+      "released_gib_s_strictly_higher": true,
+      "critical_path_stall_not_higher": false,
+      "changed_at_least_20_tasks": false
+    },
+    "passed": false
+  },
+  "decision_examples": [
+    {
+      "task_id": "asottile__pyupgrade-242",
+      "turn_index": 16,
+      "command": "source /opt/conda/etc/profile.d/conda.sh && conda activate testbed && python --version && python -c \"import tokenize_rt; print('ok')\"",
+      "duration_ms": 3.3521652221679688,
+      "scope": "public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 0.75,
+      "expected_released_delta_gib_s": 2.5054209354893757,
+      "expected_stall_delta_ms": 10.005516052246094,
+      "evidence_count": 256,
+      "act_early": false
+    },
+    {
+      "task_id": "astropy__astroquery-2160",
+      "turn_index": 16,
+      "command": "which conda && conda env list 2>&1 || echo \"No conda\"",
+      "duration_ms": 4.112005233764648,
+      "scope": "public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 0.8046875,
+      "expected_released_delta_gib_s": 4.995322198731644,
+      "expected_stall_delta_ms": 15.630468726158142,
+      "evidence_count": 256,
+      "act_early": false
+    },
+    {
+      "task_id": "beeware__briefcase-1785",
+      "turn_index": 21,
+      "command": "apt-get update && apt-get install -y python3-pip python3-pytest 2>&1 | tail -30",
+      "duration_ms": 10802.58321762085,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 3,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 6.806640625,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "catalystneuro__neuroconv-679",
+      "turn_index": 13,
+      "command": "which conda && conda env list 2>/dev/null || echo \"No conda found\"",
+      "duration_ms": 3.2532215118408203,
+      "scope": "public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 0.75,
+      "expected_released_delta_gib_s": 4.248239192138034,
+      "expected_stall_delta_ms": 20.006999969482422,
+      "evidence_count": 256,
+      "act_early": false
+    },
+    {
+      "task_id": "conan-io__conan-3477",
+      "turn_index": 14,
+      "command": "apt-get update -qq && apt-get install -y -qq python3-pip python3-pytest 2>&1 | tail -10",
+      "duration_ms": 10038.458347320557,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 3,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 4.677734375,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "conan-io__conan-3841",
+      "turn_index": 18,
+      "command": "source /opt/conda/etc/profile.d/conda.sh && conda activate base && which pytest && pytest --version 2>&1",
+      "duration_ms": 3.213644027709961,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 0.80078125,
+      "expected_released_delta_gib_s": 5.366602901228722,
+      "expected_stall_delta_ms": 15.943078100681305,
+      "evidence_count": 256,
+      "act_early": false
+    },
+    {
+      "task_id": "CS-SI__eodag-616",
+      "turn_index": 26,
+      "command": "source /opt/conda/etc/profile.d/conda.sh && conda activate base && cd /testbed && python -m pytest tests/units/test_search_plugins.py::TestSearchPluginODataV4Search -xvs 2>&1 | head -150",
+      "duration_ms": 3.8182735443115234,
+      "scope": "public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 0.75,
+      "expected_released_delta_gib_s": 8.949934709347605,
+      "expected_stall_delta_ms": 40.01133155822754,
+      "evidence_count": 256,
+      "act_early": false
+    },
+    {
+      "task_id": "dask__dask-ml-659",
+      "turn_index": 11,
+      "command": "which conda && conda env list 2>&1 | head -20",
+      "duration_ms": 4.199743270874023,
+      "scope": "public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 0.75,
+      "expected_released_delta_gib_s": 2.606038671256643,
+      "expected_stall_delta_ms": 10.005516052246094,
+      "evidence_count": 256,
+      "act_early": false
+    },
+    {
+      "task_id": "deepset-ai__haystack-6776",
+      "turn_index": 11,
+      "command": "source /opt/conda/etc/profile.d/conda.sh && conda activate && which python && python --version && python -m pytest --version 2>&1",
+      "duration_ms": 2.8057098388671875,
+      "scope": "public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 0.82421875,
+      "expected_released_delta_gib_s": 8.769276910087964,
+      "expected_stall_delta_ms": 14.067421853542328,
+      "evidence_count": 256,
+      "act_early": false
+    },
+    {
+      "task_id": "deepset-ai__haystack-8879",
+      "turn_index": 9,
+      "command": "cd /testbed && pip install -e . 2>&1 | tail -20",
+      "duration_ms": 4.136562347412109,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 3,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 4.375,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "encode__uvicorn-1706",
+      "turn_index": 20,
+      "command": "conda activate base && python -m pip install -e \".[standard]\" pytest pytest-asyncio httpx h11 httptools wsproto anyio 2>&1 | tail -30",
+      "duration_ms": 3.8204193115234375,
+      "scope": "public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 0.75,
+      "expected_released_delta_gib_s": 5.957467723434728,
+      "expected_stall_delta_ms": 20.006999969482422,
+      "evidence_count": 256,
+      "act_early": false
+    },
+    {
+      "task_id": "encode__uvicorn-1706",
+      "turn_index": 22,
+      "command": "export PATH=/opt/conda/bin:$PATH && conda activate base && python -m pip install -e \".[standard]\" pytest pytest-asyncio httpx h11 httptools wsproto anyio 2>&1 | tail -30",
+      "duration_ms": 611.1645698547363,
+      "scope": "public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 0.95703125,
+      "expected_released_delta_gib_s": 7.330589678617873,
+      "expected_stall_delta_ms": 3.4387031197547913,
+      "evidence_count": 256,
+      "act_early": false
+    },
+    {
+      "task_id": "iterative__dvc-2866",
+      "turn_index": 54,
+      "command": "which conda && conda env list 2>&1 || echo \"No conda\"",
+      "duration_ms": 3.448009490966797,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 0.80859375,
+      "expected_released_delta_gib_s": 18.85626785153809,
+      "expected_stall_delta_ms": 60.18173649332428,
+      "evidence_count": 256,
+      "act_early": false
+    },
+    {
+      "task_id": "iterative__dvc-2866",
+      "turn_index": 55,
+      "command": "apt-get update && apt-get install -y python3-pip 2>&1 | tail -20",
+      "duration_ms": 8667.231321334839,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 3,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 21.835937499999996,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "iterative__dvc-3405",
+      "turn_index": 23,
+      "command": "apt-get update -qq && apt-get install -y python3-pip -qq 2>&1 | tail -10",
+      "duration_ms": 9061.763286590576,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 3,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 5.966796875,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "iterative__dvc-3405",
+      "turn_index": 25,
+      "command": "cd /testbed && pip3 install -e . --break-system-packages -q 2>&1 | tail -30",
+      "duration_ms": 9280.059099197388,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 3,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 6.328125,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "joke2k__faker-2007",
+      "turn_index": 14,
+      "command": "apt-get update -qq && apt-get install -y python3-dateutil -qq",
+      "duration_ms": 3026.120901107788,
+      "scope": "repo",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 3,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 5.781249999999999,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "joke2k__faker-2007",
+      "turn_index": 20,
+      "command": "apt-get install -y python3-pytest -qq",
+      "duration_ms": 3431.9541454315186,
+      "scope": "repo",
+      "key_kind": "argv_prefix_depth_3",
+      "hard_bucket": 2,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 6.542968749999999,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 1,
+      "act_early": true
+    },
+    {
+      "task_id": "lincc-frameworks__nested-pandas-221",
+      "turn_index": 15,
+      "command": "which conda && conda env list 2>&1 | head -20",
+      "duration_ms": 3.8352012634277344,
+      "scope": "public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 0.75,
+      "expected_released_delta_gib_s": 6.8659845505775845,
+      "expected_stall_delta_ms": 20.006999969482422,
+      "evidence_count": 256,
+      "act_early": false
+    },
+    {
+      "task_id": "nathan-v__aws_okta_keyman-72",
+      "turn_index": 18,
+      "command": "apt-get update && apt-get install -y python3-pip",
+      "duration_ms": 9399.36876296997,
+      "scope": "repo",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 3,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 5.927734375,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "Ouranosinc__xclim-513",
+      "turn_index": 13,
+      "command": "which conda && conda env list 2>&1",
+      "duration_ms": 3.8640499114990234,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 0.75,
+      "expected_released_delta_gib_s": 5.374716115656481,
+      "expected_stall_delta_ms": 20.006999969482422,
+      "evidence_count": 256,
+      "act_early": false
+    },
+    {
+      "task_id": "Ouranosinc__xclim-513",
+      "turn_index": 18,
+      "command": "apt-get update && apt-get install -y python3-pip 2>&1 | tail -10",
+      "duration_ms": 8843.544244766235,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 3,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 7.128906250000001,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "Ouranosinc__xclim-513",
+      "turn_index": 21,
+      "command": "cd /testbed && pip3 install --break-system-packages -e . 2>&1 | tail -10",
+      "duration_ms": 13472.643613815308,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 3,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 7.841796875,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "pydicom__pydicom-938",
+      "turn_index": 8,
+      "command": "apt-get update && apt-get install -y python3-pip python3-pytest 2>&1 | tail -30",
+      "duration_ms": 10758.137464523315,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 3,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 1.1816406249999998,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "sendgrid__sendgrid-python-593",
+      "turn_index": 18,
+      "command": "cd /testbed && apt-get update -qq && apt-get install -y -qq python3-pip 2>&1 | tail -5",
+      "duration_ms": 8404.224157333374,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 3,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 11.806640625,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "simpeg__simpeg-1342",
+      "turn_index": 46,
+      "command": "source /opt/conda/etc/profile.d/conda.sh && conda activate testbed && python test_issue.py",
+      "duration_ms": 4.260778427124023,
+      "scope": "public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 0.75,
+      "expected_released_delta_gib_s": 16.983702806101256,
+      "expected_stall_delta_ms": 40.01133155822754,
+      "evidence_count": 256,
+      "act_early": false
+    },
+    {
+      "task_id": "soar-telescope__goodman_focus-13",
+      "turn_index": 17,
+      "command": "which conda && conda env list",
+      "duration_ms": 4.83250617980957,
+      "scope": "public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 0.75,
+      "expected_released_delta_gib_s": 4.7010537709270395,
+      "expected_stall_delta_ms": 20.006999969482422,
+      "evidence_count": 256,
+      "act_early": false
+    },
+    {
+      "task_id": "sqlfluff__sqlfluff-4685",
+      "turn_index": 40,
+      "command": "apt-get update -qq && apt-get install -y python3-pytest python3-pip 2>&1 | tail -20",
+      "duration_ms": 10566.345930099487,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 3,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 9.150390625,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "sqlfluff__sqlfluff-4974",
+      "turn_index": 22,
+      "command": "apt-get update -qq && apt-get install -y python3-pip -qq 2>&1 | tail -3",
+      "duration_ms": 8943.55034828186,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 3,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 9.31640625,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "sqlfluff__sqlfluff-4974",
+      "turn_index": 41,
+      "command": "cd /testbed && python3 -m pytest test/rules/yaml_test_cases_test.py --rule_id=ST09 -v 2>&1 | head -100",
+      "duration_ms": 1202.2531032562256,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 18.037109375,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "sqlfluff__sqlfluff-4974",
+      "turn_index": 44,
+      "command": "cd /testbed && python3 -m pytest test/rules/yaml_test_cases_test.py -v 2>&1 | tail -30",
+      "duration_ms": 68815.80018997192,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 19.697265625,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "sqlfluff__sqlfluff-4974",
+      "turn_index": 52,
+      "command": "cd /testbed && python3 -m pytest test/rules/yaml_test_cases_test.py --rule_id=ST09 -v 2>&1 | tail -40",
+      "duration_ms": 1431.2317371368408,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 21.6796875,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "sqlfluff__sqlfluff-4974",
+      "turn_index": 53,
+      "command": "cd /testbed && python3 -m pytest test/rules/yaml_test_cases_test.py -v 2>&1 | tail -10",
+      "duration_ms": 68062.09588050842,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 22.34375,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "sqlfluff__sqlfluff-4974",
+      "turn_index": 65,
+      "command": "cd /testbed && python3 -m pytest test/rules/yaml_test_cases_test.py --rule_id=ST09 -v 2>&1 | tail -15",
+      "duration_ms": 1572.3397731781006,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 28.22265625,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "statsmodels__statsmodels-8801",
+      "turn_index": 15,
+      "command": "source /opt/conda/etc/profile.d/conda.sh && conda activate testbed && python --version && python -c \"import numpy; import statsmodels; print('numpy:', numpy.__version__); print('statsmodels:', statsmodels.__version__)\"",
+      "duration_ms": 3.2835006713867188,
+      "scope": "public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 0.89453125,
+      "expected_released_delta_gib_s": 8.175136442910327,
+      "expected_stall_delta_ms": 8.440453112125397,
+      "evidence_count": 256,
+      "act_early": false
+    },
+    {
+      "task_id": "tefra__xsdata-679",
+      "turn_index": 21,
+      "command": "apt-get update && apt-get install -y python3-pytest 2>&1 | tail -10",
+      "duration_ms": 4771.510362625122,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 3,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 7.099609375,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "tefra__xsdata-679",
+      "turn_index": 23,
+      "command": "apt-get install -y python3-lxml 2>&1 | tail -5",
+      "duration_ms": 3162.607192993164,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 3,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 7.431640624999999,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "tefra__xsdata-679",
+      "turn_index": 26,
+      "command": "apt-get install -y python3-pytest-benchmark 2>&1 | tail -5",
+      "duration_ms": 2523.407220840454,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 3,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 7.656250000000001,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "tskit-dev__tsdate-449",
+      "turn_index": 37,
+      "command": "which conda && conda --version || echo \"No conda\"",
+      "duration_ms": 4.68754768371582,
+      "scope": "public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 0.8046875,
+      "expected_released_delta_gib_s": 16.30897745080966,
+      "expected_stall_delta_ms": 31.258852779865265,
+      "evidence_count": 256,
+      "act_early": false
+    },
+    {
+      "task_id": "wemake-services__wemake-python-styleguide-1962",
+      "turn_index": 33,
+      "command": "apt-get update && apt-get install -y python3-pip",
+      "duration_ms": 9288.095712661743,
+      "scope": "repo",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 3,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 11.474609375,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "yt-project__unyt-400",
+      "turn_index": 18,
+      "command": "which conda && conda --version",
+      "duration_ms": 3.870248794555664,
+      "scope": "public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 4,
+      "probability_survives_deadline": 0.75,
+      "expected_released_delta_gib_s": 6.078690078781159,
+      "expected_stall_delta_ms": 20.006999969482422,
+      "evidence_count": 256,
+      "act_early": false
+    },
+    {
+      "task_id": "yt-project__unyt-476",
+      "turn_index": 24,
+      "command": "apt-get update && apt-get install -y python3-sympy python3-numpy python3-packaging 2>&1 | tail -20",
+      "duration_ms": 19767.30251312256,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 3,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 8.30078125,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    },
+    {
+      "task_id": "yt-project__unyt-476",
+      "turn_index": 33,
+      "command": "apt-get install -y python3-pytest 2>&1 | tail -10",
+      "duration_ms": 3239.0732765197754,
+      "scope": "repo+public",
+      "key_kind": "shell_execution_graph",
+      "hard_bucket": 2,
+      "probability_survives_deadline": 1.0,
+      "expected_released_delta_gib_s": 11.201171875,
+      "expected_stall_delta_ms": 0.0,
+      "evidence_count": 256,
+      "act_early": true
+    }
+  ],
+  "cost": {
+    "prediction_time_agent_calls": 0,
+    "gpu_runtime_s": 0.0,
+    "evaluator_wall_s": 108.90691780624911
+  },
+  "limitations": [
+    "All SWE100/277 evidence is development-exposed; this is not confirmation.",
+    "The action model reuses measured A100 transfer costs and recorded gaps; it is not a live serving run.",
+    "Timeout is retained in the source trace but is not used as remaining-work evidence.",
+    "The survival oracle uses realized exec duration and is an upper bound only."
+  ]
+}

@@ -24,10 +24,11 @@ artifacts retain that history.
 | Manual tool semantics | **KEEP only the pytest candidate-routing question.** A hindsight selector over existing causal candidates improved full-cohort four-target accuracy by 1.941 points for pytest, but 93/118 corrections merely restored Clause-KB; adding more pytest rules is not supported. pip missed the frozen contrast gate and its perfect-tool ceiling was only 0.392 points, so deprioritize pip-specific work. |
 | KV victim selection | Closed under the current CacheWise/C100 simulator and action model. |
 | GPU tool-gap action | The profile-only early clock and pre-restore are closed by the Section 5.1 offline gate. The load-8 live action test remains unresolved. The load-32 hard-pin control in Section 5.3 was invalid; Section 5.4 compares the unchanged five-second action with stock evictable prefix caching. |
+| Static survival KV action | The raw Clause-KB duration-sample expected-Pareto arm is closed: it released more memory-time but increased stall and changed only 15 tasks. The realized-survival oracle retains substantial action headroom. |
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Any successor action must first demonstrate broader label-free activation and outcome-stable replay on existing data. Do not spend fresh tasks on the current latency-bucket lower-edge loan. |
+| Next research step | On existing exposed data, isolate whether complete-command evidence or causal environment state can recover the survival oracle without the compound-evidence false positives. Do not tune the current threshold or spend fresh tasks yet. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -685,6 +686,29 @@ Formal execution took 12,023 s, the smoke 2,180 s, and the six formal GPU traces
 integrated to 381.619 Wh; host energy was not instrumented. Full evidence is in
 `analysis/results/predictive-tool-gap-loan-20260810/result.json`.
 
+### 5.8 Static command-survival action — development NO-GO
+
+Commit `d445b4c` froze the CPU-only evaluator, arms, and gate before the full
+outcome was read. It used 2,605 eligible clauses from 81/82 telemetry-valid
+SWE100 tasks as leave-target-repository-out public evidence, then replayed
+8,273 gaps and 5,799 exec calls from 177 telemetry-valid SWE277 tasks with
+whole-task-final causal updates. Prediction-time agent and GPU costs were zero;
+the scorer reused the recorded gap trajectories and measured A100 KV transfer
+costs.
+
+The primary expected-Pareto arm made 26 early decisions. Relative to five-second
+feedback it released 203.424 additional GiB-seconds, but added 1,450.528 ms of
+critical-path stall and changed only 15 tasks, failing two of three frozen gate
+conditions. A realized `exec > 5 s` oracle released 4,425.676 additional
+GiB-seconds, reduced stall by 774.066 ms, and changed 136 tasks, so the action
+space remains open. The observed failure is evidence quality: ten primary
+actions actually ended within five seconds; 25/26 used composed
+`shell_execution_graph` evidence, and every selected history assigned survival
+probability one. Fast already-satisfied installs and narrow pytest selections
+are concrete counterexamples. This concentration does not by itself prove
+composition is the sole cause; environment state and requested work are also
+plausible missing variables. Do not tune the Pareto rule on this exposed result.
+
 ## 6. Closed directions
 
 - **Lookup structure alone:** trie, lattice, generic argv, pip/pytest semantic
@@ -776,6 +800,8 @@ Result root:
   `../gpu-tool-gap-actions-a100-instruct-20260809/result.json`
 - Predictive tool-gap loan:
   `../predictive-tool-gap-loan-20260810/result.json`
+- Static command-survival action:
+  `../static-survival-gap-action-swe177-20260810/result.json`
 
 Docs-only compiler development artifact:
 `analysis/results/offline-tool-semantics-sqlglot-v1/result.json`.
