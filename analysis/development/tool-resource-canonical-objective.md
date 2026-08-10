@@ -863,6 +863,40 @@ false-positive examples and does not prove that it caused all aggregate stall.
 Do not add scope rules on this exposed cohort. The evaluator used zero GPU and
 zero prediction-time agent calls and completed in 197.842 seconds wall time.
 
+### 5.12 Frozen first-loan actionability check
+
+This development check was fixed after the Section 5.11 aggregate result was
+visible but before inspecting task-level first-loan outcomes. It tests the
+stronger exact-immediate control because that arm released more memory-time
+than exact task-Pareto with the same zero added stall. This is an explicit
+post-development choice, not a confirmation claim.
+
+The 15 Section 5.11 fit tasks are the only history. All 26 replay tasks query
+that fixed settled history; replay tasks never update one another, matching a
+concurrent arrival wave. Compare five-second feedback with
+exact-immediate-plus-feedback. Exact-immediate acts at tool start only when the
+unchanged `expected_early_action` rule accepts the complete raw command from
+fit history; every other exec falls back to five seconds. There is no work
+signature, prefix, state, threshold, or agent.
+
+For each replay task, order actions on its recorded timeline and keep only the
+first loan each policy would emit. A loan becomes usable after the measured
+A100 swap-out completes, not at the trigger instant. The scorer retains the
+recorded next-request time and charges measured swap-in stall. Report the
+number of tasks whose first usable loan advances, total/median/p95 admission
+advance under an always-nonempty waiting queue, freed-KV sizes, and the full
+pairwise coverage of other replay tasks' first recorded prompt-plus-completion
+KV demand. Coverage is descriptive: it cannot rescue an inactive or unsafe
+policy, and admission advance is an upper bound rather than a completion-time
+claim.
+
+The actionability gate passes only if exact-immediate-plus-feedback advances
+the first usable loan for at least 8 of 26 tasks and its aggregate critical-path
+stall is no higher than feedback. A pass authorizes a separately frozen fresh
+live A/B with byte-aware admission and mean completion/makespan metrics; a
+failure stops this exact action without changing the history, trigger, task
+order, or gate. No fixed SLO is assumed.
+
 ## 6. Closed directions
 
 - **Lookup structure alone:** trie, lattice, generic argv, pip/pytest semantic
