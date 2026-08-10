@@ -554,6 +554,7 @@ class OpenClawReplayProvider(LLMProvider):
         request_id: str | None = None
         finish_reason: str | None = None
         usage: dict[str, Any] = {}
+        observed_usage_values: dict[str, int] = {}
         request = {
             "model": self._shadow_generation.model,
             "messages": messages,
@@ -611,7 +612,50 @@ class OpenClawReplayProvider(LLMProvider):
                         )
                     prompt_token_ids = list(raw_prompt_token_ids)
                 raw_usage = chunk.get("usage")
-                if isinstance(raw_usage, dict):
+                if raw_usage is not None:
+                    if not isinstance(raw_usage, dict):
+                        raise RuntimeError(
+                            "shadow generation returned malformed usage"
+                        )
+                    raw_prompt_tokens = raw_usage.get("prompt_tokens")
+                    prompt_token_details = raw_usage.get("prompt_tokens_details")
+                    if (
+                        prompt_token_details is not None
+                        and not isinstance(prompt_token_details, dict)
+                    ):
+                        raise RuntimeError(
+                            "shadow generation returned malformed prompt token details"
+                        )
+                    raw_cached_prompt_tokens = (
+                        prompt_token_details.get("cached_tokens")
+                        if isinstance(prompt_token_details, dict)
+                        else None
+                    )
+                    for usage_name, usage_value in (
+                        ("prompt_tokens", raw_prompt_tokens),
+                        ("cached_prompt_tokens", raw_cached_prompt_tokens),
+                    ):
+                        if usage_value is None:
+                            continue
+                        if (
+                            not isinstance(usage_value, int)
+                            or isinstance(usage_value, bool)
+                            or usage_value < 0
+                        ):
+                            raise RuntimeError(
+                                "shadow generation returned malformed usage "
+                                f"{usage_name}"
+                            )
+                        previous_value = observed_usage_values.get(usage_name)
+                        if (
+                            previous_value is not None
+                            and previous_value != usage_value
+                        ):
+                            raise RuntimeError(
+                                "shadow generation returned conflicting usage "
+                                f"{usage_name}: {previous_value} and {usage_value}"
+                            )
+                        observed_usage_values[usage_name] = usage_value
                     usage = raw_usage
                 choices = chunk.get("choices")
                 if not isinstance(choices, list) or not choices:
@@ -644,31 +688,19 @@ class OpenClawReplayProvider(LLMProvider):
         if prompt_token_ids is None:
             raise RuntimeError("shadow generation returned no prompt token IDs")
         raw_prompt_tokens = usage.get("prompt_tokens")
-        if (
-            not isinstance(raw_prompt_tokens, int)
-            or isinstance(raw_prompt_tokens, bool)
-            or raw_prompt_tokens < 0
-        ):
+        if raw_prompt_tokens is None:
             raise RuntimeError("shadow generation returned no valid prompt token count")
         if raw_prompt_tokens != len(prompt_token_ids):
             raise RuntimeError(
                 "shadow generation prompt token count mismatch: "
                 f"usage reported {raw_prompt_tokens}, got {len(prompt_token_ids)} IDs"
             )
-        cached_prompt_tokens: int | None = None
         prompt_token_details = usage.get("prompt_tokens_details")
-        if isinstance(prompt_token_details, dict):
-            raw_cached_prompt_tokens = prompt_token_details.get("cached_tokens")
-            if raw_cached_prompt_tokens is not None:
-                if (
-                    not isinstance(raw_cached_prompt_tokens, int)
-                    or isinstance(raw_cached_prompt_tokens, bool)
-                    or raw_cached_prompt_tokens < 0
-                ):
-                    raise RuntimeError(
-                        "shadow generation returned malformed cached prompt tokens"
-                    )
-                cached_prompt_tokens = raw_cached_prompt_tokens
+        cached_prompt_tokens = (
+            prompt_token_details.get("cached_tokens")
+            if isinstance(prompt_token_details, dict)
+            else None
+        )
         finished_at = time.monotonic()
         return {
             "model": self._shadow_generation.model,

@@ -969,6 +969,73 @@ def test_openclaw_replay_provider_rejects_conflicting_stream_request_ids(
         asyncio.run(provider.aclose())
 
 
+def test_openclaw_replay_provider_rejects_conflicting_stream_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trace_collect.openclaw_host_runtime import (
+        OpenClawReplayProvider,
+        ShadowGenerationConfig,
+    )
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        async def aiter_lines(self):
+            yield 'data: {"id":"chatcmpl-usage","prompt_token_ids":[11],"choices":[{"index":0,"delta":{},"token_ids":[101]}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"prompt_tokens_details":{"cached_tokens":0}}}'
+            yield 'data: {"id":"chatcmpl-usage","choices":[],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3,"prompt_tokens_details":{"cached_tokens":0}}}'
+            yield 'data: {"id":"chatcmpl-usage","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"prompt_tokens_details":{"cached_tokens":0}}}'
+            yield "data: [DONE]"
+
+    class _FakeStream:
+        async def __aenter__(self):
+            return _FakeResponse()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _FakeClient:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def stream(self, *_args, **_kwargs):
+            return _FakeStream()
+
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "trace_collect.openclaw_host_runtime.httpx.AsyncClient", _FakeClient
+    )
+    provider = OpenClawReplayProvider(
+        llm_actions=[
+            {
+                "action_type": "llm_call",
+                "action_id": "source-conflicting-usage",
+                "data": {
+                    "messages_in": [{"role": "user", "content": "source"}],
+                    "completion_tokens": 1,
+                    "raw_response": {"choices": []},
+                },
+            }
+        ],
+        replay_speed=1.0,
+        timing_mode="source_scaled",
+        shadow_generation=ShadowGenerationConfig(
+            api_base="http://127.0.0.1:8000/v1",
+            model="meta-llama/Llama-3.1-8B-Instruct",
+            timeout_s=12.0,
+            seed=7,
+        ),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="conflicting.*prompt_tokens"):
+            asyncio.run(provider.chat([]))
+    finally:
+        asyncio.run(provider.aclose())
+
+
 def test_openclaw_host_replay_request_closes_provider_after_runner_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
