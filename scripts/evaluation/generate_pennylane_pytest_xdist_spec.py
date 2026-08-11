@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the frozen one-shot plugin-aware pytest ToolSpec generation."""
+"""Run the frozen one-shot plugin-aware pytest ToolSpec successor."""
 
 from __future__ import annotations
 
@@ -26,10 +26,10 @@ from scripts.evaluation.evaluate_offline_agent_extractor import (  # noqa: E402
 from tool_resource.tool_spec import tool_spec_schema, validate_tool_spec  # noqa: E402
 
 
-_PROTOCOL_GIT_SHA = "6921dbc7b2dc4dd64b87844ade595cd295d5b1be"
+_PROTOCOL_GIT_SHA = "84a0786f809678b65796ee80daeffa0aec27b349"
 _SOURCES = _ROOT / "analysis/development/offline-tool-semantics-docs"
 _OUTPUT = _ROOT / (
-    "analysis/results/pennylane-pytest-xdist-doc-spec-development-v1"
+    "analysis/results/pennylane-pytest-xdist-doc-spec-development-v2"
 )
 _VERSION = "pytest-8.3.5+pytest-xdist-3.8.0"
 _FILES = (
@@ -101,7 +101,7 @@ def _reserve_attempt(head: str) -> None:
     _OUTPUT.mkdir(parents=True, exist_ok=False)
     _write_attempt(
         {
-            "schema": "pennylane-pytest-xdist-doc-attempt-v1",
+            "schema": "pennylane-pytest-xdist-doc-attempt-v2",
             "status": "started",
             "protocol_git_sha": _PROTOCOL_GIT_SHA,
             "generation_git_sha": head,
@@ -183,7 +183,7 @@ def generate() -> None:
     except BaseException as error:
         _write_attempt(
             {
-                "schema": "pennylane-pytest-xdist-doc-attempt-v1",
+                "schema": "pennylane-pytest-xdist-doc-attempt-v2",
                 "status": "failed_consumed",
                 "protocol_git_sha": _PROTOCOL_GIT_SHA,
                 "generation_git_sha": head,
@@ -193,7 +193,7 @@ def generate() -> None:
         )
         raise
     artifact = {
-        "schema": "pennylane-pytest-xdist-doc-generation-v1",
+        "schema": "pennylane-pytest-xdist-doc-generation-v2",
         "protocol_git_sha": _PROTOCOL_GIT_SHA,
         "generation_git_sha": head,
         "tool": "pytest",
@@ -218,7 +218,7 @@ def generate() -> None:
     )
     _write_attempt(
         {
-            "schema": "pennylane-pytest-xdist-doc-attempt-v1",
+            "schema": "pennylane-pytest-xdist-doc-attempt-v2",
             "status": "completed_consumed",
             "generation_status": status,
             "protocol_git_sha": _PROTOCOL_GIT_SHA,
