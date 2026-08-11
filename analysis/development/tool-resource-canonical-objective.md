@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Freeze a target-shape-conditioned xdist RSS successor on the same development-exposed PennyLane split; do not open PennyLane 16+16. |
+| Next research step | Run the frozen target-shape-conditioned xdist RSS successor on development-exposed PennyLane; do not open PennyLane 16+16. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1601,6 +1601,33 @@ Pooling those modes makes `(N + 1)` scaling peak in Medium. A successor may
 condition the same fit-only calibration on the existing name-free pytest
 target-shape representation; it may not change the scaling law, thresholds,
 split, or v1 verdict.
+
+### 5.26 Frozen target-shape-conditioned xdist RSS successor
+
+This adaptive development test follows the visible Section 5.25 scope
+diagnosis and cannot validate a fresh claim. Reuse its fit15/replay15 tasks,
+raw Clause-KB, task-final update, RSS target, worker parser, host count of eight,
+`(N + 1) * r` scaling, bucket edges, max-bucket convolution, metrics, and
+20-point High-recall gate unchanged.
+
+The sole method change is to partition serial fit pytest calibration with the
+pre-existing name-free `PytestSignature.target_shapes`: `full` has no explicit
+target, `broad` contains any directory target, and `narrow` contains only file
+or nodeid targets. Unknown pytest options fail closed. For each parsed replay
+carrier, use only the fit distribution from its family. The
+`count_unconditioned` ablation uses the pooled fit values but has exactly the
+same parsed-carrier coverage; all other commands copy Clause-KB bit-for-bit.
+
+Before scoring, require at least 20 parsed carriers across five replay tasks
+and at least ten fit calibration clauses across three tasks for every family
+used by replay. GO requires overall accuracy and High recall to be strictly
+higher than both Clause-KB and `count_unconditioned`, High recall at least 20
+points above Clause-KB, helpful carrier changes to outnumber harmful changes
+across at least three tasks, and non-applicable PMFs to remain identical. No
+parser, family, fallback, scaling factor, or gate may change after outcomes are
+read. Failure closes this worker-count-plus-scope positive-control family on
+the exposed cohort; a pass authorizes only a separately frozen scheduler-use
+test, not an agent compiler claim or access to PennyLane 16+16.
 
 ## 6. Closed directions
 
