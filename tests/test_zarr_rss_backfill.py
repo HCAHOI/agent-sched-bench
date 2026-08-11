@@ -11,6 +11,7 @@ from scripts.evaluation.evaluate_zarr_rss_evidence_gate import (
     _candidate_reservations,
     _guarded_reservation,
 )
+from scripts.evaluation.evaluate_zarr_rss_compound_gate import _guarded_reservations
 
 
 def _clause(rss, latency, *, pipeline_position=-1):
@@ -161,3 +162,52 @@ def test_exact_supported_demotion_uses_loto_and_independent_tasks() -> None:
     assert diagnostics["authorized_demotions"] == 1
     assert diagnostics["authorized_demotion_command_counts"] == {"same": 1}
     assert diagnostics["blocked_low"] == 1
+
+
+def test_compound_guard_changes_only_weak_composed_predictions() -> None:
+    base = {
+        "single": 500.0,
+        "exact": 500.0,
+        "weak": 500.0,
+        "already-full": RSS_CAPACITY_MB,
+    }
+    provenance = {
+        "single": {
+            "command": "single",
+            "key_kind": "argv_prefix_depth_3",
+            "fallback_path": ["repo:argv_prefix_depth_3"],
+        },
+        "exact": {
+            "command": "exact",
+            "key_kind": "shell_execution_graph",
+            "fallback_path": [
+                "clause[0]:repo:exact_clause",
+                "clause[1]:public:exact_clause",
+            ],
+        },
+        "weak": {
+            "command": "weak",
+            "key_kind": "shell_execution_graph",
+            "fallback_path": [
+                "clause[0]:repo:exact_clause",
+                "clause[1]:repo:argv_prefix_depth_3",
+            ],
+        },
+        "already-full": {
+            "command": "already-full",
+            "key_kind": "shell_execution_graph",
+            "fallback_path": ["clause[0]:repo:binary"],
+        },
+    }
+
+    candidate, all_compound, diagnostics = _guarded_reservations(
+        base, provenance
+    )
+
+    assert candidate == base | {"weak": RSS_CAPACITY_MB}
+    assert all_compound == base | {
+        "exact": RSS_CAPACITY_MB,
+        "weak": RSS_CAPACITY_MB,
+    }
+    assert diagnostics["changed_reservations"] == 1
+    assert diagnostics["all_compound_changed_reservations"] == 2
