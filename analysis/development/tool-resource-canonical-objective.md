@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Run the frozen deterministic pytest-xdist RSS positive control on development-exposed PennyLane fit15/replay15; do not open PennyLane 16+16. |
+| Next research step | Freeze a target-shape-conditioned xdist RSS successor on the same development-exposed PennyLane split; do not open PennyLane 16+16. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1583,6 +1583,24 @@ is strictly lower than worker scaling. No scaling factor, count mapping, fit
 filter, gate, or task may change after labels are read. A pass authorizes a
 separately frozen scheduler-use test, not an agent compiler claim or access to
 PennyLane 16+16.
+
+**Result and diagnosis.** The worker-scaling positive control is development
+NO-GO under its frozen gate. Across 418 eligible replay labels, Clause-KB RSS
+accuracy was 82.536% and worker scaling reached 84.211% (+1.675 points), with
+seven helpful and zero harmful carrier changes across three tasks. However,
+overall High recall remained 2.381% rather than improving by the required 20
+points; all 41 carrier predictions were Medium, including all 34 High labels.
+`presence_only` reached 83.254% accuracy and 9.524% High recall, so count-aware
+scaling was more accurate but not action-safe.
+
+The failure is a calibration-scope mismatch, not absence of worker-count
+signal. Of 274 fit calibration clauses, 164 file/node-scoped tests have about
+122 MB median RSS, while 110 directory/full-scope tests have about 305 MB
+median and 734 MB mean RSS. In replay, 35/41 carriers are directory/full scope.
+Pooling those modes makes `(N + 1)` scaling peak in Medium. A successor may
+condition the same fit-only calibration on the existing name-free pytest
+target-shape representation; it may not change the scaling law, thresholds,
+split, or v1 verdict.
 
 ## 6. Closed directions
 

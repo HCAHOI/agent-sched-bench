@@ -1,0 +1,126 @@
+{
+  "changes_vs_clause_kb": {
+    "presence_only": {
+      "changed": 3,
+      "harmful": 0,
+      "helpful": 3,
+      "helpful_tasks": [
+        "PennyLaneAI__pennylane-2964"
+      ]
+    },
+    "worker_scaling": {
+      "changed": 39,
+      "harmful": 0,
+      "helpful": 7,
+      "helpful_tasks": [
+        "PennyLaneAI__pennylane-3024",
+        "PennyLaneAI__pennylane-3182",
+        "PennyLaneAI__pennylane-3278"
+      ]
+    }
+  },
+  "claim_bearing": false,
+  "cost": {
+    "evaluation_seconds": 1.1037070997990668
+  },
+  "evaluation_git_sha": "bcb15988ce457e517b3593d5399ddc0c8151a6a1",
+  "evidence": {
+    "calibration_clauses": 274,
+    "calibration_tasks": 15,
+    "carrier_commands": 41,
+    "carrier_tasks": 9,
+    "fit_tasks": 15,
+    "replay_tasks": [
+      "PennyLaneAI__pennylane-2601",
+      "PennyLaneAI__pennylane-2603",
+      "PennyLaneAI__pennylane-2654",
+      "PennyLaneAI__pennylane-2668",
+      "PennyLaneAI__pennylane-2834",
+      "PennyLaneAI__pennylane-2947",
+      "PennyLaneAI__pennylane-2964",
+      "PennyLaneAI__pennylane-3024",
+      "PennyLaneAI__pennylane-3033",
+      "PennyLaneAI__pennylane-3057",
+      "PennyLaneAI__pennylane-3182",
+      "PennyLaneAI__pennylane-3266",
+      "PennyLaneAI__pennylane-3278",
+      "PennyLaneAI__pennylane-3381",
+      "PennyLaneAI__pennylane-3386"
+    ]
+  },
+  "gates": {
+    "minimum_high_recall_gain": 0.2,
+    "noncarrier_pmf_bit_identical": true,
+    "representation_go": false,
+    "worker_count_specificity": true
+  },
+  "limitations": [
+    "development-exposed tasks",
+    "positive-control process scaling, not a learned worker-memory model",
+    "canonical clause RSS target only; no scheduler or interference result"
+  ],
+  "method": {
+    "causal_update": "after_whole_task_settlement",
+    "composition": "max_bucket_convolution_with_clause_kb_command_pmf",
+    "host_cpus": 8,
+    "prediction_time_agent_calls": 0,
+    "scaling": "(workers + 1) * fit_serial_pytest_clause_rss"
+  },
+  "metrics": {
+    "carriers": {
+      "clause_kb": {
+        "accuracy": 0.0,
+        "available": 41,
+        "commands": 41,
+        "eligible_labels": 41,
+        "high_labels": 34,
+        "high_recall": 0.0
+      },
+      "presence_only": {
+        "accuracy": 0.07317073170731707,
+        "available": 41,
+        "commands": 41,
+        "eligible_labels": 41,
+        "high_labels": 34,
+        "high_recall": 0.08823529411764706
+      },
+      "worker_scaling": {
+        "accuracy": 0.17073170731707318,
+        "available": 41,
+        "commands": 41,
+        "eligible_labels": 41,
+        "high_labels": 34,
+        "high_recall": 0.0
+      }
+    },
+    "overall": {
+      "clause_kb": {
+        "accuracy": 0.8253588516746412,
+        "available": 528,
+        "commands": 528,
+        "eligible_labels": 418,
+        "high_labels": 42,
+        "high_recall": 0.023809523809523808
+      },
+      "presence_only": {
+        "accuracy": 0.8325358851674641,
+        "available": 528,
+        "commands": 528,
+        "eligible_labels": 418,
+        "high_labels": 42,
+        "high_recall": 0.09523809523809523
+      },
+      "worker_scaling": {
+        "accuracy": 0.8421052631578947,
+        "available": 528,
+        "commands": 528,
+        "eligible_labels": 418,
+        "high_labels": 42,
+        "high_recall": 0.023809523809523808
+      }
+    }
+  },
+  "protocol_git_sha": "81b7ff1c1cd715283d5ee944f369985fa60424a6",
+  "schema": "pennylane-xdist-rss-positive-control-v1",
+  "status": "development_no_go"
+}
