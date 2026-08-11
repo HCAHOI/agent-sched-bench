@@ -307,7 +307,11 @@ def _parse_tool_spec(value: Any) -> ToolSpec:
         token_values = invocation_row["tokens"]
         if not isinstance(token_values, list) or not 1 <= len(token_values) <= MAX_INVOCATION_TOKENS:
             raise ValueError("invocation tokens outside bounds")
-        tokens = tuple(_literal(token) for token in token_values)
+        raw_tokens = tuple(_literal(token) for token in token_values)
+        executable = PurePosixPath(raw_tokens[0]).name
+        if not executable:
+            raise ValueError("invocation executable has no basename")
+        tokens = (executable, *raw_tokens[1:])
         operation = _literal(invocation_row["operation"], identifier=True)
         if operation not in set(operation_names):
             raise ValueError("invocation references an unknown operation")

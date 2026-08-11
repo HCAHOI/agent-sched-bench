@@ -10,7 +10,10 @@ def _pytest_value() -> dict:
         "documented_version": "8.3.5",
         "invocations": [
             {"tokens": ["pytest"], "operation": "run"},
-            {"tokens": ["python", "-m", "pytest"], "operation": "run"},
+            {
+                "tokens": ["/opt/conda/envs/testbed/bin/python", "-m", "pytest"],
+                "operation": "run",
+            },
         ],
         "operations": [
             {
@@ -275,7 +278,7 @@ def test_validator_rejects_ambiguous_or_unbounded_specs() -> None:
 
     duplicate_invocation = deepcopy(valid)
     duplicate_invocation["invocations"].append(
-        deepcopy(duplicate_invocation["invocations"][0])
+        {"tokens": ["/usr/local/bin/pytest"], "operation": "run"}
     )
     too_many_arguments = deepcopy(valid)
     template_argument = too_many_arguments["operations"][0]["arguments"][0]
