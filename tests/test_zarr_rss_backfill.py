@@ -1,9 +1,15 @@
 from scripts.evaluation.evaluate_zarr_rss_backfill import (
+    Dataset,
     RSS_CAPACITY_MB,
     _composed_rss_source,
     _phase_raises,
     _upper_index,
     _validated_rss_source,
+)
+from scripts.evaluation.evaluate_clause_resource_classes import CommandRow, Row
+from scripts.evaluation.evaluate_zarr_rss_evidence_gate import (
+    _candidate_reservations,
+    _guarded_reservation,
 )
 
 
@@ -46,6 +52,16 @@ def test_zarr_rss_source_composition_and_upper_reservation() -> None:
     assert _validated_rss_source(
         {"eligible_for_kb": False, "clauses": [_clause(10, 1_000)]}
     ) == (RSS_CAPACITY_MB, "full_fallback")
+
+
+def test_exact_support_gate_requires_two_tasks_and_covers_history() -> None:
+    assert _guarded_reservation(500.0, {"task-a": 0}) == RSS_CAPACITY_MB
+    assert _guarded_reservation(500.0, {"task-a": 0, "task-b": 0}) == 500.0
+    assert (
+        _guarded_reservation(500.0, {"task-a": 0, "task-b": 1})
+        == RSS_CAPACITY_MB
+    )
+    assert _guarded_reservation(2_000.0, {"task-a": 0, "task-b": 1}) == 2_000.0
     assert _validated_rss_source(
         {
             "eligible_for_kb": True,
@@ -53,3 +69,94 @@ def test_zarr_rss_source_composition_and_upper_reservation() -> None:
             "clauses": [_clause(10, 1_000)],
         }
     ) == (RSS_CAPACITY_MB, "full_fallback")
+
+
+def test_exact_supported_demotion_uses_loto_and_independent_tasks() -> None:
+    def command(task_id: str, call_id: str, text: str, rss: float) -> CommandRow:
+        clause = Row(
+            task_id,
+            "zarr-developers/zarr-python",
+            0,
+            "tool",
+            ("tool",),
+            1_000.0,
+            1.0,
+            rss,
+            0.0,
+        )
+        return CommandRow(
+            task_id, clause.repo, 0, 0, call_id, text, 1_000.0, (clause,)
+        )
+
+    fit_rows = {
+        "fit-a": (
+            command("fit-a", "a1", "same", 100.0),
+            command("fit-a", "a2", "same", 100.0),
+            command("fit-a", "a3", "one-task", 100.0),
+            command("fit-a", "a4", "one-task", 100.0),
+            command("fit-a", "a5", "no-raise", 100.0),
+        ),
+        "fit-b": (
+            command("fit-b", "b1", "same", 100.0),
+            command("fit-b", "b2", "no-raise", 100.0),
+        ),
+        "target": (
+            command("target", "past1", "one-task", 100.0),
+            command("target", "past2", "same", 3_000.0),
+        ),
+    }
+    target_rows = (
+        command("target", "same", "same", 100.0),
+        command("target", "one", "one-task", 100.0),
+        command("target", "raise", "no-raise", 100.0),
+    )
+    empty = Dataset((), {}, {}, {}, {}, {}, {}, frozenset())
+    fit = Dataset(
+        tuple(fit_rows),
+        empty.programs,
+        empty.profiles,
+        empty.clauses_by_task,
+        fit_rows,
+        empty.events_by_task,
+        empty.rss_source_by_command,
+        empty.unverified_command_ids,
+    )
+    target = Dataset(
+        ("target",),
+        empty.programs,
+        {
+            **{f"target:{row.call_id}": () for row in target_rows},
+            "target:unmatched": (),
+        },
+        empty.clauses_by_task,
+        {"target": target_rows},
+        empty.events_by_task,
+        empty.rss_source_by_command,
+        empty.unverified_command_ids,
+    )
+    candidate, diagnostics = _candidate_reservations(
+        fit,
+        target,
+        {
+            "clause_kb": {
+                "target:same": 2_000.0,
+                "target:one": 500.0,
+                "target:raise": 500.0,
+            },
+            "task_aware_upper": {
+                "target:same": 500.0,
+                "target:one": 500.0,
+                "target:raise": RSS_CAPACITY_MB,
+            },
+        },
+        leave_one_out=True,
+    )
+
+    assert candidate == {
+        "target:same": 500.0,
+        "target:one": RSS_CAPACITY_MB,
+        "target:raise": 500.0,
+        "target:unmatched": RSS_CAPACITY_MB,
+    }
+    assert diagnostics["authorized_demotions"] == 1
+    assert diagnostics["blocked_low"] == 1
