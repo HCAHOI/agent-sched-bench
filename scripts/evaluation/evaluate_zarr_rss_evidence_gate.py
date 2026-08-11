@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 import json
 import math
@@ -124,6 +124,14 @@ def _candidate_reservations(
         ),
         "proposed_demotion_ids": proposed_demotions,
         "authorized_demotion_ids": authorized_demotions,
+        "authorized_demotion_command_counts": dict(
+            Counter(
+                row.command
+                for task_id in target.task_ids
+                for row in target.commands_by_task[task_id]
+                if f"{row.task_id}:{row.call_id}" in authorized_demotions
+            )
+        ),
         "blocked_low_ids": blocked_low,
     }
 

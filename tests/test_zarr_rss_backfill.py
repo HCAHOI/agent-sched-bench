@@ -159,4 +159,5 @@ def test_exact_supported_demotion_uses_loto_and_independent_tasks() -> None:
         "target:unmatched": RSS_CAPACITY_MB,
     }
     assert diagnostics["authorized_demotions"] == 1
+    assert diagnostics["authorized_demotion_command_counts"] == {"same": 1}
     assert diagnostics["blocked_low"] == 1
