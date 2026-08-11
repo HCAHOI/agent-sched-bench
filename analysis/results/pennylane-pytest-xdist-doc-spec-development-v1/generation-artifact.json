@@ -1,0 +1,36 @@
+{
+  "schema": "pennylane-pytest-xdist-doc-generation-v1",
+  "protocol_git_sha": "6921dbc7b2dc4dd64b87844ade595cd295d5b1be",
+  "generation_git_sha": "295d40acbdefc6675115b002b143594cc1c1ec74",
+  "tool": "pytest",
+  "documented_version": "pytest-8.3.5+pytest-xdist-3.8.0",
+  "sources": [
+    {
+      "path": "analysis/development/offline-tool-semantics-docs/prompt-template.md",
+      "bytes": 2736
+    },
+    {
+      "path": "analysis/development/offline-tool-semantics-docs/pytest-8.3.5.txt",
+      "bytes": 19098
+    },
+    {
+      "path": "analysis/development/offline-tool-semantics-docs/pytest-xdist-3.8.0.txt",
+      "bytes": 2016
+    }
+  ],
+  "model": "gpt-5.6-sol",
+  "requested_service_tier": "fast",
+  "reasoning_effort": "medium",
+  "prediction_time_agent_calls": 0,
+  "estimated_input_tokens": 5996,
+  "status": "valid",
+  "cost": {
+    "prompt_bytes": 23897,
+    "wall_seconds": 67.23366997623816,
+    "usage": {
+      "input_tokens": 18396,
+      "cached_input_tokens": 0,
+      "output_tokens": 4925
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "schema": "pennylane-pytest-xdist-coverage-v1",
+  "protocol_git_sha": "6921dbc7b2dc4dd64b87844ade595cd295d5b1be",
+  "generation_git_sha": "295d40acbdefc6675115b002b143594cc1c1ec74",
+  "corpus_role": "development_exposed",
+  "task_count": 15,
+  "raw_numprocesses_clauses": 50,
+  "raw_numprocesses_tasks": 10,
+  "interpreted_numprocesses_clauses": 0,
+  "interpreted_numprocesses_tasks": 0,
+  "all_interpreted_clauses": 17,
+  "coverage_gate": false,
+  "labels_read_after_generation": false,
+  "status": "structurally_unsupported",
+  "failure": "The generated absolute-path python module invocation cannot match the host's executable-basename-normalized argv."
+}

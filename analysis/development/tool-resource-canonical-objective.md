@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Run the frozen plugin-aware pytest documentation candidate on the development-exposed PennyLane fit15/replay15 sequence. The agent is offline and one-shot; prediction remains deterministic and zero-cost. Do not open the untouched PennyLane 16+16 cohorts. |
+| Next research step | Repair the generic ToolSpec invocation contract so schema-valid module invocations cannot be unreachable after executable-basename normalization. Freeze any successor separately; do not regenerate the consumed pytest-xdist candidate or open PennyLane 16+16. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1489,6 +1489,24 @@ clause-label and physical task-container metrics separately. Do not tune the
 spec, prompt, host semantics, thresholds, or gates after generation or label
 access. A pass only authorizes collecting the already frozen PennyLane warmup16
 cohort; it does not open validation16 or establish scheduling utility.
+
+**Result and decision.** The one allowed generation completed in 67.234 s and
+produced a schema-valid spec using 18,396 input and 4,925 output tokens; the
+requested tier was fast and prediction-time agent cost remains zero. The
+pre-label structural gate then stopped the experiment. Replay15 contains 50
+pytest `-n` clauses across ten tasks, but the generated spec interpreted zero
+of them; it interpreted only 17 non-`-n` direct `pytest` clauses. No prediction
+labels or candidate accuracy were read.
+
+The immediate cause is a generator/host contract mismatch. The generated spec
+declared the module invocation with the documentation's absolute interpreter
+path, while the unchanged deterministic host reduces the executable to its
+basename before matching invocation prefixes. That schema-valid invocation is
+therefore unreachable. Record this candidate as `structurally_unsupported`,
+not a method NO-GO. Its one-shot call is consumed and must not be repaired or
+regenerated. A successor must first make this generic invocation invariant
+explicit in schema validation, then freeze a new protocol; the untouched
+PennyLane cohorts remain closed.
 
 ## 6. Closed directions
 
