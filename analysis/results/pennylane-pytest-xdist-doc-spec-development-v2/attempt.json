@@ -1,0 +1,7 @@
+{
+  "schema": "pennylane-pytest-xdist-doc-attempt-v2",
+  "status": "completed_consumed",
+  "generation_status": "unsupported_structural_failure",
+  "protocol_git_sha": "84a0786f809678b65796ee80daeffa0aec27b349",
+  "generation_git_sha": "4dd9a5fdb948a40fa9785a1c3e35252a973acc8a"
+}

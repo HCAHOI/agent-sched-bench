@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Run the frozen ToolSpec invocation-contract successor on development-exposed PennyLane fit15/replay15. Stop at the unchanged pre-label coverage gate if it fails; do not open PennyLane 16+16. |
+| Next research step | Stop one-shot pytest generation. Separately freeze a deterministic positive control that combines documentation-derived pytest worker count with fit-only resource calibration; do not open PennyLane 16+16. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1528,6 +1528,21 @@ least 20 replay `-n` clauses across at least three tasks; failure stops as
 `structurally_unsupported`. Passing that gate authorizes only the frozen
 development evaluation in Section 5.23. Even a full pass does not open the
 untouched PennyLane 16+16 cohorts or establish scheduling utility.
+
+**Result and decision.** The v2 call stopped at schema validation before trace
+or label access. It used 18,398 input and 4,232 output tokens in 56.095 s. The
+response encoded `--strict` as a fixed-value equivalent of `--strict-markers`,
+although both options have arity zero; the frozen relation contract requires
+an arity-one target. The one-shot call is consumed, coverage was not evaluated,
+and the result is `unsupported_structural_failure`, not a prediction verdict.
+
+Do not tune or generate a third pytest candidate on this exposed input. Both
+consumed responses nevertheless selected pytest-xdist worker count as an
+execution-policy feature, so the causal representation hypothesis remains
+unresolved while full-help-to-full-schema one-shot reliability is now the
+observed blocker. Isolate those questions next with a deterministic positive
+control: documentation supplies only worker count, while settled fit-task
+observations calibrate its resource implication.
 
 ## 6. Closed directions
 

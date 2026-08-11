@@ -1,0 +1,18 @@
+{
+  "schema": "pennylane-pytest-xdist-doc-validation-v2",
+  "status": "unsupported_structural_failure",
+  "one_shot_consumed": true,
+  "post_generation_trace_or_label_access": false,
+  "coverage_evaluated": false,
+  "error": "fixed equivalence requires option arguments",
+  "invalid_relation": {
+    "kind": "fixed_value_equivalence",
+    "operation": "run",
+    "argument": "strict",
+    "other": "strict_markers",
+    "value": "true"
+  },
+  "source_arity": 0,
+  "target_arity": 0,
+  "required_target_arity": 1
+}
