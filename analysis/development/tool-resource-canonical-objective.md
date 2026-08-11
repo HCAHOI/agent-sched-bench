@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Measure the scheduling ceiling from time-varying task RSS on the existing evidence-valid PennyLane replay cohort. If it passes, freeze a separate causal prediction/observation action; do not tune another static Zarr rule or open final12. |
+| Next research step | On the same development-exposed PennyLane cohort, audit whether task RSS rises are attributable to tool-command intervals and visible at command admission. Use that timing evidence to freeze the smallest causal Clause/KB action; do not claim the temporal oracle as deployable or open final12. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1412,6 +1412,25 @@ violations while `unconstrained` has at least one. Failure closes time-varying
 RSS packing on this cohort. A pass authorizes only a separately frozen causal
 action using prediction and/or observations; it does not validate the oracle,
 open final12, or authorize fresh collection.
+
+**Result and decision.** The ceiling passed every frozen gate. Static lifetime
+peak reservation admitted three tasks before the first completion, reached
+five-way concurrency, and produced 6,202.222 s mean completion and 18,877.186 s
+makespan. The temporal oracle admitted eight tasks before the first completion,
+reached eight-way concurrency, and produced 3,174.106 s mean completion and
+9,891.043 s makespan: a 48.823% mean-completion reduction versus static peak.
+Its maximum sampled aggregate RSS was 15,864.092 MB with zero sampled capacity
+violations. The unconstrained control reached 47,523.476 MB and exceeded
+capacity at 12,771 sampled transition points, so the constraint is
+action-relevant rather than vacuous.
+
+This establishes substantial temporal memory-packing headroom on the exposed
+PennyLane cohort, not a scheduler result. The oracle knows every task's future
+RSS, fixes isolated task duration, and ignores CPU contention. The next step is
+therefore an action-timing audit: determine whether memory rises occur inside
+tool intervals and whether a command-boundary controller could reserve them
+before they occur. Only that evidence may define a causal Clause/KB admission
+candidate.
 
 ## 6. Closed directions
 
