@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Develop a low-CPU-phase survival action on Zarr development tasks. PennyLane stays closed locally because one observed command reached 9.53 GiB RSS; Zarr validation/final remain untouched. |
+| Next research step | Validate prediction-backed RSS-safe CPU-idle backfill on the untouched Zarr validation tasks. The protocol below is frozen before collection; final remains untouched. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1201,47 +1201,67 @@ latest-sample feedback plus a static candidate bound admits work without enough
 mean-completion benefit. This does not close runtime feedback generally or a
 separately frozen preemptive/differently timed action on untouched tasks.
 
-### 5.19 Zarr low-CPU-phase survival development boundary
+### 5.19 Frozen Zarr RSS-predicted CPU-idle backfill
 
-The next hypothesis is that causal feedback needs to estimate how long the
-currently observed low-CPU phase will remain, rather than predict a command's
-whole absolute-time profile. The candidate action may use only completed eBPF
-samples, phase age, and fit-task command evidence. It must not use a future
-sample or current-command outcome. Its exact estimator, ablations, and utility
-gate must be frozen after development and before validation is collected or
-read.
+The 19 fit-eligible development tasks are complete and development-exposed;
+task 2668 remains excluded by the pre-existing time boundary. They contain 441
+exec commands. Canonical command RSS composition gives a source bound for 395:
+observed clause RSS is composed by the shell graph, and a null clause shorter
+than 500 ms contributes the frozen 500 MB upper bucket. The other 46 commands
+remain full-capacity fallbacks. Commands using a short-null bound are reported
+separately from fully observed commands.
 
-PennyLane is not collected on this 15 GiB, no-swap host: an existing full-suite
-pytest command reached 9.53 GiB sampled RSS. The previous remote address now
-presents a different SSH host key and is not trusted as the old node. Zarr is
-the local alternative: SWE-ReBench has 42 tasks, and the valid development
-replays below reached 1.435 GB maximum sampled clause RSS without increasing
-the host OOM count. This is a resource-shape selection, not an outcome-based
-method selection.
+The original phase-survival hypothesis is not action-limiting on this workload.
+With those 395 source bounds, RSS-only hindsight backfill reduced mean task
+completion by 54.264% and makespan by 44.163% with 365 speculative starts.
+Adding full future CPU-profile compatibility selected the same command set and
+produced bit-identical completion and service metrics. This closes phase
+estimation for this Zarr action, not for other workloads.
 
-The frozen IDs are in `zarr-phase-survival-split.json`: 20 development, 10
-validation, and 12 final. Three previously traced tasks are development-exposed;
-task 2668 is also excluded from model fitting because its timestamp is later
-than the validation boundary. Validation and final tasks must not be collected
-or inspected during development.
+Development leave-one-task-out diagnosis connects the existing predictors to
+the action. Clause-KB hard RSS reservations reduced mean completion by 29.597%
+and makespan by 19.038% with 188 speculative starts. The selected Task-Aware
+RSS head reduced mean completion by 31.972% and makespan by 15.674% with 205
+starts. Both had zero modeled source-bound exposure and effectively zero service
+inflation. Task-Aware therefore improves the primary mean-completion objective
+by 2.375 points but trades away 3.365 points of makespan reduction. Mapping each
+PMF to its highest supported bucket was safer only under the earlier incorrect
+whole-command null treatment; with canonical clause composition it merely lost
+utility. It remains an ablation, not the primary action.
 
-The development preflight now contains task 459 plus exact-command replays of
-the three previously exposed tasks. Tasks 459, 2244, and 2668 are formally
-complete; task 2348 is valid but partial because two of 27 calls fail closed.
-Across the four tasks, 101/103 calls remain eligible, telemetry and cleanup are
-healthy, and the host OOM count stayed unchanged. Task 459 took 693 seconds to
-collect with Codex GPT-5.6 fast, maximum 100 iterations, concurrency one,
-required eBPF telemetry, and image cleanup; its exact-command replay took 509
-seconds and retained 25/25 calls.
+Constant fit-majority illustrates why accuracy is not the scheduler objective:
+it reached 87.821% RSS-class accuracy and 49.486% mean-completion reduction, but
+created 12 modeled source-bound exposures. Clause-KB and Task-Aware accuracy
+were lower, 66.987% and 73.718%, while both avoided modeled exposure. The action
+gate therefore keeps utility and safety separate from class accuracy.
 
-Eight long pytest profiles occur in the three fit-eligible tasks. A preliminary
-one-core phase-age diagnostic is not yet stable across tasks: the favorable
-pooled survival rate is dominated by one task, while the other seven commands
-show little support for long low-CPU runs. This authorizes only more development
-coverage, not an estimator or validation gate. The remaining 16 fit-eligible
-collections are estimated at about three hours at concurrency one; concurrency
-two would contaminate isolated CPU profiles on this eight-core host. Do not
-launch them without explicit approval.
+The untouched validation protocol is now frozen. Collect exactly the ten
+validation IDs in `zarr-phase-survival-split.json` using Codex GPT-5.6 fast,
+maximum 100 iterations, concurrency one, required eBPF telemetry, and image
+cleanup. Fit on the fixed 19 development tasks. Validation tasks never update
+one another, and prediction sees no current-task outcome. Replay all ten tasks
+as one concurrent start wave on 8 CPU cores and 16,000 MB RSS with strict
+foreground priority and FCFS backfill. Report these arms on identical commands
+and profiles: Serial-8; fit-majority RSS; hindsight source-bound RSS; Clause-KB
+hard RSS; Task-Aware hard RSS; and Task-Aware highest-supported-bucket RSS.
+Unavailable or ineligible predictions reserve 16,000 MB.
+
+The primary arm is Task-Aware hard RSS because mean task completion is the
+declared scheduler objective. Validation is GO only if it reduces mean task
+completion at least 5% versus Serial-8, captures at least half of the hindsight
+mean-completion reduction, beats Clause-KB by at least one percentage point,
+reduces makespan versus Serial-8, keeps aggregate service inflation at most 5%,
+has zero modeled source-bound/capacity/CPU-work violations, and makes at least
+20 speculative starts spanning five tasks. Fit-majority is a non-method
+baseline; Clause-KB identifies the incremental Task-Aware contribution. Report
+short-null-bound overlaps and full-fallback commands, but do not reinterpret
+them as measured RSS.
+
+No validation outcome may change the source policy, split, predictor heads,
+reservation mapping, order, capacity, arms, or gate. Open the 12-task final
+partition only if every validation condition passes; otherwise stop without
+collecting or inspecting it. PennyLane remains closed on this 15 GiB no-swap
+host because one observed command reached 9.53 GiB RSS.
 
 ## 6. Closed directions
 
