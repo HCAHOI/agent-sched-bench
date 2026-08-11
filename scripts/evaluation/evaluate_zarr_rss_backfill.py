@@ -192,6 +192,7 @@ def _composed_rss_source(call: Mapping[str, Any]) -> tuple[float, str]:
     imputed = False
     for clause in clauses:
         rss = clause.get(RSS_TARGET)
+        latency = clause.get("latency_ms")
         if (
             isinstance(rss, (int, float))
             and not isinstance(rss, bool)
@@ -200,9 +201,12 @@ def _composed_rss_source(call: Mapping[str, Any]) -> tuple[float, str]:
         ):
             values.append(float(rss))
         elif (
-            isinstance(clause.get("latency_ms"), (int, float))
-            and not isinstance(clause.get("latency_ms"), bool)
-            and float(clause["latency_ms"]) < 500.0
+            RSS_TARGET in clause
+            and rss is None
+            and isinstance(latency, (int, float))
+            and not isinstance(latency, bool)
+            and math.isfinite(latency)
+            and 0.0 <= float(latency) < 500.0
         ):
             values.append(RSS_REQUESTS[0])
             imputed = True

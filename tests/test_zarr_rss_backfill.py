@@ -55,6 +55,22 @@ def test_zarr_rss_source_composition_and_upper_reservation() -> None:
     ) == (RSS_CAPACITY_MB, "full_fallback")
 
 
+def test_zarr_short_null_rejects_missing_or_invalid_measurements() -> None:
+    invalid_clauses = [
+        _clause(-1, 10),
+        _clause(True, 10),
+        _clause("bad", 10),
+        _clause(None, -1),
+        _clause(None, float("inf")),
+        {"latency_ms": 10, "in_pipe": False, "in_subst": False, "pipeline_position": -1},
+    ]
+    for clause in invalid_clauses:
+        assert _composed_rss_source({"clauses": [clause]}) == (
+            RSS_CAPACITY_MB,
+            "full_fallback",
+        )
+
+
 def test_exact_support_gate_requires_two_tasks_and_covers_history() -> None:
     assert _guarded_reservation(500.0, {"task-a": 0}) == RSS_CAPACITY_MB
     assert _guarded_reservation(500.0, {"task-a": 0, "task-b": 0}) == 500.0
