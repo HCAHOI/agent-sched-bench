@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Test the separately frozen exact-supported demotion policy below on exposed Zarr development and validation data. This is post-hoc method development; final12 remains untouched. |
+| Next research step | Do not open Zarr final12. Exact complete-command support is safe but too sparse; any successor must preserve broad Clause-KB action coverage while causally rejecting the three validation source-bound exposures, and must be frozen separately. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1280,6 +1280,34 @@ violations; and at least 20 speculative starts across five tasks. Do not alter
 the support count, evidence rule, mapping, arms, or gate after reading results.
 Only a pass authorizes writing a fresh protocol for final12; it does not itself
 authorize collecting or reading final12.
+
+**Result and decision.** The candidate failed both exposed cohorts. On the
+19-task leave-one-task-out development cohort, it reduced mean completion by
+0.864% versus Serial-8, compared with 29.597% for Clause-KB, and made 18
+speculative starts instead of 188. On exposed validation10, it reduced mean
+completion by 5.607%, compared with 33.683% for Clause-KB, and made 12 starts
+instead of 75. It had zero modeled exposure, capacity, physical-capacity, and
+CPU-work violations, but missed the frozen improvement-over-Clause and
+20-start gates in both cohorts; development also missed the 5% completion
+gate.
+
+The mechanism is evidence sparsity, not harmful authorized demotion. The gate
+blocked 205/245 proposed sub-capacity development reservations and 89/117
+validation reservations. Every authorized demotion was the same harness
+completion command, `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat
+patch.txt`: 17 development rows and ten validation rows. Exact whole-command
+recurrence therefore certifies a ubiquitous low-work marker but does not cover
+the varied commands that create scheduling opportunity. The ungated control
+retained broad coverage and reached 35.861%/40.262% mean-completion reduction,
+but on validation it retained the same three modeled source-bound exposures as
+Clause-KB.
+
+Decision: close this exact-supported policy and do not collect or inspect
+final12. Retain the causal question exposed by the controls: a useful successor
+must distinguish unsafe source-unavailable cases without reducing the ordinary
+Clause-KB action set to exact recurring commands. This result does not close
+RSS-aware backfill or the demotion-only action; it closes this exact-evidence
+safety mechanism.
 
 ## 6. Closed directions
 
