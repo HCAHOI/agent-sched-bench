@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Do not open Zarr final12. Exact complete-command support is safe but too sparse; any successor must preserve broad Clause-KB action coverage while causally rejecting the three validation source-bound exposures, and must be frozen separately. |
+| Next research step | Test the separately frozen compound-evidence safety gate below on exposed Zarr development and validation data. This is post-hoc development; final12 remains untouched. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1308,6 +1308,42 @@ must distinguish unsafe source-unavailable cases without reducing the ordinary
 Clause-KB action set to exact recurring commands. This result does not close
 RSS-aware backfill or the demotion-only action; it closes this exact-evidence
 safety mechanism.
+
+### 5.21 Frozen post-hoc compound-evidence safety gate
+
+This candidate was designed after Section 5.20 and after inspecting the three
+exposed validation overlap events. Two events began with different multiline
+dependency probes whose three-clause RSS predictions combined two exact clause
+matches with one prefix match; their final command source was unavailable. The
+third began with a measured 231 MB editable install while one of those probes
+was already running. This diagnosis is development-exposed and cannot support
+a claim by itself.
+
+Start from the unchanged Clause-KB hard RSS reservation for every command. If
+that prediction is a shell execution graph with more than one clause and any
+selected constituent match is not `exact_clause`, replace its reservation with
+16,000 MB. Otherwise preserve the Clause-KB reservation exactly. Apply the
+reservation symmetrically: such a command cannot start as backfill beside a
+foreground command, and when it is the foreground its full reservation blocks
+backfill. The decision uses only parsed command structure and fit-derived
+Clause-KB provenance available at `BeginCall`; it uses no tool name, command
+literal, target outcome, current-task telemetry, or tunable similarity rule.
+
+Evaluate one fixed candidate on the same exposed cohorts as Section 5.20:
+leave-one-task-out over development19 and fixed-fit validation10. Keep Serial-8,
+the source-bound oracle, Clause-KB, capacities, profiles, FCFS order, and source
+policy unchanged. Report one mechanism control that assigns 16,000 MB to every
+multi-clause command, so a positive result cannot be attributed merely to
+blocking compound commands.
+
+Development GO requires the candidate to pass on both cohorts: at least 5%
+mean-completion reduction versus Serial-8; at least 90% of Clause-KB's
+mean-completion reduction; lower makespan than Serial-8; at most 5% service
+inflation; zero modeled source-bound, capacity, physical-capacity, or CPU-work
+violations; at least 80% of Clause-KB's speculative starts; and at least 20
+starts across five tasks. Do not alter the guard, controls, or gates after
+reading results. Only a pass authorizes a separately reviewed final12 protocol;
+it does not authorize collecting or reading final12.
 
 ## 6. Closed directions
 
