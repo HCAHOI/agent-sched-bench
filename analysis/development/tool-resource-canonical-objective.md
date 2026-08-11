@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Audit whether existing traces contain causal in-flight RSS observations sufficient to test a reactive overlap verifier. Do not tune another static Zarr command/provenance rule and do not open final12. |
+| Next research step | Measure the scheduling ceiling from time-varying task RSS on the existing evidence-valid PennyLane replay cohort. If it passes, freeze a separate causal prediction/observation action; do not tune another static Zarr rule or open final12. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1368,6 +1368,50 @@ same exposed cases. The next question is whether already-collected telemetry
 contains a causal in-flight RSS signal that can verify the *running overlap*
 instead of rejecting commands before execution. If it does not, specify the
 smallest fresh collection needed before implementing that action.
+
+### 5.22 Frozen PennyLane time-varying RSS packing ceiling
+
+The audit after Section 5.21 found that Zarr cannot test a reactive memory
+action: its task-container peak RSS is at most 1,257 MB on development and 652
+MB on validation, far below the 16,000 MB capacity. The existing PennyLane
+replay cohort does contain the required pressure and temporal variation. All 15
+evidence-valid replay tasks have task-container RSS samples at approximately
+two-second intervals; 13 contain commands reaching at least 2,000 MB. Among
+the 44 such commands, the median time-average RSS is 55.3% of sampled peak.
+These audit statistics were visible before freezing this protocol and make
+this cohort development-exposed.
+
+Before designing another predictor, test whether that variation can change a
+memory admission decision at all. Treat each of the 15 evidence-valid replay
+tasks in `pennylane-survival-action-split.json` as one job arriving at time
+zero, ordered by task ID. Use its complete `resources.json` sample sequence as
+a step-held RSS profile and its first-to-last sample interval as fixed service
+time. This deliberately ignores CPU contention and command rescheduling: it is
+a memory-only hindsight ceiling, not a deployable scheduler or completion-time
+claim.
+
+Compare four deterministic FCFS arms at 16,000 MB:
+
+1. `serial`: admit only one task at a time.
+2. `static_peak`: admit every ready task whose sampled lifetime peak fits with
+   the lifetime peaks reserved by running tasks.
+3. `temporal_oracle`: admit a ready task only when its complete future sampled
+   profile fits with the remaining sampled profiles of all running tasks for
+   their full overlap.
+4. `unconstrained`: start all tasks at time zero; this control must exceed the
+   capacity at least once or the memory constraint is not action-relevant.
+
+No resampling, interpolation, predictor, Clause-KB rule, threshold tuning, or
+new collection is allowed. Report mean task completion, makespan, maximum
+concurrency, starts before the first completion, and maximum sampled aggregate
+RSS. A capacity violation means sampled aggregate RSS greater than 16,000 MB.
+The temporal arm passes only if it reduces mean completion by at least 5%
+relative to `static_peak`, strictly reduces makespan, starts at least one
+additional task before the first completion, and has zero sampled capacity
+violations while `unconstrained` has at least one. Failure closes time-varying
+RSS packing on this cohort. A pass authorizes only a separately frozen causal
+action using prediction and/or observations; it does not validate the oracle,
+open final12, or authorize fresh collection.
 
 ## 6. Closed directions
 
