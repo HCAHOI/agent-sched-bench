@@ -1214,10 +1214,10 @@ read.
 PennyLane is not collected on this 15 GiB, no-swap host: an existing full-suite
 pytest command reached 9.53 GiB sampled RSS. The previous remote address now
 presents a different SSH host key and is not trusted as the old node. Zarr is
-the local alternative: SWE-ReBench has 42 tasks; two existing valid traces show
-a non-install phase-changing pytest command, with 164.3 MB maximum sampled
-clause RSS. This is a resource-shape selection, not an outcome-based method
-selection.
+the local alternative: SWE-ReBench has 42 tasks, and the valid development
+replays below reached 1.435 GB maximum sampled clause RSS without increasing
+the host OOM count. This is a resource-shape selection, not an outcome-based
+method selection.
 
 The frozen IDs are in `zarr-phase-survival-split.json`: 20 development, 10
 validation, and 12 final. Three previously traced tasks are development-exposed;
@@ -1225,12 +1225,23 @@ task 2668 is also excluded from model fitting because its timestamp is later
 than the validation boundary. Validation and final tasks must not be collected
 or inspected during development.
 
-Collection begins with only development task 459 using Codex GPT-5.6 fast,
-maximum 100 iterations, concurrency one, required eBPF telemetry, and image
-cleanup. Accept the smoke only with valid workload, telemetry, and cleanup,
-unchanged host OOM count, and no abnormal memory growth. Use its measured wall
-time and peak memory to estimate the remaining development collection; do not
-launch a run expected to exceed 30 minutes without explicit approval.
+The development preflight now contains task 459 plus exact-command replays of
+the three previously exposed tasks. Tasks 459, 2244, and 2668 are formally
+complete; task 2348 is valid but partial because two of 27 calls fail closed.
+Across the four tasks, 101/103 calls remain eligible, telemetry and cleanup are
+healthy, and the host OOM count stayed unchanged. Task 459 took 693 seconds to
+collect with Codex GPT-5.6 fast, maximum 100 iterations, concurrency one,
+required eBPF telemetry, and image cleanup; its exact-command replay took 509
+seconds and retained 25/25 calls.
+
+Eight long pytest profiles occur in the three fit-eligible tasks. A preliminary
+one-core phase-age diagnostic is not yet stable across tasks: the favorable
+pooled survival rate is dominated by one task, while the other seven commands
+show little support for long low-CPU runs. This authorizes only more development
+coverage, not an estimator or validation gate. The remaining 16 fit-eligible
+collections are estimated at about three hours at concurrency one; concurrency
+two would contaminate isolated CPU profiles on this eight-core host. Do not
+launch them without explicit approval.
 
 ## 6. Closed directions
 
