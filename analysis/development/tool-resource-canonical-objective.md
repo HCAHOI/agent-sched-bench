@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Freeze a command-boundary memory-admission use test for the retained scope-conditioned xdist RSS predictor; do not open PennyLane 16+16. |
+| Next research step | Run the frozen command-boundary memory-admission use test in Section 5.27; do not open PennyLane 16+16. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1642,6 +1642,43 @@ interaction of execution policy (worker count) and requested work scope, not
 either field in isolation. It retains a deterministic zero-runtime-agent
 predictor for the next action test. It does not validate the failed one-shot
 compiler, generalize beyond pytest/PennyLane, or establish scheduler benefit.
+
+### 5.27 Frozen scope-conditioned xdist RSS admission use test
+
+This development-only test asks whether the retained Section 5.26 predictor
+changes a useful command-boundary memory action. Reuse its committed 15-task
+PennyLane replay cohort and prediction rows without refitting or opening the
+untouched 16+16 cohorts. Reuse the existing strict-priority FCFS idle-backfill
+simulator: one normal command and at most one backfill command, an eight-core
+host, 16,000 MB memory, one concurrent task-start wave, recorded command gaps,
+recorded sampled CPU-work profiles, and the exact 15-task order already listed
+in the committed Section 5.26 result. All arms use that same order.
+
+Map each hard RSS prediction to the canonical bucket upper bound 500, 2,000,
+or 16,000 MB. An unavailable prediction or command reserves 16,000 MB. All
+commands are eligible candidates; the reservation alone controls overlap.
+Compare `serial8`, `clause_kb`, the same-coverage `count_unconditioned`
+ablation, `scope_conditioned`, and an `exact_rss_reference`. Physical RSS
+uses the canonical command target: observed clause peaks composed by shell
+stage, a 500 MB upper value only for explicitly short (<500 ms) null clauses,
+and 16,000 MB for invalid or unresolved commands. The reference reserves that
+same physical value. Because reservations also change FCFS candidate choice,
+the exact-RSS arm is a reference rather than a performance ceiling. This is a
+conservative static peak-sum replay, not a claim about simultaneous measured
+peaks.
+
+Report mean task completion, makespan, service inflation, speculative starts
+and tasks, static peak-sum exposure events, capacity/work invariants, and the
+commands whose speculative-start decision differs from Clause-KB. GO requires
+all of the following: scope conditioning has zero exposure, reservation,
+physical-capacity, and CPU-work violations; reduces mean completion by at least
+5% versus `serial8`; has lower makespan and at most 5% service inflation;
+strictly reduces exposure versus both Clause-KB and `count_unconditioned`; has
+at least 20 speculative starts across five tasks; and changes at least ten
+speculative-start decisions across three tasks versus Clause-KB. No threshold,
+reservation mapping, task, or simulator semantic may change after reading the
+action outcomes. Failure closes this static command-boundary action on the
+exposed cohort but does not reinterpret Section 5.26's prediction GO.
 
 ## 6. Closed directions
 
