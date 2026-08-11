@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Repair the generic ToolSpec invocation contract so schema-valid module invocations cannot be unreachable after executable-basename normalization. Freeze any successor separately; do not regenerate the consumed pytest-xdist candidate or open PennyLane 16+16. |
+| Next research step | Run the frozen ToolSpec invocation-contract successor on development-exposed PennyLane fit15/replay15. Stop at the unchanged pre-label coverage gate if it fails; do not open PennyLane 16+16. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1507,6 +1507,27 @@ not a method NO-GO. Its one-shot call is consumed and must not be repaired or
 regenerated. A successor must first make this generic invocation invariant
 explicit in schema validation, then freeze a new protocol; the untouched
 PennyLane cohorts remain closed.
+
+### 5.24 Frozen ToolSpec invocation-contract successor
+
+Commit `ccc9582a8456dd30ca96119e431a0cc554ae62a6` fixes the generic
+generator/host contract by compiling only an invocation's executable token to
+the same POSIX basename used for runtime argv; empty and normalized-duplicate
+invocations are invalid. This change was made and independently reviewed
+without reading candidate labels. It does not change argument semantics, the
+generation schema, or the frozen prompt.
+
+Make exactly one new generation into a distinct v2 artifact. Apart from that
+commit and artifact identity, reuse Section 5.23 verbatim: the two pinned help
+snapshots, prompt, `tool-spec-v1` schema, isolated tool-free call, model/tier/
+reasoning settings, 64k input-token and 65,536-byte response bounds, fit15
+initial evidence, replay15 task-ID settlement, three arms, metrics, and all
+GO/NO-GO thresholds. Do not read or transform the consumed v1 response, and do
+not use its generated fields as input. Before labels, v2 must interpret at
+least 20 replay `-n` clauses across at least three tasks; failure stops as
+`structurally_unsupported`. Passing that gate authorizes only the frozen
+development evaluation in Section 5.23. Even a full pass does not open the
+untouched PennyLane 16+16 cohorts or establish scheduling utility.
 
 ## 6. Closed directions
 
