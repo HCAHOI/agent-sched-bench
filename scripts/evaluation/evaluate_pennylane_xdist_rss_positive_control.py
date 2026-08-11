@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate the frozen fit-calibrated pytest-xdist RSS positive control."""
+"""Evaluate the frozen target-shape-conditioned pytest-xdist RSS control."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from scripts.evaluation.evaluate_clause_resource_classes import (  # noqa: E402
 from scripts.evaluation.evaluate_pennylane_temporal_rss_ceiling import (  # noqa: E402
     _EXPECTED_TASK_IDS,
 )
+from tool_resource.pytest_semantics import parse_pytest  # noqa: E402
 from tool_resource.runtime_kb import (  # noqa: E402
     CANONICAL_RESOURCE_BUCKET_EDGES,
     ClauseResourceKB,
@@ -31,13 +32,11 @@ from tool_resource.runtime_kb import (  # noqa: E402
 from tool_resource_eval.labels import repo_of  # noqa: E402
 
 
-_PROTOCOL_GIT_SHA = "81b7ff1c1cd715283d5ee944f369985fa60424a6"
+_PROTOCOL_GIT_SHA = "29744ed1fbbb461c39344e1b0d5636ba13aab3aa"
 _SPLIT = _ROOT / "analysis/development/pennylane-survival-action-split.json"
-_OUTPUT = _ROOT / "analysis/results/pennylane-xdist-rss-positive-control-v1"
+_OUTPUT = _ROOT / "analysis/results/pennylane-xdist-rss-positive-control-v2"
 _RSS = "sampled_peak_rss_mb"
 _HOST_CPUS = 8
-_MIN_CALIBRATION = 50
-_MIN_CALIBRATION_TASKS = 10
 _MIN_CARRIERS = 20
 _MIN_CARRIER_TASKS = 5
 _MIN_HIGH_RECALL_GAIN = 0.20
@@ -83,6 +82,18 @@ def parse_pytest_workers(argv: Sequence[str]) -> int | str | None:
         for value in values
     }
     return next(iter(parsed)) if len(parsed) == 1 and -1 not in parsed else "invalid"
+
+
+def pytest_scope(argv: Sequence[str]) -> str | None:
+    signature = parse_pytest(argv)
+    if signature is None:
+        return None
+    shapes = {shape for shape, _count in signature.target_shapes}
+    if not shapes:
+        return "full"
+    if "directory" in shapes:
+        return "broad"
+    return "narrow" if shapes <= {"file", "nodeid"} else None
 
 
 def scaled_rss_pmf(values: Sequence[float], workers: int) -> tuple[float, float, float]:
@@ -194,10 +205,19 @@ def _load_tasks() -> tuple[list[Row], dict[str, list[Row]], dict[str, list[Comma
     return fit_rows, clauses, commands
 
 
-def _carrier_count(row: CommandRow) -> int | None:
-    parsed = [parse_pytest_workers(clause.argv) for clause in row.clauses]
-    values = {value for value in parsed if isinstance(value, int)}
-    return next(iter(values)) if len(values) == 1 and "invalid" not in parsed else None
+def _carrier(row: CommandRow) -> tuple[int, str] | None:
+    parsed: list[tuple[int, str]] = []
+    for clause in row.clauses:
+        workers = parse_pytest_workers(clause.argv)
+        if workers == "invalid":
+            return None
+        if isinstance(workers, int):
+            scope = pytest_scope(clause.argv)
+            if scope is None:
+                return None
+            parsed.append((workers, scope))
+    values = set(parsed)
+    return next(iter(values)) if len(values) == 1 else None
 
 
 def _hard(pmf: Sequence[float] | None) -> int | None:
@@ -211,6 +231,51 @@ def fit_clause_kb(rows: Sequence[Row]) -> ClauseResourceKB:
     for row in rows:
         kb.observe_completed_clause(row.observation(0.0, 1.0))
     return kb
+
+
+def _preflight(
+    fit: Sequence[Row], commands: Mapping[str, Sequence[CommandRow]]
+) -> tuple[dict[str, list[Row]], dict[str, Any]]:
+    calibration: dict[str, list[Row]] = {
+        scope: [] for scope in ("full", "broad", "narrow")
+    }
+    for row in fit:
+        scope = pytest_scope(row.argv)
+        if (
+            scope is not None
+            and parse_pytest_workers(row.argv) == "serial"
+            and row.sampled_peak_rss_mb is not None
+        ):
+            calibration[scope].append(row)
+    carriers = [
+        (task_id, carrier)
+        for task_id in _EXPECTED_TASK_IDS
+        for row in commands[task_id]
+        if (carrier := _carrier(row)) is not None
+    ]
+    carrier_tasks = {task_id for task_id, _carrier_value in carriers}
+    replay_scopes = {scope for _task_id, (_workers, scope) in carriers}
+    family_coverage = {
+        scope: {
+            "clauses": len(calibration[scope]),
+            "tasks": len({row.task_id for row in calibration[scope]}),
+        }
+        for scope in sorted(replay_scopes)
+    }
+    if (
+        len(carriers) < _MIN_CARRIERS
+        or len(carrier_tasks) < _MIN_CARRIER_TASKS
+        or any(
+            value["clauses"] < 10 or value["tasks"] < 3
+            for value in family_coverage.values()
+        )
+    ):
+        raise ValueError("pytest scope coverage misses the frozen gate")
+    return calibration, {
+        "carrier_commands": len(carriers),
+        "carrier_tasks": len(carrier_tasks),
+        "calibration_by_scope": family_coverage,
+    }
 
 
 def _metrics(rows: Sequence[Mapping[str, Any]], arm: str) -> dict[str, Any]:
@@ -251,16 +316,8 @@ def _changes(rows: Sequence[Mapping[str, Any]], arm: str) -> dict[str, Any]:
 def run() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     head = _clean_head()
     fit, clauses, commands = _load_tasks()
-    calibration = [
-        row
-        for row in fit
-        if parse_pytest_workers(row.argv) == "serial"
-        and row.sampled_peak_rss_mb is not None
-    ]
-    calibration_values = [float(row.sampled_peak_rss_mb) for row in calibration]
-    calibration_tasks = {row.task_id for row in calibration}
-    if len(calibration) < _MIN_CALIBRATION or len(calibration_tasks) < _MIN_CALIBRATION_TASKS:
-        raise ValueError("fit calibration misses the frozen coverage gate")
+    calibration, coverage = _preflight(fit, commands)
+    pooled = [row for values in calibration.values() for row in values]
 
     kb = fit_clause_kb(fit)
     rows: list[dict[str, Any]] = []
@@ -271,15 +328,30 @@ def run() -> tuple[dict[str, Any], list[dict[str, Any]]]:
                 command.repo, command.command, query_ts
             ).classifications[_RSS]
             baseline = None if prediction is None else prediction.probability_by_bucket
-            workers = _carrier_count(command)
-            if workers is None:
-                scaled = baseline
-                presence = baseline
+            carrier = _carrier(command)
+            if carrier is None:
+                unconditioned = baseline
+                conditioned = baseline
+                workers = scope = None
             else:
-                worker_pmf = scaled_rss_pmf(calibration_values, workers)
-                presence_pmf = scaled_rss_pmf(calibration_values, 1)
-                scaled = worker_pmf if baseline is None else max_bucket_convolution(baseline, worker_pmf)
-                presence = presence_pmf if baseline is None else max_bucket_convolution(baseline, presence_pmf)
+                workers, scope = carrier
+                pooled_pmf = scaled_rss_pmf(
+                    [float(row.sampled_peak_rss_mb) for row in pooled], workers
+                )
+                scoped_pmf = scaled_rss_pmf(
+                    [float(row.sampled_peak_rss_mb) for row in calibration[scope]],
+                    workers,
+                )
+                unconditioned = (
+                    pooled_pmf
+                    if baseline is None
+                    else max_bucket_convolution(baseline, pooled_pmf)
+                )
+                conditioned = (
+                    scoped_pmf
+                    if baseline is None
+                    else max_bucket_convolution(baseline, scoped_pmf)
+                )
             label, source = command_resource_bucket_label(command, _RSS)
             rows.append(
                 {
@@ -288,12 +360,17 @@ def run() -> tuple[dict[str, Any], list[dict[str, Any]]]:
                     "call_id": command.call_id,
                     "command": command.command,
                     "workers": workers,
-                    "carrier": workers is not None,
+                    "scope": scope,
+                    "carrier": carrier is not None,
                     "label": label,
                     "label_source": source,
                     "clause_kb": None if baseline is None else list(baseline),
-                    "presence_only": None if presence is None else list(presence),
-                    "worker_scaling": None if scaled is None else list(scaled),
+                    "count_unconditioned": (
+                        None if unconditioned is None else list(unconditioned)
+                    ),
+                    "scope_conditioned": (
+                        None if conditioned is None else list(conditioned)
+                    ),
                 }
             )
         settle_ts = query_ts + 0.5
@@ -301,37 +378,36 @@ def run() -> tuple[dict[str, Any], list[dict[str, Any]]]:
             kb.observe_completed_clause(clause.observation(query_ts, settle_ts))
 
     carriers = [row for row in rows if row["carrier"]]
-    carrier_tasks = {str(row["task_id"]) for row in carriers}
-    if len(carriers) < _MIN_CARRIERS or len(carrier_tasks) < _MIN_CARRIER_TASKS:
-        raise ValueError("replay carriers miss the frozen coverage gate")
+    if len(carriers) != coverage["carrier_commands"]:
+        raise AssertionError("scored carriers differ from the pre-label coverage scan")
     noncarrier_identity = all(
-        row["clause_kb"] == row["presence_only"] == row["worker_scaling"]
+        row["clause_kb"] == row["count_unconditioned"] == row["scope_conditioned"]
         for row in rows if not row["carrier"]
     )
     metrics = {
         scope: {
             arm: _metrics(selected, arm)
-            for arm in ("clause_kb", "presence_only", "worker_scaling")
+            for arm in ("clause_kb", "count_unconditioned", "scope_conditioned")
         }
         for scope, selected in (("overall", rows), ("carriers", carriers))
     }
     changes = {
         arm: _changes(carriers, arm)
-        for arm in ("presence_only", "worker_scaling")
+        for arm in ("count_unconditioned", "scope_conditioned")
     }
     baseline = metrics["overall"]["clause_kb"]
-    scaled = metrics["overall"]["worker_scaling"]
-    carrier_scaled = metrics["carriers"]["worker_scaling"]
-    carrier_presence = metrics["carriers"]["presence_only"]
+    unconditioned = metrics["overall"]["count_unconditioned"]
+    conditioned = metrics["overall"]["scope_conditioned"]
     representation_go = (
-        scaled["accuracy"] > baseline["accuracy"]
-        and scaled["high_recall"] - baseline["high_recall"] >= _MIN_HIGH_RECALL_GAIN
-        and changes["worker_scaling"]["helpful"] > changes["worker_scaling"]["harmful"]
-        and len(changes["worker_scaling"]["helpful_tasks"]) >= 3
+        conditioned["accuracy"] > max(baseline["accuracy"], unconditioned["accuracy"])
+        and conditioned["high_recall"] > unconditioned["high_recall"]
+        and conditioned["high_recall"] - baseline["high_recall"] >= _MIN_HIGH_RECALL_GAIN
+        and changes["scope_conditioned"]["helpful"] > changes["scope_conditioned"]["harmful"]
+        and len(changes["scope_conditioned"]["helpful_tasks"]) >= 3
         and noncarrier_identity
     )
     result = {
-        "schema": "pennylane-xdist-rss-positive-control-v1",
+        "schema": "pennylane-xdist-rss-positive-control-v2",
         "status": "development_go" if representation_go else "development_no_go",
         "claim_bearing": False,
         "protocol_git_sha": _PROTOCOL_GIT_SHA,
@@ -339,14 +415,14 @@ def run() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         "evidence": {
             "fit_tasks": 15,
             "replay_tasks": list(_EXPECTED_TASK_IDS),
-            "calibration_clauses": len(calibration),
-            "calibration_tasks": len(calibration_tasks),
-            "carrier_commands": len(carriers),
-            "carrier_tasks": len(carrier_tasks),
+            "calibration_clauses": len(pooled),
+            "calibration_tasks": len({row.task_id for row in pooled}),
+            **coverage,
         },
         "method": {
             "host_cpus": _HOST_CPUS,
             "scaling": "(workers + 1) * fit_serial_pytest_clause_rss",
+            "scope": "name-free pytest target_shapes: full/broad/narrow",
             "composition": "max_bucket_convolution_with_clause_kb_command_pmf",
             "causal_update": "after_whole_task_settlement",
             "prediction_time_agent_calls": 0,
@@ -357,11 +433,11 @@ def run() -> tuple[dict[str, Any], list[dict[str, Any]]]:
             "minimum_high_recall_gain": _MIN_HIGH_RECALL_GAIN,
             "noncarrier_pmf_bit_identical": noncarrier_identity,
             "representation_go": representation_go,
-            "worker_count_specificity": carrier_scaled["accuracy"] > carrier_presence["accuracy"],
+            "scope_conditioning_improves_accuracy": conditioned["accuracy"] > unconditioned["accuracy"],
         },
         "limitations": [
             "development-exposed tasks",
-            "positive-control process scaling, not a learned worker-memory model",
+            "adaptive positive control, not a learned worker-memory model",
             "canonical clause RSS target only; no scheduler or interference result",
         ],
     }
