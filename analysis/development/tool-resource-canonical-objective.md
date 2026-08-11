@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Stop one-shot pytest generation. Separately freeze a deterministic positive control that combines documentation-derived pytest worker count with fit-only resource calibration; do not open PennyLane 16+16. |
+| Next research step | Run the frozen deterministic pytest-xdist RSS positive control on development-exposed PennyLane fit15/replay15; do not open PennyLane 16+16. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1543,6 +1543,46 @@ unresolved while full-help-to-full-schema one-shot reliability is now the
 observed blocker. Isolate those questions next with a deterministic positive
 control: documentation supplies only worker count, while settled fit-task
 observations calibrate its resource implication.
+
+### 5.25 Frozen pytest-xdist worker-scaling positive control
+
+This development-only test isolates the unresolved causal hypothesis without
+another LM call. Before outcome access, a label-free command scan found 265
+eligible fit15 pytest commands, all without `-n`. The fixed 15 evidence-valid
+replay tasks from Section 5.22 contain 42 eligible `-n` commands across nine
+tasks: 14 request four workers, five request eight, and 23 use `auto`. The host
+exposes eight CPUs and the task containers have no CPU limit. No RSS values or
+labels were read for this preflight.
+
+Fit the unchanged raw Clause-KB on all fit15 eligible clauses. Separately take
+every fit15 direct or `python -m pytest` clause without `-n` that has a valid
+sampled-RSS value as the serial pytest calibration distribution. Parse only
+`-n N`, `-nN`, `--numprocesses N`, and `--numprocesses=N`; accept integer
+`N` in 1--64 and map `auto` or `logical` to the causally available host count
+of eight. Unknown or conflicting forms abstain.
+
+For each parsed carrier, transform every fit calibration value `r` to
+`(N + 1) * r`, accounting for the controller plus N workers, then bucket the
+samples at the canonical 500/2,000 MB RSS edges to form an empirical PMF.
+Combine it with the Clause-KB command PMF by exact max-bucket convolution; if
+Clause-KB is unavailable, use the calibrated PMF alone. The `presence_only`
+ablation uses the identical procedure with `N = 1` for every carrier.
+Non-carriers must be bit-identical to Clause-KB. Only RSS may change.
+
+Replay tasks in task-ID order and expose their clauses only after whole-task
+settlement. Require at least 50 valid fit calibration clauses across ten tasks
+and at least 20 parsed replay carriers across five tasks before scoring.
+Report fail-closed RSS accuracy, High recall, availability, and paired
+helpful/harmful changes on both all replay commands and the carrier subset.
+The worker-scaling representation passes only if it strictly improves overall
+accuracy over Clause-KB, improves overall High recall by at least 20 percentage
+points, has more helpful than harmful carrier changes spanning at least three
+tasks, and preserves non-carrier PMFs exactly. Compare `presence_only` only as
+an ablation; worker-count specificity is supported only if its carrier accuracy
+is strictly lower than worker scaling. No scaling factor, count mapping, fit
+filter, gate, or task may change after labels are read. A pass authorizes a
+separately frozen scheduler-use test, not an agent compiler claim or access to
+PennyLane 16+16.
 
 ## 6. Closed directions
 
