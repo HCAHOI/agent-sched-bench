@@ -246,21 +246,15 @@ raise SystemExit(0 if result == -1 and ctypes.get_errno() == 14 else 1)"""
     assert run.ringbuf_reserve_failures == 0
 
 
-def test_cold_failed_exec_argv_is_local_incomplete_evidence() -> None:
-    payload = """import ctypes, errno, mmap
-page=mmap.mmap(-1,mmap.PAGESIZE,prot=mmap.PROT_READ|mmap.PROT_WRITE)
-page[:5]=b"cold\\0"
-buf=(ctypes.c_char*mmap.PAGESIZE).from_buffer(page)
-address=ctypes.addressof(buf)
-argv=(ctypes.c_void_p*2)(address,0)
+def test_unreadable_failed_exec_argv_is_local_incomplete_evidence() -> None:
+    payload = """import ctypes, errno
 envp=(ctypes.c_void_p*1)(0)
 libc=ctypes.CDLL(None,use_errno=True)
-assert libc.madvise(ctypes.c_void_p(address),mmap.PAGESIZE,4)==0
-result=libc.execve(b"/definitely/missing-agent-sched-bench",argv,envp)
-raise SystemExit(0 if result == -1 and ctypes.get_errno() == errno.ENOENT else 1)"""
+result=libc.execve(b"/bin/true",ctypes.c_void_p(1),envp)
+raise SystemExit(0 if result == -1 and ctypes.get_errno() == errno.EFAULT else 1)"""
     run = collect_case(
         f"{shlex.quote(sys.executable)} -c {shlex.quote(payload)}",
-        "cold_failed_exec_argv",
+        "unreadable_failed_exec_argv",
     )
 
     attempts = _failed_exec_attempt_records(run.events)

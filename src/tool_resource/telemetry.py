@@ -228,6 +228,7 @@ struct pending_exec_t {
     u64 seq;
     u64 argv_ptr;
     u64 argv_captured;
+    u64 argv_capture_incomplete;
     u64 filename_read_failed;
 };
 BPF_HASH(current_seq, struct task_key_t, u64);
@@ -318,18 +319,18 @@ static void fill_counters(struct event_small_t *e, struct task_struct *task) {
     );
 }
 
-static u32 capture_argv(
-    u64 seq, const char *const *argv, u64 pid_tgid, u32 failed_exec_fallback
+static void capture_argv(
+    u64 seq, const char *const *argv, u64 pid_tgid,
+    struct pending_exec_t *pending, u32 failed_exec_fallback
 ) {
     u32 tid = pid_tgid;
     u32 captured_args = 0;
-    u32 capture_incomplete = 0;
     #pragma unroll
     for (int i = 0; i < MAX_ARGS; i++) {
         const char *a = 0;
         int pointer_read = bpf_probe_read_user(&a, sizeof(a), &argv[i]);
         if (pointer_read < 0) {
-            capture_incomplete = 1;
+            pending->argv_capture_incomplete = 1;
             if (!failed_exec_fallback) argv_read_failed(ARGV_FAILURE_POINTER);
             break;
         }
@@ -357,7 +358,7 @@ static u32 capture_argv(
             );
             int complete = 0;
             if (arg_size < 0) {
-                capture_incomplete = 1;
+                pending->argv_capture_incomplete = 1;
                 e->arg_flags = ARG_FLAG_TRUNCATED;
                 if (!failed_exec_fallback) argv_read_failed(ARGV_FAILURE_STRING);
                 complete = 1;
@@ -369,7 +370,7 @@ static u32 capture_argv(
                     a + offset + sizeof(e->arg) - 1
                 );
                 if (last_read < 0) {
-                    capture_incomplete = 1;
+                    pending->argv_capture_incomplete = 1;
                     e->arg_flags = ARG_FLAG_TRUNCATED;
                     if (!failed_exec_fallback) argv_boundary_read_failed();
                     complete = 1;
@@ -394,7 +395,7 @@ static u32 capture_argv(
             &extra, sizeof(extra), &argv[MAX_ARGS]
         );
         if (pointer_read < 0) {
-            capture_incomplete = 1;
+            pending->argv_capture_incomplete = 1;
             if (!failed_exec_fallback)
                 argv_read_failed(ARGV_FAILURE_CAP_POINTER);
         }
@@ -416,7 +417,6 @@ static u32 capture_argv(
             events.ringbuf_submit(e, 0);
         }
     }
-    return capture_incomplete;
 }
 
 static void emit_kernel_exec_meta(
@@ -537,6 +537,7 @@ int capture_bprm_argv(struct pt_regs *ctx) {
         pending->seq,
         (const char *const *)pending->argv_ptr,
         pid_tgid,
+        pending,
         0
     );
     pending->argv_captured = 1;
@@ -570,13 +571,13 @@ static int on_exec_return(long ret) {
         .task_ptr = (u64)bpf_get_current_task(),
     };
     struct pending_exec_t *pending = pending_seq.lookup(&task_key);
-    u32 argv_capture_incomplete = 0;
     if (pending) {
         if (!pending->argv_captured && ret < 0) {
-            argv_capture_incomplete = capture_argv(
+            capture_argv(
                 pending->seq,
                 (const char *const *)pending->argv_ptr,
                 pid_tgid,
+                pending,
                 1
             );
         } else if (!pending->argv_captured) {
@@ -602,7 +603,7 @@ static int on_exec_return(long ret) {
             e->parent_host_pid = parent_tgid();
             if (ret < 0) {
                 e->exit_code = (u32)(-ret);  /* positive errno */
-                if (argv_capture_incomplete)
+                if (pending->argv_capture_incomplete)
                     e->arg_flags = ARG_FLAG_TRUNCATED;
             } else {
                 fill_counters(
