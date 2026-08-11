@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Run the frozen command-boundary memory-admission use test in Section 5.27; do not open PennyLane 16+16. |
+| Next research step | Test on fit-only evidence whether worker count plus scope supports a finite continuous RSS reservation below 16 GB; do not rerun replay15 or open PennyLane 16+16 without a new freeze and approval. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1680,6 +1680,28 @@ reservation mapping, task, or simulator semantic may change after reading the
 action outcomes. Failure closes this static command-boundary action on the
 exposed cohort but does not reinterpret Section 5.26's prediction GO.
 
+**Result and decision.** The scope-conditioned action is development NO-GO
+under the frozen static protocol. It changed 47 speculative-start decisions
+across 11 tasks and retained 428 starts across all 15 tasks. Relative to
+`serial8`, it reduced mean completion by 20.526% and makespan by 14.847%, but
+service inflation was 7.261%. Clause-KB and the pooled-count ablation each had
+19 modeled static peak-sum exposures; scope conditioning had 22. It therefore
+failed the zero/lower-exposure and 5% service-inflation gates while passing all
+remaining gates. The exact-RSS reference had zero modeled exposure, 24.550%
+mean-completion reduction, and 11.930% service inflation.
+
+The deterministic mechanism diagnosis is trajectory displacement. Scope moved
+25 carrier reservations from 500 to 16,000 MB, two from 2,000 to 16,000 MB,
+and one from 500 to 2,000 MB; Clause-KB backfilled all 28 carriers while scope
+backfilled one. The seven scope-only exposure command IDs were non-carriers
+whose PMFs were identical across arms, so their exposure follows changed FCFS
+pairing rather than a direct scope prediction change. This is not evidence of
+real concurrent RSS overflow: 240/570 commands lack complete physical RSS, and
+every scope exposure pair includes at least one 16,000 MB full-fallback command.
+Section 5.26's prediction GO remains retained. The next action hypothesis must
+predict a finite within-High reservation or pairwise risk; it may not tune that
+mapping on this exposed replay.
+
 ## 6. Closed directions
 
 - **Lookup structure alone:** trie, lattice, generic argv, pip/pytest semantic
@@ -1782,6 +1804,8 @@ Result root:
   `../survival-robust-clock-swe177-20260810/result.json`
 - PennyLane task-Pareto survival action:
   `../task-pareto-survival-action-pennylane41-20260810/result.json`
+- Scope-conditioned xdist RSS admission action:
+  `../pennylane-xdist-rss-admission-v1/result.json`
 
 Docs-only compiler development artifact:
 `analysis/results/offline-tool-semantics-sqlglot-v1/result.json`.
