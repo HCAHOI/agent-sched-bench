@@ -1459,7 +1459,13 @@ combined with the existing pytest 8.3.5 snapshot. Make exactly one generation
 call for the composite pytest tool using `gpt-5.6-sol`, requested fast tier,
 medium reasoning, read-only sandbox, and the existing 64k-token input and
 65,536-byte response bounds. The generator receives no traces, commands,
-labels, task IDs, or prior outcomes. Prediction-time agent calls remain zero.
+labels, task IDs, or prior outcomes. Run it from a newly created temporary
+directory outside the repository; the directory may contain only the output
+schema and files emitted by that call, while both documentation snapshots are
+embedded in the stdin prompt. Keep user rules/configuration and MCP disabled,
+reject any event stream containing a tool call, and copy artifacts into the
+repository only after the process exits. Thus read-only access cannot expose
+repository files. Prediction-time agent calls remain zero.
 
 Before reading labels, the generated spec must validate and interpret at least
 20 replay `-n` clauses across at least three tasks; otherwise stop as
@@ -1472,13 +1478,17 @@ bit-identical to Clause-KB.
 
 The development candidate passes only if, for RSS, it strictly improves both
 command accuracy and High recall over Clause-KB and the generic poset; changed
-predictions have more helpful than harmful rows; helpful changes span at least
-three tasks; and physical task-container High recall improves by at least 20
-percentage points over Clause-KB on commands with an in-interval sample. Report
-canonical clause-label and physical task-container metrics separately. Do not
-tune the spec, prompt, host semantics, thresholds, or gates after generation or
-label access. A pass only authorizes collecting the already frozen PennyLane
-warmup16 cohort; it does not open validation16 or establish scheduling utility.
+predictions are computed relative to Clause-KB on canonical hard RSS command
+labels, with `helpful` meaning candidate correct and Clause-KB wrong and
+`harmful` the reverse; helpful command rows must outnumber harmful rows and span
+at least three tasks. Generic-poset comparison is subject only to the strict
+accuracy and High-recall improvements above, not a second directionality gate.
+Physical task-container High recall must improve by at least 20 percentage
+points over Clause-KB on commands with an in-interval sample. Report canonical
+clause-label and physical task-container metrics separately. Do not tune the
+spec, prompt, host semantics, thresholds, or gates after generation or label
+access. A pass only authorizes collecting the already frozen PennyLane warmup16
+cohort; it does not open validation16 or establish scheduling utility.
 
 ## 6. Closed directions
 
