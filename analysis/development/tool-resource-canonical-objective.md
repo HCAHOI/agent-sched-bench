@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Stop CPU-policy tuning on exposed PennyLane. Any next scheduler claim needs a separately frozen preemptive/differently timed action and untouched tasks, or physical validation of an already-passing mechanism. |
+| Next research step | Develop a low-CPU-phase survival action on Zarr development tasks. PennyLane stays closed locally because one observed command reached 9.53 GiB RSS; Zarr validation/final remain untouched. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1200,6 +1200,37 @@ exposed PennyLane wave: absolute-time envelope transfer is too brittle, while
 latest-sample feedback plus a static candidate bound admits work without enough
 mean-completion benefit. This does not close runtime feedback generally or a
 separately frozen preemptive/differently timed action on untouched tasks.
+
+### 5.19 Zarr low-CPU-phase survival development boundary
+
+The next hypothesis is that causal feedback needs to estimate how long the
+currently observed low-CPU phase will remain, rather than predict a command's
+whole absolute-time profile. The candidate action may use only completed eBPF
+samples, phase age, and fit-task command evidence. It must not use a future
+sample or current-command outcome. Its exact estimator, ablations, and utility
+gate must be frozen after development and before validation is collected or
+read.
+
+PennyLane is not collected on this 15 GiB, no-swap host: an existing full-suite
+pytest command reached 9.53 GiB sampled RSS. The previous remote address now
+presents a different SSH host key and is not trusted as the old node. Zarr is
+the local alternative: SWE-ReBench has 42 tasks; two existing valid traces show
+a non-install phase-changing pytest command, with 164.3 MB maximum sampled
+clause RSS. This is a resource-shape selection, not an outcome-based method
+selection.
+
+The frozen IDs are in `zarr-phase-survival-split.json`: 20 development, 10
+validation, and 12 final. Three previously traced tasks are development-exposed;
+task 2668 is also excluded from model fitting because its timestamp is later
+than the validation boundary. Validation and final tasks must not be collected
+or inspected during development.
+
+Collection begins with only development task 459 using Codex GPT-5.6 fast,
+maximum 100 iterations, concurrency one, required eBPF telemetry, and image
+cleanup. Accept the smoke only with valid workload, telemetry, and cleanup,
+unchanged host OOM count, and no abnormal memory growth. Use its measured wall
+time and peak memory to estimate the remaining development collection; do not
+launch a run expected to exceed 30 minutes without explicit approval.
 
 ## 6. Closed directions
 

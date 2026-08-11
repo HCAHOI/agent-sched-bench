@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "repo": "zarr-developers/zarr-python",
+  "source": "nebius/SWE-rebench filtered, cached dataset snapshot 89cdfbab4ab1bd8f5a658bb212d1b63624f4f881",
+  "split_rule": "Previously traced IDs are development. Remaining tasks are ordered by created_at then task_id: oldest 17 join development, next 10 are validation, newest 12 are final.",
+  "development_exposed_before_split": [
+    "zarr-developers__zarr-python-2244",
+    "zarr-developers__zarr-python-2348",
+    "zarr-developers__zarr-python-2668"
+  ],
+  "model_fit_exclusions": [
+    "zarr-developers__zarr-python-2668"
+  ],
+  "development": [
+    "zarr-developers__zarr-python-2244",
+    "zarr-developers__zarr-python-2348",
+    "zarr-developers__zarr-python-2668",
+    "zarr-developers__zarr-python-459",
+    "zarr-developers__zarr-python-517",
+    "zarr-developers__zarr-python-659",
+    "zarr-developers__zarr-python-832",
+    "zarr-developers__zarr-python-1354",
+    "zarr-developers__zarr-python-1397",
+    "zarr-developers__zarr-python-1447",
+    "zarr-developers__zarr-python-1470",
+    "zarr-developers__zarr-python-1828",
+    "zarr-developers__zarr-python-1968",
+    "zarr-developers__zarr-python-1991",
+    "zarr-developers__zarr-python-1992",
+    "zarr-developers__zarr-python-2006",
+    "zarr-developers__zarr-python-2158",
+    "zarr-developers__zarr-python-2210",
+    "zarr-developers__zarr-python-2213",
+    "zarr-developers__zarr-python-2286"
+  ],
+  "validation": [
+    "zarr-developers__zarr-python-2397",
+    "zarr-developers__zarr-python-2416",
+    "zarr-developers__zarr-python-2434",
+    "zarr-developers__zarr-python-2494",
+    "zarr-developers__zarr-python-2512",
+    "zarr-developers__zarr-python-2548",
+    "zarr-developers__zarr-python-2576",
+    "zarr-developers__zarr-python-2583",
+    "zarr-developers__zarr-python-2629",
+    "zarr-developers__zarr-python-2638"
+  ],
+  "final": [
+    "zarr-developers__zarr-python-2644",
+    "zarr-developers__zarr-python-2655",
+    "zarr-developers__zarr-python-2661",
+    "zarr-developers__zarr-python-2679",
+    "zarr-developers__zarr-python-2709",
+    "zarr-developers__zarr-python-2755",
+    "zarr-developers__zarr-python-2758",
+    "zarr-developers__zarr-python-2795",
+    "zarr-developers__zarr-python-2817",
+    "zarr-developers__zarr-python-2851",
+    "zarr-developers__zarr-python-2996",
+    "zarr-developers__zarr-python-3015"
+  ]
+}
