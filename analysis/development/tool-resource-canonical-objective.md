@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Run the frozen target-shape-conditioned xdist RSS successor on development-exposed PennyLane; do not open PennyLane 16+16. |
+| Next research step | Freeze a command-boundary memory-admission use test for the retained scope-conditioned xdist RSS predictor; do not open PennyLane 16+16. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1628,6 +1628,20 @@ parser, family, fallback, scaling factor, or gate may change after outcomes are
 read. Failure closes this worker-count-plus-scope positive-control family on
 the exposed cohort; a pass authorizes only a separately frozen scheduler-use
 test, not an agent compiler claim or access to PennyLane 16+16.
+
+**Result and decision.** The scope-conditioned positive control passes every
+frozen development gate. Across 418 eligible labels, Clause-KB had 82.536%
+accuracy and 2.381% High recall; the same-coverage pooled-count ablation reached
+83.732% and 2.381%, while scope conditioning reached 87.799% accuracy and
+54.762% High recall. On its 28 carriers across seven tasks, scope conditioning
+reached 78.571% accuracy and 95.652% High recall, with 22 helpful and zero
+harmful changes. All 500 non-carrier PMFs were identical.
+
+This is strong adaptive evidence that useful tool understanding requires the
+interaction of execution policy (worker count) and requested work scope, not
+either field in isolation. It retains a deterministic zero-runtime-agent
+predictor for the next action test. It does not validate the failed one-shot
+compiler, generalize beyond pytest/PennyLane, or establish scheduler benefit.
 
 ## 6. Closed directions
 
