@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Test the separately frozen compound-evidence safety gate below on exposed Zarr development and validation data. This is post-hoc development; final12 remains untouched. |
+| Next research step | Audit whether existing traces contain causal in-flight RSS observations sufficient to test a reactive overlap verifier. Do not tune another static Zarr command/provenance rule and do not open final12. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1344,6 +1344,30 @@ violations; at least 80% of Clause-KB's speculative starts; and at least 20
 starts across five tasks. Do not alter the guard, controls, or gates after
 reading results. Only a pass authorizes a separately reviewed final12 protocol;
 it does not authorize collecting or reading final12.
+
+**Result and decision.** The guard removed every modeled exposure and preserved
+more action than the exact-command policy, but it remained too broad. On
+development19 it changed 75 of 89 sub-capacity compound reservations, retained
+113/188 Clause-KB starts, and reduced mean completion by 19.249% versus 29.597%
+for Clause-KB. On validation10 it changed 36 of 43, retained 51/75 starts, and
+reduced mean completion by 23.029% versus 33.683%. It passed the absolute 5%
+completion, makespan, service, exposure, capacity, CPU-work, and task-coverage
+gates in both cohorts, but failed both the frozen 90%-of-Clause benefit and
+80%-of-Clause start-retention gates.
+
+The all-compound control reduced mean completion by 20.943% on development and
+19.173% on validation. Selective provenance guarding therefore helped on
+validation but did not uniformly dominate the simpler structural control; FCFS
+interactions make additional starts non-monotonic in completion time. The main
+failure is coverage: prefix/backoff evidence inside compound agent commands is
+ordinary, not a narrow marker for unavailable RSS.
+
+Decision: close this static compound-provenance guard and do not inspect or
+collect final12. Do not tune another prefix depth or compound exception on the
+same exposed cases. The next question is whether already-collected telemetry
+contains a causal in-flight RSS signal that can verify the *running overlap*
+instead of rejecting commands before execution. If it does not, specify the
+smallest fresh collection needed before implementing that action.
 
 ## 6. Closed directions
 
