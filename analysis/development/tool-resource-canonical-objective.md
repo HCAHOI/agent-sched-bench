@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | On the same development-exposed PennyLane cohort, audit whether task RSS rises are attributable to tool-command intervals and visible at command admission. Use that timing evidence to freeze the smallest causal Clause/KB action; do not claim the temporal oracle as deployable or open final12. |
+| Next research step | Run the frozen plugin-aware pytest documentation candidate on the development-exposed PennyLane fit15/replay15 sequence. The agent is offline and one-shot; prediction remains deterministic and zero-cost. Do not open the untouched PennyLane 16+16 cohorts. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1431,6 +1431,54 @@ therefore an action-timing audit: determine whether memory rises occur inside
 tool intervals and whether a command-boundary controller could reserve them
 before they occur. Only that evidence may define a causal Clause/KB admission
 candidate.
+
+### 5.23 Frozen plugin-aware pytest documentation candidate
+
+The post-ceiling timing audit found a viable command action point and a precise
+representation failure. Across the same 15 replay tasks, all 9,542.797 s with
+task-container RSS at or above 2,000 MB occurred inside shell `exec` intervals.
+All 77 upward crossings of 2,000 MB occurred after an `exec` began, and none of
+the 44 commands reaching 2,000 MB began while the container was already above
+that threshold. Their median command-start-to-threshold delay was 18.332 s.
+
+The unchanged fit15 Clause-KB predicted none of those 44 commands as RSS High:
+26 were Low, three Medium, and 15 unavailable. The failure is concentrated in
+a documented parameter interaction. Fit15 contains no pytest `-n` invocation;
+replay15 contains 30, spanning ten tasks, and 28/30 reach RSS High. Core pytest
+documentation does not define `-n`; it is contributed by pytest-xdist. The
+previous docs-only result therefore remains closed as run: this is a new
+plugin-aware input protocol, not a reinterpretation or repair of its SQLGlot
+verdict.
+
+Use the existing strict `tool-spec-v1` schema, validator, deterministic argv
+interpreter, interaction-poset host semantics, and frozen generation prompt
+without modification. The only new documentation is the pinned
+pytest-xdist 3.8.0 CLI-help snapshot at
+`analysis/development/offline-tool-semantics-docs/pytest-xdist-3.8.0.txt`,
+combined with the existing pytest 8.3.5 snapshot. Make exactly one generation
+call for the composite pytest tool using `gpt-5.6-sol`, requested fast tier,
+medium reasoning, read-only sandbox, and the existing 64k-token input and
+65,536-byte response bounds. The generator receives no traces, commands,
+labels, task IDs, or prior outcomes. Prediction-time agent calls remain zero.
+
+Before reading labels, the generated spec must validate and interpret at least
+20 replay `-n` clauses across at least three tasks; otherwise stop as
+structurally unsupported. Evaluate fit15 as initial settled evidence and
+replay15 in task-ID order, exposing each replay task only after that task
+settles. Compare unchanged Clause-KB, the existing generic interaction poset,
+and the plugin-aware documentation poset on identical command rows. The
+candidate may change only parsed pytest commands; all non-pytest PMFs must be
+bit-identical to Clause-KB.
+
+The development candidate passes only if, for RSS, it strictly improves both
+command accuracy and High recall over Clause-KB and the generic poset; changed
+predictions have more helpful than harmful rows; helpful changes span at least
+three tasks; and physical task-container High recall improves by at least 20
+percentage points over Clause-KB on commands with an in-interval sample. Report
+canonical clause-label and physical task-container metrics separately. Do not
+tune the spec, prompt, host semantics, thresholds, or gates after generation or
+label access. A pass only authorizes collecting the already frozen PennyLane
+warmup16 cohort; it does not open validation16 or establish scheduling utility.
 
 ## 6. Closed directions
 
