@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | **Zarr RSS-predicted backfill is validation NO-GO.** Do not open final12 or tune this candidate on validation. Preserve the useful backfill mechanism, but any successor must be a separately frozen action hypothesis developed on other exposed data. |
+| Next research step | Test the separately frozen exact-supported demotion policy below on exposed Zarr development and validation data. This is post-hoc method development; final12 remains untouched. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1249,6 +1249,37 @@ or collect final12. Retain the demonstrated CPU-idle backfill opportunity and
 the result that action utility differs from classification accuracy. Any
 successor must separately freeze an uncertainty-aware reservation or
 action-trained objective using other exposed development evidence.
+
+### 5.20 Frozen post-hoc exact-supported demotion development
+
+The validation result exposed that Task-Aware's upward changes hurt the action
+while weak baseline evidence caused all modeled exposures. The next candidate
+is therefore a new, explicitly post-hoc development policy; it does not repair
+or reinterpret Section 5.19.
+
+Start from Clause-KB hard RSS and compute the Task-Aware highest-supported RSS
+bucket. The proposed reservation is the lower of those two values; Task-Aware
+may relax a reservation but never raise it. A proposed reservation below
+16,000 MB is authorized only when the identical complete command has a non-null
+RSS label in at least two independent fit tasks and the largest such historical
+bucket does not exceed the proposal. Otherwise reserve 16,000 MB. This uses no
+target outcome, current-task state, tool name, command literal, or tunable
+similarity threshold.
+
+Evaluate one fixed candidate on two exposed cohorts: leave-one-task-out over the
+19 fit tasks, and fixed-fit scoring over the ten now-exposed validation tasks.
+Use the unchanged Serial-8, source-bound oracle, Clause-KB, capacities, command
+profiles, FCFS order, and short-null source policy from Section 5.19. Report the
+ungated demotion policy only as the already-exposed mechanism control.
+
+Development GO requires the candidate to pass on both cohorts: at least 5%
+mean-completion reduction versus Serial-8; at least one percentage point more
+reduction than Clause-KB; lower makespan than Serial-8; at most 5% service
+inflation; zero modeled source-bound, capacity, physical-capacity, or CPU-work
+violations; and at least 20 speculative starts across five tasks. Do not alter
+the support count, evidence rule, mapping, arms, or gate after reading results.
+Only a pass authorizes writing a fresh protocol for final12; it does not itself
+authorize collecting or reading final12.
 
 ## 6. Closed directions
 
