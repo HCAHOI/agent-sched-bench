@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Audit existing command-window container RSS coverage for the 16 Section 5.28 exposure events; freeze a measured-safety replay only if those windows are observable. |
+| Next research step | Existing command-window RSS coverage is insufficient; estimate and request a small fresh measured-safety collection before further admission claims. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1753,6 +1753,14 @@ completion and the conservative exposure count, but missing noncarrier RSS now
 dominates the remaining static gate. This does not establish real concurrent
 RSS overflow or safety. Do not tune another envelope on replay15; first test
 whether existing command-window container samples can resolve these 16 events.
+
+A read-only coverage audit found that only 8/16 exposure-starter command
+windows contain any container RSS sample and only 4/16 contain at least two;
+the uncovered windows last 0.034--1.351 s under an approximately two-second
+sampler. Neighboring samples cannot identify a command peak. Existing traces
+therefore cannot support a measured-safety replay of this action. Do not impute
+those windows or reinterpret the static NO-GO; continuing requires a separately
+approved fresh collection with command-window peak RSS measurement.
 
 ## 6. Closed directions
 
