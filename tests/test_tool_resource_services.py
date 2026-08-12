@@ -1638,6 +1638,112 @@ def test_online_resource_calls_do_not_wait_for_telemetry(
     service.close()
 
 
+def test_synchronous_registration_waits_before_begin_returns(tmp_path: Path) -> None:
+    telemetry = TelemetryService(
+        collector_factory=_FakeCollector,
+        state_dir=tmp_path / "telemetry",
+    )
+    transport = _BlockingTransport(telemetry)
+    service = ResourceService(
+        ObservationStore(tmp_path / "observations.sqlite3"),
+        transport,
+        synchronous_telemetry_registration=True,
+    )
+    run = _open_run(service)
+    trace = _open_trace(service, run["run_token"])
+    transport.block("RegisterCall")
+    result: list[dict[str, Any]] = []
+    thread = threading.Thread(
+        target=lambda: result.append(
+            service.dispatch(
+                "BeginCall",
+                {
+                    "trace_token": trace["trace_token"],
+                    "call_id": "call",
+                    "command": "echo ok",
+                    "query_timestamp": time.time(),
+                },
+            )
+        )
+    )
+    thread.start()
+    try:
+        assert transport.entered.wait(1)
+        thread.join(0.2)
+        assert thread.is_alive()
+    finally:
+        transport.release.set()
+        thread.join()
+
+    assert result[0]["telemetry_status"] == "registered"
+    service.close()
+
+
+def test_synchronous_registration_preserves_finish_register_order(tmp_path: Path) -> None:
+    telemetry = TelemetryService(
+        collector_factory=_FakeCollector,
+        state_dir=tmp_path / "telemetry",
+    )
+    transport = _BlockingTransport(telemetry)
+    service = ResourceService(
+        ObservationStore(tmp_path / "observations.sqlite3"),
+        transport,
+        synchronous_telemetry_registration=True,
+    )
+    run = _open_run(service)
+    trace = _open_trace(service, run["run_token"])
+    first = service.dispatch(
+        "BeginCall",
+        {
+            "trace_token": trace["trace_token"],
+            "call_id": "first",
+            "command": "echo first",
+            "query_timestamp": time.time(),
+        },
+    )
+    transport.block("FinishCall")
+    service.dispatch(
+        "EndCall",
+        {
+            "call_token": first["call_token"],
+            "workload_result": {"returncode": 0, "result": "first"},
+            "end_timestamp": time.time(),
+        },
+    )
+    assert transport.entered.wait(1)
+    second: list[dict[str, Any]] = []
+    thread = threading.Thread(
+        target=lambda: second.append(
+            service.dispatch(
+                "BeginCall",
+                {
+                    "trace_token": trace["trace_token"],
+                    "call_id": "second",
+                    "command": "echo second",
+                    "query_timestamp": time.time(),
+                },
+            )
+        )
+    )
+    thread.start()
+    try:
+        thread.join(0.2)
+        assert thread.is_alive()
+        assert transport.operations == ["AttachTarget", "RegisterCall", "FinishCall"]
+    finally:
+        transport.release.set()
+        thread.join()
+
+    assert second[0]["telemetry_status"] == "registered"
+    assert transport.operations[:4] == [
+        "AttachTarget",
+        "RegisterCall",
+        "FinishCall",
+        "RegisterCall",
+    ]
+    service.close()
+
+
 def test_preworkload_readiness_barrier_waits_for_attachment(
     tmp_path: Path,
 ) -> None:
@@ -3568,3 +3674,7 @@ def test_agentd_cli_has_no_binary_resource_threshold() -> None:
     ]
     parser = build_cli_parser()
     assert not hasattr(parser.parse_args(minimal), "heavy_decision_threshold")
+    assert parser.parse_args(minimal).synchronous_telemetry_registration is False
+    assert parser.parse_args(
+        [*minimal, "--synchronous-telemetry-registration"]
+    ).synchronous_telemetry_registration is True

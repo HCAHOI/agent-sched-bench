@@ -1827,6 +1827,17 @@ generation. Continue only if the resource artifact is valid, every command has
 a finite cgroup-memory peak and at least one sample, every command lasting at
 least 50 ms has at least two samples, and source/replay actions match exactly.
 
+**2026-08-12 measurement amendment.** The first cgroup-memory smoke was valid,
+preserved all 101 actions, and produced finite peaks for all 33 commands with
+zero read failures. It nevertheless failed the unchanged coverage gate:
+25/26 commands lasting at least 50 ms had two samples. The missing command ran
+for 2.733 s, but asynchronous `RegisterCall` reached `telemetryd` only after
+the shell had completed; eBPF could retrospectively slice its spool while a
+userspace sampler could not. Measurement runs now explicitly wait for call
+registration before executing the shell. The default asynchronous service,
+commands, cadence, tasks, and gate are unchanged; rerun 2603 once after this
+amendment before any replay15 collection.
+
 **2026-08-12 pre-outcome decision correction.** Replacing only physical memory
 labels cannot change Section 5.28's reservations, starts, CPU service, or
 7.935% aggregate service inflation. Its original compound gate, which requires

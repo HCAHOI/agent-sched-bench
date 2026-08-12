@@ -132,6 +132,7 @@ class ResourceService:
         result_ttl_s: float = DEFAULT_RESULT_TTL_S,
         kb_representation: str = RAW_ARGV_REPRESENTATION,
         kb_shrinkage_alpha: float | None = None,
+        synchronous_telemetry_registration: bool = False,
     ) -> None:
         if not math.isfinite(result_ttl_s) or result_ttl_s <= 0:
             raise ValueError("result_ttl_s must be finite and positive")
@@ -145,6 +146,7 @@ class ResourceService:
             shrinkage_alpha=kb_shrinkage_alpha,
         ).representation
         self.kb_shrinkage_alpha = kb_shrinkage_alpha
+        self.synchronous_telemetry_registration = synchronous_telemetry_registration
         self._runs: dict[str, _Run] = {}
         self._traces: dict[str, _Trace] = {}
         self._operation_results: dict[
@@ -521,7 +523,10 @@ class ResourceService:
         operation: Callable[[], None],
         *,
         call: _Call | None = None,
+        wait: bool = False,
     ) -> bool:
+        completed = threading.Event() if wait else None
+
         def run_operation() -> None:
             try:
                 operation()
@@ -533,10 +538,11 @@ class ResourceService:
                     f"{type(exc).__name__}:{exc}",
                     call=call,
                 )
-
+            finally:
+                if completed is not None:
+                    completed.set()
         try:
             trace.telemetry_queue.put_nowait(run_operation)
-            return True
         except queue.Full:
             self._mark_telemetry_unavailable(
                 trace,
@@ -546,6 +552,9 @@ class ResourceService:
                 call=call,
             )
             return False
+        if completed is not None:
+            completed.wait()
+        return True
 
     def _telemetry_request(
         self,
@@ -805,6 +814,7 @@ class ResourceService:
                 "call registration",
                 lambda: self._register_call(trace, call, source_plan),
                 call=call,
+                wait=self.synchronous_telemetry_registration,
             )
         prediction_payload = _prediction_payload(prediction)
         selected = prediction_payload.get("prediction") or {}
@@ -2267,6 +2277,11 @@ def build_cli_parser() -> argparse.ArgumentParser:
     parser.add_argument("--socket-mode", type=_parse_mode, default=0o600)
     parser.add_argument("--result-ttl", type=float, default=DEFAULT_RESULT_TTL_S)
     parser.add_argument(
+        "--synchronous-telemetry-registration",
+        action="store_true",
+        help="Finish telemetry registration before returning BeginCall.",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose logging.",
@@ -2292,6 +2307,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             expected_peer_uid=args.telemetry_peer_uid,
         ),
         result_ttl_s=args.result_ttl,
+        synchronous_telemetry_registration=args.synchronous_telemetry_registration,
     )
     with ResourceServer(
         args.socket,
