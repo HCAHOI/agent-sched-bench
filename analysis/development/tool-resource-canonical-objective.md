@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Run the frozen fit-envelope RSS action in Section 5.28; do not open PennyLane 16+16. |
+| Next research step | Audit existing command-window container RSS coverage for the 16 Section 5.28 exposure events; freeze a measured-safety replay only if those windows are observable. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1734,6 +1734,26 @@ so any pass remains adaptive rather than confirmatory. Failure closes
 fit-maximum continuous reservation on this cohort without changing the
 retained prediction result.
 
+**Result and decision.** The fit-envelope arm is development NO-GO under the
+frozen safety gate, despite improving the action trade-off. The 12 activated
+`4/broad` reservations covered three tasks. Relative to serial, mean completion
+fell 28.244% and makespan 17.700%; relative to bucketed scope conditioning,
+they fell another 9.711% and 3.350%. The arm produced 445 speculative starts,
+and changed 31 start decisions across ten tasks. Modeled static exposures fell
+from 22 to 16, but did not reach zero, while service inflation was 7.935%
+rather than at most 5%. All reservation, CPU-capacity, and CPU-work invariants
+passed.
+
+None of the 16 exposure starter IDs is an activated carrier: 11 use 16,000 MB
+full fallback, three use the short-null upper value, and two have observed
+clause composition. Reconstructed pairs show 15/16 are noncarrier--noncarrier;
+one pairs a noncarrier with an activated carrier, and every pair contains at
+least one unverified RSS value. Thus finite carrier reservations improved both
+completion and the conservative exposure count, but missing noncarrier RSS now
+dominates the remaining static gate. This does not establish real concurrent
+RSS overflow or safety. Do not tune another envelope on replay15; first test
+whether existing command-window container samples can resolve these 16 events.
+
 ## 6. Closed directions
 
 - **Lookup structure alone:** trie, lattice, generic argv, pip/pytest semantic
@@ -1838,6 +1858,8 @@ Result root:
   `../task-pareto-survival-action-pennylane41-20260810/result.json`
 - Scope-conditioned xdist RSS admission action:
   `../pennylane-xdist-rss-admission-v1/result.json`
+- Fit-envelope xdist RSS admission action:
+  `../pennylane-xdist-rss-fit-envelope-admission-v1/result.json`
 
 Docs-only compiler development artifact:
 `analysis/results/offline-tool-semantics-sqlglot-v1/result.json`.
