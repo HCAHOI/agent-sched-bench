@@ -1827,17 +1827,28 @@ generation. Continue only if the resource artifact is valid, every command has
 a finite cgroup-memory peak and at least one sample, every command lasting at
 least 50 ms has at least two samples, and source/replay actions match exactly.
 
-On a pass, replay the same 15 exposed task IDs and order from Section 5.29 with
-the identical configuration. Re-evaluate only the committed Section 5.28
-fit-envelope reservation policy and controls. Physical memory safety must use
-the new cgroup-memory peak for every overlapping command; mixing it with VmRSS
-or imputing a missing command is forbidden. GO requires valid artifacts and
-complete sampling by the smoke rule for all 15 tasks, zero static peak-sum
-exposures above 16,000 MB, at least 5% lower mean completion and lower makespan
-than serial, at most 5% service inflation, and all existing reservation, CPU
-capacity, and CPU-work invariants. No predictor, reservation, task, threshold,
-or simulator rule may change after outcome access. A pass authorizes only a
-separately frozen warmup16 collection; validation16 remains untouched.
+**2026-08-12 pre-outcome decision correction.** Replacing only physical memory
+labels cannot change Section 5.28's reservations, starts, CPU service, or
+7.935% aggregate service inflation. Its original compound gate, which requires
+at most 5%, is therefore impossible regardless of the new measurements. Do not
+spend replay15 merely to rerun that gate, and do not reinterpret its NO-GO.
+
+The deployment objective has no fixed per-command service SLO: strict priority
+protects foreground CPU service, while earlier low-priority work may lengthen
+its own command wall time yet still reduce task completion. Therefore, if the
+smoke passes, replay15 answers one narrower question: were the 16 conservative
+memory exposures false positives under an absolute cgroup-charge reference?
+Use the same 15 exposed task IDs and order from Section 5.29 with the identical
+configuration. Physical memory safety must replace every command peak with the
+new cgroup-memory peak; mixing it with VmRSS or imputing a missing command is
+forbidden. The measurement is sufficient only if every artifact passes the
+smoke completeness rule, the unchanged fit-envelope action has zero static
+peak-sum exposures above 16,000 MB, retains its already reported mean-completion
+and makespan benefit, and passes all reservation, CPU-capacity, and CPU-work
+invariants. Report aggregate service inflation but do not use it as an
+unstated SLO. No predictor, reservation, task, threshold, or simulator rule may
+change after outcome access. Sufficiency authorizes only a separately frozen
+physical paired validation; warmup16 and validation16 remain untouched.
 
 ## 6. Closed directions
 
