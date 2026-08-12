@@ -26,6 +26,7 @@ from tool_resource.resource_agentd import (
     ResourceServer,
     ResourceService,
     _clause_observations,
+    _validated_command_window_rss,
     build_cli_parser,
 )
 from tool_resource.resource_protocol import (
@@ -469,6 +470,109 @@ class _LoopIterationCollector(_FakeCollector):
             {**template, "latency_ms": 100.0 * (index + 1)} for index in range(3)
         ]
         return result
+
+
+class _CommandRssCollector(_FakeCollector):
+    def finish_tool_call(
+        self,
+        token: dict[str, Any],
+        *,
+        replay_response: dict[str, Any] | None = None,
+        ended_ns: int | None = None,
+    ) -> dict[str, Any]:
+        result = super().finish_tool_call(
+            token,
+            replay_response=replay_response,
+            ended_ns=ended_ns,
+        )
+        result["command_window_rss"] = {
+            "status": "ok",
+            "sampled_peak_rss_mb": 12.345,
+            "sample_count": 7,
+            "cadence_ms": 2.0,
+            "pid_status_read_failures": 0,
+            "error": None,
+        }
+        return result
+
+
+def test_command_window_rss_reaches_final_resource_artifact(tmp_path: Path) -> None:
+    service = ResourceService(
+        ObservationStore(tmp_path / "observations.sqlite3"),
+        _DirectTransport(
+            TelemetryService(
+                collector_factory=_CommandRssCollector,
+                state_dir=tmp_path / "telemetry",
+            )
+        ),
+    )
+    run = _open_run(service)
+    trace = _open_trace(service, run["run_token"])
+    _run_call(service, trace["trace_token"], call_id="call", command="echo ok")
+
+    closed = service.dispatch(
+        "CloseTrace",
+        {"trace_token": trace["trace_token"], "workload_status": "completed"},
+    )
+
+    assert closed["collection_validity"] == "valid"
+    assert closed["artifact"]["calls"][0]["command_window_rss"] == {
+        "status": "ok",
+        "sampled_peak_rss_mb": 12.345,
+        "sample_count": 7,
+        "cadence_ms": 2.0,
+        "pid_status_read_failures": 0,
+        "error": None,
+    }
+    service.close()
+
+
+def test_invalid_command_window_rss_fails_closed(tmp_path: Path) -> None:
+    class InvalidCommandRssCollector(_CommandRssCollector):
+        def finish_tool_call(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            result = super().finish_tool_call(*args, **kwargs)
+            result["command_window_rss"]["sampled_peak_rss_mb"] = None
+            return result
+
+    service = ResourceService(
+        ObservationStore(tmp_path / "observations.sqlite3"),
+        _DirectTransport(
+            TelemetryService(
+                collector_factory=InvalidCommandRssCollector,
+                state_dir=tmp_path / "telemetry",
+            )
+        ),
+    )
+    run = _open_run(service)
+    trace = _open_trace(service, run["run_token"])
+    _run_call(service, trace["trace_token"], call_id="call", command="echo ok")
+
+    closed = service.dispatch(
+        "CloseTrace",
+        {"trace_token": trace["trace_token"], "workload_status": "completed"},
+    )
+
+    assert closed["collection_validity"] == "invalid"
+    assert closed["errors"] == [
+        "telemetry finalization failed: ResourceProtocolError: "
+        "telemetryd command-window RSS values are invalid"
+    ]
+    service.close()
+
+
+@pytest.mark.parametrize("cadence", [0.0, -2.0, 1.0, 1000.0, float("nan"), float("inf")])
+def test_command_window_rss_requires_frozen_cadence(cadence: float) -> None:
+    with pytest.raises(ResourceProtocolError, match="RSS values are invalid"):
+        _validated_command_window_rss(
+            {
+                "status": "ok",
+                "sampled_peak_rss_mb": 12.345,
+                "sample_count": 7,
+                "cadence_ms": cadence,
+                "pid_status_read_failures": 0,
+                "error": None,
+            }
+        )
 
 
 def test_loop_iterations_are_ingested_as_separate_observations(

@@ -3903,6 +3903,7 @@ class ClauseTelemetryCollector:
                 "sampled_peak_rss_mb": None,
                 "sample_count": 0,
                 "cadence_ms": 2.0,
+                "pid_status_read_failures": 0,
                 "error": self._command_rss_oracle_error or "sampler not started",
             }
         try:
@@ -3914,6 +3915,9 @@ class ClauseTelemetryCollector:
                 "sampled_peak_rss_mb": None,
                 "sample_count": oracle.samples,
                 "cadence_ms": 2.0,
+                "pid_status_read_failures": int(
+                    getattr(oracle, "pid_status_read_failures", 0)
+                ),
                 "error": f"finish failed: {type(exc).__name__}: {exc}",
             }
         if oracle.is_alive():
@@ -3922,6 +3926,9 @@ class ClauseTelemetryCollector:
                 "sampled_peak_rss_mb": None,
                 "sample_count": oracle.samples,
                 "cadence_ms": 2.0,
+                "pid_status_read_failures": int(
+                    getattr(oracle, "pid_status_read_failures", 0)
+                ),
                 "error": "sampler did not stop",
             }
         read_error = getattr(oracle, "read_error", None)

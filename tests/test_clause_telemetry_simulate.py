@@ -1077,6 +1077,9 @@ def test_command_rss_oracle_failure_does_not_change_clause_eligibility(
     assert summary["eligible_for_kb"] is True
     assert summary["command_window_rss"]["status"] == "unavailable"
     assert summary["command_window_rss"]["sampled_peak_rss_mb"] is None
+    assert isinstance(
+        summary["command_window_rss"]["pid_status_read_failures"], int
+    )
 
 
 def test_invalid_finish_timestamp_stops_command_rss_oracle(
