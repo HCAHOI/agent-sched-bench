@@ -1838,6 +1838,13 @@ registration before executing the shell. The default asynchronous service,
 commands, cadence, tasks, and gate are unchanged; rerun 2603 once after this
 amendment before any replay15 collection.
 
+**Plumbing result.** The synchronized 2603 rerun passed the frozen gate. Its
+artifact was valid with telemetry and cleanup both OK; all 33 commands had a
+finite cgroup-memory peak, zero read failures, and at least five samples. All
+26 commands lasting at least 50 ms had at least two samples. The peak range was
+9.936896--6,122.881024 MB, and all 101 source/replay actions matched exactly.
+This authorizes the exposed replay15 cgroup-memory calibration below.
+
 **2026-08-12 pre-outcome decision correction.** Replacing only physical memory
 labels cannot change Section 5.28's reservations, starts, CPU service, or
 7.935% aggregate service inflation. Its original compound gate, which requires
