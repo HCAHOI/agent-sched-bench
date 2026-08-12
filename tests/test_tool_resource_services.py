@@ -26,6 +26,7 @@ from tool_resource.resource_agentd import (
     ResourceServer,
     ResourceService,
     _clause_observations,
+    _validated_command_window_memory_current,
     _validated_command_window_rss,
     build_cli_parser,
 )
@@ -160,6 +161,15 @@ def test_normalized_observation_preserves_command_window_rss() -> None:
                 "error": None,
                 "raw_samples": ["must-not-cross"],
             },
+            "command_window_memory_current": {
+                "status": "ok",
+                "sampled_peak_mb": 45.678,
+                "sample_count": 9,
+                "cadence_ms": 2.0,
+                "read_failures": 0,
+                "error": None,
+                "raw_samples": ["must-not-cross"],
+            },
         },
         {
             "telemetry_quality": "ok",
@@ -176,6 +186,38 @@ def test_normalized_observation_preserves_command_window_rss() -> None:
         "cadence_ms": 2.0,
         "pid_status_read_failures": 0,
         "error": None,
+    }
+    assert observation["command_window_memory_current"] == {
+        "status": "ok",
+        "sampled_peak_mb": 45.678,
+        "sample_count": 9,
+        "cadence_ms": 2.0,
+        "read_failures": 0,
+        "error": None,
+    }
+
+
+def test_normalized_observation_fails_closed_when_opted_in_sidecar_is_missing() -> None:
+    observation = _normalized_observation(
+        SimpleNamespace(run_id="run", trace_id="trace"),
+        SimpleNamespace(observation_id="obs", call_id="call", command_digest="0" * 64),
+        {"eligible_for_kb": True, "telemetry_quality": "ok", "clauses": []},
+        {
+            "telemetry_quality": "ok",
+            "collection_validity": "valid",
+            "cleanup": "ok",
+            "collector": {"health": "healthy"},
+        },
+        command_memory_current_oracle=True,
+    )
+
+    assert observation["command_window_memory_current"] == {
+        "status": "unavailable",
+        "sampled_peak_mb": None,
+        "sample_count": 0,
+        "cadence_ms": 2.0,
+        "read_failures": 0,
+        "error": "opted-in memory.current sidecar missing or malformed",
     }
 
 
@@ -493,6 +535,14 @@ class _CommandRssCollector(_FakeCollector):
             "pid_status_read_failures": 0,
             "error": None,
         }
+        result["command_window_memory_current"] = {
+            "status": "ok",
+            "sampled_peak_mb": 45.678,
+            "sample_count": 9,
+            "cadence_ms": 2.0,
+            "read_failures": 0,
+            "error": None,
+        }
         return result
 
 
@@ -522,6 +572,14 @@ def test_command_window_rss_reaches_final_resource_artifact(tmp_path: Path) -> N
         "sample_count": 7,
         "cadence_ms": 2.0,
         "pid_status_read_failures": 0,
+        "error": None,
+    }
+    assert closed["artifact"]["calls"][0]["command_window_memory_current"] == {
+        "status": "ok",
+        "sampled_peak_mb": 45.678,
+        "sample_count": 9,
+        "cadence_ms": 2.0,
+        "read_failures": 0,
         "error": None,
     }
     service.close()
@@ -570,6 +628,25 @@ def test_command_window_rss_requires_frozen_cadence(cadence: float) -> None:
                 "sample_count": 7,
                 "cadence_ms": cadence,
                 "pid_status_read_failures": 0,
+                "error": None,
+            }
+        )
+
+
+@pytest.mark.parametrize("cadence", [0.0, 1.0, 1000.0, float("nan"), float("inf")])
+def test_command_window_memory_current_requires_frozen_cadence(
+    cadence: float,
+) -> None:
+    with pytest.raises(
+        ResourceProtocolError, match=r"memory\.current values are invalid"
+    ):
+        _validated_command_window_memory_current(
+            {
+                "status": "ok",
+                "sampled_peak_mb": 45.678,
+                "sample_count": 9,
+                "cadence_ms": cadence,
+                "read_failures": 0,
                 "error": None,
             }
         )
@@ -1388,16 +1465,22 @@ def test_telemetry_serializes_collector_construction(tmp_path: Path) -> None:
 
 
 def test_telemetry_forwards_command_rss_oracle_opt_in(tmp_path: Path) -> None:
-    options: list[bool] = []
+    options: list[tuple[bool, bool]] = []
 
     def collector_factory(**kwargs: Any) -> _FakeCollector:
-        options.append(kwargs["command_rss_oracle"])
+        options.append(
+            (
+                kwargs["command_rss_oracle"],
+                kwargs["command_memory_current_oracle"],
+            )
+        )
         return _FakeCollector(**kwargs)
 
     telemetry = TelemetryService(
         collector_factory=collector_factory,
         state_dir=tmp_path / "telemetry",
         command_rss_oracle=True,
+        command_memory_current_oracle=True,
     )
     telemetry.dispatch(
         "AttachTarget",
@@ -1410,7 +1493,7 @@ def test_telemetry_forwards_command_rss_oracle_opt_in(tmp_path: Path) -> None:
         },
     )
 
-    assert options == [True]
+    assert options == [(True, True)]
     telemetry.close()
 
 

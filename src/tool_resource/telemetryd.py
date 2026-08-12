@@ -93,6 +93,7 @@ class TelemetryService:
         state_dir: str | Path | None = None,
         observation_ttl_s: float = DEFAULT_OBSERVATION_TTL_S,
         command_rss_oracle: bool = False,
+        command_memory_current_oracle: bool = False,
     ) -> None:
         if not math.isfinite(observation_ttl_s) or observation_ttl_s <= 0:
             raise ValueError("observation_ttl_s must be finite and positive")
@@ -100,6 +101,7 @@ class TelemetryService:
         self.collector_factory = collector_factory
         self.observation_ttl_s = observation_ttl_s
         self.command_rss_oracle = command_rss_oracle
+        self.command_memory_current_oracle = command_memory_current_oracle
         self._state_tmp = (
             tempfile.TemporaryDirectory(prefix="telemetryd-")
             if state_dir is None
@@ -260,6 +262,7 @@ class TelemetryService:
                 artifact_path=artifact_path,
                 source_actions=(),
                 command_rss_oracle=self.command_rss_oracle,
+                command_memory_current_oracle=self.command_memory_current_oracle,
             )
         session = _Session(
             run_id,
@@ -512,6 +515,7 @@ class TelemetryService:
                     call,
                     summary,
                     artifact,
+                    command_memory_current_oracle=self.command_memory_current_oracle,
                 )
                 session.observations[call.observation_id] = observation
             session.summary = _session_summary(artifact)
@@ -871,6 +875,8 @@ def _normalized_observation(
     call: _Call,
     summary: Mapping[str, Any],
     artifact: Mapping[str, Any],
+    *,
+    command_memory_current_oracle: bool = False,
 ) -> dict[str, Any]:
     clauses = _normalized_clauses(summary)
     starts = [
@@ -926,6 +932,28 @@ def _normalized_observation(
                 "pid_status_read_failures",
                 "error",
             )
+        }
+    command_window_memory_current = summary.get("command_window_memory_current")
+    if isinstance(command_window_memory_current, Mapping):
+        observation["command_window_memory_current"] = {
+            key: command_window_memory_current.get(key)
+            for key in (
+                "status",
+                "sampled_peak_mb",
+                "sample_count",
+                "cadence_ms",
+                "read_failures",
+                "error",
+            )
+        }
+    elif command_memory_current_oracle:
+        observation["command_window_memory_current"] = {
+            "status": "unavailable",
+            "sampled_peak_mb": None,
+            "sample_count": 0,
+            "cadence_ms": 2.0,
+            "read_failures": 0,
+            "error": "opted-in memory.current sidecar missing or malformed",
         }
     return observation
 
@@ -1020,6 +1048,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Sample whole-container RSS during each command window.",
     )
     parser.add_argument(
+        "--command-memory-current-oracle",
+        action="store_true",
+        help="Sample task-cgroup memory.current during each command window.",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose logging.",
@@ -1035,6 +1068,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         container_executable=args.container_runtime,
         state_dir=args.state_dir,
         command_rss_oracle=args.command_rss_oracle,
+        command_memory_current_oracle=args.command_memory_current_oracle,
     )
     with TelemetryServer(
         args.socket,

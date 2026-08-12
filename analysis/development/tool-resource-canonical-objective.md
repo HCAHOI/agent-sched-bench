@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | First calibrate opt-in command-window RSS on the exposed PennyLane replay15. Untouched warmup16 and validation16 remain closed unless Section 5.29's calibration gate passes. |
+| Next research step | Test the independent command-window cgroup-memory safety oracle in Section 5.30. Untouched warmup16 and validation16 remain closed unless its replay15 gate passes. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1798,6 +1798,12 @@ and missing-measurement policy are unchanged. The triggering plumbing run is
 retained separately and must not be used as calibration evidence; 2603 must be
 replayed after this amendment.
 
+**Result.** The amended 2603 replay was valid and preserved all 101 actions.
+All 33 commands had finite peaks, but only 23/25 commands lasting at least 50
+ms had two complete samples; two 72.5--82.6 ms compound commands had one. The
+plumbing gate therefore failed before replay15. This is a sampling result, not
+an admission verdict; do not relax the gate or rerun the same sampler.
+
 This replay is development-exposed calibration, not fresh task evidence. Only
 a pass authorizes a separately frozen collection of the existing PennyLane
 warmup16; the validation16 remains untouched. Warmup collection must use the
@@ -1805,6 +1811,33 @@ same 2 ms measurement, concurrency one, eBPF, GPT-5.6, fast tier, and maximum
 100 iterations. No threshold, task ID, reservation mapping, or predictor may
 change after calibration outcomes are read. A failure stops this admission
 branch without consuming either untouched cohort.
+
+### 5.30 Frozen command-window cgroup-memory safety successor
+
+This successor measures scheduler safety without changing the canonical RSS
+prediction target. Alongside the unchanged VmRSS oracle, `telemetryd` samples
+the task cgroup's `memory.current` every 2 ms from `RegisterCall` through
+`FinishCall`. It records absolute decimal MB, sample count, read failures, and
+the peak in a separate `command_window_memory_current` sidecar. The value is a
+physical capacity reference, never a predictor input or KB observation.
+
+First rerun the exposed 2603 plumbing task with both opt-ins, concurrency one,
+eight cores, 20x source-gap acceleration, unchanged commands, and no LLM
+generation. Continue only if the resource artifact is valid, every command has
+a finite cgroup-memory peak and at least one sample, every command lasting at
+least 50 ms has at least two samples, and source/replay actions match exactly.
+
+On a pass, replay the same 15 exposed task IDs and order from Section 5.29 with
+the identical configuration. Re-evaluate only the committed Section 5.28
+fit-envelope reservation policy and controls. Physical memory safety must use
+the new cgroup-memory peak for every overlapping command; mixing it with VmRSS
+or imputing a missing command is forbidden. GO requires valid artifacts and
+complete sampling by the smoke rule for all 15 tasks, zero static peak-sum
+exposures above 16,000 MB, at least 5% lower mean completion and lower makespan
+than serial, at most 5% service inflation, and all existing reservation, CPU
+capacity, and CPU-work invariants. No predictor, reservation, task, threshold,
+or simulator rule may change after outcome access. A pass authorizes only a
+separately frozen warmup16 collection; validation16 remains untouched.
 
 ## 6. Closed directions
 

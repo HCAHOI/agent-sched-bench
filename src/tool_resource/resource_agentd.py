@@ -1450,6 +1450,8 @@ class ResourceService:
         }
         if "command_window_rss" in observation:
             expected_fields.add("command_window_rss")
+        if "command_window_memory_current" in observation:
+            expected_fields.add("command_window_memory_current")
         _require_result_fields(
             observation,
             expected_fields,
@@ -1458,6 +1460,13 @@ class ResourceService:
         command_window_rss = (
             _validated_command_window_rss(observation["command_window_rss"])
             if "command_window_rss" in observation
+            else None
+        )
+        command_window_memory_current = (
+            _validated_command_window_memory_current(
+                observation["command_window_memory_current"]
+            )
+            if "command_window_memory_current" in observation
             else None
         )
         if not isinstance(observation_id, str) or not observation_id:
@@ -1630,6 +1639,10 @@ class ResourceService:
         }
         if command_window_rss is not None:
             call_payload["command_window_rss"] = command_window_rss
+        if command_window_memory_current is not None:
+            call_payload["command_window_memory_current"] = (
+                command_window_memory_current
+            )
         return call_payload, envelope
 
     def expire(self) -> None:
@@ -1865,6 +1878,51 @@ def _validated_command_window_rss(value: Any) -> dict[str, Any]:
         valid = False
     if not valid:
         raise ResourceProtocolError("telemetryd command-window RSS values are invalid")
+    return row
+
+
+def _validated_command_window_memory_current(value: Any) -> dict[str, Any]:
+    fields = {
+        "status",
+        "sampled_peak_mb",
+        "sample_count",
+        "cadence_ms",
+        "read_failures",
+        "error",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise ResourceProtocolError(
+            "telemetryd command-window memory.current fields are invalid"
+        )
+    row = dict(value)
+    status = row["status"]
+    samples = row["sample_count"]
+    failures = row["read_failures"]
+    error = row["error"]
+    valid_counts = all(
+        isinstance(number, int) and not isinstance(number, bool) and number >= 0
+        for number in (samples, failures)
+    )
+    try:
+        cadence = _finite_number(row, "cadence_ms")
+        peak = _finite_number(row, "sampled_peak_mb") if status == "ok" else None
+    except ResourceProtocolError:
+        raise ResourceProtocolError(
+            "telemetryd command-window memory.current values are invalid"
+        ) from None
+    valid = (
+        cadence == 2.0 and valid_counts and (error is None or isinstance(error, str))
+    )
+    if status == "ok":
+        valid &= peak >= 0 and samples > 0 and failures == 0 and error is None
+    elif status == "unavailable":
+        valid &= row["sampled_peak_mb"] is None
+    else:
+        valid = False
+    if not valid:
+        raise ResourceProtocolError(
+            "telemetryd command-window memory.current values are invalid"
+        )
     return row
 
 

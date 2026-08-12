@@ -29,6 +29,7 @@ from tool_resource.telemetry import (
     ClauseTelemetryCollector,
     ClauseTelemetryIntegrityError,
     EventRow,
+    MemoryCurrentOracle,
     RssOracle,
     ToolCallToken,
     _EventSpool,
@@ -1000,6 +1001,106 @@ def test_command_rss_oracle_is_scoped_to_one_call(
     assert collector._command_rss_oracle is None
 
 
+def test_command_memory_current_oracle_is_scoped_to_one_call(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeOracle:
+        def __init__(self, cgroup: Path) -> None:
+            assert cgroup == tmp_path
+            self.peak_bytes = 2_500_000
+            self.samples = 7
+            self.read_failures = 0
+            self.read_error = None
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+        def join(self, *, timeout: float) -> None:
+            assert timeout == 1
+
+        def is_alive(self) -> bool:
+            return False
+
+    collector = _active_collector()
+    collector.cgroup = tmp_path
+    collector._command_memory_current_oracle_enabled = True
+    collector._command_memory_current_oracle = None
+    monkeypatch.setattr("tool_resource.telemetry.MemoryCurrentOracle", FakeOracle)
+    monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
+    monkeypatch.setattr("tool_resource.telemetry.time.monotonic_ns", lambda: 230)
+
+    token = collector.begin_tool_call("memory", "echo hi", started_ns=100)
+    summary = collector.finish_tool_call(
+        token, replay_response={"returncode": 0}, ended_ns=230
+    )
+
+    assert summary["command_window_memory_current"] == {
+        "status": "ok",
+        "sampled_peak_mb": 2.5,
+        "sample_count": 7,
+        "cadence_ms": 2.0,
+        "read_failures": 0,
+        "error": None,
+    }
+    assert collector._command_memory_current_oracle is None
+
+
+def test_command_oracles_stop_before_either_join(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+
+    class FakeOracle:
+        peak_sum_kb = 1
+        peak_bytes = 1_000
+        samples = 1
+        pid_status_read_failures = 0
+        read_failures = 0
+        read_error = None
+
+        def __init__(self, _cgroup: Path, name: str) -> None:
+            self.name = name
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            events.append(f"stop:{self.name}")
+
+        def join(self, *, timeout: float) -> None:
+            assert timeout == 1
+            assert events[:2] == ["stop:rss", "stop:memory"]
+            events.append(f"join:{self.name}")
+
+        def is_alive(self) -> bool:
+            return False
+
+    collector = _active_collector()
+    collector.cgroup = tmp_path
+    collector._command_rss_oracle_enabled = True
+    collector._command_memory_current_oracle_enabled = True
+    monkeypatch.setattr(
+        "tool_resource.telemetry.RssOracle",
+        lambda _cgroup: FakeOracle(tmp_path, "rss"),
+    )
+    monkeypatch.setattr(
+        "tool_resource.telemetry.MemoryCurrentOracle",
+        lambda _cgroup: FakeOracle(tmp_path, "memory"),
+    )
+    monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
+    monkeypatch.setattr("tool_resource.telemetry.time.monotonic_ns", lambda: 230)
+
+    token = collector.begin_tool_call("both", "echo hi", started_ns=100)
+    collector.finish_tool_call(token, replay_response={"returncode": 0}, ended_ns=230)
+
+    assert events == ["stop:rss", "stop:memory", "join:rss", "join:memory"]
+
+
 def test_rss_oracle_records_midstream_cgroup_read_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1062,6 +1163,48 @@ def test_rss_oracle_discards_incomplete_pid_samples(
     assert oracle.samples == 1
     assert oracle.peak_sum_kb == 42
     assert oracle.pid_status_read_failures == expected_failures
+
+
+def test_memory_current_oracle_samples_cgroup_charge(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    oracle = MemoryCurrentOracle(tmp_path)
+    values = iter([1_000_000, 2_500_000])
+
+    def read_text(path: Path, *args: Any, **kwargs: Any) -> str:
+        assert path == tmp_path / "memory.current"
+        value = next(values)
+        if value == 2_500_000:
+            oracle.stop()
+        return str(value)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    monkeypatch.setattr("tool_resource.telemetry.time.sleep", lambda *_: None)
+
+    oracle.run()
+
+    assert oracle.samples == 2
+    assert oracle.peak_bytes == 2_500_000
+    assert oracle.read_failures == 0
+    assert oracle.read_error is None
+
+
+def test_memory_current_oracle_fails_closed_on_read_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(Path, "read_text", lambda *_args, **_kwargs: "not-an-int")
+    oracle = MemoryCurrentOracle(tmp_path)
+
+    oracle.run()
+
+    assert oracle.samples == 0
+    assert oracle.read_failures == 1
+    assert (
+        oracle.read_error
+        == "memory.current read failed: invalid literal for int() with base 10: 'not-an-int'"
+    )
 
 
 @pytest.mark.parametrize(
