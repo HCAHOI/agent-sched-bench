@@ -13,6 +13,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -50,6 +51,7 @@ from tool_resource.telemetryd import (
     TelemetryServer,
     TelemetryService,
     _normalized_clauses,
+    _normalized_observation,
 )
 from trace_collect.openclaw_tools import ContainerAgent
 
@@ -138,6 +140,42 @@ def test_normalized_clauses_preserve_cpu_window_profile_only() -> None:
         }
     )
     assert malformed == [{"bin": "pytest", "cpu_window_profile": []}]
+
+
+def test_normalized_observation_preserves_command_window_rss() -> None:
+    observation = _normalized_observation(
+        SimpleNamespace(run_id="run", trace_id="trace"),
+        SimpleNamespace(observation_id="obs", call_id="call", command_digest="0" * 64),
+        {
+            "eligible_for_kb": True,
+            "telemetry_quality": "ok",
+            "clauses": [],
+            "command_window_rss": {
+                "status": "ok",
+                "sampled_peak_rss_mb": 12.345,
+                "sample_count": 7,
+                "cadence_ms": 2.0,
+                "pid_status_read_failures": 0,
+                "error": None,
+                "raw_samples": ["must-not-cross"],
+            },
+        },
+        {
+            "telemetry_quality": "ok",
+            "collection_validity": "valid",
+            "cleanup": "ok",
+            "collector": {"health": "healthy"},
+        },
+    )
+
+    assert observation["command_window_rss"] == {
+        "status": "ok",
+        "sampled_peak_rss_mb": 12.345,
+        "sample_count": 7,
+        "cadence_ms": 2.0,
+        "pid_status_read_failures": 0,
+        "error": None,
+    }
 
 
 class _BlockingTransport(_DirectTransport):
@@ -824,7 +862,9 @@ def test_structured_online_offline_golden_stream_and_restore(
     store = ObservationStore(tmp_path / "golden.sqlite3")
     for envelope in envelopes:
         store.insert_observation(envelope)
-    store.promote_observations({str(envelope["observation_id"]) for envelope in envelopes})
+    store.promote_observations(
+        {str(envelope["observation_id"]) for envelope in envelopes}
+    )
     snapshot = store.create_snapshot()
     service = ResourceService(
         store,
@@ -1243,6 +1283,33 @@ def test_telemetry_serializes_collector_construction(tmp_path: Path) -> None:
     telemetry.close()
 
 
+def test_telemetry_forwards_command_rss_oracle_opt_in(tmp_path: Path) -> None:
+    options: list[bool] = []
+
+    def collector_factory(**kwargs: Any) -> _FakeCollector:
+        options.append(kwargs["command_rss_oracle"])
+        return _FakeCollector(**kwargs)
+
+    telemetry = TelemetryService(
+        collector_factory=collector_factory,
+        state_dir=tmp_path / "telemetry",
+        command_rss_oracle=True,
+    )
+    telemetry.dispatch(
+        "AttachTarget",
+        {
+            "run_id": "run",
+            "trace_id": "trace",
+            "container_runtime": "docker",
+            "container_id": "container",
+            "workspace_scope": "repo",
+        },
+    )
+
+    assert options == [True]
+    telemetry.close()
+
+
 def test_telemetry_failure_log_carries_full_call_identity(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
@@ -1478,10 +1545,13 @@ def test_full_telemetry_queue_is_nonblocking_and_fail_closed(
     assert {reason["kind"] for reason in call["invalid_reasons"]} >= {
         "service_unavailable"
     }
-    assert service.store.observations_for_snapshot(
-        service.store.create_snapshot(),
-        "repo",
-    ) == []
+    assert (
+        service.store.observations_for_snapshot(
+            service.store.create_snapshot(),
+            "repo",
+        )
+        == []
+    )
     service.close()
 
 
@@ -1521,10 +1591,13 @@ def test_call_started_before_attachment_is_withheld(
     assert {reason["kind"] for reason in call["invalid_reasons"]} >= {
         "collector_not_ready"
     }
-    assert service.store.observations_for_snapshot(
-        service.store.create_snapshot(),
-        "repo",
-    ) == []
+    assert (
+        service.store.observations_for_snapshot(
+            service.store.create_snapshot(),
+            "repo",
+        )
+        == []
+    )
     service.close()
 
 
@@ -1757,17 +1830,13 @@ def test_trace_settlement_does_not_block_other_resource_requests(
         assert telemetry_transport.entered.wait(1)
         ping_result: list[dict[str, Any]] = []
         ping_thread = threading.Thread(
-            target=lambda: ping_result.append(
-                ResourceUnixTransport(socket_path).ping()
-            )
+            target=lambda: ping_result.append(ResourceUnixTransport(socket_path).ping())
         )
         ping_thread.start()
         try:
             ping_thread.join(0.2)
             assert not ping_thread.is_alive()
-            assert ping_result == [
-                {"protocol_version": RESOURCE_PROTOCOL_VERSION}
-            ]
+            assert ping_result == [{"protocol_version": RESOURCE_PROTOCOL_VERSION}]
         finally:
             telemetry_transport.release.set()
             ping_thread.join()
@@ -3303,9 +3372,12 @@ def test_run_manifest_records_resource_bucket_edges(tmp_path: Path) -> None:
 
 def test_agentd_cli_has_no_binary_resource_threshold() -> None:
     minimal = [
-        "--socket", "/tmp/s.sock",
-        "--database", "/tmp/o.sqlite3",
-        "--telemetry-socket", "/tmp/t.sock",
+        "--socket",
+        "/tmp/s.sock",
+        "--database",
+        "/tmp/o.sqlite3",
+        "--telemetry-socket",
+        "/tmp/t.sock",
     ]
     parser = build_cli_parser()
     assert not hasattr(parser.parse_args(minimal), "heavy_decision_threshold")

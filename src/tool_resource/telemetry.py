@@ -766,12 +766,16 @@ class RssOracle(threading.Thread):
         self._halt = threading.Event()  # not _stop: Thread._stop is internal
         self.peak_sum_kb = 0
         self.samples = 0
+        self.pid_status_reads = 0
+        self.pid_status_read_failures = 0
+        self.read_error: str | None = None
 
     def run(self) -> None:
         while not self._halt.is_set():
             try:
                 pids = (self._cgroup / "cgroup.procs").read_text().split()
-            except OSError:
+            except OSError as exc:
+                self.read_error = f"cgroup.procs read failed: {exc}"
                 break
             total = 0
             for pid in pids:
@@ -779,8 +783,10 @@ class RssOracle(threading.Thread):
                     for line in Path(f"/proc/{pid}/status").read_text().splitlines():
                         if line.startswith("VmRSS:"):
                             total += int(line.split()[1])
+                            self.pid_status_reads += 1
                             break
                 except OSError:
+                    self.pid_status_read_failures += 1
                     continue
             if total > self.peak_sum_kb:
                 self.peak_sum_kb = total
@@ -3692,9 +3698,7 @@ def _failed_exec_attempt_records(
                 ts_ns=event["ts_ns"],
                 argv=argv,
                 errno=event["errno"],
-                argv_capture_flags=argv_capture_flags.get(
-                    key, 0
-                ),
+                argv_capture_flags=argv_capture_flags.get(key, 0),
                 requested_executable_path=requested_paths.get(key),
                 requested_executable_path_truncated=key in requested_path_truncated,
             )
@@ -3721,6 +3725,7 @@ class ClauseTelemetryCollector:
         repo: str,
         artifact_path: Path,
         source_actions: Sequence[Mapping[str, Any]] = (),
+        command_rss_oracle: bool = False,
     ) -> None:
         from bcc import BPF, PerfSWConfig, PerfType
 
@@ -3740,6 +3745,9 @@ class ClauseTelemetryCollector:
         self._stop_poll = threading.Event()
         self._poll_error: BaseException | None = None
         self._active: ToolCallToken | None = None
+        self._command_rss_oracle_enabled = command_rss_oracle
+        self._command_rss_oracle: RssOracle | None = None
+        self._command_rss_oracle_error: str | None = None
         self._closed = False
         self.state = "active"
         self._disabled_reason: str | None = None
@@ -3851,6 +3859,9 @@ class ClauseTelemetryCollector:
         collector._stop_poll = threading.Event()
         collector._poll_error = None
         collector._active = None
+        collector._command_rss_oracle_enabled = False
+        collector._command_rss_oracle = None
+        collector._command_rss_oracle_error = None
         collector._closed = False
         collector.state = "disabled"
         collector._disabled_reason = reason
@@ -3867,6 +3878,63 @@ class ClauseTelemetryCollector:
         ]
         collector._source_exec_index = 0
         return collector
+
+    def _start_command_rss_oracle(self, tool_call_id: str) -> None:
+        if not getattr(self, "_command_rss_oracle_enabled", False):
+            return
+        self._command_rss_oracle_error = None
+        try:
+            oracle = RssOracle(self.cgroup)
+            oracle.start()
+            self._command_rss_oracle = oracle
+        except BaseException as exc:
+            self._command_rss_oracle_error = (
+                f"start failed: {type(exc).__name__}: {exc}"
+            )
+
+    def _finish_command_rss_oracle(self, tool_call_id: str) -> dict[str, Any] | None:
+        if not getattr(self, "_command_rss_oracle_enabled", False):
+            return None
+        oracle = getattr(self, "_command_rss_oracle", None)
+        self._command_rss_oracle = None
+        if oracle is None:
+            return {
+                "status": "unavailable",
+                "sampled_peak_rss_mb": None,
+                "sample_count": 0,
+                "cadence_ms": 2.0,
+                "error": self._command_rss_oracle_error or "sampler not started",
+            }
+        try:
+            oracle.stop()
+            oracle.join(timeout=1)
+        except BaseException as exc:
+            return {
+                "status": "unavailable",
+                "sampled_peak_rss_mb": None,
+                "sample_count": oracle.samples,
+                "cadence_ms": 2.0,
+                "error": f"finish failed: {type(exc).__name__}: {exc}",
+            }
+        if oracle.is_alive():
+            return {
+                "status": "unavailable",
+                "sampled_peak_rss_mb": None,
+                "sample_count": oracle.samples,
+                "cadence_ms": 2.0,
+                "error": "sampler did not stop",
+            }
+        read_error = getattr(oracle, "read_error", None)
+        pid_read_failures = int(getattr(oracle, "pid_status_read_failures", 0))
+        valid = oracle.samples > 0 and read_error is None and pid_read_failures == 0
+        return {
+            "status": "ok" if valid else "unavailable",
+            "sampled_peak_rss_mb": (oracle.peak_sum_kb / 1000.0 if valid else None),
+            "sample_count": oracle.samples,
+            "cadence_ms": 2.0,
+            "pid_status_read_failures": pid_read_failures,
+            "error": read_error or ("no samples" if not oracle.samples else None),
+        }
 
     def _disable(self, reason: str, *, tool_call_id: str | None = None) -> None:
         if self.state == "closed":
@@ -3961,6 +4029,7 @@ class ClauseTelemetryCollector:
                 f"{tool_call_id}",
                 tool_call_id=tool_call_id,
             )
+            self._finish_command_rss_oracle(self._active.tool_call_id)
             self._unavailable_call(self._active, reason="exec delimiter desynchronized")
             self._active = None
         if not tool_call_id:
@@ -4032,6 +4101,8 @@ class ClauseTelemetryCollector:
             static_plan=static_plan,
         )
         self._active = token
+        if self.state == "active":
+            self._start_command_rss_oracle(tool_call_id)
         return token
 
     def finish_tool_call(
@@ -4042,6 +4113,7 @@ class ClauseTelemetryCollector:
         ended_ns: int | None = None,
     ) -> dict[str, Any]:
         if token is not self._active:
+            self._finish_command_rss_oracle(token.tool_call_id)
             self._disable(
                 f"exec delimiter mismatch for {token.tool_call_id}",
                 tool_call_id=token.tool_call_id,
@@ -4056,7 +4128,14 @@ class ClauseTelemetryCollector:
             or ended_ns < token.started_ns
             or ended_ns > now_ns
         ):
+            self._finish_command_rss_oracle(token.tool_call_id)
+            self._active = None
+            self._disable(
+                f"invalid exec delimiter end for {token.tool_call_id}",
+                tool_call_id=token.tool_call_id,
+            )
             raise ValueError("ended_ns must be a valid past monotonic timestamp")
+        command_window_rss = self._finish_command_rss_oracle(token.tool_call_id)
         self._active = None
         if self.state != "active":
             return self._unavailable_call(token)
@@ -4188,8 +4267,12 @@ class ClauseTelemetryCollector:
             }
             if isinstance(exc, ClauseTelemetryIntegrityError):
                 failed_call.update(exc.artifact_payload)
+            if command_window_rss is not None:
+                failed_call["command_window_rss"] = command_window_rss
             self.calls.append(failed_call)
             return failed_call
+        if command_window_rss is not None:
+            summary["command_window_rss"] = command_window_rss
         self.calls.append(summary)
         for violation in violations:
             if violation not in self._integrity_errors:
@@ -4220,6 +4303,7 @@ class ClauseTelemetryCollector:
             source_tool_result=source_tool_result,
         )
         ended_ns = time.monotonic_ns()
+        command_window_rss = self._finish_command_rss_oracle(tool_call_id)
         self._active = None
         if self.state != "active":
             return self._unavailable_call(token)
@@ -4281,6 +4365,8 @@ class ClauseTelemetryCollector:
                 "integrity": {"status": "failed", "errors": [message]},
             }
             violations = [message]
+        if command_window_rss is not None:
+            summary["command_window_rss"] = command_window_rss
         self.calls.append(summary)
         for violation in violations:
             if violation not in self._integrity_errors:
@@ -4790,6 +4876,7 @@ class ClauseTelemetryCollector:
                 f"unterminated exec delimiter: {self._active.tool_call_id}",
                 tool_call_id=self._active.tool_call_id,
             )
+            self._finish_command_rss_oracle(self._active.tool_call_id)
             self._unavailable_call(self._active, reason="unterminated exec delimiter")
             self._active = None
         try:

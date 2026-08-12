@@ -92,12 +92,14 @@ class TelemetryService:
         collector_factory: CollectorFactory = _collector_factory,
         state_dir: str | Path | None = None,
         observation_ttl_s: float = DEFAULT_OBSERVATION_TTL_S,
+        command_rss_oracle: bool = False,
     ) -> None:
         if not math.isfinite(observation_ttl_s) or observation_ttl_s <= 0:
             raise ValueError("observation_ttl_s must be finite and positive")
         self.container_executable = container_executable
         self.collector_factory = collector_factory
         self.observation_ttl_s = observation_ttl_s
+        self.command_rss_oracle = command_rss_oracle
         self._state_tmp = (
             tempfile.TemporaryDirectory(prefix="telemetryd-")
             if state_dir is None
@@ -257,6 +259,7 @@ class TelemetryService:
                 repo=workspace_scope,
                 artifact_path=artifact_path,
                 source_actions=(),
+                command_rss_oracle=self.command_rss_oracle,
             )
         session = _Session(
             run_id,
@@ -344,9 +347,7 @@ class TelemetryService:
         return {
             "telemetry_call_token": call_token,
             "telemetry_status": (
-                "registered"
-                if collector_ready
-                else "unavailable:collector_not_ready"
+                "registered" if collector_ready else "unavailable:collector_not_ready"
             ),
         }
 
@@ -890,7 +891,7 @@ def _normalized_observation(
                 "detail": "collector loss, health, or cleanup gate failed",
             }
         )
-    return {
+    observation = {
         "observation_id": call.observation_id,
         "run_id": session.run_id,
         "trace_id": session.trace_id,
@@ -913,6 +914,20 @@ def _normalized_observation(
         "cleanup_status": artifact.get("cleanup"),
         "formal_completeness": artifact.get("formal_completeness"),
     }
+    command_window_rss = summary.get("command_window_rss")
+    if isinstance(command_window_rss, Mapping):
+        observation["command_window_rss"] = {
+            key: command_window_rss.get(key)
+            for key in (
+                "status",
+                "sampled_peak_rss_mb",
+                "sample_count",
+                "cadence_ms",
+                "pid_status_read_failures",
+                "error",
+            )
+        }
+    return observation
 
 
 def _session_summary(artifact: Mapping[str, Any]) -> dict[str, Any]:
@@ -1000,6 +1015,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--container-runtime", choices=["docker", "podman"])
     parser.add_argument("--state-dir", type=Path)
     parser.add_argument(
+        "--command-rss-oracle",
+        action="store_true",
+        help="Sample whole-container RSS during each command window.",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose logging.",
@@ -1014,6 +1034,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     service = TelemetryService(
         container_executable=args.container_runtime,
         state_dir=args.state_dir,
+        command_rss_oracle=args.command_rss_oracle,
     )
     with TelemetryServer(
         args.socket,

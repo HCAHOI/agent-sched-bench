@@ -29,6 +29,7 @@ from tool_resource.telemetry import (
     ClauseTelemetryCollector,
     ClauseTelemetryIntegrityError,
     EventRow,
+    RssOracle,
     ToolCallToken,
     _EventSpool,
     _captured_argv,
@@ -944,6 +945,186 @@ def test_internal_analysis_failure_disables_later_collection(
     assert following["telemetry_quality"] == "unavailable"
 
 
+def test_command_rss_oracle_is_scoped_to_one_call(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    instances: list[Any] = []
+
+    class FakeOracle:
+        def __init__(self, cgroup: Path) -> None:
+            assert cgroup == tmp_path
+            self.peak_sum_kb = 12_345
+            self.samples = 7
+            self.pid_status_read_failures = 0
+            self.read_error = None
+            self.started = False
+            self.stopped = False
+            instances.append(self)
+
+        def start(self) -> None:
+            self.started = True
+
+        def stop(self) -> None:
+            self.stopped = True
+
+        def join(self, *, timeout: float) -> None:
+            assert timeout == 1
+
+        def is_alive(self) -> bool:
+            return False
+
+    collector = _active_collector()
+    collector.cgroup = tmp_path
+    collector._command_rss_oracle_enabled = True
+    collector._command_rss_oracle = None
+    monkeypatch.setattr("tool_resource.telemetry.RssOracle", FakeOracle)
+    monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
+    monkeypatch.setattr("tool_resource.telemetry.time.monotonic_ns", lambda: 230)
+
+    token = collector.begin_tool_call("rss", "echo hi", started_ns=100)
+    summary = collector.finish_tool_call(
+        token, replay_response={"returncode": 0}, ended_ns=230
+    )
+
+    assert summary["command_window_rss"] == {
+        "status": "ok",
+        "sampled_peak_rss_mb": 12.345,
+        "sample_count": 7,
+        "cadence_ms": 2.0,
+        "pid_status_read_failures": 0,
+        "error": None,
+    }
+    assert instances[0].started
+    assert instances[0].stopped
+    assert collector._command_rss_oracle is None
+
+
+def test_rss_oracle_records_midstream_cgroup_read_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cgroup_reads = 0
+    real_read_text = Path.read_text
+
+    def read_text(path: Path, *args: Any, **kwargs: Any) -> str:
+        nonlocal cgroup_reads
+        if path == tmp_path / "cgroup.procs":
+            cgroup_reads += 1
+            if cgroup_reads > 2:
+                raise OSError("cgroup disappeared")
+            return "123\n"
+        if path == Path("/proc/123/status"):
+            return "Name:\ttest\nVmRSS:\t42 kB\n"
+        return real_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    monkeypatch.setattr("tool_resource.telemetry.time.sleep", lambda *_: None)
+    oracle = RssOracle(tmp_path)
+
+    oracle.run()
+
+    assert oracle.samples == 2
+    assert oracle.pid_status_reads == 2
+    assert oracle.read_error == "cgroup.procs read failed: cgroup disappeared"
+
+
+@pytest.mark.parametrize("failure", ["start", "stop", "join", "alive", "read"])
+def test_command_rss_oracle_failure_does_not_change_clause_eligibility(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    class FaultyOracle:
+        def __init__(self, _cgroup: Path) -> None:
+            self.peak_sum_kb = 12_345
+            self.samples = 2
+            self.pid_status_read_failures = 0
+            self.read_error = "read failed" if failure == "read" else None
+
+        def start(self) -> None:
+            if failure == "start":
+                raise RuntimeError("start failed")
+
+        def stop(self) -> None:
+            if failure == "stop":
+                raise RuntimeError("stop failed")
+
+        def join(self, *, timeout: float) -> None:
+            assert timeout == 1
+            if failure == "join":
+                raise RuntimeError("join failed")
+
+        def is_alive(self) -> bool:
+            return failure == "alive"
+
+    collector = _active_collector()
+    collector.cgroup = tmp_path
+    collector._command_rss_oracle_enabled = True
+    collector._command_rss_oracle = None
+    collector._command_rss_oracle_error = None
+    monkeypatch.setattr("tool_resource.telemetry.RssOracle", FaultyOracle)
+    monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
+    monkeypatch.setattr("tool_resource.telemetry.time.monotonic_ns", lambda: 230)
+
+    token = collector.begin_tool_call("rss", "echo hi", started_ns=100)
+    summary = collector.finish_tool_call(
+        token, replay_response={"returncode": 0}, ended_ns=230
+    )
+
+    assert collector.state == "active"
+    assert summary["telemetry_quality"] == "ok"
+    assert summary["eligible_for_kb"] is True
+    assert summary["command_window_rss"]["status"] == "unavailable"
+    assert summary["command_window_rss"]["sampled_peak_rss_mb"] is None
+
+
+def test_invalid_finish_timestamp_stops_command_rss_oracle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    stopped: list[bool] = []
+
+    class FakeOracle:
+        peak_sum_kb = 1
+        samples = 1
+        pid_status_read_failures = 0
+        read_error = None
+
+        def __init__(self, _cgroup: Path) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            stopped.append(True)
+
+        def join(self, *, timeout: float) -> None:
+            assert timeout == 1
+
+        def is_alive(self) -> bool:
+            return False
+
+    collector = _active_collector()
+    collector.cgroup = tmp_path
+    collector._command_rss_oracle_enabled = True
+    collector._command_rss_oracle = None
+    collector._command_rss_oracle_error = None
+    monkeypatch.setattr("tool_resource.telemetry.RssOracle", FakeOracle)
+    monkeypatch.setattr("tool_resource.telemetry._counter", lambda *_: 0)
+    monkeypatch.setattr("tool_resource.telemetry.time.monotonic_ns", lambda: 230)
+    token = collector.begin_tool_call("rss", "echo hi", started_ns=100)
+
+    with pytest.raises(ValueError, match="ended_ns"):
+        collector.finish_tool_call(token, ended_ns=99)
+
+    assert stopped == [True]
+    assert collector._command_rss_oracle is None
+    assert collector._active is None
+    assert collector.state == "disabled"
+
+
 def test_event_spool_read_failure_disables_collection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1809,7 +1990,9 @@ def test_failed_exec_path_does_not_choose_between_repeated_heads() -> None:
     ]
 
 
-@pytest.mark.parametrize(("path_flags", "failed_errno"), [(ARG_FLAG_TRUNCATED, 2), (0, 13)])
+@pytest.mark.parametrize(
+    ("path_flags", "failed_errno"), [(ARG_FLAG_TRUNCATED, 2), (0, 13)]
+)
 def test_failed_exec_path_requires_complete_enoent(
     path_flags: int,
     failed_errno: int,
@@ -2429,7 +2612,11 @@ def test_replay_failure_is_separate_from_healthy_telemetry(
     def record_trim() -> None:
         artifact = json.loads(collector.artifact_path.read_text(encoding="utf-8"))
         trimmed.append(
-            (collector.state, collector._cleanup_status, artifact["collection_validity"])
+            (
+                collector.state,
+                collector._cleanup_status,
+                artifact["collection_validity"],
+            )
         )
 
     monkeypatch.setattr("tool_resource.telemetry._trim_process_heap", record_trim)
@@ -2486,9 +2673,10 @@ def test_finalize_records_argv_failure_sites_without_double_counting(
     artifact = json.loads(collector.artifact_path.read_text(encoding="utf-8"))
     assert artifact["telemetry_loss_total"]["total"] == 2
     assert artifact["argv_read_failure_sites"] == {"missing_bprm_capture": 2}
-    assert "argv read failure sites: missing_bprm_capture=2" in artifact["integrity"][
-        "errors"
-    ]
+    assert (
+        "argv read failure sites: missing_bprm_capture=2"
+        in artifact["integrity"]["errors"]
+    )
 
 
 def test_finalize_marks_mapping_gaps_partial_without_discarding_valid_calls(

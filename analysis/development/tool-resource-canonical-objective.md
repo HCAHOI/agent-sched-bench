@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Existing command-window RSS coverage is insufficient; estimate and request a small fresh measured-safety collection before further admission claims. |
+| Next research step | First calibrate opt-in command-window RSS on the exposed PennyLane replay15. Untouched warmup16 and validation16 remain closed unless Section 5.29's calibration gate passes. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1761,6 +1761,39 @@ sampler. Neighboring samples cannot identify a command peak. Existing traces
 therefore cannot support a measured-safety replay of this action. Do not impute
 those windows or reinterpret the static NO-GO; continuing requires a separately
 approved fresh collection with command-window peak RSS measurement.
+
+### 5.29 Frozen command-window RSS calibration
+
+This measurement-only successor tests whether the Section 5.28 safety failure
+is an artifact of incomplete clause RSS, before spending untouched tasks. It
+does not amend either prior verdict. `telemetryd` may opt in to the existing
+userspace `RssOracle`, which samples the sum of `VmRSS` for all PIDs in the
+task cgroup every 2 ms from `RegisterCall` until `FinishCall`. The resulting
+command-window peak and sample count are physical labels only; they are never
+predictor inputs. The existing clause collector, commands, replay outcomes,
+and KB eligibility semantics remain unchanged.
+
+First replay the exact 15 exposed Section 5.28 tasks at concurrency one and
+20x source-gap acceleration, with no LLM generation: 2601, 2603, 2654, 2668,
+2834, 2947, 2964, 3024, 3033, 3057, 3182, 3266, 3278, 3381, and 3386. A
+single-task 2603 run is plumbing only. Continue to the 15-task calibration
+only if its resource artifact is valid, every call of at least 50 ms has a
+finite peak and at least two samples, and source versus replay commands are
+unchanged. Calibration passes only if all 15 task artifacts are valid, all 16
+previous exposure-starter command IDs have finite peaks and at least two
+samples, and replacing only their unresolved physical RSS with the measured
+command-window peak makes the frozen fit-envelope replay report zero measured
+capacity exposures and at most 5% service inflation while retaining at least
+5% mean-completion improvement versus serial. Missing measurements fail the
+gate; they are not imputed.
+
+This replay is development-exposed calibration, not fresh task evidence. Only
+a pass authorizes a separately frozen collection of the existing PennyLane
+warmup16; the validation16 remains untouched. Warmup collection must use the
+same 2 ms measurement, concurrency one, eBPF, GPT-5.6, fast tier, and maximum
+100 iterations. No threshold, task ID, reservation mapping, or predictor may
+change after calibration outcomes are read. A failure stops this admission
+branch without consuming either untouched cohort.
 
 ## 6. Closed directions
 
