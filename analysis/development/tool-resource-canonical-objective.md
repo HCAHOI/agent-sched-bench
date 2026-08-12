@@ -28,7 +28,7 @@ artifacts retain that history.
 | Peak-class admission | Closed. Peak CPU classes are the wrong target for sustaining command throughput. |
 | Runtime integration | No predictor, feedback controller, or scheduler is currently integrated or authorized for production. |
 | Predictive tool-gap loan | The frozen six-cell run passed registered execution validity but activated only one distinct early action, below the required four. Status is `insufficient_action_activation`, not a performance verdict; no tuning or fresh confirmation is authorized. |
-| Next research step | Test on fit-only evidence whether worker count plus scope supports a finite continuous RSS reservation below 16 GB; do not rerun replay15 or open PennyLane 16+16 without a new freeze and approval. |
+| Next research step | Run the frozen fit-envelope RSS action in Section 5.28; do not open PennyLane 16+16. |
 
 `status: no_go` in a result artifact answers only that artifact's frozen claim
 gate. It never authorizes deleting an implementation that this table marks
@@ -1701,6 +1701,37 @@ every scope exposure pair includes at least one 16,000 MB full-fallback command.
 Section 5.26's prediction GO remains retained. The next action hypothesis must
 predict a finite within-High reservation or pairwise risk; it may not tune that
 mapping on this exposed replay.
+
+### 5.28 Frozen fit-envelope RSS admission successor
+
+This adaptive development test changes only the Section 5.27 mapping from a
+High xdist prediction to 16,000 MB. For each `(worker count, target scope)`
+cell, use the maximum fit15 serial pytest RSS multiplied by `(workers + 1)`.
+The cell receives that finite reservation only when it has at least ten fit
+clauses across three tasks and the scaled maximum is below 16,000 MB;
+otherwise it abstains to 16,000 MB. Low/Medium predictions retain 500/2,000 MB,
+and non-carriers remain bit-identical to Section 5.27. No quantile, margin, or
+replay label participates.
+
+The label-free preflight admits `4/broad` at 11,447.75 MB (34 clauses, seven
+fit tasks) and `4/narrow` at 12,864.43 MB (122 clauses, 15 fit tasks). It
+abstains for `8/broad` and `8/full`, whose fit maxima exceed capacity. These
+cells are available, but `4/narrow`'s sole replay carrier is hard Medium and
+therefore remains at 2,000 MB. The method changes the 12 hard-High `4/broad`
+reservations across three replay tasks, satisfying the pre-outcome activation
+gate of ten commands across three tasks.
+
+Reuse the exact Section 5.27 task order, physical inputs, FCFS simulator, and
+committed `serial8`, `clause_kb`, `scope_conditioned`, and
+`exact_rss_reference` results; run only `continuous_fit_max`. GO requires:
+zero modeled static RSS exposures and zero reservation/CPU/work invariant
+violations; at least 5% mean-completion reduction and lower makespan versus
+serial; at most 5% service inflation; mean completion at least 1% lower than
+scope conditioning; and at least ten changed speculative-start decisions
+across three tasks versus scope conditioning. This gate is frozen after the
+Section 5.27 result was visible, so any pass remains adaptive rather than
+confirmatory. Failure closes fit-maximum continuous reservation on this cohort
+without changing the retained prediction result.
 
 ## 6. Closed directions
 
