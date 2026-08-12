@@ -1727,11 +1727,12 @@ committed `serial8`, `clause_kb`, `scope_conditioned`, and
 zero modeled static RSS exposures and zero reservation/CPU/work invariant
 violations; at least 5% mean-completion reduction and lower makespan versus
 serial; at most 5% service inflation; mean completion at least 1% lower than
-scope conditioning; and at least ten changed speculative-start decisions
-across three tasks versus scope conditioning. This gate is frozen after the
-Section 5.27 result was visible, so any pass remains adaptive rather than
-confirmatory. Failure closes fit-maximum continuous reservation on this cohort
-without changing the retained prediction result.
+scope conditioning (`1 - candidate/scope >= 0.01`); and a symmetric difference
+of at least ten speculative-start command IDs across three tasks versus scope
+conditioning. This gate is frozen after the Section 5.27 result was visible,
+so any pass remains adaptive rather than confirmatory. Failure closes
+fit-maximum continuous reservation on this cohort without changing the
+retained prediction result.
 
 ## 6. Closed directions
 
