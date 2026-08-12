@@ -1029,7 +1029,44 @@ def test_rss_oracle_records_midstream_cgroup_read_failure(
     assert oracle.read_error == "cgroup.procs read failed: cgroup disappeared"
 
 
-@pytest.mark.parametrize("failure", ["start", "stop", "join", "alive", "read"])
+@pytest.mark.parametrize(
+    ("error", "expected_failures"),
+    [(FileNotFoundError(), 0), (ProcessLookupError(), 0), (PermissionError(), 1)],
+)
+def test_rss_oracle_discards_incomplete_pid_samples(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    error: OSError,
+    expected_failures: int,
+) -> None:
+    status_reads = 0
+    oracle = RssOracle(tmp_path)
+
+    def read_text(path: Path, *args: Any, **kwargs: Any) -> str:
+        nonlocal status_reads
+        if path == tmp_path / "cgroup.procs":
+            return "123\n"
+        if path == Path("/proc/123/status"):
+            status_reads += 1
+            if status_reads == 1:
+                raise error
+            oracle.stop()
+            return "Name:\ttest\nVmRSS:\t42 kB\n"
+        raise AssertionError(path)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    monkeypatch.setattr("tool_resource.telemetry.time.sleep", lambda *_: None)
+
+    oracle.run()
+
+    assert oracle.samples == 1
+    assert oracle.peak_sum_kb == 42
+    assert oracle.pid_status_read_failures == expected_failures
+
+
+@pytest.mark.parametrize(
+    "failure", ["start", "stop", "join", "alive", "read", "pid_read"]
+)
 def test_command_rss_oracle_failure_does_not_change_clause_eligibility(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1039,7 +1076,7 @@ def test_command_rss_oracle_failure_does_not_change_clause_eligibility(
         def __init__(self, _cgroup: Path) -> None:
             self.peak_sum_kb = 12_345
             self.samples = 2
-            self.pid_status_read_failures = 0
+            self.pid_status_read_failures = 1 if failure == "pid_read" else 0
             self.read_error = "read failed" if failure == "read" else None
 
         def start(self) -> None:

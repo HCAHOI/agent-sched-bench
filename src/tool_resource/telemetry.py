@@ -778,6 +778,7 @@ class RssOracle(threading.Thread):
                 self.read_error = f"cgroup.procs read failed: {exc}"
                 break
             total = 0
+            complete = True
             for pid in pids:
                 try:
                     for line in Path(f"/proc/{pid}/status").read_text().splitlines():
@@ -785,12 +786,17 @@ class RssOracle(threading.Thread):
                             total += int(line.split()[1])
                             self.pid_status_reads += 1
                             break
+                except (FileNotFoundError, ProcessLookupError):
+                    complete = False
+                    break
                 except OSError:
                     self.pid_status_read_failures += 1
-                    continue
-            if total > self.peak_sum_kb:
-                self.peak_sum_kb = total
-            self.samples += 1
+                    complete = False
+                    break
+            if complete:
+                if total > self.peak_sum_kb:
+                    self.peak_sum_kb = total
+                self.samples += 1
             time.sleep(self._interval)
 
     def stop(self) -> None:

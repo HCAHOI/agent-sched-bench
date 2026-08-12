@@ -1787,6 +1787,17 @@ capacity exposures and at most 5% service inflation while retaining at least
 5% mean-completion improvement versus serial. Missing measurements fail the
 gate; they are not imputed.
 
+**2026-08-12 measurement amendment.** The first valid 2603 plumbing replay
+exposed a sampler time-of-check/time-of-use race: 12/33 command-window labels,
+including long pip and pytest calls, were withheld because a PID listed in
+`cgroup.procs` exited before its `/proc/<pid>/status` read. Before using this
+measurement for calibration, an `ENOENT` or `ESRCH` now discards only that
+incomplete 2 ms tick; it never contributes a partial RSS sum. Other status-read
+errors still invalidate the command. The cadence, task IDs, workload, gates,
+and missing-measurement policy are unchanged. The triggering plumbing run is
+retained separately and must not be used as calibration evidence; 2603 must be
+replayed after this amendment.
+
 This replay is development-exposed calibration, not fresh task evidence. Only
 a pass authorizes a separately frozen collection of the existing PennyLane
 warmup16; the validation16 remains untouched. Warmup collection must use the
