@@ -90,10 +90,18 @@ def test_managed_clause_telemetry_cleans_up_on_sigterm(
 
     with pytest.raises(SystemExit) as exc:
         with cli._managed_clause_telemetry(
-            tmp_path / "run",
+            tmp_path / ("long-run-name-" * 10),
             container_runtime="docker",
             verbose=False,
-        ):
+        ) as profile_path:
+            profile = profile_path.read_text(encoding="utf-8")
+            endpoint = next(
+                line.split("unix://", 1)[1]
+                for line in profile.splitlines()
+                if "endpoint: unix://" in line
+            )
+            assert len(endpoint.encode()) < 108
+            socket_dir = Path(endpoint).parent
             handler = cli.signal.getsignal(cli.signal.SIGTERM)
             assert callable(handler)
             handler(cli.signal.SIGTERM, None)
@@ -101,6 +109,7 @@ def test_managed_clause_telemetry_cleans_up_on_sigterm(
     assert exc.value.code == 128 + cli.signal.SIGTERM
     assert stopped == [(102, False), (101, True)]
     assert cli.signal.getsignal(cli.signal.SIGTERM) == previous_sigterm
+    assert not socket_dir.exists()
 
 
 def test_parse_collect_args_rejects_negative_skip() -> None:

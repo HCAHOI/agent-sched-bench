@@ -10,9 +10,10 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext, suppress
 from pathlib import Path
 
 from llm_call import add_llm_config_arguments, resolve_llm_config
@@ -499,8 +500,9 @@ def _managed_clause_telemetry(
 
     runtime = run_dir / "_tool_resource_runtime" / f"collector-{os.getpid()}"
     runtime.mkdir(parents=True, exist_ok=False)
-    telemetry_socket = runtime / "telemetry.sock"
-    resource_socket = runtime / "resource.sock"
+    socket_dir = Path(tempfile.mkdtemp(prefix="asb-resource-", dir="/tmp"))
+    telemetry_socket = socket_dir / "telemetry.sock"
+    resource_socket = socket_dir / "resource.sock"
     profile_path = runtime / "resource.yaml"
     profile_path.write_text(
         "\n".join(
@@ -564,6 +566,8 @@ def _managed_clause_telemetry(
         _stop_service(resource_process)
         _stop_service(telemetry_process, privileged=True)
         signal.signal(signal.SIGTERM, previous_sigterm)
+        with suppress(OSError):
+            socket_dir.rmdir()
 
 
 def _run_collect(args: argparse.Namespace) -> None:
