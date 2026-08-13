@@ -21,7 +21,7 @@ lives in `tool-resource-service-architecture.md`.
 | GPU/KV | **Close CacheWise/C100 victim selection under the current simulator.** Tool-gap retention remains unresolved, not active. | Predictor gain was 1.481%; a hindsight upper bound was 9.620%. GPU action experiments exposed tail/action-activation problems. |
 | Runtime integration | **None authorized.** | No predictor, feedback controller, or scheduler is integrated for production. |
 | PennyLane collection | **Do not run high-load PennyLane on this 16 GB host.** | Existing runs already OOM; `concurrency=1` does not constrain task-internal `pytest -n auto` workers. Use existing valid traces or an explicitly approved high-memory CPU node. |
-| Immediate work | **No collection or evaluator is currently authorized.** | The latest command-window replay is incomplete evidence: 11/15 artifacts are valid and four are invalid, so its frozen evaluator must not run. |
+| Immediate work | **Re-establish the action frontier using existing non-PennyLane traces; no collection or evaluator is currently authorized.** | Raw local PennyLane traces have been deleted. Historical result artifacts remain, but no PennyLane follow-up can run locally. |
 
 `status: no_go` answers one frozen claim. It does not authorize deleting a
 component marked **KEEP** above.
@@ -105,29 +105,98 @@ Task-Aware. This configuration was selected post-hoc on exposed data. Only RSS
 clears the existing five-point target gate; no result authorizes confirmation
 or runtime integration.
 
-## 4. Research frontier
+## 4. Research position and next decisions
 
-### What currently works
+### Paper-level question
 
-1. **Causal CPU feedback is broad and cheap enough to retain.** On 259 valid
-   SWE tasks from 205 repositories and 8,237 exec commands, it reduced logical
-   reservation 45.010% at 1.543% service inflation. This is a per-command
-   counterfactual, not a physical concurrent scheduler result.
-2. **Same-repository tool interactions can improve prediction.** On exposed
-   PennyLane, conditioning pytest-xdist worker count on name-free target scope
-   materially improved RSS High recall. Worker count alone did not.
-3. **There is action headroom.** Prediction-free strict-priority CPU-idle FCFS
-   improved mean completion 14.620% and makespan 17.226% in SQLGlot replay with
-   hindsight RSS safety. PennyLane temporal RSS packing has a 48.823% hindsight
-   mean-completion ceiling over static peak packing.
+> Once an agent reveals a tool command, can command structure, repository
+> history, and offline tool documentation predict its resource trajectory well
+> enough to run more agent tools concurrently without unsafe interference?
 
-### What remains missing
+This replaces “find a better KB data structure” as the organizing question.
+The intended chain is:
 
-- A causal memory-safety signal that permits useful overlap without treating
-  unavailable RSS as safe.
-- A predictor-dependent action whose benefit survives service, safety, and
-  workload-validity checks.
-- Fresh confirmation. All results above are development-exposed.
+```text
+command + docs-derived execution factors + settled traces
+                    -> resource prediction
+current eBPF/cgroup state + prediction
+                    -> admit now or wait
+                    -> task completion, utilization, and safety
+```
+
+The LM, if used, runs once before deployment and emits bounded execution
+factors. It never predicts cost directly and has zero prediction-time cost.
+The KB learns measured cost from traces. The scheduler consumes predictions;
+classification accuracy alone is not the claim.
+
+### What we have established
+
+1. **Prediction signal exists.** Task-Aware improves the exposed SQLGlot
+   four-target average from 80.203% to 84.463%. A documented interaction—pytest
+   worker count together with requested test scope—improves RSS High recall
+   from 2.381% to 54.762% on exposed PennyLane results.
+2. **Runtime signal exists broadly.** Causal CPU feedback reduced logical
+   reservation 45.010% at 1.543% service inflation on 259 SWE tasks from 205
+   repositories. This is a per-command counterfactual, not a scheduler result.
+3. **Useful actions exist in hindsight.** Prediction-free CPU-idle FCFS
+   improved SQLGlot mean completion 14.620% with hindsight RSS safety. A
+   PennyLane temporal-RSS oracle improved mean completion 48.823% over static
+   peak packing. Both expose headroom; neither is deployable evidence.
+4. **Point classes are not enough for safe overlap.** Better RSS accuracy did
+   not produce a better static admission policy. Mean CPU demand admitted too
+   much burst overlap; peak demand admitted too little. The missing object is a
+   time-varying resource envelope plus uncertainty, not another bucket mapping.
+
+### Primary direction: tool-call co-scheduling
+
+The action is deliberately small: when a tool command becomes ready, decide
+whether it can run beside the current command or must wait. No new scheduler
+framework is needed.
+
+Proceed as a decision tree:
+
+1. **Data/action audit, existing traces only.** Rank SQLGlot, SWE100/277, Zarr,
+   and Terminal-Bench by independent tasks, repeated command families,
+   command duration, CPU/RSS/Disk pressure, and overlap opportunity. SQLGlot is
+   the only large same-repository corpus now local; Zarr has about 30 valid
+   artifacts but previously showed little memory pressure; SWE and TB test
+   breadth, not same-repository learning.
+2. **Oracle gate before a new predictor.** On every corpus that has pressure,
+   compare ordinary FCFS/static-peak admission with a full-profile oracle that
+   only decides `run now` or `wait`. If no workload has a safe, material
+   completion-time opportunity, stop this action before method work or new
+   collection.
+3. **Action-specific prediction.** Only after the oracle passes, predict a
+   conservative CPU/RSS trajectory from settled command histories. Use the
+   current Clause-KB/Task-Aware outputs as baselines; use causal eBPF/cgroup
+   samples to locate the running command's current phase. Abstain when evidence
+   is unavailable. Do not turn a Low/Medium/High point class directly into a
+   safety certificate.
+4. **Tool understanding where it changes the action.** Add offline
+   documentation factors only for command families that account for oracle
+   starts or prediction failures. The representation should express execution
+   policy, requested-work scope, and mode; measured traces still determine
+   resource cost. Demonstrate on three or four tools only after label-blind
+   coverage shows they matter.
+5. **Physical validation, then fresh confirmation.** A candidate must preserve
+   command outcomes, avoid OOM/capacity violations, and improve task completion
+   against normal FCFS and feedback-only controls. Only then collect a fresh
+   same-repository workload on suitable hardware.
+
+The first deliverable is therefore a short action-opportunity table over
+existing traces, not another predictor, LM call, or collection.
+
+### Secondary directions
+
+- **Disk-aware co-location** is worth opening only if the audit finds repeated
+  Disk-High commands and measurable same-device interference. Disk prediction
+  is already relatively accurate, but no action headroom has been measured.
+- **GPU KV retention** is deferred. The five-second survival baseline captures
+  most available value, learned early triggers added stall or activated too
+  rarely, and physical work requires a GPU again.
+- **Heterogeneous worker placement** is a later consumer if co-scheduling
+  succeeds. It currently adds remote-workspace and retry semantics without
+  resolving whether predictions change a useful decision.
 
 ### Closed mechanisms
 
@@ -145,6 +214,9 @@ or runtime integration.
   classification accuracy did not produce a safe action.
 - CacheWise/C100 victim selection under the current model: too little residual
   recomputation headroom.
+- Further CPU reservation/page tuning: EAR-style work-conserving elasticity and
+  causal feedback already capture most of that action; prediction seeding added
+  no meaningful benefit.
 
 ## 5. Result ledger
 
@@ -208,16 +280,15 @@ registered validity or action gate failed.
 
 ## 6. Current operational boundaries
 
-### PennyLane command-window memory replay
+### Deleted PennyLane command-window replay
 
 The synchronized 2603 smoke passed measurement plumbing: all 33 commands had
 finite cgroup-memory peaks, zero read failures, and at least five samples; the
 peak range was 9.936896–6,122.881024 MB. This validated the measurement path,
 not host capacity for the high-load cohort.
 
-The subsequent exposed replay15 run is **not valid evidence**:
+Before cleanup, the subsequent exposed replay15 run was **not valid evidence**:
 
-- output: `traces/swe-rebench/gpt-5.6-sol/pennylane-memory-replay15-sync-c1-20x-ebpf-20260812`
 - 15 completed workload artifacts: 11 valid, four invalid;
 - invalid tasks: 2654, 3278, 3381, and 3386;
 - every invalid artifact reports overlapping exec tool calls and withholds all
@@ -225,11 +296,13 @@ The subsequent exposed replay15 run is **not valid evidence**:
 - high-load xdist commands also reproduce the already-known OOM risk on this
   16 GB, no-swap host.
 
-Therefore the frozen cgroup-memory evaluator must not run. Do not rerun
-PennyLane locally. A future rerun requires explicit approval and a dedicated
-high-memory CPU node; `concurrency=1` is insufficient because xdist creates
-task-internal parallel workers. Existing valid artifacts remain available for
-non-verdict diagnostics only.
+All raw local PennyLane traces and matching temporary collection directories
+were deleted on 2026-08-13. Historical machine-readable results listed in
+Section 8 remain, but the replay15 artifacts do not. Therefore the frozen
+cgroup-memory evaluator cannot run. Do not rerun PennyLane locally. A future
+recollection requires explicit approval and a dedicated high-memory CPU node;
+`concurrency=1` is insufficient because xdist creates task-internal parallel
+workers.
 
 ### Deferred, not authorized
 
@@ -246,7 +319,9 @@ hardware/cost estimate, and explicit approval before launch.
   are development-exposed.
 - SWE100 and SWE277 are development-exposed; their feedback result tests breadth
   but is not confirmation.
-- The 41-task PennyLane fit/replay split is development-exposed.
+- The 41-task PennyLane fit/replay split is development-exposed. Its raw local
+  traces were deleted; retained result artifacts are historical evidence but
+  no longer provide local byte-level reproduction.
 - The separate PennyLane warmup16 and validation16 remain untouched and
   uncollected. They stay closed while the calibration gate is invalid.
 - Zarr development19 and validation10 are exposed; final12 remains untouched.
