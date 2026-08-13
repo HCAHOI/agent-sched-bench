@@ -17,18 +17,20 @@ Internal lanes:
 - **service and client** — `resource_agentd.py`, `resource_protocol.py`,
   `client.py`, `profile.py`, `_uds.py`
 
-The canonical path has two independently managed Unix-domain-socket services:
+The canonical path has two Unix-domain-socket services:
 
 - `telemetryd` runs as root and alone resolves container cgroups and loads BCC/eBPF.
 - `resource-agentd` runs without root privileges and owns parsing, prediction,
   SQLite-WAL observations, snapshots, and causal updates.
 
-Trace collectors and simulators open one `ResourceRun` per exact repository
+`trace_collect` starts and stops both services when collection uses
+`--tool-resource-telemetry clause`. This managed mode is observation-only: it
+does not load, query, update, or persist the KB. Trace collectors and simulators
+open one `ResourceRun` per exact repository
 (or task-unique scope when no repository exists), then open all `ResourceTrace`
 sessions inside that pinned run. They close the run only after every scoped
 trace finishes and persist its complete manifest under `tool_resource_runs/`.
-Clients connect only to `resource-agentd`; they never start either service or
-import the collector.
+Thin clients connect only to `resource-agentd`; they never import the collector.
 
 ```console
 sudo -n env PYTHONPATH="$PWD/src:/usr/lib/python3/dist-packages" \
@@ -46,10 +48,16 @@ The default research setup runs `resource-agentd` and its local clients as the
 same unprivileged user. Clients validate the daemon against the resource socket
 owner; `telemetryd` remains the only root/BCC process.
 
-Both `trace collect` and `trace collect simulate` accept
-`--tool-resource-profile`. Omitting it disables the service path. A profile
-contains the only client-visible endpoint and all result-affecting resource
-configuration:
+Live collection normally needs only:
+
+```console
+python -m trace_collect.cli ... --tool-resource-telemetry clause
+```
+
+`--tool-resource-profile` remains available, and mutually exclusive, for an
+externally managed prediction or learning service. Simulate also accepts the
+profile form. A profile contains the client-visible endpoint and all
+result-affecting resource configuration:
 
 ```yaml
 tool_resource:

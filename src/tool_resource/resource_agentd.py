@@ -330,12 +330,16 @@ class ResourceService:
         behavior = _choice(
             payload,
             "behavior",
-            {"predict", "observe_predict", "observe_predict_learn"},
+            {"observe", "predict", "observe_predict", "observe_predict_learn"},
         )
         snapshot_id = (
-            self.store.create_snapshot()
-            if snapshot == "latest_at_run_start"
-            else snapshot
+            "not_applicable"
+            if behavior == "observe"
+            else (
+                self.store.create_snapshot()
+                if snapshot == "latest_at_run_start"
+                else snapshot
+            )
         )
         # Building the KB is part of loading the snapshot: a stored observation
         # the KB refuses is a bad snapshot, and this boundary reports those as
@@ -343,7 +347,11 @@ class ResourceService:
         # from fit_public or observe_completed_clause escaped as a raw
         # ValueError while an identically-caused decode failure did not.
         try:
-            observations = self._snapshot_observations(snapshot_id)
+            observations = (
+                []
+                if behavior == "observe"
+                else self._snapshot_observations(snapshot_id)
+            )
             public = [
                 observation
                 for observation in observations
@@ -385,7 +393,7 @@ class ResourceService:
             "canonicalizer_version": CANONICALIZER_VERSION,
             "store_schema_version": STORE_SCHEMA_VERSION,
             "capabilities": {
-                "latency_bucket_prediction": True,
+                "latency_bucket_prediction": behavior != "observe",
                 "telemetry": "observe" in behavior,
                 "causal_updates": update_policy == "causal"
                 and behavior.endswith("learn"),
@@ -787,12 +795,17 @@ class ResourceService:
             parsed = parse_command_clauses(command)
             digest = hashlib.sha256(command.encode()).hexdigest()
             source_plan = self._source_plan(trace)
-            prediction, prediction_error = self._predict(
-                run, command, parsed, query_timestamp
-            )
-            resource_predictions = self._predict_resources(
-                run, command, parsed, query_timestamp
-            )
+            if run.behavior == "observe":
+                prediction = None
+                prediction_error = "observation_only"
+                resource_predictions = {}
+            else:
+                prediction, prediction_error = self._predict(
+                    run, command, parsed, query_timestamp
+                )
+                resource_predictions = self._predict_resources(
+                    run, command, parsed, query_timestamp
+                )
             call_token = uuid.uuid4().hex
             call = _Call(
                 call_id=call_id,
@@ -817,8 +830,14 @@ class ResourceService:
                 call=call,
                 wait=self.synchronous_telemetry_registration,
             )
-        prediction_payload = _prediction_payload(prediction)
-        selected = prediction_payload.get("prediction") or {}
+        prediction_payload = (
+            None if run.behavior == "observe" else _prediction_payload(prediction)
+        )
+        selected = (
+            prediction_payload.get("prediction") or {}
+            if isinstance(prediction_payload, Mapping)
+            else {}
+        )
         return {
             "call_token": call_token,
             "prediction": prediction_payload,
@@ -1106,7 +1125,10 @@ class ResourceService:
                     )
                     calls.append(call)
                     ingested_envelopes.append(envelope)
-                    if envelope["ingest_eligible"] is True:
+                    if (
+                        run.behavior.endswith("learn")
+                        and envelope["ingest_eligible"] is True
+                    ):
                         trace.ingested_observation_ids.add(
                             str(envelope["observation_id"])
                         )
@@ -1182,7 +1204,7 @@ class ResourceService:
                     workload_status,
                     settled_calls=calls,
                 )
-            if run.update_policy == "causal":
+            if run.update_policy == "causal" and run.behavior != "observe":
                 with run.lock:
                     for envelope in ingested_envelopes:
                         if envelope["ingest_eligible"] is not True:
@@ -1314,7 +1336,11 @@ class ResourceService:
                 if token in self._traces
                 and self._traces[token].promotion_complete
             )
-            resulting_snapshot = self.store.create_snapshot()
+            resulting_snapshot = (
+                run.pinned_snapshot_id
+                if run.behavior == "observe"
+                else self.store.create_snapshot()
+            )
             telemetry_valid = "observe" not in run.behavior or (
                 bool(trace_results)
                 and all(
@@ -1583,7 +1609,7 @@ class ResourceService:
                         "detail": "telemetry clauses differ from the static plan",
                     }
                 )
-        if not run.behavior.endswith("learn"):
+        if run.behavior != "observe" and not run.behavior.endswith("learn"):
             reasons.append(
                 {"kind": "learning_disabled", "detail": "profile does not learn"}
             )
@@ -1630,7 +1656,12 @@ class ResourceService:
                 "loss_counters": observation.get("loss_counters"),
             },
         }
-        inserted, sequence = self.store.insert_observation(envelope)
+        if run.behavior != "observe":
+            inserted, sequence = self.store.insert_observation(envelope)
+            ingest_status = "inserted" if inserted else "duplicate"
+        else:
+            sequence = None
+            ingest_status = "not_requested"
         call_payload = {
             "version": 1,
             "tool_call_id": str(call_id or ""),
@@ -1645,7 +1676,7 @@ class ResourceService:
             "invalid_reasons": reasons,
             "clauses": list(clauses or []),
             "observation_id": envelope["observation_id"],
-            "ingest_status": "inserted" if inserted else "duplicate",
+            "ingest_status": ingest_status,
             "ingestion_sequence": sequence,
         }
         if command_window_rss is not None:
@@ -2049,13 +2080,14 @@ def _trace_result(
     calls: list[dict[str, Any]],
     workload_status: str,
 ) -> dict[str, Any]:
-    promotion_eligible = (
+    collection_eligible = (
         summary.get("collector_health") == "healthy"
         and summary.get("collection_validity") == "valid"
         and summary.get("cleanup_status") == "ok"
         and not summary.get("errors")
     )
-    telemetry_ok = promotion_eligible and all(
+    promotion_eligible = collection_eligible and run.behavior != "observe"
+    telemetry_ok = collection_eligible and all(
         not call.telemetry_status.startswith("unavailable")
         for call in trace.calls.values()
     )

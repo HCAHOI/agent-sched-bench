@@ -2930,6 +2930,97 @@ tool_resource:
         thread.join()
 
 
+def test_observe_only_collects_without_prediction_or_store_writes(
+    tmp_path: Path,
+) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite3")
+    service = ResourceService(
+        store,
+        _DirectTransport(
+            TelemetryService(
+                collector_factory=_FakeCollector,
+                state_dir=tmp_path / "telemetry",
+            )
+        ),
+    )
+    profile = ResourceProfile(
+        endpoint="unix:///unused.sock",
+        behavior="observe",
+        update_policy="frozen",
+        snapshot="latest_at_run_start",
+        telemetry_requirement="required_for_valid_evidence",
+        latency_bucket_edges_ms=CANONICAL_LATENCY_BUCKET_EDGES_MS,
+    )
+    resource_run = ResourceRun.open(
+        profile,
+        run_id="observe-only",
+        workspace_scope="repo",
+        manifest_path=tmp_path / "run.json",
+        transport=_DirectTransport(service),
+    )
+    trace = resource_run.open_trace(
+        trace_id="trace",
+        container_runtime="docker",
+        container_id="container",
+        artifact_path=tmp_path / "trace.json",
+    )
+    service._traces[trace._trace_token].telemetry_queue.join()
+
+    token = trace.begin_tool_call("call", "echo ok")
+    assert token.prediction is None
+    trace.finish_tool_call(
+        token,
+        replay_response={"returncode": 0, "result": "ok"},
+    )
+    assert trace.finalize(replay_execution="completed") is None
+    assert trace.final_artifact is not None
+    assert trace.final_artifact["calls"][0]["eligible_for_kb"] is True
+    assert resource_run.finalize(workload_status="completed") is None
+    assert resource_run.result is not None
+    assert resource_run.result["promoted_observation_count"] == 0
+    assert store.observation_count() == 0
+    service.close()
+
+
+def test_observe_predict_keeps_existing_unpromoted_store_semantics(
+    tmp_path: Path,
+) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite3")
+    service = ResourceService(
+        store,
+        _DirectTransport(
+            TelemetryService(
+                collector_factory=_FakeCollector,
+                state_dir=tmp_path / "telemetry",
+            )
+        ),
+    )
+    run = _open_run(service, behavior="observe_predict", update_policy="frozen")
+    trace = _open_trace(service, run["run_token"])
+    _run_call(
+        service,
+        trace["trace_token"],
+        call_id="call",
+        command="echo ok",
+    )
+    closed = service.dispatch(
+        "CloseTrace",
+        {"trace_token": trace["trace_token"], "workload_status": "completed"},
+    )
+
+    assert closed["artifact"]["calls"][0]["eligible_for_kb"] is False
+    assert closed["artifact"]["calls"][0]["invalid_reasons"][-1]["kind"] == (
+        "learning_disabled"
+    )
+    assert store.observation_count() == 1
+    closed_run = service.dispatch(
+        "CloseRun",
+        {"run_token": run["run_token"], "workload_status": "completed"},
+    )
+    assert closed_run["promoted_observation_count"] == 0
+    service.close()
+
+
 def test_thin_client_preserves_begin_failure_and_healthy_sibling(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

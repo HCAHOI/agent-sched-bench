@@ -40,6 +40,67 @@ def test_parse_collect_args_accepts_skip_and_concurrency() -> None:
     assert args.concurrency == 3
     assert args.tool_resource_profile == "resource.yaml"
     assert args.service_tier == "fast"
+    assert args.tool_resource_telemetry == "off"
+
+
+def test_parse_collect_args_accepts_managed_clause_telemetry() -> None:
+    args = parse_collect_args([
+        "--provider",
+        "openrouter",
+        "--model",
+        "z-ai/glm-5.1",
+        "--tool-resource-telemetry",
+        "clause",
+    ])
+
+    assert args.tool_resource_telemetry == "clause"
+    assert args.tool_resource_profile is None
+
+
+def test_parse_collect_args_rejects_profile_with_managed_telemetry() -> None:
+    with pytest.raises(SystemExit):
+        parse_collect_args([
+            "--provider",
+            "openrouter",
+            "--model",
+            "z-ai/glm-5.1",
+            "--tool-resource-profile",
+            "resource.yaml",
+            "--tool-resource-telemetry",
+            "clause",
+        ])
+
+
+def test_managed_clause_telemetry_cleans_up_on_sigterm(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import trace_collect.cli as cli
+
+    processes = [SimpleNamespace(pid=101), SimpleNamespace(pid=102)]
+    stopped: list[tuple[int, bool]] = []
+    monkeypatch.setattr(cli.subprocess, "Popen", lambda *_args, **_kwargs: processes.pop(0))
+    monkeypatch.setattr(cli, "_wait_for_socket", lambda *_args: None)
+    monkeypatch.setattr(
+        cli,
+        "_stop_service",
+        lambda process, privileged=False: stopped.append((process.pid, privileged)),
+    )
+    previous_sigterm = cli.signal.getsignal(cli.signal.SIGTERM)
+
+    with pytest.raises(SystemExit) as exc:
+        with cli._managed_clause_telemetry(
+            tmp_path / "run",
+            container_runtime="docker",
+            verbose=False,
+        ):
+            handler = cli.signal.getsignal(cli.signal.SIGTERM)
+            assert callable(handler)
+            handler(cli.signal.SIGTERM, None)
+
+    assert exc.value.code == 128 + cli.signal.SIGTERM
+    assert stopped == [(102, False), (101, True)]
+    assert cli.signal.getsignal(cli.signal.SIGTERM) == previous_sigterm
 
 
 def test_parse_collect_args_rejects_negative_skip() -> None:

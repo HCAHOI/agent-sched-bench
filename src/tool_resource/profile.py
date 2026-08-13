@@ -11,7 +11,7 @@ import yaml
 
 from tool_resource.runtime_kb import CANONICAL_LATENCY_BUCKETS, LatencyBuckets
 
-_BEHAVIORS = {"predict", "observe_predict", "observe_predict_learn"}
+_BEHAVIORS = {"observe", "predict", "observe_predict", "observe_predict_learn"}
 _UPDATE_POLICIES = {"frozen", "causal"}
 _TELEMETRY_REQUIREMENTS = {"best_effort", "required_for_valid_evidence"}
 _PROFILE_KEYS = {

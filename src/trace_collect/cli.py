@@ -7,7 +7,12 @@ import asyncio
 import json
 import logging
 import os
+import signal
+import subprocess
 import sys
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from llm_call import add_llm_config_arguments, resolve_llm_config
@@ -156,12 +161,22 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Resume an interrupted run by passing its existing run directory path.",
     )
-    parser.add_argument(
+    resource_group = parser.add_mutually_exclusive_group()
+    resource_group.add_argument(
         "--tool-resource-profile",
         default=None,
         help=(
             "Canonical tool-resource profile. Omit to disable the resource "
             "service for collection."
+        ),
+    )
+    resource_group.add_argument(
+        "--tool-resource-telemetry",
+        choices=["off", "clause"],
+        default="off",
+        help=(
+            "Collector-managed eBPF clause telemetry. This observes only; it "
+            "does not query, update, or persist the resource KB."
         ),
     )
     parser.add_argument(
@@ -426,6 +441,131 @@ def main() -> None:
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _wait_for_socket(path: Path, process: subprocess.Popen[bytes]) -> None:
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        if path.is_socket():
+            return
+        if process.poll() is not None:
+            raise RuntimeError(
+                f"service exited {process.returncode} before creating {path}"
+            )
+        time.sleep(0.05)
+    raise RuntimeError(f"timed out waiting for service socket {path}")
+
+
+def _stop_service(
+    process: subprocess.Popen[bytes] | None,
+    *,
+    privileged: bool = False,
+) -> None:
+    if process is None or process.poll() is not None:
+        return
+    if privileged:
+        subprocess.run(
+            ["sudo", "-n", "/bin/kill", "-TERM", "--", f"-{process.pid}"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    else:
+        os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        if privileged:
+            subprocess.run(
+                ["sudo", "-n", "/bin/kill", "-KILL", "--", f"-{process.pid}"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=10)
+
+
+@contextmanager
+def _managed_clause_telemetry(
+    run_dir: Path,
+    *,
+    container_runtime: str,
+    verbose: bool,
+) -> Iterator[Path]:
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def exit_on_sigterm(signum, _frame) -> None:
+        raise SystemExit(128 + signum)
+
+    runtime = run_dir / "_tool_resource_runtime" / f"collector-{os.getpid()}"
+    runtime.mkdir(parents=True, exist_ok=False)
+    telemetry_socket = runtime / "telemetry.sock"
+    resource_socket = runtime / "resource.sock"
+    profile_path = runtime / "resource.yaml"
+    profile_path.write_text(
+        "\n".join(
+            [
+                "tool_resource:",
+                f"  endpoint: unix://{resource_socket}",
+                "  behavior: observe",
+                "  update_policy: frozen",
+                "  snapshot: latest_at_run_start",
+                "  telemetry_requirement: required_for_valid_evidence",
+                "  latency_bucket_edges_ms: [500, 2000, 8000, 30000]",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    pythonpath = f"{REPO_ROOT / 'src'}:{REPO_ROOT}:/usr/lib/python3/dist-packages"
+    telemetry_command = [
+        "sudo", "-n", "env", f"PYTHONPATH={pythonpath}", sys.executable,
+        "-m", "tool_resource.telemetryd",
+        "--socket", str(telemetry_socket),
+        "--allowed-uid", str(os.getuid()),
+        "--socket-gid", str(os.getgid()),
+        "--container-runtime", Path(container_runtime).name,
+        "--state-dir", str(runtime / "telemetry-state"),
+    ]
+    resource_command = [
+        sys.executable, "-m", "tool_resource.resource_agentd",
+        "--socket", str(resource_socket),
+        "--database", str(runtime / "observations.sqlite3"),
+        "--telemetry-socket", str(telemetry_socket),
+    ]
+    if verbose:
+        telemetry_command.append("--verbose")
+        resource_command.append("--verbose")
+    telemetry_process: subprocess.Popen[bytes] | None = None
+    resource_process: subprocess.Popen[bytes] | None = None
+    signal.signal(signal.SIGTERM, exit_on_sigterm)
+    try:
+        with (runtime / "telemetryd.log").open("wb") as output:
+            telemetry_process = subprocess.Popen(
+                telemetry_command,
+                cwd=REPO_ROOT,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        _wait_for_socket(telemetry_socket, telemetry_process)
+        with (runtime / "resource-agentd.log").open("wb") as output:
+            resource_process = subprocess.Popen(
+                resource_command,
+                cwd=REPO_ROOT,
+                env={**os.environ, "PYTHONPATH": f"{REPO_ROOT / 'src'}:{REPO_ROOT}"},
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        _wait_for_socket(resource_socket, resource_process)
+        yield profile_path
+    finally:
+        _stop_service(resource_process)
+        _stop_service(telemetry_process, privileged=True)
+        signal.signal(signal.SIGTERM, previous_sigterm)
+
+
 def _run_collect(args: argparse.Namespace) -> None:
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -474,7 +614,7 @@ def _run_collect(args: argparse.Namespace) -> None:
 
     from agents.benchmarks import get_benchmark_class
     from agents.benchmarks.base import BenchmarkConfig
-    from trace_collect.collector import collect_traces
+    from trace_collect.collector import build_run_dir, collect_traces
 
     benchmark_yaml = REPO_ROOT / "configs" / "benchmarks" / f"{args.benchmark}.yaml"
     if not benchmark_yaml.exists():
@@ -484,42 +624,65 @@ def _run_collect(args: argparse.Namespace) -> None:
     plugin_cls = get_benchmark_class(config.slug)
     benchmark = plugin_cls(config)
 
-    run_dir = asyncio.run(
-        collect_traces(
-            scaffold=args.scaffold,
-            container_executable=args.container,
-            provider_name=provider_config.name,
-            env_key=provider_config.env_key,
-            api_base=provider_config.api_base,
-            api_key=provider_config.api_key,
-            model=provider_config.model,
-            benchmark=benchmark,
-            max_iterations=args.max_iterations,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            top_k=args.top_k,
-            repetition_penalty=args.repetition_penalty,
-            service_tier=args.service_tier,
-            sample=args.sample,
-            selection_seed=args.selection_seed,
-            skip=args.skip,
-            concurrency=args.concurrency,
-            instance_ids=args.instance_ids.split(",") if args.instance_ids else None,
-            run_id=args.run_id,
-            max_context_tokens=args.max_context_tokens,
-            mcp_config=args.mcp_config,
-            prompt_template=args.prompt_template,
-            min_free_disk_gb=args.min_free_disk_gb,
-            tool_resource_profile=(
-                Path(args.tool_resource_profile) if args.tool_resource_profile else None
-            ),
-        )
+    managed_run_dir = None
+    resource_context = nullcontext(
+        Path(args.tool_resource_profile) if args.tool_resource_profile else None
     )
+    if args.tool_resource_telemetry == "clause":
+        if args.container is None:
+            print(
+                "ERROR: --tool-resource-telemetry clause requires --container.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        managed_run_dir = (
+            Path(args.run_id)
+            if args.run_id
+            else build_run_dir(benchmark, provider_config.model)
+        )
+        resource_context = _managed_clause_telemetry(
+            managed_run_dir,
+            container_runtime=args.container,
+            verbose=args.verbose,
+        )
+
+    with resource_context as resource_profile:
+        run_dir = asyncio.run(
+            collect_traces(
+                scaffold=args.scaffold,
+                container_executable=args.container,
+                provider_name=provider_config.name,
+                env_key=provider_config.env_key,
+                api_base=provider_config.api_base,
+                api_key=provider_config.api_key,
+                model=provider_config.model,
+                benchmark=benchmark,
+                max_iterations=args.max_iterations,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                repetition_penalty=args.repetition_penalty,
+                service_tier=args.service_tier,
+                sample=args.sample,
+                selection_seed=args.selection_seed,
+                skip=args.skip,
+                concurrency=args.concurrency,
+                instance_ids=(
+                    args.instance_ids.split(",") if args.instance_ids else None
+                ),
+                run_id=str(managed_run_dir) if managed_run_dir else args.run_id,
+                max_context_tokens=args.max_context_tokens,
+                mcp_config=args.mcp_config,
+                prompt_template=args.prompt_template,
+                min_free_disk_gb=args.min_free_disk_gb,
+                tool_resource_profile=resource_profile,
+            )
+        )
     print(f"Traces written to: {run_dir}/")
     results_path = run_dir / "results.jsonl"
     if results_path.exists():
         print(f"Results written to: {results_path}")
-    if args.tool_resource_profile and _resource_run_manifests_invalid(
+    if resource_profile and _resource_run_manifests_invalid(
         run_dir / "tool_resource_runs"
     ):
         print(
