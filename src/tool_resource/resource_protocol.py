@@ -38,7 +38,7 @@ class ResourceTransport(Protocol):
 #: OpenTrace, BeginCall, and EndCall retain the short default timeout.
 RESOURCE_OPERATION_TIMEOUTS_S = {
     "AwaitTraceReady": 300.0,
-    "CloseTrace": 300.0,
+    "CloseTrace": 900.0,
     "CloseRun": 300.0,
 }
 

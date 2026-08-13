@@ -38,7 +38,9 @@ class TelemetryTransport(Protocol):
 #: outlast a timeout sized for cheap RPCs without blocking the online caller.
 TELEMETRY_OPERATION_TIMEOUTS_S = {
     "AttachTarget": 120.0,
-    "FinishCall": 120.0,
+    # High-process-count PennyLane calls took up to 495 s to drain and analyze.
+    # This runs on resource-agentd's background FIFO, not the workload path.
+    "FinishCall": 600.0,
     "FinalizeSession": 120.0,
 }
 

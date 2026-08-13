@@ -3748,6 +3748,7 @@ def test_heavy_telemetry_operations_get_their_own_timeout() -> None:
     assert transport.operation_timeouts_s["AttachTarget"] > transport.timeout_s
     assert transport.operation_timeouts_s["FinishCall"] > transport.timeout_s
     assert transport.operation_timeouts_s["FinalizeSession"] > transport.timeout_s
+    assert transport.operation_timeouts_s["FinishCall"] == 600.0
     assert "Ping" not in transport.operation_timeouts_s
 
 
@@ -3760,7 +3761,8 @@ def test_resource_close_timeouts_outlast_telemetry_finalize() -> None:
 
     assert (
         RESOURCE_OPERATION_TIMEOUTS_S["CloseTrace"]
-        > TELEMETRY_OPERATION_TIMEOUTS_S["FinalizeSession"]
+        > TELEMETRY_OPERATION_TIMEOUTS_S["FinishCall"]
+        + TELEMETRY_OPERATION_TIMEOUTS_S["FinalizeSession"]
     )
     assert (
         RESOURCE_OPERATION_TIMEOUTS_S["AwaitTraceReady"]
