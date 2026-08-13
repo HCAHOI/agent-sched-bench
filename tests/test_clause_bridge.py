@@ -12,6 +12,7 @@ from tool_resource.clause_bridge import (
     bridge_command,
     shell_lookup_exit_semantics,
 )
+from tool_resource.clause_parser import parse_command_clauses
 from tool_resource.runtime_kb import ClauseObservation
 
 _MS = 1_000_000
@@ -163,7 +164,7 @@ def _lookup_failure(
         replay_channel="raw_stderr" if exit_code else "tool_result",
         parser="anchored_shell_command_not_found_v1",
         exit_code_semantics=shell_lookup_exit_semantics(
-            command,
+            parse_command_clauses(command),
             "python",
             exit_code,
         )

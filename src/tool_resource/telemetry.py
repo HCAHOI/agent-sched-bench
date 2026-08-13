@@ -930,6 +930,7 @@ def _replay_tool_result(
 def shell_command_lookup_failure_evidence(
     *,
     command: str,
+    parsed_command: Mapping[str, Any] | None,
     source_tool_call_id: str,
     replay_tool_call_id: str,
     source_command: str,
@@ -946,7 +947,9 @@ def shell_command_lookup_failure_evidence(
     )
 
     if (
-        not source_tool_call_id
+        parsed_command is None
+        or parsed_command.get("parse_failed") is not False
+        or not source_tool_call_id
         or not replay_tool_call_id
         or source_command != command
         or replay_exit_code not in {0, 127}
@@ -967,7 +970,7 @@ def shell_command_lookup_failure_evidence(
     ):
         return None
     exit_code_semantics = shell_lookup_exit_semantics(
-        command,
+        parsed_command,
         source_match[0],
         source_exit_code,
     )
@@ -4374,6 +4377,7 @@ class ClauseTelemetryCollector:
         )
         lookup_failure = shell_command_lookup_failure_evidence(
             command=token.command,
+            parsed_command=token.static_plan,
             source_tool_call_id=token.source_tool_call_id,
             replay_tool_call_id=token.tool_call_id,
             source_command=token.source_command,

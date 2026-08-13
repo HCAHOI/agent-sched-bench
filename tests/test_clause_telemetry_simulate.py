@@ -18,8 +18,9 @@ from agents.openclaw.tools.base import Tool
 from agents.openclaw.tools.container import ContainerExecTool
 from agents.openclaw.tools.registry import ToolRegistry
 from llm_call.provider_base import LLMProvider, LLMResponse, ToolCallRequest
-from tool_resource import telemetry
+from tool_resource import clause_bridge, telemetry
 from tool_resource.artifact_schema import CLAUSE_TELEMETRY_SCHEMA_VERSION
+from tool_resource.clause_parser import parse_command_clauses
 from tool_resource.telemetry import (
     ARG_FLAG_ARGV_CAPPED,
     ARG_FLAG_CONTINUED,
@@ -2246,11 +2247,20 @@ def test_failed_exec_path_rejects_mixed_complete_attempts_on_same_pid() -> None:
     ]
 
 
-def test_direct_command_not_found_is_zero_target_evidence() -> None:
+def test_direct_command_not_found_is_zero_target_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     command = "cd /testbed && python -m pytest"
     diagnostic = "/bin/sh: 1: python: not found"
+    parsed = parse_command_clauses(command)
+    monkeypatch.setattr(
+        clause_bridge,
+        "parse_command_clauses",
+        lambda _command: (_ for _ in ()).throw(AssertionError("reparsed")),
+    )
     evidence = shell_command_lookup_failure_evidence(
         command=command,
+        parsed_command=parsed,
         source_tool_call_id="source-1",
         replay_tool_call_id="replay-1",
         source_command=command,
@@ -2269,7 +2279,7 @@ def test_direct_command_not_found_is_zero_target_evidence() -> None:
     ]
     collector = _collector_without_bpf()
     summary, violations = collector._summarize_call(
-        token=ToolCallToken("replay-1", command, 100, 0, 0),
+        token=ToolCallToken("replay-1", command, 100, 0, 0, static_plan=parsed),
         ended_ns=230,
         events=events,
         loss_counts={},
@@ -2293,6 +2303,7 @@ def test_pipeline_masked_command_not_found_uses_anchored_tool_result() -> None:
     diagnostic = "/bin/sh: 1: python: not found"
     evidence = shell_command_lookup_failure_evidence(
         command=command,
+        parsed_command=parse_command_clauses(command),
         source_tool_call_id="source-1",
         replay_tool_call_id="replay-1",
         source_command=command,
@@ -2311,6 +2322,7 @@ def test_command_not_found_text_that_is_not_a_shell_diagnostic_is_rejected() -> 
     assert (
         shell_command_lookup_failure_evidence(
             command=command,
+            parsed_command=parse_command_clauses(command),
             source_tool_call_id="source-1",
             replay_tool_call_id="replay-1",
             source_command=command,
@@ -2329,6 +2341,7 @@ def test_raw_stderr_is_preferred_over_diagnostic_looking_stdout() -> None:
     assert (
         shell_command_lookup_failure_evidence(
             command=command,
+            parsed_command=parse_command_clauses(command),
             source_tool_call_id="source-1",
             replay_tool_call_id="replay-1",
             source_command=command,
@@ -2347,6 +2360,7 @@ def test_command_not_found_source_replay_disagreement_is_rejected() -> None:
     assert (
         shell_command_lookup_failure_evidence(
             command=command,
+            parsed_command=parse_command_clauses(command),
             source_tool_call_id="source-1",
             replay_tool_call_id="replay-1",
             source_command=command,
@@ -2360,6 +2374,7 @@ def test_command_not_found_source_replay_disagreement_is_rejected() -> None:
     assert (
         shell_command_lookup_failure_evidence(
             command=command,
+            parsed_command=parse_command_clauses(command),
             source_tool_call_id="source-1",
             replay_tool_call_id="replay-1",
             source_command=command,
@@ -2377,6 +2392,7 @@ def test_command_not_found_path_heads_must_agree_exactly() -> None:
     assert (
         shell_command_lookup_failure_evidence(
             command=command,
+            parsed_command=parse_command_clauses(command),
             source_tool_call_id="source-1",
             replay_tool_call_id="replay-1",
             source_command=command,
@@ -2397,6 +2413,7 @@ def test_later_sequential_command_can_mask_command_not_found(command: str) -> No
     diagnostic = "/bin/sh: 1: python: not found"
     evidence = shell_command_lookup_failure_evidence(
         command=command,
+        parsed_command=parse_command_clauses(command),
         source_tool_call_id="source-1",
         replay_tool_call_id="replay-1",
         source_command=command,
@@ -2414,6 +2431,7 @@ def test_exit_zero_command_not_found_accepts_explicit_or_true() -> None:
     diagnostic = "/bin/sh: 1: python: not found"
     evidence = shell_command_lookup_failure_evidence(
         command=command,
+        parsed_command=parse_command_clauses(command),
         source_tool_call_id="source-1",
         replay_tool_call_id="replay-1",
         source_command=command,
@@ -2431,6 +2449,7 @@ def test_command_not_found_requires_both_tool_call_ids() -> None:
     assert (
         shell_command_lookup_failure_evidence(
             command="python",
+            parsed_command=parse_command_clauses("python"),
             source_tool_call_id="",
             replay_tool_call_id="replay-1",
             source_command="python",

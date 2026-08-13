@@ -448,18 +448,17 @@ def _lookup_exit_semantics(
 
 
 def shell_lookup_exit_semantics(
-    command: str,
+    parsed_command: Mapping[str, Any],
     executable_head: str,
     exit_code: int,
 ) -> str | None:
     """Classify the only accepted source/replay exit-code semantics."""
 
-    parsed = parse_command_clauses(command)
-    if parsed["parse_failed"]:
+    if parsed_command["parse_failed"]:
         return None
     return _lookup_exit_semantics(
-        parsed["clauses"],
-        parsed["control_edges"],
+        parsed_command["clauses"],
+        parsed_command["control_edges"],
         executable_head,
         exit_code,
     )
