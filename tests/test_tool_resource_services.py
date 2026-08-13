@@ -29,6 +29,7 @@ from tool_resource.resource_agentd import (
     _validated_command_window_memory_current,
     _validated_command_window_rss,
     build_cli_parser,
+    parse_command_clauses,
 )
 from tool_resource.resource_protocol import (
     RESOURCE_PROTOCOL_VERSION,
@@ -2308,6 +2309,7 @@ def test_trace_integrity_failure_withholds_otherwise_valid_call(
         {"trace_token": trace["trace_token"], "workload_status": "completed"},
     )
     assert closed["formal_completeness"] == "partial"
+    assert closed["collection_validity"] == "invalid"
     assert closed["artifact"]["calls"][0]["eligible_for_kb"] is False
     assert {
         reason["kind"] for reason in closed["artifact"]["calls"][0]["invalid_reasons"]
@@ -2928,6 +2930,95 @@ tool_resource:
         thread.join()
 
 
+def test_thin_client_preserves_begin_failure_and_healthy_sibling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = ResourceService(
+        ObservationStore(tmp_path / "observations.sqlite3"),
+        _DirectTransport(
+            TelemetryService(
+                collector_factory=_FakeCollector,
+                state_dir=tmp_path / "telemetry",
+            )
+        ),
+    )
+    profile = ResourceProfile(
+        endpoint="unix:///unused.sock",
+        behavior="observe_predict_learn",
+        update_policy="causal",
+        snapshot="latest_at_run_start",
+        telemetry_requirement="required_for_valid_evidence",
+        latency_bucket_edges_ms=CANONICAL_LATENCY_BUCKET_EDGES_MS,
+    )
+    resource_run = ResourceRun.open(
+        profile,
+        run_id="begin-failure",
+        workspace_scope="repo",
+        manifest_path=tmp_path / "run.json",
+        transport=_DirectTransport(service),
+    )
+    trace = resource_run.open_trace(
+        trace_id="trace",
+        container_runtime="docker",
+        container_id="container",
+        artifact_path=tmp_path / "trace.json",
+    )
+    assert trace.wait_ready() is None
+
+    original_parse = parse_command_clauses
+
+    def fail_parse(_command: str) -> dict[str, Any]:
+        raise RuntimeError("parser unavailable")
+
+    monkeypatch.setattr(
+        "tool_resource.resource_agentd.parse_command_clauses",
+        fail_parse,
+    )
+    failed = trace.begin_tool_call("failed", "echo failed")
+    assert failed._start_error is not None
+    trace.finish_tool_call(
+        failed,
+        replay_response={"returncode": 0, "result": "ok"},
+    )
+    monkeypatch.setattr(
+        "tool_resource.resource_agentd.parse_command_clauses",
+        original_parse,
+    )
+    healthy = trace.begin_tool_call("healthy", "echo ok")
+    assert healthy._start_error is None
+    trace.finish_tool_call(
+        healthy,
+        replay_response={"returncode": 0, "result": "ok"},
+    )
+
+    assert trace.finalize(replay_execution="completed") is not None
+    assert trace.final_artifact is not None
+    assert trace.final_artifact["telemetry_quality"] == "unavailable"
+    assert trace.final_artifact["collection_validity"] == "invalid"
+    assert trace.final_artifact["formal_completeness"] == "partial"
+    assert trace.final_artifact["call_coverage"] == {
+        "total_call_count": 2,
+        "eligible_call_count": 1,
+        "withheld_call_count": 1,
+        "eligible_fraction": 0.5,
+    }
+    calls = {
+        call["tool_call_id"]: call for call in trace.final_artifact["calls"]
+    }
+    assert calls["failed"]["eligible_for_kb"] is False
+    assert calls["failed"]["invalid_reasons"][0]["kind"] == (
+        "resource_service_failure"
+    )
+    assert calls["healthy"]["eligible_for_kb"] is True
+    assert resource_run.finalize(workload_status="completed") is not None
+    assert resource_run.result is not None
+    assert resource_run.result["telemetry_valid"] is False
+    assert resource_run.result["evidence_valid"] is False
+    assert resource_run.result["promoted_observation_count"] == 1
+    service.close()
+
+
 def test_thin_client_recovers_post_commit_close_trace_response_loss(
     tmp_path: Path,
 ) -> None:
@@ -3042,7 +3133,10 @@ def test_thin_client_run_spans_traces_for_causal_visibility(tmp_path: Path) -> N
     service.close()
 
 
-def test_prediction_only_client_does_not_require_telemetry(tmp_path: Path) -> None:
+def test_prediction_only_client_does_not_require_telemetry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     service = ResourceService(
         ObservationStore(tmp_path / "observations.sqlite3"),
         _DirectTransport(
@@ -3073,7 +3167,15 @@ def test_prediction_only_client_does_not_require_telemetry(tmp_path: Path) -> No
         container_id="container",
         artifact_path=tmp_path / "prediction.json",
     )
+    def fail_parse(_command: str) -> dict[str, Any]:
+        raise RuntimeError("parser unavailable")
+
+    monkeypatch.setattr(
+        "tool_resource.resource_agentd.parse_command_clauses",
+        fail_parse,
+    )
     token = trace.begin_tool_call("call", "echo prediction")
+    assert token._start_error is not None
     trace.finish_tool_call(
         token,
         replay_response={"returncode": 0, "result": "ok"},
@@ -3081,6 +3183,9 @@ def test_prediction_only_client_does_not_require_telemetry(tmp_path: Path) -> No
     assert trace.finalize(replay_execution="completed") is None
     assert trace.final_artifact is not None
     assert trace.final_artifact["telemetry_quality"] == "not_requested"
+    assert trace.final_artifact["collection_validity"] == "not_requested"
+    assert trace.final_artifact["calls"][0]["telemetry_quality"] == "not_requested"
+    assert trace.final_artifact["calls"][0]["eligible_for_kb"] is False
     assert resource_run.finalize(workload_status="completed") is None
     assert resource_run.result is not None
     assert resource_run.result["evidence_valid"] is True
@@ -3090,6 +3195,7 @@ def test_prediction_only_client_does_not_require_telemetry(tmp_path: Path) -> No
 
 def test_best_effort_run_preserves_invalid_telemetry_as_valid_evidence_policy(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = ResourceService(
         ObservationStore(tmp_path / "observations.sqlite3"),
@@ -3121,6 +3227,21 @@ def test_best_effort_run_preserves_invalid_telemetry_as_valid_evidence_policy(
         container_id="container",
         artifact_path=tmp_path / "trace.json",
     )
+    original_parse = parse_command_clauses
+
+    def fail_parse(_command: str) -> dict[str, Any]:
+        raise RuntimeError("parser unavailable")
+
+    monkeypatch.setattr(
+        "tool_resource.resource_agentd.parse_command_clauses",
+        fail_parse,
+    )
+    failed = trace.begin_tool_call("failed", "echo failed")
+    trace.finish_tool_call(failed, replay_response={"returncode": 0})
+    monkeypatch.setattr(
+        "tool_resource.resource_agentd.parse_command_clauses",
+        original_parse,
+    )
     token = trace.begin_tool_call("call", "echo ok")
     actual = {"returncode": 0, "result": "ok"}
     assert (
@@ -3128,11 +3249,73 @@ def test_best_effort_run_preserves_invalid_telemetry_as_valid_evidence_policy(
         is False
     )
     assert trace.finalize(replay_execution="completed") is not None
+    assert trace.final_artifact is not None
+    assert trace.final_artifact["formal_completeness"] == "unavailable"
     assert resource_run.finalize(workload_status="completed") is None
     assert resource_run.result is not None
     assert resource_run.result["telemetry_valid"] is False
     assert resource_run.result["evidence_valid"] is True
     assert resource_run.result["promoted_observation_count"] == 0
+    service.close()
+
+
+def test_best_effort_begin_failure_does_not_rescue_aborted_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = ResourceService(
+        ObservationStore(tmp_path / "observations.sqlite3"),
+        _DirectTransport(
+            TelemetryService(
+                collector_factory=_FakeCollector,
+                state_dir=tmp_path / "telemetry",
+            )
+        ),
+    )
+    profile = ResourceProfile(
+        endpoint="unix:///unused.sock",
+        behavior="observe_predict_learn",
+        update_policy="frozen",
+        snapshot="latest_at_run_start",
+        telemetry_requirement="best_effort",
+        latency_bucket_edges_ms=CANONICAL_LATENCY_BUCKET_EDGES_MS,
+    )
+    transport = _DirectTransport(service)
+    resource_run = ResourceRun.open(
+        profile,
+        run_id="best-effort-aborted",
+        workspace_scope="repo",
+        manifest_path=tmp_path / "run.json",
+        transport=transport,
+    )
+    transport.fail_operation = "OpenTrace"
+    resource_run.open_trace(
+        trace_id="failed-open",
+        container_runtime="docker",
+        container_id="container",
+        artifact_path=tmp_path / "failed-open.json",
+    )
+    transport.fail_operation = None
+    trace = resource_run.open_trace(
+        trace_id="begin-failure",
+        container_runtime="docker",
+        container_id="container",
+        artifact_path=tmp_path / "trace.json",
+    )
+
+    def fail_parse(_command: str) -> dict[str, Any]:
+        raise RuntimeError("parser unavailable")
+
+    monkeypatch.setattr(
+        "tool_resource.resource_agentd.parse_command_clauses",
+        fail_parse,
+    )
+    token = trace.begin_tool_call("failed", "echo failed")
+    trace.finish_tool_call(token, replay_response={"returncode": 0})
+    assert trace.finalize(replay_execution="completed") is not None
+    assert resource_run.finalize(workload_status="completed") is not None
+    assert resource_run.result is not None
+    assert resource_run.result["evidence_valid"] is False
     service.close()
 
 

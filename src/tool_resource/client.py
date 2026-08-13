@@ -192,6 +192,23 @@ class ResourceRun:
             ):
                 raise RuntimeError("resource-agentd returned an invalid run result")
             self._result = dict(result)
+            failed_traces = sum(
+                trace._client_service_failure for trace in self._traces
+            )
+            if failed_traces:
+                self._result["telemetry_valid"] = False
+                self._result["evidence_valid"] = bool(
+                    self._result["evidence_valid"]
+                    and (
+                        self.profile.telemetry_requirement == "best_effort"
+                        or "observe" not in self.profile.behavior
+                    )
+                )
+                run_manifest = dict(self._result["run_manifest"])
+                run_manifest["error"] = (
+                    f"{failed_traces} resource trace(s) contained service failures"
+                )
+                self._result["run_manifest"] = run_manifest
             _write_json(
                 self.manifest_path,
                 {
@@ -201,7 +218,7 @@ class ResourceRun:
             )
             return (
                 None
-                if result["evidence_valid"] is True
+                if self._result["evidence_valid"] is True
                 else "resource evidence invalid"
             )
         except Exception as exc:  # noqa: BLE001 - workloads already completed
@@ -270,6 +287,7 @@ class ResourceTrace:
         self._errors: list[str] = []
         self._calls: list[dict[str, Any]] = []
         self._final_artifact: dict[str, Any] | None = None
+        self._client_service_failure = False
         self._closed = False
 
     @classmethod
@@ -590,12 +608,77 @@ class ResourceTrace:
         artifact = trace_result.get("artifact")
         if not isinstance(artifact, Mapping):
             raise RuntimeError("resource-agentd returned no trace artifact")
-        self._final_artifact = dict(artifact)
+        final_artifact = dict(artifact)
         calls = artifact.get("calls")
         if isinstance(calls, list) and all(isinstance(call, Mapping) for call in calls):
-            self._calls = [dict(call) for call in calls]
+            server_calls = [dict(call) for call in calls]
+            by_id = {
+                str(call.get("tool_call_id")): call
+                for call in server_calls
+                if call.get("tool_call_id")
+            }
+            settled_ids: set[str] = set()
+            merged_calls: list[dict[str, Any]] = []
+            for local_call in self._calls:
+                call_id = str(local_call.get("tool_call_id") or "")
+                if call_id in by_id:
+                    merged_calls.append(by_id[call_id])
+                    settled_ids.add(call_id)
+                else:
+                    merged_calls.append(local_call)
+            merged_calls.extend(
+                call
+                for call in server_calls
+                if str(call.get("tool_call_id") or "") not in settled_ids
+            )
+            if len(merged_calls) != len(server_calls):
+                telemetry_not_requested = (
+                    final_artifact.get("telemetry_quality") == "not_requested"
+                )
+                if telemetry_not_requested:
+                    for call in merged_calls:
+                        if call.get("tool_call_id") not in by_id:
+                            call["telemetry_quality"] = "not_requested"
+                eligible = sum(call.get("eligible_for_kb") is True for call in merged_calls)
+                local_errors = [
+                    str(reason.get("detail"))
+                    for call in merged_calls
+                    if call.get("tool_call_id") not in by_id
+                    for reason in call.get("invalid_reasons", [])
+                    if isinstance(reason, Mapping)
+                    and reason.get("kind") == "resource_service_failure"
+                ]
+                coverage = {
+                    "total_call_count": len(merged_calls),
+                    "eligible_call_count": eligible,
+                    "withheld_call_count": len(merged_calls) - eligible,
+                    "eligible_fraction": eligible / len(merged_calls),
+                }
+                final_artifact["calls"] = merged_calls
+                final_artifact["call_coverage"] = coverage
+                if not telemetry_not_requested:
+                    self._client_service_failure = True
+                    final_artifact["telemetry_quality"] = "unavailable"
+                    if final_artifact.get("formal_completeness") != "unavailable":
+                        final_artifact["formal_completeness"] = "partial"
+                    final_artifact["collection_validity"] = "invalid"
+                    summary = dict(final_artifact.get("session_summary") or {})
+                    errors = list(summary.get("errors") or [])
+                    errors.extend(
+                        error for error in local_errors if error not in errors
+                    )
+                    summary.update(
+                        collection_validity="invalid",
+                        formal_completeness=final_artifact["formal_completeness"],
+                        eligible_call_count=eligible,
+                        withheld_call_count=len(merged_calls) - eligible,
+                        errors=errors,
+                    )
+                    final_artifact["session_summary"] = summary
+            self._calls = merged_calls
+        self._final_artifact = final_artifact
         _write_json(self.artifact_path, self._final_artifact)
-        if trace_result.get("telemetry_status") not in {"ok", "not_requested"}:
+        if final_artifact.get("collection_validity") == "invalid":
             errors = trace_result.get("errors")
             if isinstance(errors, list):
                 self._errors.extend(str(error) for error in errors)

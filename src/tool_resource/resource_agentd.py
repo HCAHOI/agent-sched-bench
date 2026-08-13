@@ -30,6 +30,7 @@ from tool_resource._uds import (
     require_fields,
 )
 from tool_resource.clause_parser import parse_command_clauses
+from tool_resource.mvdan_client import ensure_compatible_adapter
 from tool_resource.resource_protocol import (
     RESOURCE_PROTOCOL_VERSION,
     ResourceProtocolError,
@@ -2052,6 +2053,7 @@ def _trace_result(
         summary.get("collector_health") == "healthy"
         and summary.get("collection_validity") == "valid"
         and summary.get("cleanup_status") == "ok"
+        and not summary.get("errors")
     )
     telemetry_ok = promotion_eligible and all(
         not call.telemetry_status.startswith("unavailable")
@@ -2059,9 +2061,13 @@ def _trace_result(
     )
     trace.promotion_eligible = promotion_eligible
     eligible = sum(call["eligible_for_kb"] is True for call in calls)
+    formal_available = (
+        summary.get("collector_health") == "healthy"
+        and summary.get("cleanup_status") == "ok"
+    )
     formal_completeness = (
         "unavailable"
-        if not telemetry_ok
+        if not formal_available
         else (
             "partial"
             if summary.get("formal_completeness") == "partial" or eligible != len(calls)
@@ -2297,6 +2303,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    ensure_compatible_adapter()
     client_uids = set(args.allowed_uid or [os.geteuid()])
     if any(uid < 0 for uid in client_uids):
         raise ValueError("client UIDs must be non-negative")
