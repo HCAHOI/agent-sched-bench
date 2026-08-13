@@ -21,7 +21,7 @@ lives in `tool-resource-service-architecture.md`.
 | GPU/KV | **Close CacheWise/C100 victim selection under the current simulator.** Tool-gap retention remains unresolved, not active. | Predictor gain was 1.481%; a hindsight upper bound was 9.620%. GPU action experiments exposed tail/action-activation problems. |
 | Runtime integration | **None authorized.** | No predictor, feedback controller, or scheduler is integrated for production. |
 | PennyLane collection | **Do not run high-load PennyLane on this 16 GB host.** | Existing runs already OOM; `concurrency=1` does not constrain task-internal `pytest -n auto` workers. Use existing valid traces or an explicitly approved high-memory CPU node. |
-| Immediate work | **Re-establish the action frontier using existing non-PennyLane traces; no collection or evaluator is currently authorized.** | Raw local PennyLane traces have been deleted. Historical result artifacts remain, but no PennyLane follow-up can run locally. |
+| Immediate work | **Establish the joint GPU–tool scheduling ceiling from existing traces and measured GPU costs; no collection or evaluator is currently authorized.** | CPU-only analysis is a cheap preflight, not the intended systems contribution. Raw local PennyLane traces have been deleted. |
 
 `status: no_go` answers one frozen claim. It does not authorize deleting a
 component marked **KEEP** above.
@@ -109,25 +109,26 @@ or runtime integration.
 
 ### Paper-level question
 
-> Once an agent reveals a tool command, can command structure, repository
-> history, and offline tool documentation predict its resource trajectory well
-> enough to run more agent tools concurrently without unsafe interference?
+> Can an agent scheduler use tool-command understanding to coordinate GPU
+> inference, KV state, and distributed CPU/tool execution across alternating
+> agent phases, improving completion time and utilization without unsafe
+> interference?
 
 This replaces “find a better KB data structure” as the organizing question.
 The intended chain is:
 
 ```text
-command + docs-derived execution factors + settled traces
-                    -> resource prediction
-current eBPF/cgroup state + prediction
-                    -> admit now or wait
-                    -> task completion, utilization, and safety
+command + docs-derived factors + settled traces -> tool time/resource forecast
+GPU queue/KV state + CPU-worker state + feedback -> joint phase decision
+  -> admit another agent / run or queue tool / keep or offload KV / place task
+  -> task completion, GPU tail, tool service, utilization, and safety
 ```
 
 The LM, if used, runs once before deployment and emits bounded execution
 factors. It never predicts cost directly and has zero prediction-time cost.
 The KB learns measured cost from traces. The scheduler consumes predictions;
-classification accuracy alone is not the claim.
+classification accuracy alone is not the claim. CPU-only backfill is one
+action component, not the paper's boundary.
 
 ### What we have established
 
@@ -142,61 +143,84 @@ classification accuracy alone is not the claim.
    improved SQLGlot mean completion 14.620% with hindsight RSS safety. A
    PennyLane temporal-RSS oracle improved mean completion 48.823% over static
    peak packing. Both expose headroom; neither is deployable evidence.
-4. **Point classes are not enough for safe overlap.** Better RSS accuracy did
+4. **GPU/tool phase coupling is already visible.** Raising static active-task
+   concurrency from four to eight reduced mean task JCT 21.77%, but worsened
+   paired p99 TTFT to 1.262x and 1.131x. Separating task concurrency eight from
+   LLM concurrency four reduced mean JCT 13.465%, but a host-side semaphore
+   queue inflated end-to-end p99 TTFT by 15.984x–22.231x. These are exposed
+   trade-offs and a queue-design failure, not evidence against joint scheduling.
+5. **Point classes are not enough for safe overlap.** Better RSS accuracy did
    not produce a better static admission policy. Mean CPU demand admitted too
    much burst overlap; peak demand admitted too little. The missing object is a
-   time-varying resource envelope plus uncertainty, not another bucket mapping.
+   forecast of phase completion and time-varying resource use, not another
+   bucket mapping.
 
-### Primary direction: tool-call co-scheduling
+### Primary direction: joint GPU–tool phase scheduling
 
-The action is deliberately small: when a tool command becomes ready, decide
-whether it can run beside the current command or must wait. No new scheduler
-framework is needed.
+Agents alternate between GPU inference and CPU/tool execution. The scheduler
+should not reserve one fixed end-to-end concurrency slot for both phases. It
+should separately control:
+
+- **GPU:** ready-request admission and priority; stock KV retention versus the
+  existing five-second reactive offload baseline;
+- **tool workers:** run/wait admission under CPU, RSS, and Disk pressure;
+- **agent admission:** temporary extra tasks while incumbents are in tool
+  phases, without creating a burst of simultaneous returning GPU requests;
+- **distributed placement:** assign whole task containers to CPU workers that
+  share one GPU service. Per-command workspace migration is not required.
 
 Proceed as a decision tree:
 
-1. **Data/action audit, existing traces only.** Rank SQLGlot, SWE100/277, Zarr,
-   and Terminal-Bench by independent tasks, repeated command families,
-   command duration, CPU/RSS/Disk pressure, and overlap opportunity. SQLGlot is
-   the only large same-repository corpus now local; Zarr has about 30 valid
-   artifacts but previously showed little memory pressure; SWE and TB test
-   breadth, not same-repository learning.
-2. **Oracle gate before a new predictor.** On every corpus that has pressure,
-   compare ordinary FCFS/static-peak admission with a full-profile oracle that
-   only decides `run now` or `wait`. If no workload has a safe, material
-   completion-time opportunity, stop this action before method work or new
-   collection.
-3. **Action-specific prediction.** Only after the oracle passes, predict a
-   conservative CPU/RSS trajectory from settled command histories. Use the
-   current Clause-KB/Task-Aware outputs as baselines; use causal eBPF/cgroup
-   samples to locate the running command's current phase. Abstain when evidence
-   is unavailable. Do not turn a Low/Medium/High point class directly into a
-   safety certificate.
+1. **Joint oracle before infrastructure.** Replay the existing agent phase
+   trajectories with measured GPU inference/KV costs and recorded tool
+   profiles. Compare the best GPU-only action, best tool-only action, and a
+   joint oracle. The joint direction advances only if coordination adds value
+   beyond both single-resource controls at matched GPU-tail and tool-service
+   operating points. CPU-only simulation is acceptable for this gate; it is
+   not physical evidence.
+2. **Small causal action set.** If the joint oracle passes, begin with only
+   three decisions: admit another agent or wait; run a ready tool or wait; keep
+   KV or use the existing five-second reactive offload. Do not begin with RL,
+   PD separation, per-command remote migration, or a general cluster manager.
+3. **Action-specific forecasts.** Predict the distribution of active tools'
+   return times and conservative CPU/RSS trajectories from settled histories.
+   Use causal eBPF/cgroup samples to update surviving tools and locate their
+   current phase. Use Task-Aware and feedback-only as separate controls;
+   abstain when evidence is unavailable.
 4. **Tool understanding where it changes the action.** Add offline
    documentation factors only for command families that account for oracle
    starts or prediction failures. The representation should express execution
    policy, requested-work scope, and mode; measured traces still determine
    resource cost. Demonstrate on three or four tools only after label-blind
    coverage shows they matter.
-5. **Physical validation, then fresh confirmation.** A candidate must preserve
-   command outcomes, avoid OOM/capacity violations, and improve task completion
-   against normal FCFS and feedback-only controls. Only then collect a fresh
-   same-repository workload on suitable hardware.
+5. **Physical single-GPU validation.** Use one GPU server and one or more CPU
+   tool workers. Compare fixed concurrency, feedback-only, and joint predicted
+   scheduling. Report a Pareto frontier rather than inventing one fixed SLO:
+   mean/tail task JCT, GPU TTFT/throughput, tool service inflation, KV transfer,
+   OOM/capacity violations, and utilization.
+6. **Distributed and fresh confirmation.** Only a physical single-GPU gain
+   authorizes multiple CPU nodes or a fresh same-repository collection. Whole
+   task containers remain on their assigned CPU worker and call the shared GPU;
+   the experiment measures whether prediction improves load balance and phase
+   overlap, not remote-filesystem engineering.
 
-The first deliverable is therefore a short action-opportunity table over
-existing traces, not another predictor, LM call, or collection.
+The first deliverable is a joint-oracle table over existing traces: absolute
+GPU/tool utilization and task completion for GPU-only, tool-only, and joint
+actions. It requires no new trace collection or LM call. A GPU is needed only
+after this gate passes.
 
 ### Secondary directions
 
-- **Disk-aware co-location** is worth opening only if the audit finds repeated
-  Disk-High commands and measurable same-device interference. Disk prediction
+- **Disk-aware tool placement** is part of the distributed branch only if the
+  audit finds repeated Disk-High commands and measurable same-device
+  interference. Disk prediction
   is already relatively accurate, but no action headroom has been measured.
-- **GPU KV retention** is deferred. The five-second survival baseline captures
-  most available value, learned early triggers added stall or activated too
-  rarely, and physical work requires a GPU again.
-- **Heterogeneous worker placement** is a later consumer if co-scheduling
-  succeeds. It currently adds remote-workspace and retry semantics without
-  resolving whether predictions change a useful decision.
+- **PD separation** is conditional. Add it only if the repaired joint scheduler
+  still shows prefill bursts harming decode/TTFT; the prior phase-aware result
+  was dominated by host-side queueing, so it cannot justify PD infrastructure.
+- **Predictive early KV timing** remains closed as a standalone line. The joint
+  scheduler may use stock caching and the causal five-second action; it must not
+  claim that earlier learned triggers already work.
 
 ### Closed mechanisms
 
