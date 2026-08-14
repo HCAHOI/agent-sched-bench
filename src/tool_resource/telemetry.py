@@ -202,11 +202,11 @@ struct event_small_t {
 /* Page counts must be powers of two. The argv ring keeps its original size so
  * no workload mix can hold fewer argv events than before this split; the small
  * ring is added capacity, and a loss in either voids the call, so the safe
- * starting point is "never worse", not "same total bytes". 4MiB + 1MiB per
- * collector: 6553 argv-carrying events as before, plus 8192 counter events
+ * starting point is "never worse", not "same total bytes". 4MiB + 4MiB per
+ * collector: 6553 argv-carrying events as before, plus 32768 counter events
  * that used to compete for the same space at five times the width. */
 BPF_RINGBUF_OUTPUT(events, 1024);
-BPF_RINGBUF_OUTPUT(events_small, 256);
+BPF_RINGBUF_OUTPUT(events_small, 1024);
 BPF_ARRAY(target_cgroup, u64, 1);
 BPF_ARRAY(ringbuf_reserve_failures, u64, 1);
 /* Diagnostic only: which ring ran out. ringbuf_reserve_failures stays the
