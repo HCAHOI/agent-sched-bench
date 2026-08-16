@@ -1,0 +1,495 @@
+{
+  "arms": {
+    "clause_kb": {
+      "equal_weight_accuracy": 0.7567996556934223,
+      "equal_weight_severe_underprediction_rate": 0.045450195634024915,
+      "targets": {
+        "disk_read_write_bytes_total": {
+          "accuracy": 0.7272727272727273,
+          "confusion_label_by_prediction": [
+            [
+              245,
+              120,
+              3
+            ],
+            [
+              5,
+              155,
+              5
+            ],
+            [
+              2,
+              21,
+              16
+            ]
+          ],
+          "eligible_n": 572,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.0034965034965034965,
+          "within_one_bucket_accuracy": 0.9912587412587412
+        },
+        "latency": {
+          "confusion_label_by_prediction": [
+            [
+              210,
+              14,
+              5,
+              0,
+              13
+            ],
+            [
+              12,
+              21,
+              13,
+              0,
+              42
+            ],
+            [
+              2,
+              9,
+              36,
+              3,
+              58
+            ],
+            [
+              0,
+              12,
+              11,
+              9,
+              33
+            ],
+            [
+              0,
+              0,
+              15,
+              0,
+              92
+            ]
+          ],
+          "eligible_examples": 610,
+          "exact_class_accuracy": 0.6032786885245902,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.047540983606557376,
+          "within_one_bucket_accuracy": 0.759016393442623
+        },
+        "peak_cpu_cores": {
+          "accuracy": 0.9395973154362416,
+          "confusion_label_by_prediction": [
+            [
+              151,
+              0,
+              18
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              9,
+              0,
+              269
+            ]
+          ],
+          "eligible_n": 447,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.020134228187919462,
+          "within_one_bucket_accuracy": 0.9395973154362416
+        },
+        "sampled_peak_rss_mb": {
+          "accuracy": 0.7570498915401301,
+          "confusion_label_by_prediction": [
+            [
+              345,
+              9,
+              5
+            ],
+            [
+              33,
+              0,
+              2
+            ],
+            [
+              51,
+              12,
+              4
+            ]
+          ],
+          "eligible_n": 461,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.11062906724511931,
+          "within_one_bucket_accuracy": 0.8785249457700651
+        }
+      }
+    },
+    "majority": {
+      "equal_weight_accuracy": 0.6101859394254984,
+      "equal_weight_severe_underprediction_rate": 0.1681336093052426,
+      "targets": {
+        "disk_read_write_bytes_total": {
+          "accuracy": 0.6433566433566433,
+          "confusion_label_by_prediction": [
+            [
+              368,
+              0,
+              0
+            ],
+            [
+              165,
+              0,
+              0
+            ],
+            [
+              39,
+              0,
+              0
+            ]
+          ],
+          "eligible_n": 572,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.06818181818181818,
+          "within_one_bucket_accuracy": 0.9318181818181818
+        },
+        "latency": {
+          "confusion_label_by_prediction": [
+            [
+              242,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              88,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              108,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              65,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              107,
+              0,
+              0,
+              0,
+              0
+            ]
+          ],
+          "eligible_examples": 610,
+          "exact_class_accuracy": 0.39672131147540984,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.45901639344262296,
+          "within_one_bucket_accuracy": 0.5409836065573771
+        },
+        "peak_cpu_cores": {
+          "accuracy": 0.6219239373601789,
+          "confusion_label_by_prediction": [
+            [
+              0,
+              0,
+              169
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              278
+            ]
+          ],
+          "eligible_n": 447,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.0,
+          "within_one_bucket_accuracy": 0.6219239373601789
+        },
+        "sampled_peak_rss_mb": {
+          "accuracy": 0.7787418655097614,
+          "confusion_label_by_prediction": [
+            [
+              359,
+              0,
+              0
+            ],
+            [
+              35,
+              0,
+              0
+            ],
+            [
+              67,
+              0,
+              0
+            ]
+          ],
+          "eligible_n": 461,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.14533622559652928,
+          "within_one_bucket_accuracy": 0.8546637744034707
+        }
+      }
+    },
+    "task_aware": {
+      "equal_weight_accuracy": 0.7832602143991815,
+      "equal_weight_severe_underprediction_rate": 0.0209063539724676,
+      "targets": {
+        "disk_read_write_bytes_total": {
+          "accuracy": 0.7272727272727273,
+          "confusion_label_by_prediction": [
+            [
+              245,
+              120,
+              3
+            ],
+            [
+              5,
+              155,
+              5
+            ],
+            [
+              2,
+              21,
+              16
+            ]
+          ],
+          "eligible_n": 572,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.0034965034965034965,
+          "within_one_bucket_accuracy": 0.9912587412587412
+        },
+        "latency": {
+          "confusion_label_by_prediction": [
+            [
+              210,
+              14,
+              6,
+              0,
+              12
+            ],
+            [
+              11,
+              23,
+              15,
+              0,
+              39
+            ],
+            [
+              2,
+              10,
+              42,
+              5,
+              49
+            ],
+            [
+              0,
+              9,
+              11,
+              14,
+              31
+            ],
+            [
+              1,
+              2,
+              8,
+              4,
+              92
+            ]
+          ],
+          "eligible_examples": 610,
+          "exact_class_accuracy": 0.6245901639344262,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.036065573770491806,
+          "within_one_bucket_accuracy": 0.7901639344262295
+        },
+        "peak_cpu_cores": {
+          "accuracy": 0.9373601789709173,
+          "confusion_label_by_prediction": [
+            [
+              151,
+              0,
+              18
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              10,
+              0,
+              268
+            ]
+          ],
+          "eligible_n": 447,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.02237136465324385,
+          "within_one_bucket_accuracy": 0.9373601789709173
+        },
+        "sampled_peak_rss_mb": {
+          "accuracy": 0.8438177874186551,
+          "confusion_label_by_prediction": [
+            [
+              337,
+              11,
+              11
+            ],
+            [
+              25,
+              7,
+              3
+            ],
+            [
+              10,
+              12,
+              45
+            ]
+          ],
+          "eligible_n": 461,
+          "prediction_unavailable": 0,
+          "severe_underprediction_rate": 0.021691973969631236,
+          "within_one_bucket_accuracy": 0.9544468546637744
+        }
+      }
+    }
+  },
+  "claim_bearing": true,
+  "comparison": {
+    "task_aware_minus_clause_kb": {
+      "accuracy_difference": 0.02646055870575914,
+      "changes": {
+        "by_target": {
+          "disk_read_write_bytes_total": {
+            "changed": 0,
+            "harmful": 0,
+            "helpful": 0,
+            "helpful_task_ids": [],
+            "neutral": 0,
+            "tasks": 0
+          },
+          "latency": {
+            "changed": 54,
+            "harmful": 15,
+            "helpful": 28,
+            "helpful_task_ids": [
+              "PennyLaneAI__pennylane-5835",
+              "PennyLaneAI__pennylane-5866",
+              "PennyLaneAI__pennylane-5986",
+              "PennyLaneAI__pennylane-6358",
+              "PennyLaneAI__pennylane-6398",
+              "PennyLaneAI__pennylane-6732"
+            ],
+            "neutral": 11,
+            "tasks": 9
+          },
+          "peak_cpu_cores": {
+            "changed": 1,
+            "harmful": 1,
+            "helpful": 0,
+            "helpful_task_ids": [],
+            "neutral": 0,
+            "tasks": 1
+          },
+          "sampled_peak_rss_mb": {
+            "changed": 63,
+            "harmful": 9,
+            "helpful": 49,
+            "helpful_task_ids": [
+              "PennyLaneAI__pennylane-5835",
+              "PennyLaneAI__pennylane-5851",
+              "PennyLaneAI__pennylane-5866",
+              "PennyLaneAI__pennylane-5986",
+              "PennyLaneAI__pennylane-6049",
+              "PennyLaneAI__pennylane-6062",
+              "PennyLaneAI__pennylane-6147",
+              "PennyLaneAI__pennylane-6732"
+            ],
+            "neutral": 5,
+            "tasks": 10
+          }
+        },
+        "changed": 118,
+        "harmful": 25,
+        "helpful": 77,
+        "helpful_task_ids": [
+          "PennyLaneAI__pennylane-5835",
+          "PennyLaneAI__pennylane-5851",
+          "PennyLaneAI__pennylane-5866",
+          "PennyLaneAI__pennylane-5986",
+          "PennyLaneAI__pennylane-6049",
+          "PennyLaneAI__pennylane-6062",
+          "PennyLaneAI__pennylane-6147",
+          "PennyLaneAI__pennylane-6358",
+          "PennyLaneAI__pennylane-6398",
+          "PennyLaneAI__pennylane-6732"
+        ]
+      },
+      "paired_task_bootstrap": {
+        "cluster_unit": "task",
+        "draws": 2000,
+        "interval_95": [
+          0.007459255754234416,
+          0.04514906979407221
+        ],
+        "method": "paired_task_cluster_percentile_bootstrap",
+        "point_estimate": 0.026460558705759155,
+        "seed": 0,
+        "statistic": "task_aware_minus_clause_kb_equal_weight_accuracy"
+      }
+    }
+  },
+  "coverage": {
+    "clauses": 2406,
+    "commands": 1271,
+    "scored_commands": 610,
+    "tasks": 31,
+    "trace_fallback_tasks": 5
+  },
+  "gate": {
+    "go": true,
+    "helpful_on_at_least_two_tasks": true,
+    "higher_equal_weight_accuracy": true,
+    "more_helpful_than_harmful": true,
+    "no_more_severe_underprediction": true
+  },
+  "protocol": {
+    "baseline": "Clause-KB",
+    "candidate": "fixed Task-Aware Command Predictor",
+    "causal_update": "whole-task settlement",
+    "evaluation_unit": "eligible exec command",
+    "scored_tasks": 15,
+    "targets": {
+      "cpu_rss_disk_buckets": 3,
+      "latency_buckets": 5
+    },
+    "warmup_tasks": 16
+  },
+  "provenance": {
+    "git_sha": "1f6e3276268fd69e80f829da73e2cf3c1427c31b",
+    "public_rows_after_repo_filter": 18025,
+    "public_rows_before_repo_filter": 18224,
+    "public_telemetry": [
+      "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+      "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl"
+    ],
+    "role": "validation",
+    "run_dir": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816",
+    "split": "/home/chiyu/workspace/agent-sched-bench/analysis/development/offline-tool-semantics-splits.json"
+  },
+  "schema": "pennylane-multitarget-transfer-v1",
+  "status": "validation"
+}

@@ -1,6 +1,6 @@
 # Tool-Resource Prediction — Current Objective and Decisions
 
-**Effective:** 2026-08-13
+**Effective:** 2026-08-16
 **Scope:** current scientific contract, retained results, and stop conditions
 
 This is the authority for tool-resource targets, evaluation semantics, evidence
@@ -12,7 +12,7 @@ lives in `tool-resource-service-architecture.md`.
 
 | Area | Decision | What the evidence supports |
 |---|---|---|
-| Prediction | **KEEP Task-Aware Command Predictor** as the selected development candidate. | On exposed SQLGlot50 it improves equal-weight four-target accuracy from 80.203% for Clause-KB to 84.463%. It is not confirmation or deployed code. |
+| Prediction | **KEEP Task-Aware Command Predictor** as the selected candidate. | It improved equal-weight four-target accuracy from 80.203% to 84.463% on exposed SQLGlot50 and passed the preregistered PennyLane transfer gate, 75.680% to 78.326% on 15 scored tasks. It is not deployed code. |
 | Baseline | **KEEP Clause-KB** as the normal learned baseline. | It is the implemented raw exact/prefix/binary `ClauseResourceKB`; trie is an implementation detail, not a contribution. |
 | Runtime feedback | **KEEP causal command-level eBPF feedback** as a measured mechanism and control. | It reduced reserved CPU-core-seconds 45.010% at 1.543% service inflation on 259 SWE100/277 tasks. Tested admission consumers did not pass their utility gates. |
 | CPU action | **KEEP equal-share burstable execution and prediction-free CPU-idle FCFS as controls.** | Burstable has positive small-pair evidence but no valid general scheduling claim. CPU-idle FCFS has strong replay headroom but lacks causal memory safety. |
@@ -20,8 +20,8 @@ lives in `tool-resource-service-architecture.md`.
 | Memory action | **KEEP temporal RSS packing as action-space evidence only.** | A hindsight PennyLane oracle improved mean completion 48.823% versus static peak packing. No causal safe scheduler is established. |
 | GPU/KV | **Close CacheWise/C100 victim selection under the current simulator.** Tool-gap retention remains unresolved, not active. | Predictor gain was 1.481%; a hindsight upper bound was 9.620%. GPU action experiments exposed tail/action-activation problems. |
 | Runtime integration | **None authorized.** | No predictor, feedback controller, or scheduler is integrated for production. |
-| PennyLane collection | **Do not run high-load PennyLane on this 16 GB host.** | Existing runs already OOM; `concurrency=1` does not constrain task-internal `pytest -n auto` workers. Use existing valid traces or an explicitly approved high-memory CPU node. |
-| Immediate work | **Establish the joint GPU–tool scheduling ceiling from existing traces and measured GPU costs; no collection or evaluator is currently authorized.** | CPU-only analysis is a cheap preflight, not the intended systems contribution. Raw local PennyLane traces have been deleted. |
+| PennyLane collection | **Use the completed 76-task high-memory-node corpus; do not rerun it on this 16 GB host.** | All tasks have evidence-valid clause eBPF aggregates. Six replay-only attempts use the canonical trace-to-tool-call fallback. |
+| Immediate work | **Establish the joint GPU–tool scheduling ceiling from existing traces and measured GPU costs.** | Prediction now transfers to a high-load same-repository workload; the next question is whether it changes a useful action beyond GPU-only and tool-only controls. |
 
 `status: no_go` answers one frozen claim. It does not authorize deleting a
 component marked **KEEP** above.
@@ -132,10 +132,12 @@ action component, not the paper's boundary.
 
 ### What we have established
 
-1. **Prediction signal exists.** Task-Aware improves the exposed SQLGlot
-   four-target average from 80.203% to 84.463%. A documented interaction—pytest
-   worker count together with requested test scope—improves RSS High recall
-   from 2.381% to 54.762% on exposed PennyLane results.
+1. **Prediction signal transfers.** Task-Aware improves the exposed SQLGlot
+   four-target average from 80.203% to 84.463%. On the preregistered PennyLane
+   transfer it improves Clause-KB from 75.680% to 78.326%; the paired task
+   bootstrap interval is +0.746 to +4.515 points. A documented interaction—
+   pytest worker count together with requested test scope—also improves RSS
+   High recall from 2.381% to 54.762% on exposed PennyLane results.
 2. **Runtime signal exists broadly.** Causal CPU feedback reduced logical
    reservation 45.010% at 1.543% service inflation on 259 SWE tasks from 205
    repositories. This is a per-command counterfactual, not a scheduler result.
@@ -252,6 +254,7 @@ registered validity or action gate failed.
 | Experiment | Key result | Decision |
 |---|---|---|
 | SQLGlot multitarget predictor | Task-Aware 84.463% equal-weight accuracy vs Clause-KB 80.203% | Retain selected predictor |
+| PennyLane multitarget transfer | Task-Aware 78.326% vs Clause-KB 75.680%; 77 helpful/25 harmful; severe underprediction 2.091% vs 4.545% | Transfer gate GO; use in joint-action study |
 | pip/pytest upper bound | pytest hindsight routing +1.941 points overall; 93/118 corrections restored Clause-KB. pip perfect-tool ceiling +0.392 points | Retain pytest question; deprioritize pip |
 | Docs-only tool compiler v1 | Only `make` produced a valid spec; 1,792 predictions copied Clause-KB | Closed as uninformative, not a semantics impossibility result |
 | Plugin-aware pytest ToolSpec v1/v2 | One-shot generation failed structural contracts before labels | Compiler reliability blocker; no prediction verdict |
@@ -304,35 +307,25 @@ registered validity or action gate failed.
 
 ## 6. Current operational boundaries
 
-### Deleted PennyLane command-window replay
+### PennyLane high-memory collection
 
-The synchronized 2603 smoke passed measurement plumbing: all 33 commands had
-finite cgroup-memory peaks, zero read failures, and at least five samples; the
-peak range was 9.936896–6,122.881024 MB. This validated the measurement path,
-not host capacity for the high-load cohort.
+The dedicated CPU-node collection completed all 76 selected tasks. The cleaned
+local corpus is
+`traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816`: every
+task has one `attempt_1` with evidence-valid clause aggregates. Seventy attempts
+contain the ordinary collector sidecars; six retained source traces and valid
+eBPF replay aggregates, so evaluation reconstructs tool-call rows in memory
+with the collector's canonical trace converter. The immutable archive remains
+beside the extracted corpus.
 
-Before cleanup, the subsequent exposed replay15 run was **not valid evidence**:
-
-- 15 completed workload artifacts: 11 valid, four invalid;
-- invalid tasks: 2654, 3278, 3381, and 3386;
-- every invalid artifact reports overlapping exec tool calls and withholds all
-  calls fail-closed;
-- high-load xdist commands also reproduce the already-known OOM risk on this
-  16 GB, no-swap host.
-
-All raw local PennyLane traces and matching temporary collection directories
-were deleted on 2026-08-13. Historical machine-readable results listed in
-Section 8 remain, but the replay15 artifacts do not. Therefore the frozen
-cgroup-memory evaluator cannot run. Do not rerun PennyLane locally. A future
-recollection requires explicit approval and a dedicated high-memory CPU node;
-`concurrency=1` is insufficient because xdist creates task-internal parallel
-workers.
+This does not make the local 16 GB host safe for PennyLane. `pytest -n auto`
+can consume task-internal parallel memory regardless of collection concurrency;
+future physical reruns still require a high-memory CPU node.
 
 ### Deferred, not authorized
 
 - Load-8 live `keep` versus five-second `deadline/reactive` GPU action.
 - Load-32 stock evictable prefix-cache control versus `deadline/reactive`.
-- High-memory rerun of the four invalid PennyLane calibration tasks.
 
 These are not active work. Any revival requires a short current protocol,
 hardware/cost estimate, and explicit approval before launch.
@@ -343,11 +336,12 @@ hardware/cost estimate, and explicit approval before launch.
   are development-exposed.
 - SWE100 and SWE277 are development-exposed; their feedback result tests breadth
   but is not confirmation.
-- The 41-task PennyLane fit/replay split is development-exposed. Its raw local
-  traces were deleted; retained result artifacts are historical evidence but
-  no longer provide local byte-level reproduction.
-- The separate PennyLane warmup16 and validation16 remain untouched and
-  uncollected. They stay closed while the calibration gate is invalid.
+- The 41-task PennyLane fit/replay split is development-exposed and locally
+  reproducible from the cleaned corpus.
+- PennyLane warmup16 supplied fit evidence. Fifteen preregistered validation
+  tasks were scored once and are now consumed; `PennyLaneAI__pennylane-5846`
+  was excluded without replacement after a replay-format diagnostic exposed
+  its status, first clause aggregate, and trace excerpt.
 - Zarr development19 and validation10 are exposed; final12 remains untouched.
 - Confirmation requires genuinely fresh tasks, a new time period, or another
   suitable repository with criteria frozen before outcome access.
@@ -375,6 +369,8 @@ hardware/cost estimate, and explicit approval before launch.
 
 ### Tool semantics and survival
 
+- `analysis/results/pennylane-multitarget-transfer-development-v1/result.json`
+- `analysis/results/pennylane-multitarget-transfer-validation-v1/result.json`
 - `analysis/results/pip-pytest-upper-bound-sqlglot-v1/result.json`
 - `analysis/results/offline-tool-semantics-sqlglot-v1/result.json`
 - `analysis/results/static-survival-gap-action-swe177-20260810/result.json`
@@ -437,7 +433,7 @@ No new collection or runtime integration without a separate approved protocol.
 | Role | Files |
 |---|---|
 | Current authority | this file; `tool-resource-service-architecture.md` |
-| Frozen protocol provenance retained because evaluators/results reference it | `cpu-feedback-admission-protocol.md`, `cpu-feedback-borrowing-protocol.md`, `cpu-idle-speculative-backfill-protocol.md`, `cpu-idle-rss-safety-protocol.md`, `cpu-idle-short-null-amendment.md`, `pip-pytest-upper-bound-protocol.md` |
+| Frozen protocol provenance retained because evaluators/results reference it | `cpu-feedback-admission-protocol.md`, `cpu-feedback-borrowing-protocol.md`, `cpu-idle-speculative-backfill-protocol.md`, `cpu-idle-rss-safety-protocol.md`, `cpu-idle-short-null-amendment.md`, `pennylane-multitarget-transfer-protocol.md`, `pip-pytest-upper-bound-protocol.md` |
 | Machine-readable split/source inputs | JSON and pinned documentation snapshots in this directory |
 
 Completed implementation plans are not current documents and are not kept
