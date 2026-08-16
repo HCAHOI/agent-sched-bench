@@ -1,0 +1,423 @@
+{
+  "schema": "pennylane-finite-bound-joint-admission-v1",
+  "status": "no_go",
+  "corpus_role": "development_exposed",
+  "git_sha": "54991ea3ba9d4a94fa5f6430c1fe976881d552c7",
+  "protocol": "analysis/development/pennylane-finite-bound-joint-admission-protocol.md",
+  "run_dir": "traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816",
+  "input_tree_sha256": "53d8faa0a6bd98dcfb38bfdf0916c196ff8d54ae6a305828a7b6f8509f3f7f16",
+  "fit_task_ids": [
+    "PennyLaneAI__pennylane-1072",
+    "PennyLaneAI__pennylane-1117",
+    "PennyLaneAI__pennylane-1260",
+    "PennyLaneAI__pennylane-1320",
+    "PennyLaneAI__pennylane-1325",
+    "PennyLaneAI__pennylane-1329",
+    "PennyLaneAI__pennylane-1357",
+    "PennyLaneAI__pennylane-1405",
+    "PennyLaneAI__pennylane-1436",
+    "PennyLaneAI__pennylane-2525",
+    "PennyLaneAI__pennylane-2542",
+    "PennyLaneAI__pennylane-2543",
+    "PennyLaneAI__pennylane-2601",
+    "PennyLaneAI__pennylane-2603",
+    "PennyLaneAI__pennylane-2654",
+    "PennyLaneAI__pennylane-2668",
+    "PennyLaneAI__pennylane-2834",
+    "PennyLaneAI__pennylane-2947",
+    "PennyLaneAI__pennylane-2964",
+    "PennyLaneAI__pennylane-3024",
+    "PennyLaneAI__pennylane-3033",
+    "PennyLaneAI__pennylane-3057",
+    "PennyLaneAI__pennylane-3104",
+    "PennyLaneAI__pennylane-3182",
+    "PennyLaneAI__pennylane-3266",
+    "PennyLaneAI__pennylane-3278",
+    "PennyLaneAI__pennylane-3381",
+    "PennyLaneAI__pennylane-3386",
+    "PennyLaneAI__pennylane-3477",
+    "PennyLaneAI__pennylane-3483",
+    "PennyLaneAI__pennylane-3579",
+    "PennyLaneAI__pennylane-3921",
+    "PennyLaneAI__pennylane-4161",
+    "PennyLaneAI__pennylane-4251",
+    "PennyLaneAI__pennylane-4295"
+  ],
+  "replay_task_ids": [
+    "PennyLaneAI__pennylane-4328",
+    "PennyLaneAI__pennylane-4343",
+    "PennyLaneAI__pennylane-4366",
+    "PennyLaneAI__pennylane-4421",
+    "PennyLaneAI__pennylane-4441",
+    "PennyLaneAI__pennylane-4540",
+    "PennyLaneAI__pennylane-4663",
+    "PennyLaneAI__pennylane-4697",
+    "PennyLaneAI__pennylane-4736",
+    "PennyLaneAI__pennylane-4993",
+    "PennyLaneAI__pennylane-5063",
+    "PennyLaneAI__pennylane-5277",
+    "PennyLaneAI__pennylane-5407",
+    "PennyLaneAI__pennylane-5448",
+    "PennyLaneAI__pennylane-5455",
+    "PennyLaneAI__pennylane-5623",
+    "PennyLaneAI__pennylane-5716",
+    "PennyLaneAI__pennylane-5781",
+    "PennyLaneAI__pennylane-5831",
+    "PennyLaneAI__pennylane-5835",
+    "PennyLaneAI__pennylane-5857",
+    "PennyLaneAI__pennylane-5860",
+    "PennyLaneAI__pennylane-5926",
+    "PennyLaneAI__pennylane-5986",
+    "PennyLaneAI__pennylane-6049",
+    "PennyLaneAI__pennylane-6062",
+    "PennyLaneAI__pennylane-6107",
+    "PennyLaneAI__pennylane-6147",
+    "PennyLaneAI__pennylane-6358",
+    "PennyLaneAI__pennylane-6398",
+    "PennyLaneAI__pennylane-6732",
+    "PennyLaneAI__pennylane-6939",
+    "PennyLaneAI__pennylane-889",
+    "PennyLaneAI__pennylane-903",
+    "PennyLaneAI__pennylane-963"
+  ],
+  "evidence": {
+    "source": {
+      "task_count": 70,
+      "input_tree_sha256": "53d8faa0a6bd98dcfb38bfdf0916c196ff8d54ae6a305828a7b6f8509f3f7f16",
+      "excluded": {
+        "PennyLaneAI__pennylane-5538": "source_scaled_llm_and_empty_task_resources",
+        "PennyLaneAI__pennylane-5582": "source_scaled_llm_and_empty_task_resources",
+        "PennyLaneAI__pennylane-5761": "source_scaled_llm_and_empty_task_resources",
+        "PennyLaneAI__pennylane-5846": "source_scaled_llm_and_empty_task_resources",
+        "PennyLaneAI__pennylane-5851": "source_scaled_llm_and_empty_task_resources",
+        "PennyLaneAI__pennylane-5866": "source_scaled_llm_and_empty_task_resources"
+      },
+      "resource_profile_bins": 98775,
+      "median_raw_sample_gap_s": 2.0043439865112305,
+      "maximum_raw_sample_gap_s": 2.6961820125579834,
+      "llm_slot_bins": 14772
+    },
+    "prediction": {
+      "fit_tasks": 35,
+      "replay_tasks": 35,
+      "fit_commands": 1319,
+      "replay_commands": 1339,
+      "cpu_predictions_available": 1334,
+      "rss_predictions_available": 1334,
+      "cpu_prediction_unavailable_command_ids": [
+        "PennyLaneAI__pennylane-5277:call_UlRbewS0j5I1tA3r9J879aKK",
+        "PennyLaneAI__pennylane-5448:call_3cxFEZma2cQlVbNAtiriMKLa",
+        "PennyLaneAI__pennylane-889:call_xzg6GLlKifSskZBtopabbe9V",
+        "PennyLaneAI__pennylane-889:call_Y0IM3Q0npmurggP3BaLqhIGr",
+        "PennyLaneAI__pennylane-889:call_H9QCmuES8PN2tSwAxllA6mvJ"
+      ],
+      "rss_prediction_unavailable_command_ids": [
+        "PennyLaneAI__pennylane-5277:call_UlRbewS0j5I1tA3r9J879aKK",
+        "PennyLaneAI__pennylane-5448:call_3cxFEZma2cQlVbNAtiriMKLa",
+        "PennyLaneAI__pennylane-889:call_xzg6GLlKifSskZBtopabbe9V",
+        "PennyLaneAI__pennylane-889:call_Y0IM3Q0npmurggP3BaLqhIGr",
+        "PennyLaneAI__pennylane-889:call_H9QCmuES8PN2tSwAxllA6mvJ"
+      ],
+      "public_inputs": [
+        {
+          "path": "traces/swe-rebench/qwen3.7-max/swe100-full-5be74da-20260726/simulate_cloud_model_c2_20260726T005356962.jsonl",
+          "sha256": "1441c0113752b1508341a83b303cc0f059d3455cd78debd0a584fa051e93318e",
+          "rows": 4458
+        },
+        {
+          "path": "traces/swe-rebench/qwen3.7-max/swe277-full-5be74da-20260726/simulate_cloud_model_c2_20260726T024552768.jsonl",
+          "sha256": "f4dc3e360d6f24c0c2436da956a9d1adf448defaa0a41034bb9373d2f8e6ee7c",
+          "rows": 13766
+        }
+      ]
+    },
+    "finite_bounds": {
+      "peak_cpu_cores": {
+        "bounds": [
+          1.4868000000000001,
+          2.0432,
+          42.718599999999995
+        ],
+        "support_commands": [
+          115,
+          11,
+          490
+        ],
+        "support_tasks": [
+          34,
+          9,
+          35
+        ],
+        "observed_max": [
+          1.4868000000000001,
+          2.0432,
+          42.718599999999995
+        ]
+      },
+      "sampled_peak_rss_mb": {
+        "bounds": [
+          1415.168,
+          2019.328,
+          31825.92
+        ],
+        "support_commands": [
+          510,
+          103,
+          107
+        ],
+        "support_tasks": [
+          35,
+          30,
+          26
+        ],
+        "observed_max": [
+          1415.168,
+          2019.328,
+          31825.92
+        ]
+      }
+    },
+    "prediction_time_agent_calls": 0,
+    "hard_page_reference": {
+      "path": "analysis/results/pennylane-causal-joint-tool-admission-v1/result.json",
+      "sha256": "ba61fd5911de1324b7d5283630859beb5cd8b93c80a3901eb5e8b2e2974a3a58",
+      "status": "no_go"
+    }
+  },
+  "arms": {
+    "serial_tool": {
+      "completed": true,
+      "completed_tasks": 35,
+      "active_cap": 8,
+      "mean_task_completion_s": 61655.766262871875,
+      "makespan_s": 113834.72618126869,
+      "llm_queue_s": 1252.7860960960388,
+      "tool_queue_s": 755280.5372946262,
+      "starts_before_first_completion": 8,
+      "maximum_active_tasks": 8,
+      "llm_slot_utilization": 0.027108364561154032,
+      "cpu_utilization": 0.10297394524231943,
+      "rss_utilization": 0.043717309233187895,
+      "peak_llm_slots": 4.0,
+      "peak_cpu_cores": 42.0274,
+      "peak_rss_mb": 25413.560999999998,
+      "capacity_violation_s": {
+        "gpu": 0.0,
+        "cpu": 0.0,
+        "rss": 0.0
+      },
+      "reservation_underprediction_s": {
+        "cpu": 0.0,
+        "rss": 0.0
+      },
+      "tasks_with_overlapped_exec": 0,
+      "deadlock": null
+    },
+    "finite_fit_static": {
+      "completed": false,
+      "completed_tasks": 0,
+      "active_cap": 8,
+      "mean_task_completion_s": null,
+      "makespan_s": null,
+      "llm_queue_s": 429.40629982948303,
+      "tool_queue_s": 1271.2032616138458,
+      "starts_before_first_completion": 8,
+      "maximum_active_tasks": 8,
+      "llm_slot_utilization": null,
+      "cpu_utilization": null,
+      "rss_utilization": null,
+      "peak_llm_slots": 4.0,
+      "peak_cpu_cores": 8.1143,
+      "peak_rss_mb": 455.895,
+      "capacity_violation_s": {
+        "gpu": 0.0,
+        "cpu": 0.0,
+        "rss": 0.0
+      },
+      "reservation_underprediction_s": {
+        "cpu": 0.3908040523529053,
+        "rss": 77.88378620147705
+      },
+      "tasks_with_overlapped_exec": 4,
+      "deadlock": {
+        "time_s": 307.16664481163025,
+        "ready_tasks": [
+          "PennyLaneAI__pennylane-4421",
+          "PennyLaneAI__pennylane-4441",
+          "PennyLaneAI__pennylane-4697",
+          "PennyLaneAI__pennylane-4343",
+          "PennyLaneAI__pennylane-4663",
+          "PennyLaneAI__pennylane-4366",
+          "PennyLaneAI__pennylane-4540",
+          "PennyLaneAI__pennylane-4328"
+        ],
+        "ready_kinds": [
+          "exec",
+          "exec",
+          "exec",
+          "exec",
+          "exec",
+          "exec",
+          "exec",
+          "exec"
+        ]
+      }
+    },
+    "finite_fit_feedback": {
+      "completed": false,
+      "completed_tasks": 0,
+      "active_cap": 8,
+      "mean_task_completion_s": null,
+      "makespan_s": null,
+      "llm_queue_s": 429.40629982948303,
+      "tool_queue_s": 1271.2032616138458,
+      "starts_before_first_completion": 8,
+      "maximum_active_tasks": 8,
+      "llm_slot_utilization": null,
+      "cpu_utilization": null,
+      "rss_utilization": null,
+      "peak_llm_slots": 4.0,
+      "peak_cpu_cores": 8.1143,
+      "peak_rss_mb": 455.895,
+      "capacity_violation_s": {
+        "gpu": 0.0,
+        "cpu": 0.0,
+        "rss": 0.0
+      },
+      "reservation_underprediction_s": {
+        "cpu": 43.819581270217896,
+        "rss": 152.14578652381897
+      },
+      "tasks_with_overlapped_exec": 4,
+      "deadlock": {
+        "time_s": 307.16664481163025,
+        "ready_tasks": [
+          "PennyLaneAI__pennylane-4421",
+          "PennyLaneAI__pennylane-4441",
+          "PennyLaneAI__pennylane-4697",
+          "PennyLaneAI__pennylane-4343",
+          "PennyLaneAI__pennylane-4663",
+          "PennyLaneAI__pennylane-4366",
+          "PennyLaneAI__pennylane-4540",
+          "PennyLaneAI__pennylane-4328"
+        ],
+        "ready_kinds": [
+          "exec",
+          "exec",
+          "exec",
+          "exec",
+          "exec",
+          "exec",
+          "exec",
+          "exec"
+        ]
+      }
+    },
+    "joint_oracle_cap8": {
+      "gate": "joint",
+      "active_cap": 8,
+      "mean_task_completion_s": 11478.57142857143,
+      "makespan_s": 30326.0,
+      "starts_before_first_completion": 8,
+      "maximum_active_tasks": 8,
+      "llm_slot_utilization": 0.1165831299874695,
+      "cpu_utilization": 0.38653336610384215,
+      "rss_utilization": 0.12980106088422477,
+      "peak_llm_slots": 4.0,
+      "peak_cpu_cores": 42.945499999999996,
+      "peak_rss_mb": 39186.541000000005,
+      "violation_bins": {
+        "gpu": 0,
+        "cpu": 0,
+        "rss": 0
+      },
+      "feasible": true,
+      "start_s_by_task": {
+        "PennyLaneAI__pennylane-4328": 0.0,
+        "PennyLaneAI__pennylane-4343": 12056.0,
+        "PennyLaneAI__pennylane-4366": 2756.0,
+        "PennyLaneAI__pennylane-4421": 0.0,
+        "PennyLaneAI__pennylane-4441": 2462.0,
+        "PennyLaneAI__pennylane-4540": 17860.0,
+        "PennyLaneAI__pennylane-4663": 5618.0,
+        "PennyLaneAI__pennylane-4697": 4340.0,
+        "PennyLaneAI__pennylane-4736": 0.0,
+        "PennyLaneAI__pennylane-4993": 250.0,
+        "PennyLaneAI__pennylane-5063": 3826.0,
+        "PennyLaneAI__pennylane-5277": 15650.0,
+        "PennyLaneAI__pennylane-5407": 6856.0,
+        "PennyLaneAI__pennylane-5448": 15674.0,
+        "PennyLaneAI__pennylane-5455": 0.0,
+        "PennyLaneAI__pennylane-5623": 314.0,
+        "PennyLaneAI__pennylane-5716": 24594.0,
+        "PennyLaneAI__pennylane-5781": 14636.0,
+        "PennyLaneAI__pennylane-5831": 162.0,
+        "PennyLaneAI__pennylane-5835": 23090.0,
+        "PennyLaneAI__pennylane-5857": 1920.0,
+        "PennyLaneAI__pennylane-5860": 10212.0,
+        "PennyLaneAI__pennylane-5926": 3590.0,
+        "PennyLaneAI__pennylane-5986": 18222.0,
+        "PennyLaneAI__pennylane-6049": 10834.0,
+        "PennyLaneAI__pennylane-6062": 21016.0,
+        "PennyLaneAI__pennylane-6107": 26604.0,
+        "PennyLaneAI__pennylane-6147": 5162.0,
+        "PennyLaneAI__pennylane-6358": 512.0,
+        "PennyLaneAI__pennylane-6398": 7614.0,
+        "PennyLaneAI__pennylane-6732": 3258.0,
+        "PennyLaneAI__pennylane-6939": 8356.0,
+        "PennyLaneAI__pennylane-889": 80.0,
+        "PennyLaneAI__pennylane-903": 2618.0,
+        "PennyLaneAI__pennylane-963": 3076.0
+      },
+      "completion_s_by_task": {
+        "PennyLaneAI__pennylane-4328": 2756.0,
+        "PennyLaneAI__pennylane-4343": 13898.0,
+        "PennyLaneAI__pennylane-4366": 5162.0,
+        "PennyLaneAI__pennylane-4421": 1920.0,
+        "PennyLaneAI__pennylane-4441": 5436.0,
+        "PennyLaneAI__pennylane-4540": 21322.0,
+        "PennyLaneAI__pennylane-4663": 9006.0,
+        "PennyLaneAI__pennylane-4697": 6852.0,
+        "PennyLaneAI__pennylane-4736": 3072.0,
+        "PennyLaneAI__pennylane-4993": 3584.0,
+        "PennyLaneAI__pennylane-5063": 6378.0,
+        "PennyLaneAI__pennylane-5277": 18774.0,
+        "PennyLaneAI__pennylane-5407": 8950.0,
+        "PennyLaneAI__pennylane-5448": 21200.0,
+        "PennyLaneAI__pennylane-5455": 9420.0,
+        "PennyLaneAI__pennylane-5623": 2596.0,
+        "PennyLaneAI__pennylane-5716": 30326.0,
+        "PennyLaneAI__pennylane-5781": 18482.0,
+        "PennyLaneAI__pennylane-5831": 2462.0,
+        "PennyLaneAI__pennylane-5835": 27276.0,
+        "PennyLaneAI__pennylane-5857": 5846.0,
+        "PennyLaneAI__pennylane-5860": 12244.0,
+        "PennyLaneAI__pennylane-5926": 4186.0,
+        "PennyLaneAI__pennylane-5986": 24124.0,
+        "PennyLaneAI__pennylane-6049": 16044.0,
+        "PennyLaneAI__pennylane-6062": 25748.0,
+        "PennyLaneAI__pennylane-6107": 28958.0,
+        "PennyLaneAI__pennylane-6147": 12582.0,
+        "PennyLaneAI__pennylane-6358": 11394.0,
+        "PennyLaneAI__pennylane-6398": 14864.0,
+        "PennyLaneAI__pennylane-6732": 8702.0,
+        "PennyLaneAI__pennylane-6939": 10618.0,
+        "PennyLaneAI__pennylane-889": 512.0,
+        "PennyLaneAI__pennylane-903": 3250.0,
+        "PennyLaneAI__pennylane-963": 3806.0
+      }
+    }
+  },
+  "gate": {
+    "status": "no_go",
+    "mean_completion_reduction_vs_serial_tool": null,
+    "checks": {
+      "candidate_completed_and_safe": false,
+      "serial_tool_completed_and_safe": true,
+      "mean_completion_at_least_5pct_below_serial_tool": false,
+      "makespan_no_higher_than_serial_tool": false,
+      "overlap_spans_at_least_20_tasks": false
+    }
+  },
+  "interpretation_boundary": "Fit-only bucket-to-reservation carrier on development-exposed fixed trajectories. Zero modeled violations are required; this is not a physical concurrency or fresh-data result."
+}

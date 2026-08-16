@@ -18,11 +18,11 @@ lives in `tool-resource-service-architecture.md`.
 | CPU action | **KEEP equal-share burstable execution and prediction-free CPU-idle FCFS as controls.** | Burstable has positive small-pair evidence but no valid general scheduling claim. CPU-idle FCFS has strong replay headroom but lacks causal memory safety. |
 | Tool semantics | **KEEP the pytest worker-count × target-scope result; close pip-specific and generic KB-structure work.** | The pytest representation improved RSS accuracy/High recall to 87.799%/54.762% from 82.536%/2.381%, but its static admission consumer failed. |
 | Memory action | **KEEP temporal RSS packing as action-space evidence only.** | A hindsight PennyLane oracle improved mean completion 48.823% versus static peak packing. No causal safe scheduler is established. |
-| Joint action | **KEEP joint phase coordination as action-space evidence; proceed to the smallest causal consumer.** | A frozen PennyLane hindsight model reduced mean completion to 14,100.143 s from 21,705.486 s for the best tool-only arm and 79,829.000 s for the GPU-only arm, with zero modeled capacity violations. This is not a physical GPU result. |
+| Joint action | **KEEP joint phase coordination as action-space evidence; close CPU-only bucket carriers.** | A frozen PennyLane hindsight model reduced mean completion to 14,100.143 s from 21,705.486 s for the best tool-only arm, but both causal bucket carriers failed liveness. This is not a physical GPU result. |
 | GPU/KV | **Close CacheWise/C100 victim selection under the current simulator.** Tool-gap retention remains unresolved, not active. | Predictor gain was 1.481%; a hindsight upper bound was 9.620%. GPU action experiments exposed tail/action-activation problems. |
 | Runtime integration | **None authorized.** | No predictor, feedback controller, or scheduler is integrated for production. |
 | PennyLane collection | **Use the completed 76-task high-memory-node corpus; do not rerun it on this 16 GB host.** | All tasks have evidence-valid clause eBPF aggregates. Six replay-only attempts use the canonical trace-to-tool-call fallback. |
-| Immediate work | **Test fit-only finite resource bounds for causal tool admission.** | The first cap-8 causal consumer deadlocked because an unbounded RSS-High prediction reserved the full 80 GB while other active tasks retained positive RSS. The next question is whether settled fit tasks can convert the same buckets into finite composable requests without unsafe replay exposure. |
+| Immediate work | **Pause until a physical GPU is available, then freeze a single-GPU protocol.** | The registered finite-bound carrier also deadlocked: all eight ready execs lacked eligible predictor rows and full-host fallback was infeasible with retained RSS. Its NO-GO closes further CPU-only carrier tuning. |
 
 `status: no_go` answers one frozen claim. It does not authorize deleting a
 component marked **KEEP** above.
@@ -167,11 +167,14 @@ action component, not the paper's boundary.
    not produce a better static admission policy. Mean CPU demand admitted too
    much burst overlap; peak demand admitted too little. The missing object is a
    forecast of phase completion and time-varying resource use, not another
-   bucket mapping. The first causal joint consumer made this operational: at
-   307.167 s, all eight active tasks waited on exec because RSS-High mapped to
-   the full 80 GB host, although observed held RSS was below 456 MiB. The
+   bucket mapping. Both causal consumers made this operational: at 307.167 s,
+   all eight active tasks waited on exec because none had an eligible command
+   row and the registered fallback requested the full 80 GB. Their retained
+   RSS totaled 141.985 MiB, so every fallback request exceeded host capacity.
+   Finite fit bounds could not affect these unavailable actions. The
    prediction-free serial-tool control completed safely, so the failure is the
-   bucket-to-reservation carrier rather than absent action headroom.
+   prediction-to-action carrier rather than absent action headroom or an ID
+   mismatch.
 
 ### Primary direction: joint GPU–tool phase scheduling
 
@@ -193,13 +196,10 @@ Proceed as a decision tree:
    cleared all registered gates against both single-resource controls. It used
    recorded LLM-request occupancy rather than measured GPU inference/KV costs,
    so it authorizes causal scheduler work but no GPU-performance claim.
-2. **Small causal action set — active.** Begin with only two decisions:
-   admit another agent or wait, and run a ready tool or wait. Keep Task-Aware
-   and feedback-only as separate controls. Add KV retention only in a physical
-   GPU experiment, where its service and transfer costs can be measured. Do not
-   begin with RL, PD separation, per-command remote migration, or a general
-   cluster manager. The first hard-page consumer is closed after a liveness
-   failure; retain its result and test one fit-only finite-bound carrier next.
+2. **Small causal CPU-only action set — closed.** The hard-page and fit-only
+   finite-bound carriers both failed the registered liveness gate. Retain the
+   results; do not add a margin, quantile sweep, exclusive bypass, or
+   command-specific exception on the exposed trajectories.
 3. **Action-specific forecasts.** Predict the distribution of active tools'
    return times and conservative CPU/RSS trajectories from settled histories.
    Use causal eBPF/cgroup samples to update surviving tools and locate their
@@ -224,9 +224,11 @@ Proceed as a decision tree:
 
 The first deliverable is complete. The joint arm raised recorded LLM-slot,
 sampled CPU, and sampled RSS utilization to 17.301%, 37.662%, and 14.171%, from
-13.278%, 28.904%, and 10.876% for the best tool-only arm. A GPU is not needed
-for the next causal CPU-side experiment; it is needed only when evaluating
-physical inference service, KV, and TTFT effects.
+13.278%, 28.904%, and 10.876% for the best tool-only arm. The two registered
+CPU-only carrier screens are also complete and neither preserved liveness.
+The next claim-bearing experiment now requires a physical GPU to measure
+inference service, KV, TTFT, and the joint action rather than another replay
+reservation mapping.
 
 ### Secondary directions
 
@@ -310,6 +312,7 @@ registered validity or action gate failed.
 | Finite fit-envelope admission | 28.244% gain; exposures fell 22→16; 7.935% inflation | Better trade-off, still not safe |
 | Joint phase-packing ceiling | Mean completion 14,100.143 s vs tool-only 21,705.486 s and GPU-only 79,829.000 s; max active 11; zero modeled violations | Frozen hindsight gate GO; proceed to causal joint admission |
 | Causal joint hard-page admission | Candidate deadlocked at 307.167 s with 0/35 tasks complete; serial-tool completed safely at 61,655.766 s mean; exact cap-8 oracle mean 11,478.571 s | Hard CPU/RSS page carrier NO-GO; test one fit-only finite-bound carrier |
+| Causal joint finite-bound admission | Fit bounds were CPU `[1.487, 2.043, 42.719]` cores and RSS `[1,415, 2,019, 31,826]` MiB, but static and feedback arms still deadlocked at 307.167 s with 0/35 complete; local and remote results were byte-identical | Finite carrier NO-GO; close CPU-only carrier tuning and require physical GPU action next |
 
 ### KV and tool-gap actions
 
@@ -416,6 +419,7 @@ hardware/cost estimate, and explicit approval before launch.
 - `analysis/results/pennylane-xdist-rss-fit-envelope-admission-v1/result.json`
 - `analysis/results/pennylane-joint-phase-packing-v1/result.json`
 - `analysis/results/pennylane-causal-joint-tool-admission-v1/result.json`
+- `analysis/results/pennylane-finite-bound-joint-admission-v1/result.json`
 
 ### GPU action results
 
@@ -457,7 +461,7 @@ No new collection or runtime integration without a separate approved protocol.
 | Role | Files |
 |---|---|
 | Current authority | this file; `tool-resource-service-architecture.md` |
-| Frozen protocol provenance retained because evaluators/results reference it | `cpu-feedback-admission-protocol.md`, `cpu-feedback-borrowing-protocol.md`, `cpu-idle-speculative-backfill-protocol.md`, `cpu-idle-rss-safety-protocol.md`, `cpu-idle-short-null-amendment.md`, `pennylane-multitarget-transfer-protocol.md`, `pennylane-joint-phase-packing-protocol.md`, `pennylane-causal-joint-tool-admission-protocol.md`, `pip-pytest-upper-bound-protocol.md` |
+| Frozen protocol provenance retained because evaluators/results reference it | `cpu-feedback-admission-protocol.md`, `cpu-feedback-borrowing-protocol.md`, `cpu-idle-speculative-backfill-protocol.md`, `cpu-idle-rss-safety-protocol.md`, `cpu-idle-short-null-amendment.md`, `pennylane-multitarget-transfer-protocol.md`, `pennylane-joint-phase-packing-protocol.md`, `pennylane-causal-joint-tool-admission-protocol.md`, `pennylane-finite-bound-joint-admission-protocol.md`, `pip-pytest-upper-bound-protocol.md` |
 | Machine-readable split/source inputs | JSON and pinned documentation snapshots in this directory |
 
 Completed implementation plans are not current documents and are not kept
