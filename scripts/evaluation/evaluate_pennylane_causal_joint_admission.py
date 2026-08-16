@@ -69,6 +69,8 @@ Arm = Literal[
     "serial_tool",
     "task_aware_static",
     "task_aware_feedback",
+    "finite_fit_static",
+    "finite_fit_feedback",
 ]
 
 
@@ -277,6 +279,8 @@ def _reservations(
     predictions = _task_aware(fit, replay, baseline_by_sample, events_by_task=events)
     requested: dict[tuple[str, str], tuple[float, float]] = {}
     available_cpu = available_rss = 0
+    unavailable_cpu: list[str] = []
+    unavailable_rss: list[str] = []
     for row in replay:
         sample_id = f"{row.task_id}:{row.call_index}"
         pmfs = predictions[sample_id]["candidate_probability_by_bucket"]
@@ -290,6 +294,11 @@ def _reservations(
         )
         available_cpu += cpu_pmf is not None
         available_rss += rss_pmf is not None
+        command_key = f"{row.task_id}:{row.call_id}"
+        if cpu_pmf is None:
+            unavailable_cpu.append(command_key)
+        if rss_pmf is None:
+            unavailable_rss.append(command_key)
         requested[(row.task_id, row.call_id)] = (
             _CPU_PAGES[cpu_index],
             _RSS_PAGES[rss_index],
@@ -301,6 +310,8 @@ def _reservations(
         "replay_commands": len(replay),
         "cpu_predictions_available": available_cpu,
         "rss_predictions_available": available_rss,
+        "cpu_prediction_unavailable_command_ids": unavailable_cpu,
+        "rss_prediction_unavailable_command_ids": unavailable_rss,
         "public_inputs": public_inputs,
     }
 
@@ -327,6 +338,8 @@ def simulate(
         "serial_tool",
         "task_aware_static",
         "task_aware_feedback",
+        "finite_fit_static",
+        "finite_fit_feedback",
     }:
         raise ValueError("causal joint admission requires programs and a known arm")
     active_cap = 4 if arm == "fixed4" else _ACTIVE_CAP
@@ -380,7 +393,9 @@ def simulate(
                 and current.action_id == previous.action_id
             )
             if continuation:
-                if arm == "task_aware_feedback" and current.kind == "exec":
+                if arm in {"task_aware_feedback", "finite_fit_feedback"} and (
+                    current.kind == "exec"
+                ):
                     state.cpu_request = previous.cpu_cores
                     state.rss_request = previous.rss_mb
                 state.finish_s = now + current.duration_s
@@ -420,7 +435,12 @@ def simulate(
             elif segment.kind == "exec":
                 if arm == "serial_tool":
                     allowed = running_exec == 0
-                elif arm in {"task_aware_static", "task_aware_feedback"}:
+                elif arm in {
+                    "task_aware_static",
+                    "task_aware_feedback",
+                    "finite_fit_static",
+                    "finite_fit_feedback",
+                }:
                     cpu_request, rss_request = reservations.get(
                         (state.program.task_id, str(segment.action_id)),
                         (_CPU_PAGES[-1], _RSS_PAGES[-1]),
@@ -479,7 +499,12 @@ def simulate(
         violation_s["gpu"] += duration if gpu > capacities.gpu_slots + _EPS else 0.0
         violation_s["cpu"] += duration if cpu > capacities.cpu_cores + _EPS else 0.0
         violation_s["rss"] += duration if rss > capacities.rss_mb + _EPS else 0.0
-        if arm in {"task_aware_static", "task_aware_feedback"}:
+        if arm in {
+            "task_aware_static",
+            "task_aware_feedback",
+            "finite_fit_static",
+            "finite_fit_feedback",
+        }:
             actual_exec_cpu = sum(
                 state.segment.cpu_cores
                 for state in running

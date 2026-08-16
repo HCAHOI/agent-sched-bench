@@ -19,8 +19,9 @@ piecewise-constant action model frozen in
 ## Frozen finite-bound carrier
 
 1. On the 35 settled fit tasks only, associate each eligible exec command's
-   unambiguous canonical CPU and RSS label with the maximum task-profile CPU or
-   RSS value observed during that exec action.
+   unambiguous **observed-composed** CPU and RSS label with the maximum
+   task-profile CPU or RSS value observed during that exec action. Short-null
+   imputations and ambiguous or unavailable labels never contribute a bound.
 2. For each target and label, use the maximum observed action value. Apply a
    cumulative maximum from Low through High so a higher class never requests
    less. Cap the result at the frozen host capacity.

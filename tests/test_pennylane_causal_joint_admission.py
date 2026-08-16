@@ -32,6 +32,7 @@ def test_feedback_releases_capacity_only_after_observation() -> None:
 
     static = simulate(_programs(), "task_aware_static", reservations)
     feedback = simulate(_programs(), "task_aware_feedback", reservations)
+    finite_feedback = simulate(_programs(), "finite_fit_feedback", reservations)
     serial = simulate(_programs(), "serial_tool", reservations)
 
     assert static["makespan_s"] == serial["makespan_s"] == 7.0
@@ -39,6 +40,7 @@ def test_feedback_releases_capacity_only_after_observation() -> None:
     assert feedback["mean_task_completion_s"] == 4.0
     assert feedback["tasks_with_overlapped_exec"] == 2
     assert feedback["capacity_violation_s"] == {"gpu": 0.0, "cpu": 0.0, "rss": 0.0}
+    assert finite_feedback == feedback
 
 
 def test_missing_prediction_falls_back_to_serial_high_page() -> None:
