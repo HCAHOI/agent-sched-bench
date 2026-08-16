@@ -18,10 +18,11 @@ lives in `tool-resource-service-architecture.md`.
 | CPU action | **KEEP equal-share burstable execution and prediction-free CPU-idle FCFS as controls.** | Burstable has positive small-pair evidence but no valid general scheduling claim. CPU-idle FCFS has strong replay headroom but lacks causal memory safety. |
 | Tool semantics | **KEEP the pytest worker-count × target-scope result; close pip-specific and generic KB-structure work.** | The pytest representation improved RSS accuracy/High recall to 87.799%/54.762% from 82.536%/2.381%, but its static admission consumer failed. |
 | Memory action | **KEEP temporal RSS packing as action-space evidence only.** | A hindsight PennyLane oracle improved mean completion 48.823% versus static peak packing. No causal safe scheduler is established. |
+| Joint action | **KEEP joint phase coordination as action-space evidence; proceed to the smallest causal consumer.** | A frozen PennyLane hindsight model reduced mean completion to 14,100.143 s from 21,705.486 s for the best tool-only arm and 79,829.000 s for the GPU-only arm, with zero modeled capacity violations. This is not a physical GPU result. |
 | GPU/KV | **Close CacheWise/C100 victim selection under the current simulator.** Tool-gap retention remains unresolved, not active. | Predictor gain was 1.481%; a hindsight upper bound was 9.620%. GPU action experiments exposed tail/action-activation problems. |
 | Runtime integration | **None authorized.** | No predictor, feedback controller, or scheduler is integrated for production. |
 | PennyLane collection | **Use the completed 76-task high-memory-node corpus; do not rerun it on this 16 GB host.** | All tasks have evidence-valid clause eBPF aggregates. Six replay-only attempts use the canonical trace-to-tool-call fallback. |
-| Immediate work | **Establish the joint GPU–tool scheduling ceiling from existing traces and measured GPU costs.** | Prediction now transfers to a high-load same-repository workload; the next question is whether it changes a useful action beyond GPU-only and tool-only controls. |
+| Immediate work | **Test the smallest causal joint admission consumer.** | The joint hindsight gate passed under the frozen 43-core proxy. The next question is how much of that headroom survives causal forecasts and online state, before any GPU or distributed infrastructure is added. |
 
 `status: no_go` answers one frozen claim. It does not authorize deleting a
 component marked **KEEP** above.
@@ -151,7 +152,18 @@ action component, not the paper's boundary.
    LLM concurrency four reduced mean JCT 13.465%, but a host-side semaphore
    queue inflated end-to-end p99 TTFT by 15.984x–22.231x. These are exposed
    trade-offs and a queue-design failure, not evidence against joint scheduling.
-5. **Point classes are not enough for safe overlap.** Better RSS accuracy did
+5. **Joint coordination has a large action-space ceiling.** On 70 ordinary
+   PennyLane task trajectories, the frozen joint hindsight arm reached
+   14,100.143 s mean completion and 42,692 s makespan, versus 21,705.486 s and
+   55,628 s for the best tool-only arm. It admitted up to 11 active tasks with
+   zero modeled LLM-slot, CPU, or RSS violations. The GPU-only arm collapsed
+   to cap one because cap two violated the 43-core proxy; the tool-only arm
+   stopped at cap four because cap five exceeded four recorded LLM-request
+   slots. The mechanism is therefore cross-resource phase staggering, not a
+   better global concurrency cap. This is a deterministic hindsight ceiling
+   using recorded Codex request occupancy, fixed two-second profiles, and an
+   observed 43-core lower-bound proxy—not an A100 service or causal scheduler.
+6. **Point classes are not enough for safe overlap.** Better RSS accuracy did
    not produce a better static admission policy. Mean CPU demand admitted too
    much burst overlap; peak demand admitted too little. The missing object is a
    forecast of phase completion and time-varying resource use, not another
@@ -173,17 +185,16 @@ should separately control:
 
 Proceed as a decision tree:
 
-1. **Joint oracle before infrastructure.** Replay the existing agent phase
-   trajectories with measured GPU inference/KV costs and recorded tool
-   profiles. Compare the best GPU-only action, best tool-only action, and a
-   joint oracle. The joint direction advances only if coordination adds value
-   beyond both single-resource controls at matched GPU-tail and tool-service
-   operating points. CPU-only simulation is acceptable for this gate; it is
-   not physical evidence.
-2. **Small causal action set.** If the joint oracle passes, begin with only
-   three decisions: admit another agent or wait; run a ready tool or wait; keep
-   KV or use the existing five-second reactive offload. Do not begin with RL,
-   PD separation, per-command remote migration, or a general cluster manager.
+1. **Joint hindsight screen — passed.** The frozen 70-task PennyLane model
+   cleared all registered gates against both single-resource controls. It used
+   recorded LLM-request occupancy rather than measured GPU inference/KV costs,
+   so it authorizes causal scheduler work but no GPU-performance claim.
+2. **Small causal action set — current step.** Begin with only two decisions:
+   admit another agent or wait, and run a ready tool or wait. Keep Task-Aware
+   and feedback-only as separate controls. Add KV retention only in a physical
+   GPU experiment, where its service and transfer costs can be measured. Do not
+   begin with RL, PD separation, per-command remote migration, or a general
+   cluster manager.
 3. **Action-specific forecasts.** Predict the distribution of active tools'
    return times and conservative CPU/RSS trajectories from settled histories.
    Use causal eBPF/cgroup samples to update surviving tools and locate their
@@ -206,10 +217,11 @@ Proceed as a decision tree:
    the experiment measures whether prediction improves load balance and phase
    overlap, not remote-filesystem engineering.
 
-The first deliverable is a joint-oracle table over existing traces: absolute
-GPU/tool utilization and task completion for GPU-only, tool-only, and joint
-actions. It requires no new trace collection or LM call. A GPU is needed only
-after this gate passes.
+The first deliverable is complete. The joint arm raised recorded LLM-slot,
+sampled CPU, and sampled RSS utilization to 17.301%, 37.662%, and 14.171%, from
+13.278%, 28.904%, and 10.876% for the best tool-only arm. A GPU is not needed
+for the next causal CPU-side experiment; it is needed only when evaluating
+physical inference service, KV, and TTFT effects.
 
 ### Secondary directions
 
@@ -291,6 +303,7 @@ registered validity or action gate failed.
 | Temporal RSS oracle | 48.823% mean-completion gain vs static peak; max 15,864 MB, zero sampled violations | Strong hindsight action-space evidence |
 | Scope-conditioned xdist admission | 20.526% gain but 7.261% service inflation and 22 modeled exposures | Prediction GO does not imply action GO |
 | Finite fit-envelope admission | 28.244% gain; exposures fell 22→16; 7.935% inflation | Better trade-off, still not safe |
+| Joint phase-packing ceiling | Mean completion 14,100.143 s vs tool-only 21,705.486 s and GPU-only 79,829.000 s; max active 11; zero modeled violations | Frozen hindsight gate GO; proceed to causal joint admission |
 
 ### KV and tool-gap actions
 
@@ -338,6 +351,9 @@ hardware/cost estimate, and explicit approval before launch.
   but is not confirmation.
 - The 41-task PennyLane fit/replay split is development-exposed and locally
   reproducible from the cleaned corpus.
+- All 70 ordinary PennyLane task trajectories used by the joint phase-packing
+  result are development-exposed; the six replay-only attempts were excluded
+  by frozen format criteria.
 - PennyLane warmup16 supplied fit evidence. Fifteen preregistered validation
   tasks were scored once and are now consumed; `PennyLaneAI__pennylane-5846`
   was excluded without replacement after a replay-format diagnostic exposed
@@ -392,6 +408,7 @@ hardware/cost estimate, and explicit approval before launch.
 - `analysis/results/pennylane-xdist-rss-positive-control-v2/result.json`
 - `analysis/results/pennylane-xdist-rss-admission-v1/result.json`
 - `analysis/results/pennylane-xdist-rss-fit-envelope-admission-v1/result.json`
+- `analysis/results/pennylane-joint-phase-packing-v1/result.json`
 
 ### GPU action results
 
@@ -433,7 +450,7 @@ No new collection or runtime integration without a separate approved protocol.
 | Role | Files |
 |---|---|
 | Current authority | this file; `tool-resource-service-architecture.md` |
-| Frozen protocol provenance retained because evaluators/results reference it | `cpu-feedback-admission-protocol.md`, `cpu-feedback-borrowing-protocol.md`, `cpu-idle-speculative-backfill-protocol.md`, `cpu-idle-rss-safety-protocol.md`, `cpu-idle-short-null-amendment.md`, `pennylane-multitarget-transfer-protocol.md`, `pip-pytest-upper-bound-protocol.md` |
+| Frozen protocol provenance retained because evaluators/results reference it | `cpu-feedback-admission-protocol.md`, `cpu-feedback-borrowing-protocol.md`, `cpu-idle-speculative-backfill-protocol.md`, `cpu-idle-rss-safety-protocol.md`, `cpu-idle-short-null-amendment.md`, `pennylane-multitarget-transfer-protocol.md`, `pennylane-joint-phase-packing-protocol.md`, `pip-pytest-upper-bound-protocol.md` |
 | Machine-readable split/source inputs | JSON and pinned documentation snapshots in this directory |
 
 Completed implementation plans are not current documents and are not kept
