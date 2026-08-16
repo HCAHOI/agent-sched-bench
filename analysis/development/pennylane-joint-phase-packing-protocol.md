@@ -3,6 +3,13 @@
 **Status:** frozen before joint scheduling outcomes
 **Role:** development-only action-space screen; not physical GPU evidence
 
+**Pre-outcome amendment, 2026-08-16:** the initial 28-core capacity was an
+unverified host assumption. Input preflight stopped before computing any arm:
+37/70 ordinary traces exceeded 28 sampled cores, the maximum was 42.7186, and
+their run manifests recorded no CPU limit. CPU capacity is therefore the
+conservative observable lower bound `ceil(42.7186) = 43` cores. The cohort,
+algorithms, comparisons, and GO gate are unchanged.
+
 ## Question and evidence
 
 Does exact coordination of agent LLM phases and host CPU/RSS phases improve
@@ -22,9 +29,9 @@ completion beyond the best feasible single-resource task-admission controls?
 - Discretize at two seconds, the collection sampler's nominal interval.
   CPU/RSS samples are held until the next sample; a bin touched by an LLM call
   consumes one request slot.
-- Capacities are four simultaneous LLM requests, 28 CPU cores, and 80,000 MiB
+- Capacities are four simultaneous LLM requests, 43 CPU cores, and 80,000 MiB
   RSS. Four is the prior A100 reference cap; CPU/RSS are the collection-node
-  limits.
+  capacity proxies. The CPU value is the amended observable lower bound above.
 - A task may start at a bin boundary. Its recorded internal phase durations and
   resource profile never change, so modeled service inflation is zero.
 - `static`: best feasible global active-task cap.

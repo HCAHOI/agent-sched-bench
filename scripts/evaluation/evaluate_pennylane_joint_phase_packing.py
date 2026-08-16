@@ -51,7 +51,7 @@ Gate = Literal["none", "gpu", "tool", "joint"]
 @dataclass(frozen=True)
 class Capacities:
     gpu_slots: float = 4.0
-    cpu_cores: float = 28.0
+    cpu_cores: float = 43.0
     rss_mb: float = 80_000.0
 
 
