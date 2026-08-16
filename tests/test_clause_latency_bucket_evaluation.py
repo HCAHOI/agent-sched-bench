@@ -51,10 +51,86 @@ from scripts.evaluation.evaluate_clause_resource_classes import (
     Row,
     evaluate as evaluate_resources,
     load_candidate_s_selection,
+    load_run_rows,
     load_rows,
 )
 from tool_resource.clause_parser import parse_command_clauses
 from tool_resource.runtime_kb import ClauseLatencyBucketPrediction
+
+
+def test_run_loader_recovers_tool_calls_from_canonical_trace(tmp_path: Path) -> None:
+    task_id = "owner__repo-1"
+    attempt = tmp_path / task_id / "attempt_1"
+    attempt.mkdir(parents=True)
+    (tmp_path / "results.jsonl").write_text(
+        json.dumps(
+            {
+                "instance_id": task_id,
+                "attempt_dir": f"{task_id}/attempt_1",
+                "success": True,
+            }
+        )
+        + "\n"
+    )
+    command = "python -m pytest -q"
+    call_id = "call_1"
+    (attempt / "trace.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "action",
+                "action_type": "tool_exec",
+                "action_id": f"tool_1_{call_id}",
+                "ts_start": 1.0,
+                "ts_end": 2.0,
+                "data": {
+                    "tool_name": "exec",
+                    "tool_call_id": call_id,
+                    "tool_args": json.dumps({"command": command}),
+                    "tool_result": "ok",
+                },
+            }
+        )
+        + "\n"
+    )
+    (attempt / "resource_observations.json").write_text(
+        json.dumps(
+            {
+                "collection_validity": "valid",
+                "workload_execution": "completed",
+                "telemetry_quality": "ok",
+                "cleanup": "ok",
+                "calls": [
+                    {
+                        "tool_call_id": call_id,
+                        "command": command,
+                        "eligible_for_kb": True,
+                        "clauses": [
+                            {
+                                "eligible_for_kb": True,
+                                "bin": "python",
+                                "argv": ["python", "-m", "pytest", "-q"],
+                                "latency_ms": 1000.0,
+                                "peak_cpu_cores": 1.0,
+                                "sampled_peak_rss_mb": 100.0,
+                                "disk_io": {"read_write_bytes_total": 0.0},
+                                "in_loop": False,
+                                "in_pipe": False,
+                                "in_subst": False,
+                                "pipeline_position": -1,
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+
+    task_ids, clauses, commands = load_run_rows(tmp_path)
+
+    assert task_ids == [task_id]
+    assert len(clauses) == len(commands) == 1
+    assert commands[0].call_id == call_id
+    assert commands[0].duration_ms == 1000.0
 
 
 def _scored(label_bucket: int, probability_by_bucket: tuple[float, ...]) -> ScoredRow:

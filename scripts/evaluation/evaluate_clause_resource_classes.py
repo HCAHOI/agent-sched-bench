@@ -17,6 +17,7 @@ from typing import Any
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
+from trace_collect.attempt_layout import build_tool_calls_from_trace  # noqa: E402
 from tool_resource_eval.labels import repo_of  # noqa: E402
 from tool_resource.runtime_kb import (  # noqa: E402
     CANONICAL_LATENCY_BUCKETS,
@@ -330,7 +331,11 @@ def load_run_rows(
                     f"{mismatches}"
                 )
             tool_calls_path = attempt_dir / "tool_calls.json"
-            tool_calls = json.loads(tool_calls_path.read_text(encoding="utf-8"))
+            tool_calls = (
+                json.loads(tool_calls_path.read_text(encoding="utf-8"))
+                if tool_calls_path.exists()
+                else build_tool_calls_from_trace(attempt_dir / "trace.jsonl")
+            )
             if not isinstance(tool_calls, list):
                 raise ValueError(f"{tool_calls_path}: expected a JSON array")
             exec_calls: dict[str, Mapping[str, Any]] = {}

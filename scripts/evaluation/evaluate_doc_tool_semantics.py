@@ -513,14 +513,20 @@ def _history_row(
         command=row.command,
         labels=_labels(row),
         current=(
-            {target: None for target in _TARGETS} if current is None else dict(current)
+            {target: None for target in _TARGETS}
+            if current is None
+            else {target: current.get(target) for target in _TARGETS}
         ),
         pmfs=(
             {target: None for target in _TARGETS}
             if pmfs is None
             else {
-                target: None if value is None else tuple(value)
-                for target, value in pmfs.items()
+                target: (
+                    None
+                    if pmfs.get(target) is None
+                    else tuple(pmfs[target])
+                )
+                for target in _TARGETS
             }
         ),
     )
@@ -704,7 +710,11 @@ def _changes(
 ) -> dict[str, Any]:
     by_target = {
         target: _phase_changes(
-            _metric_rows(rows, left, reference=right),
+            _metric_rows(
+                [row for row in rows if row["labels"][target] is not None],
+                left,
+                reference=right,
+            ),
             target,
             reference="reference",
         )

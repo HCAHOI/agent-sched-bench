@@ -8,6 +8,7 @@ import scripts.evaluation.evaluate_doc_tool_semantics as doc_tool_semantics
 from scripts.evaluation.evaluate_doc_tool_semantics import (
     _generation_status,
     _generated_specs,
+    _history_row,
     _render_generation_prompt,
     _validated_response_text,
     build_split_manifest,
@@ -17,6 +18,45 @@ from scripts.evaluation.evaluate_doc_tool_semantics import (
 )
 from scripts.evaluation.evaluate_clause_resource_classes import CommandRow, Row
 from tool_resource.tool_spec import validate_tool_spec
+
+
+def test_history_row_fills_unavailable_resource_targets() -> None:
+    clause = Row(
+        task_id="owner__repo-1",
+        repo="owner__repo",
+        manifest_index=0,
+        bin="true",
+        argv=("true",),
+        latency_ms=1.0,
+        peak_cpu_cores=None,
+        sampled_peak_rss_mb=None,
+        disk_read_write_bytes_total=None,
+    )
+    command = CommandRow(
+        task_id=clause.task_id,
+        repo=clause.repo,
+        manifest_index=0,
+        call_index=0,
+        call_id="call_1",
+        command="true",
+        duration_ms=1.0,
+        clauses=(clause,),
+    )
+
+    row = _history_row(
+        command,
+        {"latency": 0},
+        {"latency": (1.0, 0.0, 0.0, 0.0, 0.0)},
+    )
+
+    assert row.current == {
+        "latency": 0,
+        "peak_cpu_cores": None,
+        "sampled_peak_rss_mb": None,
+        "disk_read_write_bytes_total": None,
+    }
+    assert row.pmfs["latency"] == (1.0, 0.0, 0.0, 0.0, 0.0)
+    assert all(row.pmfs[target] is None for target in row.pmfs if target != "latency")
 
 
 def _tasks() -> list[dict[str, str]]:
