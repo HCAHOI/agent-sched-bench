@@ -11,8 +11,8 @@ from tool_resource import telemetry as C
 _W = C.WINDOW_NS
 
 
-def test_high_volume_event_ring_keeps_four_mib_capacity() -> None:
-    assert "BPF_RINGBUF_OUTPUT(events_small, 1024);" in C.BPF_PROGRAM
+def test_high_volume_event_ring_keeps_sixteen_mib_capacity() -> None:
+    assert "BPF_RINGBUF_OUTPUT(events_small, 4096);" in C.BPF_PROGRAM
 
 
 def test_bpf_lifecycle_keeps_identity_until_free_and_clears_new_child() -> None:
