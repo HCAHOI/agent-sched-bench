@@ -7,6 +7,7 @@ from scripts.evaluation.evaluate_pennylane_joint_phase_packing import (
     Capacities,
     TaskProfile,
     _held_samples,
+    _llm_profile,
     best_feasible,
     simulate,
 )
@@ -68,3 +69,7 @@ def test_non_finite_resource_sample_fails_closed() -> None:
             0.0,
             1,
         )
+
+
+def test_adjacent_llm_calls_in_one_bin_are_boolean_occupancy() -> None:
+    assert _llm_profile([(0.1, 0.5), (1.0, 1.5)], 0.0, 1).tolist() == [1.0]

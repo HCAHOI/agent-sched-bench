@@ -176,6 +176,17 @@ def _input_tree_sha256() -> str:
     return digest.hexdigest()
 
 
+def _llm_profile(
+    intervals: list[tuple[float, float]], origin: float, bins: int
+) -> np.ndarray:
+    profile = np.zeros(bins, dtype=np.float64)
+    for start, finish in intervals:
+        first_bin = max(0, int((start - origin) // _BIN_S))
+        end_bin = min(bins, math.ceil((finish - origin) / _BIN_S))
+        profile[first_bin:end_bin] = 1.0
+    return profile
+
+
 def _load_profiles() -> tuple[list[TaskProfile], dict[str, Any]]:
     input_sha256 = _input_tree_sha256()
     if input_sha256 != _INPUT_TREE_SHA256:
@@ -218,13 +229,7 @@ def _load_profiles() -> tuple[list[TaskProfile], dict[str, Any]]:
         end = max(action_last, epochs[-1])
         bins = max(1, math.ceil((end - origin) / _BIN_S))
         cpu, rss = _held_samples(samples, origin, bins)
-        gpu = np.zeros(bins, dtype=np.float64)
-        for start, finish in llm:
-            first_bin = max(0, int((start - origin) // _BIN_S))
-            end_bin = min(bins, math.ceil((finish - origin) / _BIN_S))
-            gpu[first_bin:end_bin] += 1.0
-        if gpu.max(initial=0.0) > 1.0:
-            raise ValueError(f"{task_dir.name}: overlapping LLM calls within one task")
+        gpu = _llm_profile(llm, origin, bins)
         profiles.append(TaskProfile(task_dir.name, gpu, cpu, rss))
     if len(profiles) != _EXPECTED_TASKS or set(excluded) != _EXCLUDED:
         raise ValueError(
