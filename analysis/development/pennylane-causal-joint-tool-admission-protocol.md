@@ -12,6 +12,11 @@ prediction-free serial-tool control, while sharing four LLM request slots?
 - Use the 70 ordinary tasks from `pennylane-all76-clean-ebpf-20260816` and the
   frozen input-tree digest
   `53d8faa0a6bd98dcfb38bfdf0916c196ff8d54ae6a305828a7b6f8509f3f7f16`.
+- Bind the frozen public predictor inputs to SHA256
+  `1441c0113752b1508341a83b303cc0f059d3455cd78debd0a584fa051e93318e`
+  (SWE100) and
+  `f4dc3e360d6f24c0c2436da956a9d1adf448defaa0a41034bb9373d2f8e6ee7c`
+  (SWE277).
 - Exclude the same six `source_scaled` replay-only tasks as the joint-ceiling
   protocol.
 - Lexically sorted tasks 1–35 supply settled predictor evidence; tasks 36–70
@@ -33,6 +38,10 @@ prediction-free serial-tool control, while sharing four LLM request slots?
   action is admitted. Once an LLM call or exec starts, it is non-preemptive
   through all of that action's segments. Queue waiting shifts later task
   segments and holds the task's latest causally observed RSS.
+- A newly admitted task has no completed resource sample, so its held RSS is
+  zero until its first segment completes. Any resulting initial exposure is
+  counted as a capacity violation; the evaluator may not inspect that first
+  segment to prevent it.
 - Actual capacity checks use the shifted recorded CPU/RSS values. Fixed service
   time is valid only when an arm has zero actual capacity-violation seconds; any
   violating arm is unsafe rather than credited with free service.
@@ -75,7 +84,8 @@ candidate reservation underprediction seconds.
 
 `task_aware_feedback` advances only if all are true:
 
-1. zero LLM, CPU, and RSS actual capacity-violation seconds;
+1. both `serial_tool` and `task_aware_feedback` complete with zero LLM, CPU,
+   and RSS actual capacity-violation seconds;
 2. mean task completion at least 5% below `serial_tool`;
 3. makespan no higher than `serial_tool`;
 4. at least two exec phases overlap in at least 20 replay tasks, so any gain is
