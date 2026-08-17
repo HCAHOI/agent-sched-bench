@@ -7,11 +7,15 @@ import argparse
 import json
 from pathlib import Path
 import subprocess
+import sys
 from typing import Any
 
 import numpy as np
 
-from scripts.evaluation.evaluate_pennylane_joint_phase_packing import (
+_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_ROOT))
+
+from scripts.evaluation.evaluate_pennylane_joint_phase_packing import (  # noqa: E402
     Capacities,
     TaskProfile,
     _BIN_S,
@@ -19,8 +23,6 @@ from scripts.evaluation.evaluate_pennylane_joint_phase_packing import (
     simulate,
 )
 
-
-_ROOT = Path(__file__).resolve().parents[2]
 _PROTOCOL = (
     _ROOT / "analysis/development/pennylane-perfect-container-parking-protocol.md"
 )
