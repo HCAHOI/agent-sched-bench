@@ -22,7 +22,7 @@ lives in `tool-resource-service-architecture.md`.
 | GPU/KV | **Close CacheWise/C100 victim selection under the current simulator.** Tool-gap retention remains unresolved, not active. | Predictor gain was 1.481%; a hindsight upper bound was 9.620%. GPU action experiments exposed tail/action-activation problems. |
 | Runtime integration | **None authorized.** | No predictor, feedback controller, or scheduler is integrated for production. |
 | PennyLane collection | **Use the completed 76-task high-memory-node corpus; do not rerun it on this 16 GB host.** | All tasks have evidence-valid clause eBPF aggregates. Six replay-only attempts use the canonical trace-to-tool-call fallback. |
-| Immediate work | **Screen a revocable phase-local tool lease on existing PennyLane traces before another physical run.** | Feedback repeated roughly 33% mean-JCT and 42% makespan gains, but the current one-shot loan is never reclaimed and the second repetition raised p99 TTFT to 1.115x. Predictive gap timing and exact-duration tool ordering both have below-one-percent action headroom. |
+| Immediate work | **Freeze GPU-pressure-aware backfill on a fresh physical PennyLane cohort; do not tune the lease on the exposed eight tasks.** | A revocable phase lease retained 89.427% of permanent-loan mean-completion gain and removed 39.129% of its overlap above fixed-four, but failed its frozen total-overlap gate. The next action must use live GPU pressure and charge borrower wait to TTFT. |
 
 `status: no_go` answers one frozen claim. It does not authorize deleting a
 component marked **KEEP** above.
@@ -278,6 +278,33 @@ makespan strictly versus fixed-four, retains at least 80% of the permanent
 loan's mean-completion gain, reduces LLM request-overlap time by at least 25%
 versus the permanent loan, and does not increase peak simultaneous prompt
 tokens. No threshold or arm may be changed after the screen is read.
+
+The screen completed with a frozen **NO-GO**. Against fixed-four, the permanent
+loan reduced mean completion by 30.236% and makespan by 40.410%; the revocable
+lease reduced them by 27.039% and 33.733%, retaining 89.427% of the permanent
+mean-completion gain. It paused borrowers for 714.111 task-seconds and reduced
+total LLM request-overlap time by 10.309%, below the registered 25% gate. The
+other five checks passed. This result is independently reproduced in
+`analysis/results/pennylane-revocable-tool-lease-development-v1/result.json`.
+
+Post-outcome diagnosis, not a gate amendment: fixed-four already contributed
+73.655% of permanent-loan overlap. The total-overlap gate therefore required
+removing 94.893% of the overlap added by loans; the lease removed 39.129%.
+Prompt-token overlap and peak simultaneous prompt tokens removed 34.142% and
+43.590% of their loan-added excess, respectively. The lease is consequently
+useful mechanism evidence but does not authorize the physical run specified by
+the frozen screen.
+
+The next frontier is a joint, feedback-only backfill action rather than another
+tool-duration predictor. A long foreground tool phase may admit a borrower,
+but the borrower's next LLM request is admitted only while live GPU queue/KV
+pressure is below a frozen operating point; foreground requests are never
+blocked, and every borrower wait is included in end-to-end TTFT. This directly
+connects the measured CPU opportunity to the resource that produced the tail
+risk. The next physical comparison must use fresh task IDs and include
+fixed-four, permanent feedback loan, and the joint feedback arm. Until its
+signal, operating point, cohort, and JCT/TTFT gate are frozen, only plumbing
+inspection and synthetic tests are allowed.
 
 A subsequent development-only action screen fixed eight active tasks, four
 LLM slots, and four tool slots, then replaced work-conserving FCFS with an

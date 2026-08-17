@@ -1,0 +1,124 @@
+{
+  "schema": "pennylane-revocable-tool-lease-development-v1",
+  "status": "no_go",
+  "corpus_role": "development_exposed_actionability_screen",
+  "git_sha": "5daef25af6c38238c7688113a7f9be87b007ee1d",
+  "input": {
+    "run_dir": "traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816",
+    "task_ids": [
+      "PennyLaneAI__pennylane-2603",
+      "PennyLaneAI__pennylane-2654",
+      "PennyLaneAI__pennylane-2668",
+      "PennyLaneAI__pennylane-2834",
+      "PennyLaneAI__pennylane-2947",
+      "PennyLaneAI__pennylane-2964",
+      "PennyLaneAI__pennylane-3024",
+      "PennyLaneAI__pennylane-3033"
+    ],
+    "task_count": 8,
+    "action_count": 884,
+    "llm_action_count": 446,
+    "exec_action_count": 328
+  },
+  "configuration": {
+    "base_task_concurrency": 4,
+    "feedback_budget_s": 34.790656,
+    "lease_boundary": "finish_inflight_action_then_pause",
+    "prediction_time_agent_calls": 0
+  },
+  "arms": {
+    "fixed4": {
+      "completed": true,
+      "completed_tasks": 8,
+      "mean_task_completion_s": 2792.1762785315514,
+      "makespan_s": 4405.991432189941,
+      "feedback_trigger_count": 0,
+      "admitted_tasks": 8,
+      "borrower_promotions": 0,
+      "paused_borrower_s": 0.0,
+      "llm_request_overlap_s": 1035.6355566978455,
+      "prompt_overlap_token_s": 24892697.89258814,
+      "peak_simultaneous_llm_requests": 4,
+      "peak_simultaneous_prompt_tokens": 181935,
+      "deadlock": null,
+      "task_completion_s": {
+        "PennyLaneAI__pennylane-2603": 2026.1380858421326,
+        "PennyLaneAI__pennylane-2654": 2204.9091823101044,
+        "PennyLaneAI__pennylane-2668": 1381.2481520175934,
+        "PennyLaneAI__pennylane-2834": 2140.2693152427673,
+        "PennyLaneAI__pennylane-2947": 3346.864909887314,
+        "PennyLaneAI__pennylane-2964": 4405.991432189941,
+        "PennyLaneAI__pennylane-3024": 3206.350279569626,
+        "PennyLaneAI__pennylane-3033": 3625.638871192932
+      }
+    },
+    "permanent_loan": {
+      "completed": true,
+      "completed_tasks": 8,
+      "mean_task_completion_s": 1947.9407377092152,
+      "makespan_s": 2625.5486795004426,
+      "feedback_trigger_count": 4,
+      "admitted_tasks": 8,
+      "borrower_promotions": 0,
+      "paused_borrower_s": 0.0,
+      "llm_request_overlap_s": 1406.0710783623344,
+      "prompt_overlap_token_s": 42413018.27340384,
+      "peak_simultaneous_llm_requests": 5,
+      "peak_simultaneous_prompt_tokens": 236808,
+      "deadlock": null,
+      "task_completion_s": {
+        "PennyLaneAI__pennylane-2603": 2026.1380858421326,
+        "PennyLaneAI__pennylane-2654": 2204.9091823101044,
+        "PennyLaneAI__pennylane-2668": 1381.2481520175934,
+        "PennyLaneAI__pennylane-2834": 2140.2693152427673,
+        "PennyLaneAI__pennylane-2947": 2182.729301362854,
+        "PennyLaneAI__pennylane-2964": 2625.5486795004426,
+        "PennyLaneAI__pennylane-3024": 1319.148791700226,
+        "PennyLaneAI__pennylane-3033": 1703.5343936976014
+      }
+    },
+    "revocable_lease": {
+      "completed": true,
+      "completed_tasks": 8,
+      "mean_task_completion_s": 2037.2046745678863,
+      "makespan_s": 2919.7217445373535,
+      "feedback_trigger_count": 33,
+      "admitted_tasks": 8,
+      "borrower_promotions": 2,
+      "paused_borrower_s": 714.1114948693687,
+      "llm_request_overlap_s": 1261.1218773420867,
+      "prompt_overlap_token_s": 36431157.2584357,
+      "peak_simultaneous_llm_requests": 5,
+      "peak_simultaneous_prompt_tokens": 212889,
+      "deadlock": null,
+      "task_completion_s": {
+        "PennyLaneAI__pennylane-2603": 2026.1380858421326,
+        "PennyLaneAI__pennylane-2654": 2204.9091823101044,
+        "PennyLaneAI__pennylane-2668": 1381.2481520175934,
+        "PennyLaneAI__pennylane-2834": 2140.2693152427673,
+        "PennyLaneAI__pennylane-2947": 2340.200757413727,
+        "PennyLaneAI__pennylane-2964": 2919.7217445373535,
+        "PennyLaneAI__pennylane-3024": 1359.1744171675261,
+        "PennyLaneAI__pennylane-3033": 1925.9757420118865
+      }
+    }
+  },
+  "comparisons": {
+    "permanent_mean_completion_reduction_vs_fixed4": 0.3023575364182711,
+    "lease_mean_completion_reduction_vs_fixed4": 0.2703882307748551,
+    "lease_fraction_of_permanent_mean_completion_gain": 0.8942665493900878,
+    "lease_request_overlap_reduction_vs_permanent": 0.10308810361782816
+  },
+  "gate": {
+    "status": "no_go",
+    "checks": {
+      "lease_completed_without_deadlock": true,
+      "lease_mean_completion_at_least_5pct_below_fixed4": true,
+      "lease_makespan_strictly_below_fixed4": true,
+      "lease_retains_at_least_80pct_of_permanent_gain": true,
+      "lease_reduces_request_overlap_at_least_25pct": false,
+      "lease_peak_prompt_tokens_no_higher_than_permanent": true
+    }
+  },
+  "interpretation_boundary": "Recorded action durations and prompt-token counts are replayed without a GPU service model. This screen can authorize a physical tail test but cannot establish TTFT safety."
+}
