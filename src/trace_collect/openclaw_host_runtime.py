@@ -812,6 +812,7 @@ class OpenClawReplayProvider(LLMProvider):
         return {
             "model": self._shadow_generation.model,
             "seed": self._shadow_generation.seed,
+            "request_priority": int(request.get("priority", 0)),
             "source_action_id": source_action_id,
             "source_action_index": source_action_index,
             "request_id": request_id,

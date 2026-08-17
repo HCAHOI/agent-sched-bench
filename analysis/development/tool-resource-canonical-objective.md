@@ -308,6 +308,30 @@ comparison must use fresh task IDs and include fixed-four, permanent feedback
 loan, and priority feedback. Until its cohort and JCT/TTFT gate are frozen,
 only plumbing inspection and synthetic tests are allowed.
 
+The first native-priority physical protocol is now frozen, but not launched.
+From the 68 unused tasks having at least one shell exec longer than the retained
+34.790656-second feedback budget, a seed-42 shuffle selected, in order:
+`3182, 5835, 4366, 4251, 1405, 6062, 5623, 6939` (all prefixed
+`PennyLaneAI__pennylane-`). The first four are foreground; the rest are
+borrowers. The cohort has 972 actions, 490 LLM calls, 482 tool calls, and 370
+shell execs. All cells use one A100 80GB, the same Llama-3.1-8B-Instruct image,
+container CPU cap two, vLLM priority scheduling, and no host admission cap.
+Restart vLLM to an empty prefix cache before each cell. Run
+`fixed -> feedback -> priority-feedback`, then the reverse order; fixed and
+feedback send priority zero, while priority-feedback sends borrower priority
+one. Record priority per request and include server queueing in TTFT.
+
+The frozen GO gate requires both repetitions to be valid, feedback and
+priority-feedback each to reduce mean JCT by at least 5% and makespan strictly
+versus fixed, priority-feedback to retain at least 80% of feedback's mean-JCT
+gain, and its all-request p95 and p99 TTFT to remain within 1.05x fixed. In
+addition, priority-feedback p99 must be below feedback in both repetitions and
+its geometric-mean p99 ratio versus feedback must be at most 0.95. Any failed
+condition stops the native-priority branch; no `/metrics` controller is built
+until this result identifies a remaining queue/KV failure. Expected physical
+time is six cells, roughly 6--9 hours; launching requires a fresh explicit GPU
+allocation and approval.
+
 A subsequent development-only action screen fixed eight active tasks, four
 LLM slots, and four tool slots, then replaced work-conserving FCFS with an
 exact-duration shortest-tool-first oracle on the 35 exposed PennyLane replay

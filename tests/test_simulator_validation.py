@@ -864,6 +864,7 @@ def test_openclaw_replay_provider_charges_streamed_shadow_generation(
     } == {
         "model": "meta-llama/Llama-3.1-8B-Instruct",
         "seed": 7,
+        "request_priority": 1,
         "source_action_id": "source-llm-17",
         "source_action_index": 17,
         "request_id": "chatcmpl-shadow-1",
