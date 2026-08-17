@@ -1,0 +1,1146 @@
+{
+  "schema": "pennylane-perfect-container-parking-development-v1",
+  "status": "no_go",
+  "corpus_role": "development_exposed",
+  "git_sha": "af8868aa3a309b2583a139d7dac15f01e47618ab",
+  "protocol_git_sha": "0daae2928c6e60b402393f76cfa89e2c27549d40",
+  "protocol": "analysis/development/pennylane-perfect-container-parking-protocol.md",
+  "evidence": {
+    "task_count": 70,
+    "input_tree_sha256": "53d8faa0a6bd98dcfb38bfdf0916c196ff8d54ae6a305828a7b6f8509f3f7f16",
+    "excluded": {
+      "PennyLaneAI__pennylane-5538": "source_scaled_llm_and_empty_task_resources",
+      "PennyLaneAI__pennylane-5582": "source_scaled_llm_and_empty_task_resources",
+      "PennyLaneAI__pennylane-5761": "source_scaled_llm_and_empty_task_resources",
+      "PennyLaneAI__pennylane-5846": "source_scaled_llm_and_empty_task_resources",
+      "PennyLaneAI__pennylane-5851": "source_scaled_llm_and_empty_task_resources",
+      "PennyLaneAI__pennylane-5866": "source_scaled_llm_and_empty_task_resources"
+    },
+    "resource_profile_bins": 98775,
+    "median_raw_sample_gap_s": 2.0043439865112305,
+    "maximum_raw_sample_gap_s": 2.6961820125579834,
+    "llm_slot_bins": 14772
+  },
+  "arms": {
+    "always_resident": {
+      "gate": "joint",
+      "active_cap": null,
+      "mean_task_completion_s": 14100.142857142857,
+      "makespan_s": 42692.0,
+      "starts_before_first_completion": 9,
+      "maximum_active_tasks": 11,
+      "llm_slot_utilization": 0.17300665230019677,
+      "cpu_utilization": 0.3766157530739379,
+      "rss_utilization": 0.14170837245151316,
+      "peak_llm_slots": 4.0,
+      "peak_cpu_cores": 42.995400000000004,
+      "peak_rss_mb": 50196.48,
+      "violation_bins": {
+        "gpu": 0,
+        "cpu": 0,
+        "rss": 0
+      },
+      "feasible": true,
+      "start_s_by_task": {
+        "PennyLaneAI__pennylane-1072": 0.0,
+        "PennyLaneAI__pennylane-1117": 0.0,
+        "PennyLaneAI__pennylane-1260": 0.0,
+        "PennyLaneAI__pennylane-1320": 0.0,
+        "PennyLaneAI__pennylane-1325": 2820.0,
+        "PennyLaneAI__pennylane-1329": 610.0,
+        "PennyLaneAI__pennylane-1357": 620.0,
+        "PennyLaneAI__pennylane-1405": 692.0,
+        "PennyLaneAI__pennylane-1436": 1110.0,
+        "PennyLaneAI__pennylane-2525": 20338.0,
+        "PennyLaneAI__pennylane-2542": 5328.0,
+        "PennyLaneAI__pennylane-2543": 18924.0,
+        "PennyLaneAI__pennylane-2601": 2544.0,
+        "PennyLaneAI__pennylane-2603": 29618.0,
+        "PennyLaneAI__pennylane-2654": 17742.0,
+        "PennyLaneAI__pennylane-2668": 15608.0,
+        "PennyLaneAI__pennylane-2834": 19682.0,
+        "PennyLaneAI__pennylane-2947": 30714.0,
+        "PennyLaneAI__pennylane-2964": 22862.0,
+        "PennyLaneAI__pennylane-3024": 18690.0,
+        "PennyLaneAI__pennylane-3033": 15100.0,
+        "PennyLaneAI__pennylane-3057": 1254.0,
+        "PennyLaneAI__pennylane-3104": 320.0,
+        "PennyLaneAI__pennylane-3182": 1242.0,
+        "PennyLaneAI__pennylane-3266": 14904.0,
+        "PennyLaneAI__pennylane-3278": 6068.0,
+        "PennyLaneAI__pennylane-3381": 25030.0,
+        "PennyLaneAI__pennylane-3386": 10882.0,
+        "PennyLaneAI__pennylane-3477": 12134.0,
+        "PennyLaneAI__pennylane-3483": 22052.0,
+        "PennyLaneAI__pennylane-3579": 1982.0,
+        "PennyLaneAI__pennylane-3921": 1816.0,
+        "PennyLaneAI__pennylane-4161": 2962.0,
+        "PennyLaneAI__pennylane-4251": 25336.0,
+        "PennyLaneAI__pennylane-4295": 448.0,
+        "PennyLaneAI__pennylane-4328": 9460.0,
+        "PennyLaneAI__pennylane-4343": 23960.0,
+        "PennyLaneAI__pennylane-4366": 11194.0,
+        "PennyLaneAI__pennylane-4421": 240.0,
+        "PennyLaneAI__pennylane-4441": 14320.0,
+        "PennyLaneAI__pennylane-4540": 25884.0,
+        "PennyLaneAI__pennylane-4663": 7614.0,
+        "PennyLaneAI__pennylane-4697": 924.0,
+        "PennyLaneAI__pennylane-4736": 27026.0,
+        "PennyLaneAI__pennylane-4993": 17414.0,
+        "PennyLaneAI__pennylane-5063": 3514.0,
+        "PennyLaneAI__pennylane-5277": 21146.0,
+        "PennyLaneAI__pennylane-5407": 16220.0,
+        "PennyLaneAI__pennylane-5448": 17292.0,
+        "PennyLaneAI__pennylane-5455": 1986.0,
+        "PennyLaneAI__pennylane-5623": 2124.0,
+        "PennyLaneAI__pennylane-5716": 36960.0,
+        "PennyLaneAI__pennylane-5781": 9636.0,
+        "PennyLaneAI__pennylane-5831": 3778.0,
+        "PennyLaneAI__pennylane-5835": 33760.0,
+        "PennyLaneAI__pennylane-5857": 6034.0,
+        "PennyLaneAI__pennylane-5860": 6678.0,
+        "PennyLaneAI__pennylane-5926": 2218.0,
+        "PennyLaneAI__pennylane-5986": 28892.0,
+        "PennyLaneAI__pennylane-6049": 13206.0,
+        "PennyLaneAI__pennylane-6062": 31684.0,
+        "PennyLaneAI__pennylane-6107": 34506.0,
+        "PennyLaneAI__pennylane-6147": 8388.0,
+        "PennyLaneAI__pennylane-6358": 3418.0,
+        "PennyLaneAI__pennylane-6398": 5702.0,
+        "PennyLaneAI__pennylane-6732": 4666.0,
+        "PennyLaneAI__pennylane-6939": 4948.0,
+        "PennyLaneAI__pennylane-889": 1518.0,
+        "PennyLaneAI__pennylane-903": 1458.0,
+        "PennyLaneAI__pennylane-963": 2260.0
+      },
+      "completion_s_by_task": {
+        "PennyLaneAI__pennylane-1072": 898.0,
+        "PennyLaneAI__pennylane-1117": 650.0,
+        "PennyLaneAI__pennylane-1260": 808.0,
+        "PennyLaneAI__pennylane-1320": 1362.0,
+        "PennyLaneAI__pennylane-1325": 3892.0,
+        "PennyLaneAI__pennylane-1329": 1308.0,
+        "PennyLaneAI__pennylane-1357": 1164.0,
+        "PennyLaneAI__pennylane-1405": 2004.0,
+        "PennyLaneAI__pennylane-1436": 1764.0,
+        "PennyLaneAI__pennylane-2525": 22344.0,
+        "PennyLaneAI__pennylane-2542": 7728.0,
+        "PennyLaneAI__pennylane-2543": 21546.0,
+        "PennyLaneAI__pennylane-2601": 4046.0,
+        "PennyLaneAI__pennylane-2603": 31704.0,
+        "PennyLaneAI__pennylane-2654": 20056.0,
+        "PennyLaneAI__pennylane-2668": 17086.0,
+        "PennyLaneAI__pennylane-2834": 21898.0,
+        "PennyLaneAI__pennylane-2947": 32796.0,
+        "PennyLaneAI__pennylane-2964": 25284.0,
+        "PennyLaneAI__pennylane-3024": 19848.0,
+        "PennyLaneAI__pennylane-3033": 16570.0,
+        "PennyLaneAI__pennylane-3057": 2590.0,
+        "PennyLaneAI__pennylane-3104": 2786.0,
+        "PennyLaneAI__pennylane-3182": 3654.0,
+        "PennyLaneAI__pennylane-3266": 16810.0,
+        "PennyLaneAI__pennylane-3278": 8438.0,
+        "PennyLaneAI__pennylane-3381": 26464.0,
+        "PennyLaneAI__pennylane-3386": 12628.0,
+        "PennyLaneAI__pennylane-3477": 14712.0,
+        "PennyLaneAI__pennylane-3483": 26160.0,
+        "PennyLaneAI__pennylane-3579": 5624.0,
+        "PennyLaneAI__pennylane-3921": 6694.0,
+        "PennyLaneAI__pennylane-4161": 4928.0,
+        "PennyLaneAI__pennylane-4251": 29930.0,
+        "PennyLaneAI__pennylane-4295": 2276.0,
+        "PennyLaneAI__pennylane-4328": 12216.0,
+        "PennyLaneAI__pennylane-4343": 25802.0,
+        "PennyLaneAI__pennylane-4366": 13600.0,
+        "PennyLaneAI__pennylane-4421": 2160.0,
+        "PennyLaneAI__pennylane-4441": 17294.0,
+        "PennyLaneAI__pennylane-4540": 29346.0,
+        "PennyLaneAI__pennylane-4663": 11002.0,
+        "PennyLaneAI__pennylane-4697": 3436.0,
+        "PennyLaneAI__pennylane-4736": 30098.0,
+        "PennyLaneAI__pennylane-4993": 20748.0,
+        "PennyLaneAI__pennylane-5063": 6066.0,
+        "PennyLaneAI__pennylane-5277": 24270.0,
+        "PennyLaneAI__pennylane-5407": 18314.0,
+        "PennyLaneAI__pennylane-5448": 22818.0,
+        "PennyLaneAI__pennylane-5455": 11406.0,
+        "PennyLaneAI__pennylane-5623": 4406.0,
+        "PennyLaneAI__pennylane-5716": 42692.0,
+        "PennyLaneAI__pennylane-5781": 13482.0,
+        "PennyLaneAI__pennylane-5831": 6078.0,
+        "PennyLaneAI__pennylane-5835": 37946.0,
+        "PennyLaneAI__pennylane-5857": 9960.0,
+        "PennyLaneAI__pennylane-5860": 8710.0,
+        "PennyLaneAI__pennylane-5926": 2814.0,
+        "PennyLaneAI__pennylane-5986": 34794.0,
+        "PennyLaneAI__pennylane-6049": 18416.0,
+        "PennyLaneAI__pennylane-6062": 36416.0,
+        "PennyLaneAI__pennylane-6107": 36860.0,
+        "PennyLaneAI__pennylane-6147": 15808.0,
+        "PennyLaneAI__pennylane-6358": 14300.0,
+        "PennyLaneAI__pennylane-6398": 12952.0,
+        "PennyLaneAI__pennylane-6732": 10110.0,
+        "PennyLaneAI__pennylane-6939": 7210.0,
+        "PennyLaneAI__pennylane-889": 1950.0,
+        "PennyLaneAI__pennylane-903": 2090.0,
+        "PennyLaneAI__pennylane-963": 2990.0
+      }
+    },
+    "perfect_parking": {
+      "gate": "joint",
+      "active_cap": null,
+      "mean_task_completion_s": 14475.828571428572,
+      "makespan_s": 42524.0,
+      "starts_before_first_completion": 9,
+      "maximum_active_tasks": 11,
+      "llm_slot_utilization": 0.17369015144389052,
+      "cpu_utilization": 0.3660863396429485,
+      "rss_utilization": 0.14039614023198665,
+      "peak_llm_slots": 4.0,
+      "peak_cpu_cores": 43.0,
+      "peak_rss_mb": 49508.899999999994,
+      "violation_bins": {
+        "gpu": 0,
+        "cpu": 0,
+        "rss": 0
+      },
+      "feasible": true,
+      "start_s_by_task": {
+        "PennyLaneAI__pennylane-1072": 0.0,
+        "PennyLaneAI__pennylane-1117": 0.0,
+        "PennyLaneAI__pennylane-1260": 0.0,
+        "PennyLaneAI__pennylane-1320": 0.0,
+        "PennyLaneAI__pennylane-1325": 2122.0,
+        "PennyLaneAI__pennylane-1329": 610.0,
+        "PennyLaneAI__pennylane-1357": 620.0,
+        "PennyLaneAI__pennylane-1405": 692.0,
+        "PennyLaneAI__pennylane-1436": 1110.0,
+        "PennyLaneAI__pennylane-2525": 20336.0,
+        "PennyLaneAI__pennylane-2542": 6164.0,
+        "PennyLaneAI__pennylane-2543": 16160.0,
+        "PennyLaneAI__pennylane-2601": 14448.0,
+        "PennyLaneAI__pennylane-2603": 27746.0,
+        "PennyLaneAI__pennylane-2654": 13698.0,
+        "PennyLaneAI__pennylane-2668": 26346.0,
+        "PennyLaneAI__pennylane-2834": 11172.0,
+        "PennyLaneAI__pennylane-2947": 30366.0,
+        "PennyLaneAI__pennylane-2964": 15372.0,
+        "PennyLaneAI__pennylane-3024": 3820.0,
+        "PennyLaneAI__pennylane-3033": 2866.0,
+        "PennyLaneAI__pennylane-3057": 1242.0,
+        "PennyLaneAI__pennylane-3104": 320.0,
+        "PennyLaneAI__pennylane-3182": 1254.0,
+        "PennyLaneAI__pennylane-3266": 20506.0,
+        "PennyLaneAI__pennylane-3278": 5626.0,
+        "PennyLaneAI__pennylane-3381": 31160.0,
+        "PennyLaneAI__pennylane-3386": 12124.0,
+        "PennyLaneAI__pennylane-3477": 20784.0,
+        "PennyLaneAI__pennylane-3483": 26986.0,
+        "PennyLaneAI__pennylane-3579": 1958.0,
+        "PennyLaneAI__pennylane-3921": 2186.0,
+        "PennyLaneAI__pennylane-4161": 5394.0,
+        "PennyLaneAI__pennylane-4251": 15954.0,
+        "PennyLaneAI__pennylane-4295": 448.0,
+        "PennyLaneAI__pennylane-4328": 14388.0,
+        "PennyLaneAI__pennylane-4343": 29806.0,
+        "PennyLaneAI__pennylane-4366": 22858.0,
+        "PennyLaneAI__pennylane-4421": 240.0,
+        "PennyLaneAI__pennylane-4441": 24000.0,
+        "PennyLaneAI__pennylane-4540": 19636.0,
+        "PennyLaneAI__pennylane-4663": 17160.0,
+        "PennyLaneAI__pennylane-4697": 924.0,
+        "PennyLaneAI__pennylane-4736": 18290.0,
+        "PennyLaneAI__pennylane-4993": 2556.0,
+        "PennyLaneAI__pennylane-5063": 4102.0,
+        "PennyLaneAI__pennylane-5277": 32396.0,
+        "PennyLaneAI__pennylane-5407": 10192.0,
+        "PennyLaneAI__pennylane-5448": 21896.0,
+        "PennyLaneAI__pennylane-5455": 1986.0,
+        "PennyLaneAI__pennylane-5623": 4956.0,
+        "PennyLaneAI__pennylane-5716": 36792.0,
+        "PennyLaneAI__pennylane-5781": 22216.0,
+        "PennyLaneAI__pennylane-5831": 2260.0,
+        "PennyLaneAI__pennylane-5835": 33434.0,
+        "PennyLaneAI__pennylane-5857": 6346.0,
+        "PennyLaneAI__pennylane-5860": 7984.0,
+        "PennyLaneAI__pennylane-5926": 2556.0,
+        "PennyLaneAI__pennylane-5986": 24914.0,
+        "PennyLaneAI__pennylane-6049": 9614.0,
+        "PennyLaneAI__pennylane-6062": 31968.0,
+        "PennyLaneAI__pennylane-6107": 35628.0,
+        "PennyLaneAI__pennylane-6147": 4534.0,
+        "PennyLaneAI__pennylane-6358": 6108.0,
+        "PennyLaneAI__pennylane-6398": 10856.0,
+        "PennyLaneAI__pennylane-6732": 4286.0,
+        "PennyLaneAI__pennylane-6939": 6870.0,
+        "PennyLaneAI__pennylane-889": 1282.0,
+        "PennyLaneAI__pennylane-903": 1662.0,
+        "PennyLaneAI__pennylane-963": 1472.0
+      },
+      "completion_s_by_task": {
+        "PennyLaneAI__pennylane-1072": 898.0,
+        "PennyLaneAI__pennylane-1117": 650.0,
+        "PennyLaneAI__pennylane-1260": 808.0,
+        "PennyLaneAI__pennylane-1320": 1362.0,
+        "PennyLaneAI__pennylane-1325": 3194.0,
+        "PennyLaneAI__pennylane-1329": 1308.0,
+        "PennyLaneAI__pennylane-1357": 1164.0,
+        "PennyLaneAI__pennylane-1405": 2004.0,
+        "PennyLaneAI__pennylane-1436": 1764.0,
+        "PennyLaneAI__pennylane-2525": 22342.0,
+        "PennyLaneAI__pennylane-2542": 8564.0,
+        "PennyLaneAI__pennylane-2543": 18782.0,
+        "PennyLaneAI__pennylane-2601": 15950.0,
+        "PennyLaneAI__pennylane-2603": 29832.0,
+        "PennyLaneAI__pennylane-2654": 16012.0,
+        "PennyLaneAI__pennylane-2668": 27824.0,
+        "PennyLaneAI__pennylane-2834": 13388.0,
+        "PennyLaneAI__pennylane-2947": 32448.0,
+        "PennyLaneAI__pennylane-2964": 17794.0,
+        "PennyLaneAI__pennylane-3024": 4978.0,
+        "PennyLaneAI__pennylane-3033": 4336.0,
+        "PennyLaneAI__pennylane-3057": 2578.0,
+        "PennyLaneAI__pennylane-3104": 2786.0,
+        "PennyLaneAI__pennylane-3182": 3666.0,
+        "PennyLaneAI__pennylane-3266": 22412.0,
+        "PennyLaneAI__pennylane-3278": 7996.0,
+        "PennyLaneAI__pennylane-3381": 32594.0,
+        "PennyLaneAI__pennylane-3386": 13870.0,
+        "PennyLaneAI__pennylane-3477": 23362.0,
+        "PennyLaneAI__pennylane-3483": 31094.0,
+        "PennyLaneAI__pennylane-3579": 5600.0,
+        "PennyLaneAI__pennylane-3921": 7064.0,
+        "PennyLaneAI__pennylane-4161": 7360.0,
+        "PennyLaneAI__pennylane-4251": 20548.0,
+        "PennyLaneAI__pennylane-4295": 2276.0,
+        "PennyLaneAI__pennylane-4328": 17144.0,
+        "PennyLaneAI__pennylane-4343": 31648.0,
+        "PennyLaneAI__pennylane-4366": 25264.0,
+        "PennyLaneAI__pennylane-4421": 2160.0,
+        "PennyLaneAI__pennylane-4441": 26974.0,
+        "PennyLaneAI__pennylane-4540": 23098.0,
+        "PennyLaneAI__pennylane-4663": 20548.0,
+        "PennyLaneAI__pennylane-4697": 3436.0,
+        "PennyLaneAI__pennylane-4736": 21362.0,
+        "PennyLaneAI__pennylane-4993": 5890.0,
+        "PennyLaneAI__pennylane-5063": 6654.0,
+        "PennyLaneAI__pennylane-5277": 35520.0,
+        "PennyLaneAI__pennylane-5407": 12286.0,
+        "PennyLaneAI__pennylane-5448": 27422.0,
+        "PennyLaneAI__pennylane-5455": 11406.0,
+        "PennyLaneAI__pennylane-5623": 7238.0,
+        "PennyLaneAI__pennylane-5716": 42524.0,
+        "PennyLaneAI__pennylane-5781": 26062.0,
+        "PennyLaneAI__pennylane-5831": 4560.0,
+        "PennyLaneAI__pennylane-5835": 37620.0,
+        "PennyLaneAI__pennylane-5857": 10272.0,
+        "PennyLaneAI__pennylane-5860": 10016.0,
+        "PennyLaneAI__pennylane-5926": 3152.0,
+        "PennyLaneAI__pennylane-5986": 30816.0,
+        "PennyLaneAI__pennylane-6049": 14824.0,
+        "PennyLaneAI__pennylane-6062": 36700.0,
+        "PennyLaneAI__pennylane-6107": 37982.0,
+        "PennyLaneAI__pennylane-6147": 11954.0,
+        "PennyLaneAI__pennylane-6358": 16990.0,
+        "PennyLaneAI__pennylane-6398": 18106.0,
+        "PennyLaneAI__pennylane-6732": 9730.0,
+        "PennyLaneAI__pennylane-6939": 9132.0,
+        "PennyLaneAI__pennylane-889": 1714.0,
+        "PennyLaneAI__pennylane-903": 2294.0,
+        "PennyLaneAI__pennylane-963": 2202.0
+      }
+    }
+  },
+  "comparison": {
+    "mean_task_completion_reduction": -0.026644106949271107,
+    "makespan_reduction": 0.003935163496673888,
+    "earlier_start_task_count": 27,
+    "total_start_advance_s": 113402.0,
+    "total_completion_advance_s": 113402.0,
+    "removed_cpu_core_s": 21974.0416,
+    "removed_rss_mib_s": 6368669.558
+  },
+  "gate": {
+    "status": "no_go",
+    "checks": {
+      "perfect_parking_zero_capacity_violations": true,
+      "at_least_one_task_starts_earlier": true,
+      "mean_task_completion_improves_at_least_5pct": false
+    }
+  },
+  "task_deltas": [
+    {
+      "task_id": "PennyLaneAI__pennylane-1072",
+      "start_advance_s": 0.0,
+      "completion_advance_s": 0.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-1117",
+      "start_advance_s": 0.0,
+      "completion_advance_s": 0.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-1260",
+      "start_advance_s": 0.0,
+      "completion_advance_s": 0.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-1320",
+      "start_advance_s": 0.0,
+      "completion_advance_s": 0.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-1325",
+      "start_advance_s": 698.0,
+      "completion_advance_s": 698.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-1329",
+      "start_advance_s": 0.0,
+      "completion_advance_s": 0.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-1357",
+      "start_advance_s": 0.0,
+      "completion_advance_s": 0.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-1405",
+      "start_advance_s": 0.0,
+      "completion_advance_s": 0.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-1436",
+      "start_advance_s": 0.0,
+      "completion_advance_s": 0.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2525",
+      "start_advance_s": 2.0,
+      "completion_advance_s": 2.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2542",
+      "start_advance_s": -836.0,
+      "completion_advance_s": -836.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2543",
+      "start_advance_s": 2764.0,
+      "completion_advance_s": 2764.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2601",
+      "start_advance_s": -11904.0,
+      "completion_advance_s": -11904.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2603",
+      "start_advance_s": 1872.0,
+      "completion_advance_s": 1872.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2654",
+      "start_advance_s": 4044.0,
+      "completion_advance_s": 4044.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2668",
+      "start_advance_s": -10738.0,
+      "completion_advance_s": -10738.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2834",
+      "start_advance_s": 8510.0,
+      "completion_advance_s": 8510.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2947",
+      "start_advance_s": 348.0,
+      "completion_advance_s": 348.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2964",
+      "start_advance_s": 7490.0,
+      "completion_advance_s": 7490.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3024",
+      "start_advance_s": 14870.0,
+      "completion_advance_s": 14870.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3033",
+      "start_advance_s": 12234.0,
+      "completion_advance_s": 12234.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3057",
+      "start_advance_s": 12.0,
+      "completion_advance_s": 12.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3104",
+      "start_advance_s": 0.0,
+      "completion_advance_s": 0.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3182",
+      "start_advance_s": -12.0,
+      "completion_advance_s": -12.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3266",
+      "start_advance_s": -5602.0,
+      "completion_advance_s": -5602.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3278",
+      "start_advance_s": 442.0,
+      "completion_advance_s": 442.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3381",
+      "start_advance_s": -6130.0,
+      "completion_advance_s": -6130.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3386",
+      "start_advance_s": -1242.0,
+      "completion_advance_s": -1242.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3477",
+      "start_advance_s": -8650.0,
+      "completion_advance_s": -8650.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3483",
+      "start_advance_s": -4934.0,
+      "completion_advance_s": -4934.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3579",
+      "start_advance_s": 24.0,
+      "completion_advance_s": 24.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3921",
+      "start_advance_s": -370.0,
+      "completion_advance_s": -370.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4161",
+      "start_advance_s": -2432.0,
+      "completion_advance_s": -2432.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4251",
+      "start_advance_s": 9382.0,
+      "completion_advance_s": 9382.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4295",
+      "start_advance_s": 0.0,
+      "completion_advance_s": 0.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4328",
+      "start_advance_s": -4928.0,
+      "completion_advance_s": -4928.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4343",
+      "start_advance_s": -5846.0,
+      "completion_advance_s": -5846.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4366",
+      "start_advance_s": -11664.0,
+      "completion_advance_s": -11664.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4421",
+      "start_advance_s": 0.0,
+      "completion_advance_s": 0.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4441",
+      "start_advance_s": -9680.0,
+      "completion_advance_s": -9680.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4540",
+      "start_advance_s": 6248.0,
+      "completion_advance_s": 6248.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4663",
+      "start_advance_s": -9546.0,
+      "completion_advance_s": -9546.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4697",
+      "start_advance_s": 0.0,
+      "completion_advance_s": 0.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4736",
+      "start_advance_s": 8736.0,
+      "completion_advance_s": 8736.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4993",
+      "start_advance_s": 14858.0,
+      "completion_advance_s": 14858.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5063",
+      "start_advance_s": -588.0,
+      "completion_advance_s": -588.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5277",
+      "start_advance_s": -11250.0,
+      "completion_advance_s": -11250.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5407",
+      "start_advance_s": 6028.0,
+      "completion_advance_s": 6028.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5448",
+      "start_advance_s": -4604.0,
+      "completion_advance_s": -4604.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5455",
+      "start_advance_s": 0.0,
+      "completion_advance_s": 0.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5623",
+      "start_advance_s": -2832.0,
+      "completion_advance_s": -2832.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5716",
+      "start_advance_s": 168.0,
+      "completion_advance_s": 168.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5781",
+      "start_advance_s": -12580.0,
+      "completion_advance_s": -12580.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5831",
+      "start_advance_s": 1518.0,
+      "completion_advance_s": 1518.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5835",
+      "start_advance_s": 326.0,
+      "completion_advance_s": 326.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5857",
+      "start_advance_s": -312.0,
+      "completion_advance_s": -312.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5860",
+      "start_advance_s": -1306.0,
+      "completion_advance_s": -1306.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5926",
+      "start_advance_s": -338.0,
+      "completion_advance_s": -338.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5986",
+      "start_advance_s": 3978.0,
+      "completion_advance_s": 3978.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-6049",
+      "start_advance_s": 3592.0,
+      "completion_advance_s": 3592.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-6062",
+      "start_advance_s": -284.0,
+      "completion_advance_s": -284.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-6107",
+      "start_advance_s": -1122.0,
+      "completion_advance_s": -1122.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-6147",
+      "start_advance_s": 3854.0,
+      "completion_advance_s": 3854.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-6358",
+      "start_advance_s": -2690.0,
+      "completion_advance_s": -2690.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-6398",
+      "start_advance_s": -5154.0,
+      "completion_advance_s": -5154.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-6732",
+      "start_advance_s": 380.0,
+      "completion_advance_s": 380.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-6939",
+      "start_advance_s": -1922.0,
+      "completion_advance_s": -1922.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-889",
+      "start_advance_s": 236.0,
+      "completion_advance_s": 236.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-903",
+      "start_advance_s": -204.0,
+      "completion_advance_s": -204.0
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-963",
+      "start_advance_s": 788.0,
+      "completion_advance_s": 788.0
+    }
+  ],
+  "released_resource_time_by_task": [
+    {
+      "task_id": "PennyLaneAI__pennylane-1072",
+      "llm_bins": 223,
+      "cpu_core_s": 180.9042,
+      "rss_mib_s": 38040.092000000004
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-1117",
+      "llm_bins": 206,
+      "cpu_core_s": 136.8624,
+      "rss_mib_s": 39088.554
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-1260",
+      "llm_bins": 231,
+      "cpu_core_s": 149.1954,
+      "rss_mib_s": 39281.229999999996
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-1320",
+      "llm_bins": 401,
+      "cpu_core_s": 873.5078000000001,
+      "rss_mib_s": 133700.318
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-1325",
+      "llm_bins": 358,
+      "cpu_core_s": 292.413,
+      "rss_mib_s": 76688.73599999999
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-1329",
+      "llm_bins": 232,
+      "cpu_core_s": 336.9162,
+      "rss_mib_s": 39207.632
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-1357",
+      "llm_bins": 146,
+      "cpu_core_s": 283.855,
+      "rss_mib_s": 18729.154000000002
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-1405",
+      "llm_bins": 346,
+      "cpu_core_s": 657.0724,
+      "rss_mib_s": 91458.64
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-1436",
+      "llm_bins": 178,
+      "cpu_core_s": 242.3666,
+      "rss_mib_s": 42363.182
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2525",
+      "llm_bins": 149,
+      "cpu_core_s": 185.0876,
+      "rss_mib_s": 33031.058000000005
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2542",
+      "llm_bins": 236,
+      "cpu_core_s": 401.74039999999997,
+      "rss_mib_s": 34959.544
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2543",
+      "llm_bins": 238,
+      "cpu_core_s": 239.7542,
+      "rss_mib_s": 202537.89200000002
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2601",
+      "llm_bins": 136,
+      "cpu_core_s": 261.73119999999994,
+      "rss_mib_s": 23374.808
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2603",
+      "llm_bins": 265,
+      "cpu_core_s": 519.3779999999999,
+      "rss_mib_s": 139101.844
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2654",
+      "llm_bins": 298,
+      "cpu_core_s": 655.4114,
+      "rss_mib_s": 288770.368
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2668",
+      "llm_bins": 156,
+      "cpu_core_s": 138.2276,
+      "rss_mib_s": 43533.564
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2834",
+      "llm_bins": 232,
+      "cpu_core_s": 361.093,
+      "rss_mib_s": 160909.914
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2947",
+      "llm_bins": 133,
+      "cpu_core_s": 211.20159999999998,
+      "rss_mib_s": 36249.183999999994
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-2964",
+      "llm_bins": 297,
+      "cpu_core_s": 399.74840000000006,
+      "rss_mib_s": 79076.068
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3024",
+      "llm_bins": 137,
+      "cpu_core_s": 192.3212,
+      "rss_mib_s": 19517.612
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3033",
+      "llm_bins": 113,
+      "cpu_core_s": 133.82059999999998,
+      "rss_mib_s": 14576.326000000001
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3057",
+      "llm_bins": 120,
+      "cpu_core_s": 137.7302,
+      "rss_mib_s": 14684.071999999998
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3104",
+      "llm_bins": 118,
+      "cpu_core_s": 163.5016,
+      "rss_mib_s": 31861.934
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3182",
+      "llm_bins": 173,
+      "cpu_core_s": 289.4382,
+      "rss_mib_s": 52160.714
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3266",
+      "llm_bins": 210,
+      "cpu_core_s": 255.5696,
+      "rss_mib_s": 36177.716
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3278",
+      "llm_bins": 203,
+      "cpu_core_s": 197.9804,
+      "rss_mib_s": 80734.814
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3381",
+      "llm_bins": 186,
+      "cpu_core_s": 172.33100000000002,
+      "rss_mib_s": 71005.71800000001
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3386",
+      "llm_bins": 199,
+      "cpu_core_s": 244.10139999999998,
+      "rss_mib_s": 47279.652
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3477",
+      "llm_bins": 178,
+      "cpu_core_s": 208.9096,
+      "rss_mib_s": 75689.22
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3483",
+      "llm_bins": 280,
+      "cpu_core_s": 331.2342,
+      "rss_mib_s": 126137.69599999998
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3579",
+      "llm_bins": 219,
+      "cpu_core_s": 324.3692,
+      "rss_mib_s": 56358.362
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3921",
+      "llm_bins": 325,
+      "cpu_core_s": 401.22360000000003,
+      "rss_mib_s": 224821.97599999997
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4161",
+      "llm_bins": 310,
+      "cpu_core_s": 403.273,
+      "rss_mib_s": 118612.16799999999
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4251",
+      "llm_bins": 323,
+      "cpu_core_s": 372.8092,
+      "rss_mib_s": 363885.97200000007
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4295",
+      "llm_bins": 146,
+      "cpu_core_s": 221.5768,
+      "rss_mib_s": 43940.932
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4328",
+      "llm_bins": 222,
+      "cpu_core_s": 136.49099999999999,
+      "rss_mib_s": 115264.394
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4343",
+      "llm_bins": 138,
+      "cpu_core_s": 196.4738,
+      "rss_mib_s": 45175.29000000001
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4366",
+      "llm_bins": 166,
+      "cpu_core_s": 266.7342,
+      "rss_mib_s": 45742.066
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4421",
+      "llm_bins": 85,
+      "cpu_core_s": 61.683400000000006,
+      "rss_mib_s": 13049.122000000001
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4441",
+      "llm_bins": 148,
+      "cpu_core_s": 169.9374,
+      "rss_mib_s": 106150.736
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4540",
+      "llm_bins": 244,
+      "cpu_core_s": 379.82480000000004,
+      "rss_mib_s": 230992.93399999998
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4663",
+      "llm_bins": 301,
+      "cpu_core_s": 422.3386,
+      "rss_mib_s": 63753.974
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4697",
+      "llm_bins": 233,
+      "cpu_core_s": 588.4906,
+      "rss_mib_s": 104559.006
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4736",
+      "llm_bins": 211,
+      "cpu_core_s": 385.671,
+      "rss_mib_s": 135752.42200000002
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4993",
+      "llm_bins": 178,
+      "cpu_core_s": 303.9358,
+      "rss_mib_s": 79483.916
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5063",
+      "llm_bins": 298,
+      "cpu_core_s": 887.1878000000002,
+      "rss_mib_s": 236085.92
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5277",
+      "llm_bins": 173,
+      "cpu_core_s": 312.84180000000003,
+      "rss_mib_s": 172570.108
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5407",
+      "llm_bins": 108,
+      "cpu_core_s": 158.8936,
+      "rss_mib_s": 49367.248
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5448",
+      "llm_bins": 249,
+      "cpu_core_s": 393.6966,
+      "rss_mib_s": 112026.67399999998
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5455",
+      "llm_bins": 310,
+      "cpu_core_s": 576.2934,
+      "rss_mib_s": 104642.99
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5623",
+      "llm_bins": 144,
+      "cpu_core_s": 224.9976,
+      "rss_mib_s": 54889.528
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5716",
+      "llm_bins": 134,
+      "cpu_core_s": 416.8586,
+      "rss_mib_s": 102975.68
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5781",
+      "llm_bins": 164,
+      "cpu_core_s": 297.36080000000004,
+      "rss_mib_s": 65949.652
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5831",
+      "llm_bins": 169,
+      "cpu_core_s": 235.70180000000002,
+      "rss_mib_s": 23517.14
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5835",
+      "llm_bins": 217,
+      "cpu_core_s": 587.8774000000001,
+      "rss_mib_s": 166036.168
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5857",
+      "llm_bins": 185,
+      "cpu_core_s": 205.7662,
+      "rss_mib_s": 101973.98199999999
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5860",
+      "llm_bins": 141,
+      "cpu_core_s": 154.8992,
+      "rss_mib_s": 38502.85
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5926",
+      "llm_bins": 140,
+      "cpu_core_s": 195.9264,
+      "rss_mib_s": 8218.490000000002
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-5986",
+      "llm_bins": 248,
+      "cpu_core_s": 456.22299999999996,
+      "rss_mib_s": 144098.94400000002
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-6049",
+      "llm_bins": 319,
+      "cpu_core_s": 515.9092,
+      "rss_mib_s": 121617.196
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-6062",
+      "llm_bins": 168,
+      "cpu_core_s": 292.3224,
+      "rss_mib_s": 139543.586
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-6107",
+      "llm_bins": 123,
+      "cpu_core_s": 159.1976,
+      "rss_mib_s": 66074.288
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-6147",
+      "llm_bins": 236,
+      "cpu_core_s": 643.1156000000001,
+      "rss_mib_s": 105592.698
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-6358",
+      "llm_bins": 285,
+      "cpu_core_s": 512.8901999999999,
+      "rss_mib_s": 399588.3679999999
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-6398",
+      "llm_bins": 326,
+      "cpu_core_s": 487.80600000000004,
+      "rss_mib_s": 119812.584
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-6732",
+      "llm_bins": 156,
+      "cpu_core_s": 82.6062,
+      "rss_mib_s": 17900.564
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-6939",
+      "llm_bins": 288,
+      "cpu_core_s": 195.0,
+      "rss_mib_s": 69078.55399999999
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-889",
+      "llm_bins": 127,
+      "cpu_core_s": 149.727,
+      "rss_mib_s": 17220.972
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-903",
+      "llm_bins": 178,
+      "cpu_core_s": 128.0652,
+      "rss_mib_s": 28043.593999999997
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-963",
+      "llm_bins": 259,
+      "cpu_core_s": 214.6412,
+      "rss_mib_s": 25871.254
+    }
+  ],
+  "interpretation_boundary": "Zero-cost hindsight ceiling on fixed two-second profiles. It does not measure checkpoint, restore, transfer, or physical scheduling cost."
+}

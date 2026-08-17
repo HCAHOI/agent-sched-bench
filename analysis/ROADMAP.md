@@ -17,21 +17,20 @@ boundaries.
 
 | Kind | In scope |
 |---|---|
-| Observed state | Current phase; GPU queue; KV/prefix location, size, and reuse cost; tool workspace/container location, version, size, and restore cost; causal clause/eBPF feedback |
+| Observed state | Current phase; GPU queue; KV/prefix location, size, and reuse cost; causal clause/eBPF feedback |
 | Predicted state | Distribution over tool return time and CPU/RSS/I/O demand |
-| Actions | Borrower admission and return priority; replica routing; KV retain/offload/evict; whole-task CPU-worker placement; tool-state keep/park/restore |
+| Actions | Borrower admission and return priority; replica routing; KV retain/offload/evict |
 | Objectives | Session JCT, makespan, all-request tail TTFT, resource-time, and measured state movement cost |
 
-SSH is deployment machinery; a narrow RPC connects the coordinator and remote
-tool workers. Host-local telemetry keeps its UDS privilege boundary. EAR owns
-dynamic CPU/RSS elasticity inside workers, so static container right-sizing is
-not the contribution.
+SSH and RPC are deployment machinery, not the current contribution. Host-local
+telemetry keeps its UDS privilege boundary. EAR owns dynamic CPU/RSS elasticity
+inside workers, so static container right-sizing is not the contribution.
 
-Keep these meanings of snapshot separate: the existing immutable KB evidence
-snapshot is for reproducibility; GPU KV/prefix state and tool workspace/container
-state are scheduling state. The first system excludes arbitrary process
-checkpointing, per-command workspace migration, online LLM policy generation,
-a new RPC framework, and dynamic TP reconfiguration.
+Keep snapshot meanings separate: the existing immutable KB evidence snapshot is
+for reproducibility; GPU KV/prefix state is scheduling state. Tool-container
+parking is closed below. The first system excludes arbitrary process
+checkpointing, workspace migration, online LLM policy generation, a new RPC
+framework, and dynamic TP reconfiguration.
 
 ## Decision sequence
 
@@ -43,28 +42,24 @@ whether tool-gap completion-time gains can coexist with safe TTFT tails. On
 failure, do one bounded queueing-versus-KV-loss diagnosis; continue only if the
 observed state identifies a concrete action.
 
-### F1 — Test tool-state parking headroom
+### F1/F2 — Tool-state parking and remote placement are closed
 
-Before implementing checkpointing, compare `always resident` with a zero-cost
-`perfect parking` upper bound on existing PennyLane trajectories. Freeze the
-screen before outcome access: it must change a real admission decision and
-improve mean task completion by at least 5%, or the tool-snapshot branch closes.
-A pass authorizes measuring warm reuse, park/restore, and cold rebuild costs.
+The zero-cost perfect-parking screen changed starts but worsened mean completion
+2.664%: 27 tasks advanced by 113,402 task-seconds while 30 were delayed by
+139,700. It removed only 3.178% of CPU-core-time and 1.316% of RSS-time; baseline
+RSS utilization was 14.171%. Therefore do not measure restore costs or build the
+remote snapshot-RPC branch for this workload. Reopening requires a new workload
+with independently demonstrated CPU/RSS pressure.
 
-### F2 — Place remote tools using state locality
+### F3 — Measure KV-local return placement on two replicas
 
-Enter only if F1 still passes after real restore costs are charged. Reuse EAR,
-keep each task on one worker by default, and compare fixed placement,
-least-loaded placement, and snapshot-locality-plus-capacity placement. The last
-must beat both simple baselines physically after preparation, transfer, restore,
-and queueing time are included.
-
-### F3 — Route LLM returns using KV locality
-
-With at least two replicas, compare least-loaded routing, KV-local routing, and
-one cost rule: leave the local replica only when avoided queueing exceeds the
-measured state-reuse loss. Charge scheduler wait and repeated prefill to JCT and
-TTFT. No queue-versus-reuse crossover closes this branch.
+The current corpus shows frequent long-context returns and substantial source
+provider cache reuse, but its original tasks ran serially and contain no replica
+identity, vLLM KV hit, or per-replica queue state. The opportunity is therefore
+underdetermined. With two replicas, compare least-loaded routing, KV-local
+routing, and one cost rule: leave the local replica only when avoided queueing
+exceeds measured state-reuse loss. Charge scheduler wait and repeated prefill to
+JCT and TTFT. No queue-versus-reuse crossover closes this branch.
 
 ### F4 — Study RP x TP only after locality works
 
@@ -88,7 +83,7 @@ physical session outcomes; accuracy alone is insufficient.
 
 The paper arc is:
 
-`tool-gap backfill -> dual-state parking/placement -> RP x TP interaction`
+`tool-gap backfill -> KV-local replica placement -> RP x TP interaction`
 
 GPU/KV, CPU/RSS, and state-location fragmentation must be reported separately.
 Simulation and zero-cost oracles establish headroom only; allocation,

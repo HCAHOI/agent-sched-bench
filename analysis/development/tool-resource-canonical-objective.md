@@ -1,6 +1,6 @@
 # Tool-Resource Prediction — Current Objective and Decisions
 
-**Effective:** 2026-08-16
+**Effective:** 2026-08-17
 **Scope:** current scientific contract, retained results, and stop conditions
 
 This is the authority for tool-resource targets, evaluation semantics, evidence
@@ -19,6 +19,7 @@ lives in `tool-resource-service-architecture.md`.
 | Tool semantics | **KEEP the pytest worker-count × target-scope result; close pip-specific and generic KB-structure work.** | The pytest representation improved RSS accuracy/High recall to 87.799%/54.762% from 82.536%/2.381%, but its static admission consumer failed. |
 | Memory action | **KEEP temporal RSS packing as action-space evidence only.** | A hindsight PennyLane oracle improved mean completion 48.823% versus static peak packing. No causal safe scheduler is established. |
 | Joint action | **KEEP joint phase coordination as action-space evidence; close CPU-only bucket carriers.** | A frozen PennyLane hindsight model reduced mean completion to 14,100.143 s from 21,705.486 s for the best tool-only arm, but both causal bucket carriers failed liveness. This is not a physical GPU result. |
+| Tool-container state | **CLOSE parking and remote snapshot placement for the current PennyLane action model.** | Even instantaneous, free parking worsened mean completion 2.664%; it changed admission but released too little resource-time to overcome greedy reordering. |
 | GPU/KV | **Close CacheWise/C100 victim selection under the current simulator.** Tool-gap retention remains unresolved, not active. | Predictor gain was 1.481%; a hindsight upper bound was 9.620%. GPU action experiments exposed tail/action-activation problems. |
 | Runtime integration | **None authorized.** | No predictor, feedback controller, or scheduler is integrated for production. |
 | PennyLane collection | **Use the completed 76-task high-memory-node corpus; do not rerun it on this 16 GB host.** | All tasks have evidence-valid clause eBPF aggregates. Six replay-only attempts use the canonical trace-to-tool-call fallback. |
@@ -351,6 +352,20 @@ pass the original validity checks. All conditions except feedback-r2 p99
 passed, so the repeated tail-safe claim is NO-GO. This openly amended
 development replication does not alter the predictive-loan NO-GO.
 
+The preregistered perfect-container-parking screen also completed with a frozen
+**NO-GO**. On the same 70-task exact joint profiles, instantaneous zero-cost
+parking changed admission and remained capacity-safe, but mean completion rose
+from 14,100.143 s to 14,475.829 s, a 2.664% regression; makespan improved only
+0.394%. Parking removed 21,974.042 CPU-core-seconds and 6,368,669.558
+RSS-MiB-seconds, only 3.178% and 1.316% of the always-resident resource-time.
+It advanced 27 tasks by 113,402 task-seconds but delayed 30 by 139,700, for a
+net 26,298-second loss. The first divergence was a CPU-enabled admission swap
+that subsequently hit the LLM-slot limit, and the greedy reordering cascaded.
+Because a free hindsight intervention missed the 5% gate, do not measure
+parking/restore costs or build remote snapshot RPC for this workload. The
+independently reproduced artifact is
+`analysis/results/pennylane-perfect-container-parking-development-v1/result.json`.
+
 ### Secondary directions
 
 - **Disk-aware tool placement** is part of the distributed branch only if the
@@ -542,6 +557,7 @@ hardware/cost estimate, and explicit approval before launch.
 - `analysis/results/pennylane-joint-phase-packing-v1/result.json`
 - `analysis/results/pennylane-causal-joint-tool-admission-v1/result.json`
 - `analysis/results/pennylane-finite-bound-joint-admission-v1/result.json`
+- `analysis/results/pennylane-perfect-container-parking-development-v1/result.json`
 
 ### GPU action results
 
