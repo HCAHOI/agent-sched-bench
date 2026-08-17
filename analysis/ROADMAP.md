@@ -42,6 +42,9 @@ whether tool-gap completion-time gains can coexist with safe TTFT tails. On
 failure, do one bounded queueing-versus-KV-loss diagnosis; continue only if the
 observed state identifies a concrete action.
 
+The tracked runner performs a no-outcome preflight and validates every cell
+before proceeding; no A100 run has started.
+
 ### F1/F2 — Tool-state parking and remote placement are closed
 
 The zero-cost perfect-parking screen changed starts but worsened mean completion

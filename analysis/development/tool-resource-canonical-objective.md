@@ -23,7 +23,7 @@ lives in `tool-resource-service-architecture.md`.
 | GPU/KV | **Close CacheWise/C100 victim selection under the current simulator.** Tool-gap retention remains unresolved, not active. | Predictor gain was 1.481%; a hindsight upper bound was 9.620%. GPU action experiments exposed tail/action-activation problems. |
 | Runtime integration | **None authorized.** | No predictor, feedback controller, or scheduler is integrated for production. |
 | PennyLane collection | **Use the completed 76-task high-memory-node corpus; do not rerun it on this 16 GB host.** | All tasks have evidence-valid clause eBPF aggregates. Six replay-only attempts use the canonical trace-to-tool-call fallback. |
-| Immediate work | **Freeze GPU-pressure-aware backfill on a fresh physical PennyLane cohort; do not tune the lease on the exposed eight tasks.** | A revocable phase lease retained 89.427% of permanent-loan mean-completion gain and removed 39.129% of its overlap above fixed-four, but failed its frozen total-overlap gate. The next action must use live GPU pressure and charge borrower wait to TTFT. |
+| Immediate work | **Run the frozen native-priority comparison only with explicit GPU approval.** | Its tracked runner/analyzer now prove priority, lifecycle, replay, telemetry, and result provenance before consuming 6--9 A100 hours. |
 
 `status: no_go` answers one frozen claim. It does not authorize deleting a
 component marked **KEEP** above.
@@ -321,6 +321,22 @@ Restart vLLM to an empty prefix cache before each cell. Run
 `fixed -> feedback -> priority-feedback`, then the reverse order; fixed and
 feedback send priority zero, while priority-feedback sends borrower priority
 one. Record priority per request and include server queueing in TTFT.
+
+**Pre-outcome execution clarification, 2026-08-17.** Use exact model namespace
+`NousResearch/Meta-Llama-3.1-8B-Instruct`, a 131,072-token model limit (the
+frozen traces reach 111,057 source prompt-plus-completion tokens), a 250 W A100
+power limit, run root
+`/home/Ubuntu/pennylane-native-priority-physical-v1-20260818`, and result path
+`analysis/results/pennylane-native-priority-physical-development-v1/result.json`.
+The frozen inputs are
+`analysis/development/pennylane-native-priority-v1/manifest.yaml` and
+`resource-profile.yaml`; the only driver and scorer are
+`scripts/evaluation/run_pennylane_native_priority.sh` and
+`evaluate_pennylane_native_priority.py`. Cell directories are numbered in the
+frozen order. Every server starts with `--scheduling-policy priority`; use only
+the `/v1/models` readiness probe, not a generative warmup that would populate
+the prefix cache. The driver validates each cell before starting the next and
+never overwrites an existing run root or result.
 
 The frozen GO gate requires both repetitions to be valid, feedback and
 priority-feedback each to reduce mean JCT by at least 5% and makespan strictly

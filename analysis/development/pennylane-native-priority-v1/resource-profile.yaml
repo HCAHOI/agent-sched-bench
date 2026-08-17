@@ -1,0 +1,7 @@
+tool_resource:
+  endpoint: unix:///run/agent-sched/resource/resource.sock
+  behavior: observe
+  update_policy: frozen
+  snapshot: latest_at_run_start
+  telemetry_requirement: required_for_valid_evidence
+  latency_bucket_edges_ms: [500, 2000, 8000, 30000]
