@@ -259,6 +259,16 @@ clear the minimum utility gate. Full protocol, validity, utilization, and
 failure evidence is in
 `analysis/results/pennylane-physical-gap-loan-development-v1/result.json`.
 
+**Post-outcome replication amendment, 2026-08-17.** After the first three
+cells were visible and the second predictor cell made the activation gate
+unreachable, the user authorized early termination and continued work. Run
+only the two remaining originally ordered controls, `feedback-r2` then
+`fixed-r2`, with the same tasks, model, hardware, fresh-vLLM lifecycle, and
+telemetry. A repeated feedback mechanism claim requires both repetitions to
+reduce mean JCT by at least 5%, lower makespan, keep paired p95 and p99 TTFT
+ratios at most 1.05, and pass the original validity checks. This is an openly
+amended development replication; it cannot rescue the predictive-loan NO-GO.
+
 ### Secondary directions
 
 - **Disk-aware tool placement** is part of the distributed branch only if the
