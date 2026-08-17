@@ -1,0 +1,5 @@
+version: 1
+defaults:
+  task_source: ../../../data/swe-rebench/tasks.json
+traces:
+  - trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-3024/attempt_1/trace.jsonl
