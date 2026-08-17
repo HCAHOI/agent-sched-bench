@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "experiment": "pennylane-physical-gap-loan-development-v1",
+  "date": "2026-08-17",
+  "decision": "predictor_action_interface_no_go_feedback_mechanism_positive",
+  "decision_reason": "The fifth latency bucket has a 30 s lower edge, below the measured 34.683-34.791 s causal feedback budget, so no hard-bucket prediction could satisfy the frozen predictor trigger. The second predictor repetition was stopped after all four one-shot loans had again been claimed by feedback, making the activation gate unreachable. This does not reject the retained Task-Aware predictor.",
+  "evidence_boundary": "Development-exposed PennyLane tasks and predictions; descriptive physical evidence, not confirmation.",
+  "protocol": {
+    "code_commit": "2e86442e348ee477652eaff73c3523413fc7e411",
+    "remote_root": "/home/Ubuntu/pennylane-physical-gap-loan-v1-20260817",
+    "hardware": "NVIDIA A100 80GB PCIe at 250 W; 16 logical CPU cores; 94.4 GiB RAM",
+    "model": "NousResearch/Meta-Llama-3.1-8B-Instruct",
+    "task_ids": [
+      "PennyLaneAI__pennylane-2603",
+      "PennyLaneAI__pennylane-2654",
+      "PennyLaneAI__pennylane-2668",
+      "PennyLaneAI__pennylane-2834",
+      "PennyLaneAI__pennylane-2947",
+      "PennyLaneAI__pennylane-2964",
+      "PennyLaneAI__pennylane-3024",
+      "PennyLaneAI__pennylane-3033"
+    ],
+    "container_cpu_cap": 2,
+    "base_task_concurrency": 4,
+    "llm_request_admission": "unconstrained",
+    "frozen_order": [
+      "fixed-r1",
+      "feedback-r1",
+      "predictor-r1",
+      "predictor-r2",
+      "feedback-r2",
+      "fixed-r2"
+    ],
+    "completed_cells": [
+      "fixed-r1",
+      "feedback-r1",
+      "predictor-r1"
+    ],
+    "stopped_cell": "predictor-r2",
+    "unrun_cells": [
+      "feedback-r2",
+      "fixed-r2"
+    ],
+    "stop_reason": "User-authorized early stop after predictor-r2 consumed all four possible loans through feedback, making the four-distinct-predictor-trigger gate unreachable."
+  },
+  "metrics": {
+    "fixed-r1": {
+      "mean_jct_s": 4689.464735398874,
+      "p95_jct_s": 6948.894334251698,
+      "makespan_s": 7623.108243486999,
+      "p95_ttft_ms": 860.11375,
+      "p99_ttft_ms": 1176.2885000000003,
+      "task_throughput_per_hour": 3.7779864958110796,
+      "gpu_util_mean_pct": 15.963779527559055,
+      "gpu_busy_fraction": 0.18385826771653543,
+      "gpu_power_mean_w": 96.78023228346457,
+      "gpu_temp_max_c": 49,
+      "kv_log_max_pct": 25.5,
+      "host_cpu_util_pct": 28.307207606460818,
+      "host_rss_mean_mib": 10249.245313818701
+    },
+    "feedback-r1": {
+      "mean_jct_s": 3153.748240726624,
+      "p95_jct_s": 4213.248787071849,
+      "makespan_s": 4362.411944420999,
+      "p95_ttft_ms": 889.9785,
+      "p99_ttft_ms": 1232.6308000000001,
+      "task_throughput_per_hour": 6.6018524538545105,
+      "gpu_util_mean_pct": 24.67484521898647,
+      "gpu_busy_fraction": 0.281816097225407,
+      "gpu_power_mean_w": 114.4652281586792,
+      "gpu_temp_max_c": 50,
+      "kv_log_max_pct": 31.1,
+      "host_cpu_util_pct": 50.706817816243415,
+      "host_rss_mean_mib": 17827.68143996247
+    },
+    "predictor-r1": {
+      "mean_jct_s": 3155.9431704006283,
+      "p95_jct_s": 4229.098123307953,
+      "makespan_s": 4395.489848970003,
+      "p95_ttft_ms": 881.752,
+      "p99_ttft_ms": 1148.1806000000001,
+      "task_throughput_per_hour": 6.552170745371809,
+      "gpu_util_mean_pct": 24.537445936717504,
+      "gpu_busy_fraction": 0.2774869109947644,
+      "gpu_power_mean_w": 113.88084907807877,
+      "gpu_temp_max_c": 49,
+      "kv_log_max_pct": 30.4,
+      "host_cpu_util_pct": 50.47941314724049,
+      "host_rss_mean_mib": 17519.442430128245
+    }
+  },
+  "comparisons": {
+    "feedback_vs_fixed": {
+      "mean_jct_reduction_pct": 32.74822567871653,
+      "makespan_reduction_pct": 42.77384230837677,
+      "p95_ttft_ratio": 1.0347218609166522,
+      "p99_ttft_ratio": 1.0478983684699799
+    },
+    "predictor_vs_feedback": {
+      "mean_jct_increase_pct": 0.06959749182448242,
+      "makespan_increase_pct": 0.7582480740111253,
+      "interpretation": "Both arms made the same four feedback-triggered loan decisions; the difference is run-to-run physical variation, not a predictor effect."
+    }
+  },
+  "activation": {
+    "required_distinct_predictor_trigger_ids": 4,
+    "predictor-r1": {
+      "loans": 4,
+      "predictor_triggers": 0,
+      "feedback_triggers": 4
+    },
+    "predictor-r2_partial": {
+      "loans": 4,
+      "predictor_triggers": 0,
+      "feedback_triggers": 4,
+      "performance_excluded": true
+    },
+    "pass": false
+  },
+  "validity": {
+    "complete_cells": 3,
+    "tasks_per_complete_cell": 8,
+    "actions_per_complete_cell": 884,
+    "llm_calls_per_complete_cell": 446,
+    "tool_calls_per_complete_cell": 438,
+    "requested_completion_tokens_per_complete_cell": 89576,
+    "returned_completion_tokens_per_complete_cell": 89576,
+    "all_action_sequences_exact": true,
+    "all_provider_sequences_exact": true,
+    "all_token_counts_exact": true,
+    "telemetry_errors": 0,
+    "telemetry_integrity_failures": 0,
+    "oom_or_gpu_xid": false,
+    "thermal_slowdown": false,
+    "unexpected_tool_terminal_differences": {
+      "fixed-r1": 6,
+      "feedback-r1": 7,
+      "predictor-r1": 7
+    },
+    "tool_terminal_difference_policy": "Reported but non-invalidating under the frozen fixed-trajectory protocol because tool output never changes the shadow LLM prompt."
+  },
+  "mechanism_diagnosis": {
+    "latency_bucket_lower_edges_s": [
+      0,
+      0.5,
+      2,
+      8,
+      30
+    ],
+    "feedback_budget_s": {
+      "feedback-r1": 34.790656000000006,
+      "predictor-r1": 34.683224
+    },
+    "trigger_condition": "predicted hard-bucket lower edge > causal feedback budget",
+    "range_mismatch": "The maximum possible lower edge was 30 s, so the frozen predictor condition was false for every command.",
+    "opportunity_timing": "For three of four foreground tasks, the first bucket-five prediction appeared only after feedback had already claimed the one-shot loan. The fourth had an earlier bucket-five prediction, but 30 s did not exceed the 34.683 s budget.",
+    "ideal_direct_headroom": {
+      "maximum_admission_advance_per_waiter_s": 34.683224,
+      "maximum_mean_jct_reduction_s": 17.341612,
+      "maximum_mean_jct_reduction_pct": 0.5498730613958105,
+      "maximum_makespan_reduction_pct": 0.7950469703888392,
+      "registered_mean_jct_gate_pct": 5
+    },
+    "preflight_failure": "The label-blind carrier count checked for fifth-bucket commands but did not test the numerical trigger condition, temporal reachability while a loan remained, or the action-level utility upper bound."
+  },
+  "decision": {
+    "predictive_tool_gap_loan": "NO-GO for this action mapping; do not lower the trigger or reinterpret the result post hoc.",
+    "task_aware_predictor": "KEEP; this experiment did not execute a predictor-triggered action and therefore is not evidence against prediction accuracy.",
+    "causal_feedback": "PROMISING development mechanism: one physical repetition improved mean JCT 32.748% and makespan 42.774% while p95/p99 TTFT ratios stayed below 1.05. A second fixed/feedback repetition is required before a repeated physical claim.",
+    "next_gate": "Before another physical run, prove offline that the prediction output can change a reachable action and that its ideal direct effect exceeds the registered minimum effect."
+  }
+}

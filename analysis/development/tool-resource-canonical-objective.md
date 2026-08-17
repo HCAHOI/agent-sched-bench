@@ -22,7 +22,7 @@ lives in `tool-resource-service-architecture.md`.
 | GPU/KV | **Close CacheWise/C100 victim selection under the current simulator.** Tool-gap retention remains unresolved, not active. | Predictor gain was 1.481%; a hindsight upper bound was 9.620%. GPU action experiments exposed tail/action-activation problems. |
 | Runtime integration | **None authorized.** | No predictor, feedback controller, or scheduler is integrated for production. |
 | PennyLane collection | **Use the completed 76-task high-memory-node corpus; do not rerun it on this 16 GB host.** | All tasks have evidence-valid clause eBPF aggregates. Six replay-only attempts use the canonical trace-to-tool-call fallback. |
-| Immediate work | **Run the frozen PennyLane single-GPU task-admission development experiment after its smoke and cost gate.** | The new A100 node is available. The experiment reuses the reviewed tool-gap loan controller and asks whether Task-Aware predictions add value over causal feedback on a long-tool workload; it does not reopen the SQLGlot activation failure. |
+| Immediate work | **Screen one prediction-dependent action for numerical reachability, temporal opportunity, and decision-level headroom before another physical run.** | The physical PennyLane loan experiment showed that feedback is promising, but the registered predictor trigger was structurally unreachable and had less than one percent ideal direct headroom. |
 
 `status: no_go` answers one frozen claim. It does not authorize deleting a
 component marked **KEEP** above.
@@ -230,52 +230,34 @@ The next claim-bearing experiment now requires a physical GPU to measure
 inference service, KV, TTFT, and the joint action rather than another replay
 reservation mapping.
 
-#### Frozen PennyLane physical task-admission development protocol
+#### PennyLane physical task-admission result
 
-**Question.** On long, same-repository agent trajectories, can the unchanged
-Task-Aware latency predictor admit waiting tasks earlier than causal feedback
-without worsening GPU request tails, and thereby reduce task completion time?
+The A100 development run completed one `fixed`, one causal `feedback`, and one
+`predictor` cell on the same eight tasks. Feedback reduced mean JCT 32.748% and
+makespan 42.774%; its p95 and p99 TTFT ratios versus fixed were 1.035 and 1.048.
+Predictor produced the same four feedback-triggered loans and no
+predictor-triggered loan, so its 0.070% mean-JCT and 0.758% makespan regressions
+relative to feedback are physical variation, not a prediction effect.
 
-This is development evidence: all PennyLane outcomes are already exposed. The
-workload was selected without reading command labels or durations. Among the 41
-tasks with existing causal Task-Aware outputs, retain tasks having at least one
-latency hard prediction in bucket five, then take the first eight by numeric PR
-ID: `2603, 2654, 2668, 2834, 2947, 2964, 3024, 3033`. The frozen manifest and
-label-free predictions live under
-`analysis/development/pennylane-physical-gap-loan-v1/`.
+The failure was in the action interface and its preflight. The fifth latency
+bucket lower edge is 30 s, while the measured causal feedback budget was
+34.683--34.791 s; therefore the frozen `lower_edge > budget` condition was
+false for every possible hard prediction. Even an ideal immediate trigger
+could advance four waiters by only 34.683 s each, bounding direct mean-JCT and
+makespan gains at 0.550% and 0.795%, below the registered 5% gate. The second
+predictor cell was stopped, with user approval, after all four one-shot loans
+had again been claimed by feedback; the remaining cells could not change the
+activation verdict.
 
-Reuse the reviewed fixed-trajectory shadow-inference and tool-gap loan code
-unchanged. Every cell stages the same eight task containers, caps each at two
-CPUs, starts four FIFO foreground tasks, uses one A100 80 GB at 250 W with the
-public full-precision `NousResearch/Meta-Llama-3.1-8B-Instruct` mirror, and
-leaves LLM request admission unconstrained. The official gated repository
-returned HTTP 401 on the fresh node; this model-source amendment was recorded
-before any smoke or outcome access and does not change the architecture,
-tokenizer, task inputs, or gates. `fixed`
-admits no loan; `feedback` admits one waiting task after a running tool exceeds
-the maximum causally completed foreground LLM-response time; `predictor`
-admits immediately only when the unchanged Task-Aware hard-bucket lower edge
-exceeds that budget and otherwise uses the identical feedback rule. A lender
-and its slot may be used once; waiting tasks cannot lend.
-
-Run cells in `fixed, feedback, predictor, predictor, feedback, fixed` order
-with fresh containers and vLLM state. Validity requires exact source action,
-tool ID/argument/order, and requested/returned completion-token counts; the
-declared CPU caps; valid telemetry; no framework failure, OOM, or thermal
-slowdown. Tool terminal-class differences are reported but do not invalidate
-fixed-trajectory shadow inference because tool output never changes the LLM
-prompt. Predictor contribution is a development GO only if both repetitions
-activate at least four distinct early command IDs in total, predictor pooled
-mean JCT is at least 5% below both feedback and fixed, predictor makespan is
-lower than both paired arms in both repetitions, paired predictor/feedback p95
-JCT and p99 end-to-end TTFT ratios are each at most 1.05, and all validity
-checks pass. Report the full JCT/TTFT/throughput/utilization frontier regardless
-of verdict; do not tune task IDs, buckets, budgets, or gates afterward.
-
-Before the six formal cells, run one non-evidentiary PennyLane plumbing smoke
-and measure wall time and memory. Do not start a run estimated above 30 minutes
-without explicit approval. A failed activation, validity, or cost smoke stops
-the experiment without replacement tasks.
+This closes predictive tool-gap loan under the registered mapping, not the
+Task-Aware predictor. Retain feedback as a promising physical mechanism, but
+require a second fixed/feedback repetition before a repeated claim. Before any
+new prediction-driven physical action, a label-blind preflight must establish
+that the output range can cross the action threshold, the relevant prediction
+exists while the action is still available, and the ideal direct effect can
+clear the minimum utility gate. Full protocol, validity, utilization, and
+failure evidence is in
+`analysis/results/pennylane-physical-gap-loan-development-v1/result.json`.
 
 ### Secondary directions
 
@@ -372,6 +354,7 @@ registered validity or action gate failed.
 | Static GPU concurrency 4→8 | Mean task JCT -21.77%, but p99 TTFT ratios 1.262/1.131 | Throughput-tail trade-off; no promotion |
 | Phase-aware shadow admission | Mean task JCT -13.465%, but end-to-end p99 TTFT ratios 22.231/15.984 | Host admission queue dominates; NO-GO |
 | Predictive tool-gap loan | Only one distinct early action, below four-action gate | Insufficient activation; no performance verdict |
+| PennyLane physical tool-gap admission | Feedback mean JCT/makespan -32.748%/-42.774%; predictor made zero predictor-triggered loans because 30 s bucket support could not cross the 34.683 s feedback budget | Keep feedback mechanism; predictive loan action-interface NO-GO |
 | Load-32 hard-pin control | Deadlocked/stalled before a valid result | Invalid control, no method verdict |
 
 ## 6. Current operational boundaries
@@ -475,6 +458,7 @@ hardware/cost estimate, and explicit approval before launch.
 - `analysis/results/fixed-trajectory-static-ceiling-20260810/result.json`
 - `analysis/results/fixed-trajectory-phase-aware-admission-20260810/result.json`
 - `analysis/results/predictive-tool-gap-loan-20260810/result.json`
+- `analysis/results/pennylane-physical-gap-loan-development-v1/result.json`
 
 Task split authorities:
 
