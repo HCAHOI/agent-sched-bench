@@ -195,7 +195,8 @@ def simulate(
             state.finish_s = now + action.duration_s
             state.trigger_s = None
             if (
-                action.kind == "exec"
+                arm != "fixed4"
+                and action.kind == "exec"
                 and state.program.task_id in foreground_ids
                 and action.duration_s > feedback_budget_s
                 and (arm == "revocable_lease" or state.program.task_id not in loaned)

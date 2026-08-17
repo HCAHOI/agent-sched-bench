@@ -20,7 +20,10 @@ def test_revocable_lease_reactivates_on_later_lender_tool_phase() -> None:
 
     permanent = simulate(programs, "permanent_loan", base_concurrency=2, feedback_budget_s=2)
     lease = simulate(programs, "revocable_lease", base_concurrency=2, feedback_budget_s=2)
+    fixed = simulate(programs, "fixed4", base_concurrency=2, feedback_budget_s=2)
 
+    assert fixed["completed"] is True
+    assert fixed["feedback_trigger_count"] == 0
     assert lease["feedback_trigger_count"] == 2
     assert lease["paused_borrower_s"] > 0
     assert lease["task_completion_s"]["borrower"] == 8
