@@ -22,7 +22,7 @@ lives in `tool-resource-service-architecture.md`.
 | GPU/KV | **Close CacheWise/C100 victim selection under the current simulator.** Tool-gap retention remains unresolved, not active. | Predictor gain was 1.481%; a hindsight upper bound was 9.620%. GPU action experiments exposed tail/action-activation problems. |
 | Runtime integration | **None authorized.** | No predictor, feedback controller, or scheduler is integrated for production. |
 | PennyLane collection | **Use the completed 76-task high-memory-node corpus; do not rerun it on this 16 GB host.** | All tasks have evidence-valid clause eBPF aggregates. Six replay-only attempts use the canonical trace-to-tool-call fallback. |
-| Immediate work | **Screen one prediction-dependent action for numerical reachability, temporal opportunity, and decision-level headroom before another physical run.** | The physical PennyLane loan experiment showed that feedback is promising, but the registered predictor trigger was structurally unreachable and had less than one percent ideal direct headroom. |
+| Immediate work | **Finish the frozen fixed/feedback replication; do not build another prediction-driven action without an irreversible decision and a five-point oracle ceiling.** | Predictive gap-loan timing has below-one-percent direct headroom. A development screen also found that exact tool-duration ordering changes mean completion by below one percent, so latency priority is not the missing action. |
 
 `status: no_go` answers one frozen claim. It does not authorize deleting a
 component marked **KEEP** above.
@@ -258,6 +258,14 @@ exists while the action is still available, and the ideal direct effect can
 clear the minimum utility gate. Full protocol, validity, utilization, and
 failure evidence is in
 `analysis/results/pennylane-physical-gap-loan-development-v1/result.json`.
+
+A subsequent development-only action screen fixed eight active tasks, four
+LLM slots, and four tool slots, then replaced work-conserving FCFS with an
+exact-duration shortest-tool-first oracle on the 35 exposed PennyLane replay
+trajectories. Mean completion improved 0.435% and makespan 0.666%. This is an
+exploratory upper-bound screen rather than a frozen result, but it is enough to
+close tool-latency priority as the next consumer: a learned predictor cannot
+exceed its exact-duration action ceiling under the same model.
 
 **Post-outcome replication amendment, 2026-08-17.** After the first three
 cells were visible and the second predictor cell made the activation gate
