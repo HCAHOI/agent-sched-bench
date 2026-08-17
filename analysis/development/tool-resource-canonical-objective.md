@@ -22,7 +22,7 @@ lives in `tool-resource-service-architecture.md`.
 | GPU/KV | **Close CacheWise/C100 victim selection under the current simulator.** Tool-gap retention remains unresolved, not active. | Predictor gain was 1.481%; a hindsight upper bound was 9.620%. GPU action experiments exposed tail/action-activation problems. |
 | Runtime integration | **None authorized.** | No predictor, feedback controller, or scheduler is integrated for production. |
 | PennyLane collection | **Use the completed 76-task high-memory-node corpus; do not rerun it on this 16 GB host.** | All tasks have evidence-valid clause eBPF aggregates. Six replay-only attempts use the canonical trace-to-tool-call fallback. |
-| Immediate work | **Pause until a physical GPU is available, then freeze a single-GPU protocol.** | The registered finite-bound carrier also deadlocked: all eight ready execs lacked eligible predictor rows and full-host fallback was infeasible with retained RSS. Its NO-GO closes further CPU-only carrier tuning. |
+| Immediate work | **Run the frozen PennyLane single-GPU task-admission development experiment after its smoke and cost gate.** | The new A100 node is available. The experiment reuses the reviewed tool-gap loan controller and asks whether Task-Aware predictions add value over causal feedback on a long-tool workload; it does not reopen the SQLGlot activation failure. |
 
 `status: no_go` answers one frozen claim. It does not authorize deleting a
 component marked **KEEP** above.
@@ -229,6 +229,49 @@ CPU-only carrier screens are also complete and neither preserved liveness.
 The next claim-bearing experiment now requires a physical GPU to measure
 inference service, KV, TTFT, and the joint action rather than another replay
 reservation mapping.
+
+#### Frozen PennyLane physical task-admission development protocol
+
+**Question.** On long, same-repository agent trajectories, can the unchanged
+Task-Aware latency predictor admit waiting tasks earlier than causal feedback
+without worsening GPU request tails, and thereby reduce task completion time?
+
+This is development evidence: all PennyLane outcomes are already exposed. The
+workload was selected without reading command labels or durations. Among the 41
+tasks with existing causal Task-Aware outputs, retain tasks having at least one
+latency hard prediction in bucket five, then take the first eight by numeric PR
+ID: `2603, 2654, 2668, 2834, 2947, 2964, 3024, 3033`. The frozen manifest and
+label-free predictions live under
+`analysis/development/pennylane-physical-gap-loan-v1/`.
+
+Reuse the reviewed fixed-trajectory shadow-inference and tool-gap loan code
+unchanged. Every cell stages the same eight task containers, caps each at two
+CPUs, starts four FIFO foreground tasks, uses one A100 80 GB at 250 W with
+Llama-3.1-8B-Instruct, and leaves LLM request admission unconstrained. `fixed`
+admits no loan; `feedback` admits one waiting task after a running tool exceeds
+the maximum causally completed foreground LLM-response time; `predictor`
+admits immediately only when the unchanged Task-Aware hard-bucket lower edge
+exceeds that budget and otherwise uses the identical feedback rule. A lender
+and its slot may be used once; waiting tasks cannot lend.
+
+Run cells in `fixed, feedback, predictor, predictor, feedback, fixed` order
+with fresh containers and vLLM state. Validity requires exact source action,
+tool ID/argument/order, and requested/returned completion-token counts; the
+declared CPU caps; valid telemetry; no framework failure, OOM, or thermal
+slowdown. Tool terminal-class differences are reported but do not invalidate
+fixed-trajectory shadow inference because tool output never changes the LLM
+prompt. Predictor contribution is a development GO only if both repetitions
+activate at least four distinct early command IDs in total, predictor pooled
+mean JCT is at least 5% below both feedback and fixed, predictor makespan is
+lower than both paired arms in both repetitions, paired predictor/feedback p95
+JCT and p99 end-to-end TTFT ratios are each at most 1.05, and all validity
+checks pass. Report the full JCT/TTFT/throughput/utilization frontier regardless
+of verdict; do not tune task IDs, buckets, budgets, or gates afterward.
+
+Before the six formal cells, run one non-evidentiary PennyLane plumbing smoke
+and measure wall time and memory. Do not start a run estimated above 30 minutes
+without explicit approval. A failed activation, validity, or cost smoke stops
+the experiment without replacement tasks.
 
 ### Secondary directions
 
