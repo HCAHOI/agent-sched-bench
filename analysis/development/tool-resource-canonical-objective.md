@@ -22,7 +22,7 @@ lives in `tool-resource-service-architecture.md`.
 | GPU/KV | **Close CacheWise/C100 victim selection under the current simulator.** Tool-gap retention remains unresolved, not active. | Predictor gain was 1.481%; a hindsight upper bound was 9.620%. GPU action experiments exposed tail/action-activation problems. |
 | Runtime integration | **None authorized.** | No predictor, feedback controller, or scheduler is integrated for production. |
 | PennyLane collection | **Use the completed 76-task high-memory-node corpus; do not rerun it on this 16 GB host.** | All tasks have evidence-valid clause eBPF aggregates. Six replay-only attempts use the canonical trace-to-tool-call fallback. |
-| Immediate work | **Stop GPU work; retain feedback as a Pareto candidate and require a frozen tail-aware action before another physical run.** | Feedback repeated roughly 33% mean-JCT and 42% makespan gains, but the second repetition raised p99 TTFT to 1.115x and failed the frozen tail gate. Predictive gap timing and exact-duration tool ordering both have below-one-percent action headroom. |
+| Immediate work | **Screen a revocable phase-local tool lease on existing PennyLane traces before another physical run.** | Feedback repeated roughly 33% mean-JCT and 42% makespan gains, but the current one-shot loan is never reclaimed and the second repetition raised p99 TTFT to 1.115x. Predictive gap timing and exact-duration tool ordering both have below-one-percent action headroom. |
 
 `status: no_go` answers one frozen claim. It does not authorize deleting a
 component marked **KEEP** above.
@@ -254,13 +254,30 @@ had again been claimed by feedback; the remaining cells could not change the
 activation verdict.
 
 This closes predictive tool-gap loan under the registered mapping, not the
-Task-Aware predictor. The failed feedback gate has a concrete mechanism: two
-paired 58k--64k-token prompts returned at concurrency three in feedback-r2,
-raising their TTFT relative to fixed-r2 and moving the 446-request p99. Any
-continuation must control this long-prefill return burst and register its JCT
-versus tail trade-off before a physical run. Full protocol, validity,
-utilization, and failure evidence is in
+Task-Aware predictor. Two paired 58k--64k-token prompts returned at concurrency
+three in feedback-r2 and had higher TTFT than in fixed-r2, moving the
+446-request p99. The higher overlap is consistent with queueing/batching or
+prefix-cache-state contention, but cached-token counts were not retained, so
+the physical mechanism is not identified. Any continuation must reduce the
+return overlap and register its JCT versus tail trade-off before a physical
+run. Full protocol, validity, utilization, and failure evidence is in
 `analysis/results/pennylane-physical-gap-loan-development-v1/result.json`.
+
+The next development screen is frozen before execution. It uses the same eight
+development-exposed PennyLane trajectories, the retained feedback-r1 budget of
+34.790656 seconds, and three arms: four permanently active tasks; the existing
+one-shot loan, where each qualifying foreground exec permanently admits one
+waiting task; and a revocable phase-local lease. A leased task may progress
+only while its lender remains in a qualifying exec phase, may finish an action
+already in flight when that phase ends, and becomes permanent only when a base
+slot opens. The screen is an actionability proxy, not physical tail evidence:
+recorded action durations and prompt-token counts are replayed without a GPU
+service model. It authorizes one physical test only if the revocable arm
+completes without deadlock, improves mean completion by at least 5% and
+makespan strictly versus fixed-four, retains at least 80% of the permanent
+loan's mean-completion gain, reduces LLM request-overlap time by at least 25%
+versus the permanent loan, and does not increase peak simultaneous prompt
+tokens. No threshold or arm may be changed after the screen is read.
 
 A subsequent development-only action screen fixed eight active tasks, four
 LLM slots, and four tool slots, then replaced work-conserving FCFS with an

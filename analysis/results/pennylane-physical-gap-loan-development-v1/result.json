@@ -3,7 +3,7 @@
   "experiment": "pennylane-physical-gap-loan-development-v1",
   "date": "2026-08-17",
   "decision": "predictor_action_interface_no_go_feedback_throughput_replicated_tail_gate_no_go",
-  "decision_reason": "No hard-bucket prediction could satisfy the frozen predictor trigger because its maximum 30 s lower edge was below the 34.683-34.791 s causal feedback budget. Feedback repeated its large JCT and makespan gains, but feedback-r2 failed the preregistered p99 TTFT bound because concurrent long-prefill requests created real tail contention. Keep feedback as a development Pareto candidate, not a tail-safe default; this result does not reject the retained Task-Aware predictor.",
+  "decision_reason": "No hard-bucket prediction could satisfy the frozen predictor trigger because its maximum 30 s lower edge was below the 34.683-34.791 s causal feedback budget. Feedback repeated its large JCT and makespan gains, but feedback-r2 failed the preregistered p99 TTFT bound. The affected long prompts coincided with higher request overlap; cached-prefix state was not recorded, so queueing/batching and prefix-cache effects cannot be separated. Keep feedback as a development Pareto candidate, not a tail-safe default; this result does not reject the retained Task-Aware predictor.",
   "evidence_boundary": "Development-exposed PennyLane tasks and predictions; descriptive physical evidence, not confirmation.",
   "protocol": {
     "code_commit": "2e86442e348ee477652eaff73c3523413fc7e411",
@@ -152,7 +152,7 @@
         "both_p99_ttft_ratios_at_most_1_05": false,
         "status": "no_go_repeated_tail_safe_feedback_claim"
       },
-      "tail_diagnosis": "The feedback-r2 p99 increase is physical contention, not a population mismatch. Two paired long-prefill requests ran at higher overlap: PennyLaneAI__pennylane-2654 llm_47 (63,553 prompt tokens) rose from 648.444 ms at concurrency two to 1,435.925 ms at concurrency three; PennyLaneAI__pennylane-2964 llm_66 (58,318 prompt tokens) rose from 1,099.767 ms at concurrency one to 1,332.831 ms at concurrency three."
+      "tail_diagnosis": "The feedback-r2 p99 increase is not a population mismatch. Two paired long-prompt requests coincided with higher overlap: PennyLaneAI__pennylane-2654 llm_47 (63,553 prompt tokens) rose from 648.444 ms at concurrency two to 1,435.925 ms at concurrency three; PennyLaneAI__pennylane-2964 llm_66 (58,318 prompt tokens) rose from 1,099.767 ms at concurrency one to 1,332.831 ms at concurrency three. This is consistent with queueing/batching or prefix-cache-state contention, but cached-token counts were unavailable, so those mechanisms cannot be separated."
     }
   },
   "activation": {
