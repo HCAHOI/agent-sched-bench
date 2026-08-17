@@ -246,8 +246,12 @@ label-free predictions live under
 
 Reuse the reviewed fixed-trajectory shadow-inference and tool-gap loan code
 unchanged. Every cell stages the same eight task containers, caps each at two
-CPUs, starts four FIFO foreground tasks, uses one A100 80 GB at 250 W with
-Llama-3.1-8B-Instruct, and leaves LLM request admission unconstrained. `fixed`
+CPUs, starts four FIFO foreground tasks, uses one A100 80 GB at 250 W with the
+public full-precision `NousResearch/Meta-Llama-3.1-8B-Instruct` mirror, and
+leaves LLM request admission unconstrained. The official gated repository
+returned HTTP 401 on the fresh node; this model-source amendment was recorded
+before any smoke or outcome access and does not change the architecture,
+tokenizer, task inputs, or gates. `fixed`
 admits no loan; `feedback` admits one waiting task after a running tool exceeds
 the maximum causally completed foreground LLM-response time; `predictor`
 admits immediately only when the unchanged Task-Aware hard-bucket lower edge
