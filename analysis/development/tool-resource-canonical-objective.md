@@ -22,7 +22,7 @@ lives in `tool-resource-service-architecture.md`.
 | GPU/KV | **Close CacheWise/C100 victim selection under the current simulator.** Tool-gap retention remains unresolved, not active. | Predictor gain was 1.481%; a hindsight upper bound was 9.620%. GPU action experiments exposed tail/action-activation problems. |
 | Runtime integration | **None authorized.** | No predictor, feedback controller, or scheduler is integrated for production. |
 | PennyLane collection | **Use the completed 76-task high-memory-node corpus; do not rerun it on this 16 GB host.** | All tasks have evidence-valid clause eBPF aggregates. Six replay-only attempts use the canonical trace-to-tool-call fallback. |
-| Immediate work | **Finish the frozen fixed/feedback replication; do not build another prediction-driven action without an irreversible decision and a five-point oracle ceiling.** | Predictive gap-loan timing has below-one-percent direct headroom. A development screen also found that exact tool-duration ordering changes mean completion by below one percent, so latency priority is not the missing action. |
+| Immediate work | **Stop GPU work; retain feedback as a Pareto candidate and require a frozen tail-aware action before another physical run.** | Feedback repeated roughly 33% mean-JCT and 42% makespan gains, but the second repetition raised p99 TTFT to 1.115x and failed the frozen tail gate. Predictive gap timing and exact-duration tool ordering both have below-one-percent action headroom. |
 
 `status: no_go` answers one frozen claim. It does not authorize deleting a
 component marked **KEEP** above.
@@ -232,12 +232,16 @@ reservation mapping.
 
 #### PennyLane physical task-admission result
 
-The A100 development run completed one `fixed`, one causal `feedback`, and one
-`predictor` cell on the same eight tasks. Feedback reduced mean JCT 32.748% and
-makespan 42.774%; its p95 and p99 TTFT ratios versus fixed were 1.035 and 1.048.
-Predictor produced the same four feedback-triggered loans and no
-predictor-triggered loan, so its 0.070% mean-JCT and 0.758% makespan regressions
-relative to feedback are physical variation, not a prediction effect.
+The A100 development run completed two paired `fixed`/causal-`feedback`
+repetitions and one complete `predictor` cell on the same eight tasks. Feedback
+reduced mean JCT by 32.748% and 33.102%, and makespan by 42.774% and 42.443%.
+Its p95 TTFT ratios were 1.035 and 1.017; p99 ratios were 1.048 and 1.115. The
+throughput effect therefore repeated, but the second p99 result failed the
+frozen 1.05 tail bound. Feedback remains a physical Pareto candidate, not a
+tail-safe default. Predictor produced the same four feedback-triggered loans
+and no predictor-triggered loan, so its 0.070% mean-JCT and 0.758% makespan
+regressions relative to feedback-r1 are physical variation, not a prediction
+effect.
 
 The failure was in the action interface and its preflight. The fifth latency
 bucket lower edge is 30 s, while the measured causal feedback budget was
@@ -250,13 +254,12 @@ had again been claimed by feedback; the remaining cells could not change the
 activation verdict.
 
 This closes predictive tool-gap loan under the registered mapping, not the
-Task-Aware predictor. Retain feedback as a promising physical mechanism, but
-require a second fixed/feedback repetition before a repeated claim. Before any
-new prediction-driven physical action, a label-blind preflight must establish
-that the output range can cross the action threshold, the relevant prediction
-exists while the action is still available, and the ideal direct effect can
-clear the minimum utility gate. Full protocol, validity, utilization, and
-failure evidence is in
+Task-Aware predictor. The failed feedback gate has a concrete mechanism: two
+paired 58k--64k-token prompts returned at concurrency three in feedback-r2,
+raising their TTFT relative to fixed-r2 and moving the 446-request p99. Any
+continuation must control this long-prefill return burst and register its JCT
+versus tail trade-off before a physical run. Full protocol, validity,
+utilization, and failure evidence is in
 `analysis/results/pennylane-physical-gap-loan-development-v1/result.json`.
 
 A subsequent development-only action screen fixed eight active tasks, four
@@ -269,13 +272,14 @@ exceed its exact-duration action ceiling under the same model.
 
 **Post-outcome replication amendment, 2026-08-17.** After the first three
 cells were visible and the second predictor cell made the activation gate
-unreachable, the user authorized early termination and continued work. Run
-only the two remaining originally ordered controls, `feedback-r2` then
-`fixed-r2`, with the same tasks, model, hardware, fresh-vLLM lifecycle, and
-telemetry. A repeated feedback mechanism claim requires both repetitions to
-reduce mean JCT by at least 5%, lower makespan, keep paired p95 and p99 TTFT
-ratios at most 1.05, and pass the original validity checks. This is an openly
-amended development replication; it cannot rescue the predictive-loan NO-GO.
+unreachable, the user authorized early termination and completion of only the
+two remaining controls, `feedback-r2` then `fixed-r2`. Both retained the same
+tasks, model, hardware, fresh-vLLM lifecycle, and telemetry. The registered
+repeated-mechanism gate required both repetitions to reduce mean JCT by at
+least 5%, lower makespan, keep paired p95 and p99 TTFT ratios at most 1.05, and
+pass the original validity checks. All conditions except feedback-r2 p99
+passed, so the repeated tail-safe claim is NO-GO. This openly amended
+development replication does not alter the predictive-loan NO-GO.
 
 ### Secondary directions
 
@@ -372,7 +376,7 @@ registered validity or action gate failed.
 | Static GPU concurrency 4→8 | Mean task JCT -21.77%, but p99 TTFT ratios 1.262/1.131 | Throughput-tail trade-off; no promotion |
 | Phase-aware shadow admission | Mean task JCT -13.465%, but end-to-end p99 TTFT ratios 22.231/15.984 | Host admission queue dominates; NO-GO |
 | Predictive tool-gap loan | Only one distinct early action, below four-action gate | Insufficient activation; no performance verdict |
-| PennyLane physical tool-gap admission | Feedback mean JCT/makespan -32.748%/-42.774%; predictor made zero predictor-triggered loans because 30 s bucket support could not cross the 34.683 s feedback budget | Keep feedback mechanism; predictive loan action-interface NO-GO |
+| PennyLane physical tool-gap admission | Feedback mean JCT improved 32.748%/33.102% and makespan 42.774%/42.443% across two repetitions; p99 TTFT was 1.048x/1.115x. Predictor made zero predictor-triggered loans because 30 s bucket support could not cross the 34.683 s budget | Keep feedback as Pareto candidate; repeated tail-safe and predictive-loan claims NO-GO |
 | Load-32 hard-pin control | Deadlocked/stalled before a valid result | Invalid control, no method verdict |
 
 ## 6. Current operational boundaries

@@ -2,8 +2,8 @@
   "schema_version": 1,
   "experiment": "pennylane-physical-gap-loan-development-v1",
   "date": "2026-08-17",
-  "decision": "predictor_action_interface_no_go_feedback_mechanism_positive",
-  "decision_reason": "The fifth latency bucket has a 30 s lower edge, below the measured 34.683-34.791 s causal feedback budget, so no hard-bucket prediction could satisfy the frozen predictor trigger. The second predictor repetition was stopped after all four one-shot loans had again been claimed by feedback, making the activation gate unreachable. This does not reject the retained Task-Aware predictor.",
+  "decision": "predictor_action_interface_no_go_feedback_throughput_replicated_tail_gate_no_go",
+  "decision_reason": "No hard-bucket prediction could satisfy the frozen predictor trigger because its maximum 30 s lower edge was below the 34.683-34.791 s causal feedback budget. Feedback repeated its large JCT and makespan gains, but feedback-r2 failed the preregistered p99 TTFT bound because concurrent long-prefill requests created real tail contention. Keep feedback as a development Pareto candidate, not a tail-safe default; this result does not reject the retained Task-Aware predictor.",
   "evidence_boundary": "Development-exposed PennyLane tasks and predictions; descriptive physical evidence, not confirmation.",
   "protocol": {
     "code_commit": "2e86442e348ee477652eaff73c3523413fc7e411",
@@ -34,14 +34,14 @@
     "completed_cells": [
       "fixed-r1",
       "feedback-r1",
-      "predictor-r1"
-    ],
-    "stopped_cell": "predictor-r2",
-    "unrun_cells": [
+      "predictor-r1",
       "feedback-r2",
       "fixed-r2"
     ],
-    "stop_reason": "User-authorized early stop after predictor-r2 consumed all four possible loans through feedback, making the four-distinct-predictor-trigger gate unreachable."
+    "stopped_cell": "predictor-r2",
+    "unrun_cells": [],
+    "stop_reason": "User-authorized early stop after predictor-r2 consumed all four possible loans through feedback, making the four-distinct-predictor-trigger gate unreachable. The post-outcome amendment then completed feedback-r2 and fixed-r2 without rerunning either predictor cell.",
+    "replication_amendment_commit": "7d25227"
   },
   "metrics": {
     "fixed-r1": {
@@ -88,6 +88,36 @@
       "kv_log_max_pct": 30.4,
       "host_cpu_util_pct": 50.47941314724049,
       "host_rss_mean_mib": 17519.442430128245
+    },
+    "feedback-r2": {
+      "mean_jct_s": 3136.032789085127,
+      "p95_jct_s": 4170.819882715652,
+      "makespan_s": 4313.330399753002,
+      "p95_ttft_ms": 884.5497499999999,
+      "p99_ttft_ms": 1292.7846000000009,
+      "task_throughput_per_hour": 6.676975174832236,
+      "gpu_util_mean_pct": 24.746753246753247,
+      "gpu_busy_fraction": 0.2826994434137291,
+      "gpu_power_mean_w": 114.99849953617812,
+      "gpu_temp_max_c": 50,
+      "kv_log_max_pct": 44.0,
+      "host_cpu_util_pct": 51.277102996696556,
+      "host_rss_mean_mib": 17550.385053430276
+    },
+    "fixed-r2": {
+      "mean_jct_s": 4687.813308861628,
+      "p95_jct_s": 6868.304790200501,
+      "makespan_s": 7494.027289865,
+      "p95_ttft_ms": 869.4075,
+      "p99_ttft_ms": 1159.2071500000002,
+      "task_throughput_per_hour": 3.8430604648250237,
+      "gpu_util_mean_pct": 15.848505072076883,
+      "gpu_busy_fraction": 0.18246129204484784,
+      "gpu_power_mean_w": 96.58174319273893,
+      "gpu_temp_max_c": 50,
+      "kv_log_max_pct": 43.7,
+      "host_cpu_util_pct": 29.094764227642276,
+      "host_rss_mean_mib": 10608.843140133808
     }
   },
   "comparisons": {
@@ -101,6 +131,28 @@
       "mean_jct_increase_pct": 0.06959749182448242,
       "makespan_increase_pct": 0.7582480740111253,
       "interpretation": "Both arms made the same four feedback-triggered loan decisions; the difference is run-to-run physical variation, not a predictor effect."
+    },
+    "feedback_replication": {
+      "r1": {
+        "mean_jct_reduction_pct": 32.74822567871653,
+        "makespan_reduction_pct": 42.77384230837677,
+        "p95_ttft_ratio": 1.0347218609166522,
+        "p99_ttft_ratio": 1.0478983684699799
+      },
+      "r2": {
+        "mean_jct_reduction_pct": 33.1024385472665,
+        "makespan_reduction_pct": 42.443091906185145,
+        "p95_ttft_ratio": 1.0174167464623896,
+        "p99_ttft_ratio": 1.1152317340347673
+      },
+      "frozen_gate": {
+        "both_mean_jct_reductions_at_least_5pct": true,
+        "both_makespans_lower": true,
+        "both_p95_ttft_ratios_at_most_1_05": true,
+        "both_p99_ttft_ratios_at_most_1_05": false,
+        "status": "no_go_repeated_tail_safe_feedback_claim"
+      },
+      "tail_diagnosis": "The feedback-r2 p99 increase is physical contention, not a population mismatch. Two paired long-prefill requests ran at higher overlap: PennyLaneAI__pennylane-2654 llm_47 (63,553 prompt tokens) rose from 648.444 ms at concurrency two to 1,435.925 ms at concurrency three; PennyLaneAI__pennylane-2964 llm_66 (58,318 prompt tokens) rose from 1,099.767 ms at concurrency one to 1,332.831 ms at concurrency three."
     }
   },
   "activation": {
@@ -119,7 +171,7 @@
     "pass": false
   },
   "validity": {
-    "complete_cells": 3,
+    "complete_cells": 5,
     "tasks_per_complete_cell": 8,
     "actions_per_complete_cell": 884,
     "llm_calls_per_complete_cell": 446,
@@ -136,7 +188,9 @@
     "unexpected_tool_terminal_differences": {
       "fixed-r1": 6,
       "feedback-r1": 7,
-      "predictor-r1": 7
+      "predictor-r1": 7,
+      "feedback-r2": 6,
+      "fixed-r2": 4
     },
     "tool_terminal_difference_policy": "Reported but non-invalidating under the frozen fixed-trajectory protocol because tool output never changes the shadow LLM prompt."
   },
