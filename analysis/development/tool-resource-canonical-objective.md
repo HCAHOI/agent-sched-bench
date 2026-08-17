@@ -297,14 +297,16 @@ the frozen screen.
 
 The next frontier is a joint, feedback-only backfill action rather than another
 tool-duration predictor. A long foreground tool phase may admit a borrower,
-but the borrower's next LLM request is admitted only while live GPU queue/KV
-pressure is below a frozen operating point; foreground requests are never
-blocked, and every borrower wait is included in end-to-end TTFT. This directly
-connects the measured CPU opportunity to the resource that produced the tail
-risk. The next physical comparison must use fresh task IDs and include
-fixed-four, permanent feedback loan, and the joint feedback arm. Until its
-signal, operating point, cohort, and JCT/TTFT gate are frozen, only plumbing
-inspection and synthetic tests are allowed.
+while its LLM work is lower priority than foreground returns. The first rung is
+vLLM's native priority scheduler: foreground requests retain priority zero,
+borrower requests use priority one, and no host-side concurrency cap is added.
+Only if that native baseline cannot control the tail should a controller poll
+live queue/KV pressure and delay borrower requests; every such wait must be
+included in end-to-end TTFT. This directly connects the measured CPU
+opportunity to the resource that produced the tail risk. The next physical
+comparison must use fresh task IDs and include fixed-four, permanent feedback
+loan, and priority feedback. Until its cohort and JCT/TTFT gate are frozen,
+only plumbing inspection and synthetic tests are allowed.
 
 A subsequent development-only action screen fixed eight active tasks, four
 LLM slots, and four tool slots, then replaced work-conserving FCFS with an

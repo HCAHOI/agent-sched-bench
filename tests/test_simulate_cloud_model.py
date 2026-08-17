@@ -708,6 +708,7 @@ def test_tool_gap_loan_staged_queue_admits_one_waiter_per_loan(
             warmup_skip_iterations=0,
             tool_gap_arm="feedback",
             tool_gap_predictions={},
+            tool_gap_borrower_priority=1,
         )
     )
 
@@ -716,6 +717,7 @@ def test_tool_gap_loan_staged_queue_admits_one_waiter_per_loan(
     assert reused_loan is False
     assert configs["task-0"].can_lend is True
     assert configs["task-4"].can_lend is False
+    assert configs["task-4"].borrower_priority == 1
     summary = json.loads(
         (tmp_path / "out" / ".tool-gap-loan" / "summary.json").read_text()
     )

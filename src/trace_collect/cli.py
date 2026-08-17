@@ -364,6 +364,12 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         help="Enable the registered staged tool-gap loan experiment arm.",
     )
     parser.add_argument(
+        "--tool-gap-borrower-priority",
+        type=positive_int_arg,
+        default=None,
+        help="vLLM priority for requests from tool-gap borrowers.",
+    )
+    parser.add_argument(
         "--tool-gap-predictions",
         default=None,
         help="Strict label-free prediction JSON used only by the predictor arm.",
@@ -797,6 +803,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "shadow_llm_seed": args.shadow_llm_seed,
         "shadow_llm_max_concurrency": args.shadow_llm_max_concurrency,
         "tool_gap_loan_arm": args.tool_gap_loan_arm,
+        "tool_gap_borrower_priority": args.tool_gap_borrower_priority,
         "tool_gap_predictions": (
             Path(args.tool_gap_predictions) if args.tool_gap_predictions else None
         ),

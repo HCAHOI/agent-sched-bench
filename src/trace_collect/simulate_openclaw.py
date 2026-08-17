@@ -393,6 +393,11 @@ async def _run_openclaw_replay_session(
                 "task_id": tool_gap_loan.task_id,
                 "foreground_task_ids": list(tool_gap_loan.foreground_task_ids),
                 "can_lend": tool_gap_loan.can_lend,
+                **(
+                    {"borrower_priority": tool_gap_loan.borrower_priority}
+                    if tool_gap_loan.borrower_priority is not None
+                    else {}
+                ),
                 "predictions": [
                     {
                         "sample_id": prediction.sample_id,

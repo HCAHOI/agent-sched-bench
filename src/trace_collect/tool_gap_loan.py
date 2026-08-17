@@ -53,6 +53,7 @@ class ToolGapLoanConfig:
     foreground_task_ids: tuple[str, ...]
     can_lend: bool
     predictions: tuple[ToolGapPrediction, ...] = ()
+    borrower_priority: int | None = None
 
     def __post_init__(self) -> None:
         if self.arm not in {"fixed", "feedback", "predictor"}:
@@ -63,6 +64,12 @@ class ToolGapLoanConfig:
             raise ValueError("tool-gap foreground task IDs must be unique")
         if self.arm != "predictor" and self.predictions:
             raise ValueError("tool-gap predictions are only valid for the predictor arm")
+        if self.borrower_priority is not None and (
+            not isinstance(self.borrower_priority, int)
+            or isinstance(self.borrower_priority, bool)
+            or self.borrower_priority < 1
+        ):
+            raise ValueError("tool-gap borrower priority must be a positive integer")
 
 
 @dataclass

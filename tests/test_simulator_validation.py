@@ -791,7 +791,8 @@ def test_openclaw_replay_provider_charges_streamed_shadow_generation(
             state_dir=str(tmp_path / "gap-state"),
             task_id="task-0",
             foreground_task_ids=("task-0", "task-1", "task-2", "task-3"),
-            can_lend=True,
+            can_lend=False,
+            borrower_priority=1,
         )
     )
     provider = OpenClawReplayProvider(
@@ -842,6 +843,7 @@ def test_openclaw_replay_provider_charges_streamed_shadow_generation(
         "seed": 7,
         "stream": True,
         "stream_options": {"include_usage": True},
+        "priority": 1,
     }
     assert response.tool_calls[0].id == "source-call"
     assert response.tool_calls[0].arguments == {"command": "source"}
@@ -1333,6 +1335,7 @@ def test_openclaw_host_replay_request_closes_provider_after_runner_failure(
                         "task-3",
                     ],
                     "can_lend": True,
+                    "borrower_priority": 1,
                     "predictions": [],
                 },
                 "command_timeout_s": 60.0,
@@ -1356,12 +1359,14 @@ def test_openclaw_host_replay_request_closes_provider_after_runner_failure(
     assert captured["llm_actions"][0]["action_id"] == "source-llm-1"
     assert captured["llm_actions"][0]["_source_action_index"] == 1
     assert captured["tool_gap_loan"].config.task_id == "close-on-failure"
+    assert captured["tool_gap_loan"].config.borrower_priority == 1
     assert status["tool_gap_loan"] == {
         "arm": "fixed",
         "state_dir": str(tmp_path / "gap-state"),
         "task_id": "close-on-failure",
         "can_lend": True,
         "prediction_count": 0,
+        "borrower_priority": 1,
     }
     assert json.loads(status_path.read_text(encoding="utf-8"))["success"] is False
 
@@ -1435,11 +1440,14 @@ def test_simulate_cli_parses_tool_gap_loan_options() -> None:
             "predictor",
             "--tool-gap-predictions",
             "predictions.json",
+            "--tool-gap-borrower-priority",
+            "1",
         ]
     )
 
     assert args.tool_gap_loan_arm == "predictor"
     assert args.tool_gap_predictions == "predictions.json"
+    assert args.tool_gap_borrower_priority == 1
 
 
 def test_tool_gap_prediction_file_accepts_only_ordered_exec_subsequence(
@@ -1554,6 +1562,7 @@ def test_simulate_cli_passes_container_cpu_cap(
     ("shadow_kwargs", "match"),
     [
         ({"shadow_llm_max_concurrency": 4}, "requires shadow generation"),
+        ({"tool_gap_borrower_priority": 1}, "requires a tool-gap loan arm"),
         ({"shadow_llm_api_base": "http://127.0.0.1:8000/v1"}, "together"),
         ({"shadow_llm_model": "meta-llama/Llama-3.1-8B-Instruct"}, "together"),
         (
@@ -2700,6 +2709,7 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
             "task-3",
         ),
         can_lend=True,
+        borrower_priority=1,
         predictions=(
             ToolGapPrediction(
                 sample_id="sample-0",
@@ -2734,6 +2744,7 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
                 "task-3",
             ],
             "can_lend": True,
+            "borrower_priority": 1,
             "predictions": [
                 {
                     "sample_id": "sample-0",

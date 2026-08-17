@@ -172,6 +172,19 @@ def test_prediction_rejects_hard_bucket_inconsistent_with_pmf() -> None:
         )
 
 
+@pytest.mark.parametrize("priority", [0, -1, True])
+def test_config_rejects_invalid_borrower_priority(priority: int) -> None:
+    with pytest.raises(ValueError, match="borrower priority"):
+        ToolGapLoanConfig(
+            arm="feedback",
+            state_dir="state",
+            task_id="task-0",
+            foreground_task_ids=FOREGROUND,
+            can_lend=False,
+            borrower_priority=priority,
+        )
+
+
 @pytest.mark.parametrize(
     "probabilities",
     [

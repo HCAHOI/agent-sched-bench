@@ -667,6 +667,12 @@ class OpenClawReplayProvider(LLMProvider):
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if (
+            self._tool_gap_loan is not None
+            and not self._tool_gap_loan.config.can_lend
+            and self._tool_gap_loan.config.borrower_priority is not None
+        ):
+            request["priority"] = self._tool_gap_loan.config.borrower_priority
         url = f"{self._shadow_generation.api_base.rstrip('/')}/chat/completions"
         async with self._shadow_client.stream("POST", url, json=request) as response:
             response.raise_for_status()
@@ -1431,6 +1437,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 foreground_task_ids=tuple(payload["foreground_task_ids"]),
                 can_lend=bool(payload["can_lend"]),
                 predictions=predictions,
+                borrower_priority=payload.get("borrower_priority"),
             )
         )
         tool_gap_status = {
@@ -1439,6 +1446,11 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             "task_id": tool_gap_loan.config.task_id,
             "can_lend": tool_gap_loan.config.can_lend,
             "prediction_count": len(tool_gap_loan.config.predictions),
+            **(
+                {"borrower_priority": tool_gap_loan.config.borrower_priority}
+                if tool_gap_loan.config.borrower_priority is not None
+                else {}
+            ),
         }
     tool_resource_profile = request.get("tool_resource_profile")
     if tool_resource_profile is not None:

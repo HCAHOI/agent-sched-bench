@@ -2400,6 +2400,7 @@ async def _run_staged_cloud_model_queue(
     shadow_generation: ShadowGenerationConfig | None = None,
     tool_gap_arm: str | None = None,
     tool_gap_predictions: dict[str, tuple[ToolGapPrediction, ...]] | None = None,
+    tool_gap_borrower_priority: int | None = None,
     llm_timing: LLMTimingConfig,
     command_timeout_s: float,
     warmup_skip_iterations: int,
@@ -2564,6 +2565,7 @@ async def _run_staged_cloud_model_queue(
                     foreground_task_ids=foreground_ids,
                     can_lend=next_index < concurrency,
                     predictions=predictions_by_task.get(task_id, ()),
+                    borrower_priority=tool_gap_borrower_priority,
                 )
                 task = asyncio.create_task(
                     replay_one(prepared, admitted_monotonic, config)
@@ -3873,6 +3875,7 @@ async def simulate(
     shadow_llm_max_concurrency: int | None = None,
     tool_gap_loan_arm: str | None = None,
     tool_gap_predictions: Path | None = None,
+    tool_gap_borrower_priority: int | None = None,
     resource_monitoring: MonitoringMode = "auto",
     pmu_monitoring: MonitoringMode = "auto",
     memory_bandwidth_monitoring: MonitoringMode = "auto",
@@ -3911,6 +3914,15 @@ async def simulate(
         raise ValueError("predictor tool-gap loan requires a prediction file")
     if tool_gap_loan_arm != "predictor" and tool_gap_predictions is not None:
         raise ValueError("tool-gap predictions are only valid for the predictor arm")
+    if tool_gap_borrower_priority is not None:
+        if (
+            not isinstance(tool_gap_borrower_priority, int)
+            or isinstance(tool_gap_borrower_priority, bool)
+            or tool_gap_borrower_priority < 1
+        ):
+            raise ValueError("tool-gap borrower priority must be a positive integer")
+        if tool_gap_loan_arm is None:
+            raise ValueError("tool-gap borrower priority requires a tool-gap loan arm")
     shadow_generation = None
     if shadow_llm_api_base is not None:
         if replay_speed != 1.0:
@@ -4176,6 +4188,7 @@ async def simulate(
                                     if tool_gap_predictions is not None
                                     else None
                                 ),
+                                "borrower_priority": tool_gap_borrower_priority,
                             }
                         }
                         if tool_gap_loan_arm is not None
@@ -4239,6 +4252,7 @@ async def simulate(
                     cleanup_state=cleanup_state,
                     tool_gap_arm=tool_gap_loan_arm,
                     tool_gap_predictions=tool_gap_prediction_map,
+                    tool_gap_borrower_priority=tool_gap_borrower_priority,
                     **queue_kwargs,
                 )
             else:
