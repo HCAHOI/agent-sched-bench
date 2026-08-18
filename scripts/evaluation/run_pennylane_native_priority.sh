@@ -312,7 +312,7 @@ PY
   twrapper=$!
   for _ in $(seq 1 60); do
     [[ -s "$cell/telemetryd.pid" && -S /run/agent-sched/telemetry.sock ]] && break
-    kill -0 "$twrapper"
+    sudo -n kill -0 "$twrapper"
     sleep 0.5
   done
   tpid=$(<"$cell/telemetryd.pid")

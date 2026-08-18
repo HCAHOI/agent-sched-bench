@@ -52,6 +52,7 @@ def test_frozen_inputs_and_runner_contract() -> None:
     assert "uid=$(id -u)" in source and "gid=$(id -g)" in source
     assert 'setsid "${vllm_args[@]}"' in source
     assert 'kill -TERM -- "-$vpid"' in source
+    assert 'sudo -n kill -0 "$twrapper"' in source
 
 
 def test_cell_order_and_mapping() -> None:
