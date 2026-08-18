@@ -34,6 +34,13 @@ cd "$REPO_ROOT"
 [ -f pyproject.toml ] || { echo "FATAL: pyproject.toml not found at $REPO_ROOT" >&2; exit 1; }
 echo "== repo: $REPO_ROOT ($(git rev-parse --short HEAD 2>/dev/null || echo 'no git'))"
 
+# --- privileged eBPF runtime -------------------------------------------------
+if ! PYTHONPATH=/usr/lib/python3/dist-packages python3 -c 'import bcc' 2>/dev/null; then
+  sudo -n apt-get update -qq
+  sudo -n apt-get install -y python3-bpfcc
+fi
+echo "== bcc: $(PYTHONPATH=/usr/lib/python3/dist-packages python3 -c 'import bcc; print(bcc.__file__)')"
+
 # --- writable config home (rental images often ship root-owned ~/.config) ---
 if [ ! -w "${XDG_CONFIG_HOME:-$HOME/.config}" ]; then
   export XDG_CONFIG_HOME="$HOME/.xdg"

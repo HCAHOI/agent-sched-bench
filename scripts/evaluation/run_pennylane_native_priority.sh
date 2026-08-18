@@ -88,6 +88,8 @@ preflight() {
   done
   [[ -x "$python" ]] || { fail "missing project Python: $python"; return 1; }
   [[ -x "$vllm" ]] || { fail "missing vLLM executable: $vllm"; return 1; }
+  PYTHONPATH="$repo/src:$repo:/usr/lib/python3/dist-packages" \
+    "$python" -c 'import bcc' || { fail "missing python3-bpfcc"; return 1; }
   [[ ! -e "$run_root" ]] || { fail "run root already exists: $run_root"; return 1; }
   [[ ! -e "$result_path" ]] || { fail "result already exists: $result_path"; return 1; }
 

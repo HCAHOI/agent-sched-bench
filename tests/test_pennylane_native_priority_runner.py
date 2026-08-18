@@ -8,6 +8,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts/evaluation/run_pennylane_native_priority.sh"
+SETUP = ROOT / "scripts/setup/benchmark_server.sh"
 INPUT = ROOT / "analysis/development/pennylane-native-priority-v1"
 
 
@@ -53,6 +54,8 @@ def test_frozen_inputs_and_runner_contract() -> None:
     assert 'setsid "${vllm_args[@]}"' in source
     assert 'kill -TERM -- "-$vpid"' in source
     assert 'sudo -n kill -0 "$twrapper"' in source
+    assert '"$python" -c \'import bcc\'' in source
+    assert "apt-get install -y python3-bpfcc" in SETUP.read_text()
 
 
 def test_cell_order_and_mapping() -> None:
