@@ -521,6 +521,7 @@ def test_staged_queue_prepares_every_task_before_fifo_admission(
     ]
     prepared_ids: list[str] = []
     admitted_ids: list[str] = []
+    finalized_ids: list[str] = []
     active = 0
     max_active = 0
 
@@ -557,8 +558,12 @@ def test_staged_queue_prepares_every_task_before_fifo_admission(
             tool_exec_count=0,
         )
 
+    async def fake_finalize(prepared: PreparedTraceSession) -> None:
+        finalized_ids.append(prepared.loaded.run_instance_id)
+
     monkeypatch.setattr(simulator_module, "_prepare_replay_session", fake_prepare)
     monkeypatch.setattr(simulator_module, "_replay_cloud_model_session", fake_replay)
+    monkeypatch.setattr(simulator_module, "_finalize_prepared_session", fake_finalize)
     monkeypatch.setattr(simulator_module, "_REPLAY_START_DELAY_S", 0.001)
 
     prepared, stats, common_ready_wall_time_s = asyncio.run(
@@ -584,6 +589,7 @@ def test_staged_queue_prepares_every_task_before_fifo_admission(
         "task-2",
     ]
     assert admitted_ids == ["task-0", "task-1", "task-2"]
+    assert sorted(finalized_ids) == ["task-0", "task-1", "task-2"]
     assert max_active == 2
     assert common_ready_wall_time_s <= time.time()
     stats_by_id = {stat.run_instance_id: stat for stat in stats}
@@ -624,6 +630,7 @@ def test_tool_gap_loan_staged_queue_admits_one_waiter_per_loan(
     borrower_finished = asyncio.Event()
     release_foreground = asyncio.Event()
     reused_loan = False
+    finalized: list[str] = []
 
     async def fake_prepare(
         loaded: LoadedTraceSession,
@@ -688,8 +695,14 @@ def test_tool_gap_loan_staged_queue_admits_one_waiter_per_loan(
             tool_exec_count=0,
         )
 
+    async def fake_finalize(prepared: PreparedTraceSession) -> None:
+        task_id = prepared.loaded.run_instance_id
+        if task_id not in finalized:
+            finalized.append(task_id)
+
     monkeypatch.setattr(simulator_module, "_prepare_replay_session", fake_prepare)
     monkeypatch.setattr(simulator_module, "_replay_cloud_model_session", fake_replay)
+    monkeypatch.setattr(simulator_module, "_finalize_prepared_session", fake_finalize)
     monkeypatch.setattr(simulator_module, "_REPLAY_START_DELAY_S", 0.001)
 
     asyncio.run(
@@ -718,6 +731,7 @@ def test_tool_gap_loan_staged_queue_admits_one_waiter_per_loan(
     assert configs["task-0"].can_lend is True
     assert configs["task-4"].can_lend is False
     assert configs["task-4"].borrower_priority == 1
+    assert sorted(finalized) == [f"task-{index}" for index in range(8)]
     summary = json.loads(
         (tmp_path / "out" / ".tool-gap-loan" / "summary.json").read_text()
     )
@@ -727,6 +741,90 @@ def test_tool_gap_loan_staged_queue_admits_one_waiter_per_loan(
         (release["lender_task_id"], release["borrower_task_id"])
         for release in summary["loan_releases"]
     ] == [("task-0", "task-4")]
+
+
+def test_tool_gap_staged_queue_cancellation_joins_active_replays(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    sessions = [
+        LoadedTraceSession(
+            source_trace=tmp_path / f"trace-{index}.jsonl",
+            task_source=tmp_path / "tasks.json",
+            task_instance_id=f"task-{index}",
+            source_action_agent_id=f"task-{index}",
+            run_instance_id=f"task-{index}",
+            manifest_index=index,
+            scaffold="openclaw",
+            metadata={"source_model": "model"},
+            summary=None,
+            task={"instance_id": f"task-{index}"},
+            actions=[],
+            iterations={},
+        )
+        for index in range(8)
+    ]
+    all_started = asyncio.Event()
+    started: list[str] = []
+    cancelled: list[str] = []
+    finalized: list[str] = []
+
+    async def fake_prepare(
+        loaded: LoadedTraceSession,
+        **_kwargs,
+    ) -> PreparedTraceSession:
+        return PreparedTraceSession(loaded=loaded)
+
+    async def fake_replay(
+        prepared: PreparedTraceSession,
+        **_kwargs,
+    ) -> ReplayTaskStats:
+        task_id = prepared.loaded.run_instance_id
+        started.append(task_id)
+        if len(started) == 4:
+            all_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.append(task_id)
+            raise
+
+    async def fake_finalize(prepared: PreparedTraceSession) -> None:
+        finalized.append(prepared.loaded.run_instance_id)
+
+    monkeypatch.setattr(simulator_module, "_prepare_replay_session", fake_prepare)
+    monkeypatch.setattr(simulator_module, "_replay_cloud_model_session", fake_replay)
+    monkeypatch.setattr(simulator_module, "_finalize_prepared_session", fake_finalize)
+    monkeypatch.setattr(simulator_module, "_REPLAY_START_DELAY_S", 0.001)
+
+    async def cancel_queue() -> None:
+        queue = asyncio.create_task(
+            simulator_module._run_staged_cloud_model_queue(
+                sessions,
+                output_path=tmp_path / "out",
+                trace_logger=object(),
+                concurrency=4,
+                prep_concurrency=8,
+                container_executable=None,
+                network_mode="host",
+                container_resource_recorder=None,
+                replay_speed=1.0,
+                llm_timing=LLMTimingConfig(),
+                command_timeout_s=1.0,
+                warmup_skip_iterations=0,
+                tool_gap_arm="fixed",
+            )
+        )
+        await all_started.wait()
+        queue.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await queue
+
+    asyncio.run(cancel_queue())
+
+    assert sorted(started) == [f"task-{index}" for index in range(4)]
+    assert sorted(cancelled) == sorted(started)
+    assert sorted(finalized) == sorted(started)
 
 
 def test_staged_queue_cleans_successful_preparations_when_one_fails(
@@ -846,7 +944,9 @@ def test_staged_queue_cleans_every_preparation_when_replay_fails(
         )
 
     async def fake_finalize(prepared: PreparedTraceSession) -> None:
-        finalized.append(prepared.loaded.run_instance_id)
+        task_id = prepared.loaded.run_instance_id
+        if task_id not in finalized:
+            finalized.append(task_id)
 
     async def fake_release(_cleanup_state: object, run_instance_id: str) -> None:
         released.append(run_instance_id)
@@ -4556,8 +4656,11 @@ def test_staged_queue_finalizes_every_session_when_trace_split_fails(
         raise RuntimeError("split failed")
 
     async def fake_finalize(prepared: PreparedTraceSession) -> None:
-        finalized.append(prepared.loaded.run_instance_id)
-        if prepared.loaded.run_instance_id == "task-a":
+        task_id = prepared.loaded.run_instance_id
+        if task_id in finalized:
+            return
+        finalized.append(task_id)
+        if task_id == "task-a":
             raise RuntimeError("first finalizer failed")
 
     monkeypatch.setattr(simulator_module, "_split_trace_by_agent", fake_split)

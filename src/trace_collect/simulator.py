@@ -2510,18 +2510,21 @@ async def _run_staged_cloud_model_queue(
             admitted_monotonic: float,
             config: ToolGapLoanConfig,
         ) -> ReplayTaskStats:
-            stats = await _replay_cloud_model_session(
-                prepared,
-                trace_logger=trace_logger,
-                replay_zero_monotonic=common_ready_monotonic,
-                replay_speed=replay_speed,
-                shadow_generation=shadow_generation,
-                tool_gap_loan=config,
-                llm_timing=llm_timing,
-                command_timeout_s=command_timeout_s,
-                warmup_skip_iterations=warmup_skip_iterations,
-            )
-            terminal_monotonic = time.monotonic()
+            try:
+                stats = await _replay_cloud_model_session(
+                    prepared,
+                    trace_logger=trace_logger,
+                    replay_zero_monotonic=common_ready_monotonic,
+                    replay_speed=replay_speed,
+                    shadow_generation=shadow_generation,
+                    tool_gap_loan=config,
+                    llm_timing=llm_timing,
+                    command_timeout_s=command_timeout_s,
+                    warmup_skip_iterations=warmup_skip_iterations,
+                )
+                terminal_monotonic = time.monotonic()
+            finally:
+                await _finalize_prepared_session(prepared)
             return dataclasses.replace(
                 stats,
                 admission_wait_s=max(
@@ -2607,28 +2610,34 @@ async def _run_staged_cloud_model_queue(
         await _sleep_until_monotonic(common_ready_monotonic)
         admit_to_capacity()
         failure: BaseException | None = None
-        while active:
-            done, _ = await asyncio.wait(
-                active,
-                timeout=0.01,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            try:
-                refresh_loans()
-            except BaseException as exc:
-                failure = exc
-                break
-            for task in done:
-                prepared, _admitted, _slot, _lender = active.pop(task)
+        try:
+            while active:
+                done, _ = await asyncio.wait(
+                    active,
+                    timeout=0.01,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
                 try:
-                    stats = task.result()
+                    refresh_loans()
                 except BaseException as exc:
                     failure = exc
                     break
-                task_stats[prepared.loaded.run_instance_id] = stats
-            if failure is not None:
-                break
-            admit_to_capacity()
+                for task in done:
+                    prepared, _admitted, _slot, _lender = active.pop(task)
+                    try:
+                        stats = task.result()
+                    except BaseException as exc:
+                        failure = exc
+                        break
+                    task_stats[prepared.loaded.run_instance_id] = stats
+                if failure is not None:
+                    break
+                admit_to_capacity()
+        except BaseException:
+            for task in active:
+                task.cancel()
+            await asyncio.gather(*active, return_exceptions=True)
+            raise
         if failure is not None:
             for task in active:
                 task.cancel()
@@ -2674,17 +2683,20 @@ async def _run_staged_cloud_model_queue(
                 return
             admitted_monotonic = time.monotonic()
             try:
-                stats = await _replay_cloud_model_session(
-                    prepared,
-                    trace_logger=trace_logger,
-                    replay_zero_monotonic=common_ready_monotonic,
-                    replay_speed=replay_speed,
-                    shadow_generation=shadow_generation,
-                    llm_timing=llm_timing,
-                    command_timeout_s=command_timeout_s,
-                    warmup_skip_iterations=warmup_skip_iterations,
-                )
-                terminal_monotonic = time.monotonic()
+                try:
+                    stats = await _replay_cloud_model_session(
+                        prepared,
+                        trace_logger=trace_logger,
+                        replay_zero_monotonic=common_ready_monotonic,
+                        replay_speed=replay_speed,
+                        shadow_generation=shadow_generation,
+                        llm_timing=llm_timing,
+                        command_timeout_s=command_timeout_s,
+                        warmup_skip_iterations=warmup_skip_iterations,
+                    )
+                    terminal_monotonic = time.monotonic()
+                finally:
+                    await _finalize_prepared_session(prepared)
                 task_stats[prepared.loaded.run_instance_id] = dataclasses.replace(
                     stats,
                     admission_wait_s=max(
