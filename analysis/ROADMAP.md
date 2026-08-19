@@ -129,6 +129,13 @@ Latency and TTFT must each cover at least 90% of warm calls, cover the cold call
 and have median upper-bound/actual ratio at most 1.5. Failure stops state-aware
 service modeling; success alone authorizes the already frozen concurrency probe.
 
+The fresh task-1325 result is **NO-GO**. All 66 physical request prompts matched
+the source trace. Warm-call coverage passed for latency (65/65) and TTFT
+(60/65), and median slack passed (1.19x and 1.41x). The cold call was not covered:
+latency was 2,239.8 ms versus a 2,194.0 ms upper bound, and TTFT was 971.3 ms
+versus 968.2 ms. The misses are narrow but violate the frozen safety condition,
+so do not run the concurrency probe or full-corpus scheduler from this model.
+
 ## Decision sequence
 
 ### F0 — Full-corpus causal simulation
