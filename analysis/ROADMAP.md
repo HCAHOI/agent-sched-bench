@@ -87,8 +87,12 @@ non-negative linear model from source-visible uncached prompt, cached prompt,
 and output tokens. TTFT excludes output tokens. Continue only if validation
 median absolute percentage error is at most 25% and p90 is at most 50% for both
 latency and TTFT. Then run one bounded four-request concurrency check from four
-different tasks; the contention rule used by the simulator must bracket its
-observed latency and TTFT rather than be chosen from scheduler results.
+different tasks: 963, 5986, 3483, and 6358, selecting in each the source call
+whose prompt is closest to 50,000 tokens and forcing 128 output tokens. Compare
+fresh-server sequential and simultaneous cells. The simulator limits active LLM
+requests to four and linearly interpolates from one to the matched median
+four-request latency and TTFT slowdown; it is fixed from this calibration, not
+chosen from scheduler results.
 
 ## Decision sequence
 
