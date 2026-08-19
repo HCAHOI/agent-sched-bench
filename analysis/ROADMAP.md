@@ -42,8 +42,10 @@ whether tool-gap completion-time gains can coexist with safe TTFT tails. On
 failure, do one bounded queueing-versus-KV-loss diagnosis; continue only if the
 observed state identifies a concrete action.
 
-The tracked runner performs a no-outcome preflight and validates every cell
-before proceeding; no A100 run has started.
+The attempted A100 run has no formal result: its first two cells validated, but
+the third missed the frozen auxiliary GPU-telemetry cadence. The tracked runner
+now isolates and retains every cell so one invalid cell cannot suppress later
+work. A new run still requires explicit GPU approval.
 
 ### F1/F2 — Tool-state parking and remote placement are closed
 
@@ -54,15 +56,20 @@ RSS utilization was 14.171%. Therefore do not measure restore costs or build the
 remote snapshot-RPC branch for this workload. Reopening requires a new workload
 with independently demonstrated CPU/RSS pressure.
 
-### F3 — Measure KV-local return placement on two replicas
+### F3 — Pre-arrival return coordination beyond Agentix
 
-The current corpus shows frequent long-context returns and substantial source
-provider cache reuse, but its original tasks ran serially and contain no replica
-identity, vLLM KV hit, or per-replica queue state. The opportunity is therefore
-underdetermined. With two replicas, compare least-loaded routing, KV-local
-routing, and one cost rule: leave the local replica only when avoided queueing
-exceeds measured state-reuse loss. Charge scheduler wait and repeated prefill to
-JCT and TTFT. No queue-versus-reuse crossover closes this branch.
+Agentix already prioritizes arrived LLM calls by program-level attained service
+and routes long calls to the program's replica while sending short calls to the
+least-loaded replica. Native priority or KV-local routing alone is therefore a
+baseline, not our contribution.
+
+The distinct hypothesis is earlier coordination: while a tool is still running,
+its elapsed time, completed clauses, and causal resource state may identify a
+return window before the next LLM request exists. That state could control
+backfill admission, return priority, and KV retention or placement. Reopen this
+branch only if a physical return-tail diagnosis shows such advance notice would
+change an action; then compare against Agentix-style request-arrival scheduling
+and charge all queueing, repeated prefill, and state movement to JCT and TTFT.
 
 ### F4 — Study RP x TP only after locality works
 
