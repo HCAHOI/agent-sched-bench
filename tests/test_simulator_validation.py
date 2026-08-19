@@ -1372,6 +1372,116 @@ def test_openclaw_host_replay_request_closes_provider_after_runner_failure(
     assert json.loads(status_path.read_text(encoding="utf-8"))["success"] is False
 
 
+@pytest.mark.parametrize("shadow_mode", ["thunderagent", "continuum_public"])
+def test_program_aware_replay_uses_distinct_manifest_replica_ids(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    shadow_mode: str,
+) -> None:
+    from trace_collect.openclaw_host_runtime import (
+        ShadowGenerationConfig,
+        run_openclaw_host_replay_request,
+        shadow_generation_payload,
+    )
+    from trace_collect.simulate_manifest import _assign_replay_instance_ids
+
+    replicas = [
+        SimpleNamespace(
+            task_instance_id="shared-task",
+            run_instance_id="shared-task",
+            manifest_index=index,
+        )
+        for index in range(2)
+    ]
+    _assign_replay_instance_ids(replicas)
+
+    captured_program_ids: list[str] = []
+
+    class _FakeAgent:
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+    class _FailingRunner:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        async def run(self, **_kwargs: object) -> None:
+            raise RuntimeError("stop after provider construction")
+
+    class _FakeProvider:
+        def __init__(self, **kwargs: object) -> None:
+            captured_program_ids.append(str(kwargs["program_id"]))
+
+        async def aclose(self) -> None:
+            pass
+
+        def get_default_model(self) -> str:
+            return "replay-openclaw"
+
+    async def fake_proof(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {}
+
+    monkeypatch.setattr(
+        "trace_collect.openclaw_host_runtime.ContainerAgent",
+        lambda *_args, **_kwargs: _FakeAgent(),
+    )
+    monkeypatch.setattr(
+        "trace_collect.openclaw_host_runtime.container_runtime_proof", fake_proof
+    )
+    monkeypatch.setattr("agents.openclaw._session_runner.SessionRunner", _FailingRunner)
+    monkeypatch.setattr(
+        "trace_collect.openclaw_host_runtime.OpenClawReplayProvider", _FakeProvider
+    )
+
+    shadow_generation = shadow_generation_payload(
+        ShadowGenerationConfig(
+            api_base="http://127.0.0.1:9000/v1",
+            model="test-model",
+            timeout_s=12.0,
+            seed=0,
+            mode=shadow_mode,
+        )
+    )
+    source_actions = [
+        {
+            "action_type": "llm_call",
+            "action_id": "llm-0",
+            "data": {"messages_in": [], "completion_tokens": 1},
+        }
+    ]
+    for replica in replicas:
+        request = {
+            "source_actions": source_actions,
+            "container_id": f"cid-{replica.run_instance_id}",
+            "container_executable": "docker",
+            "output_trace": str(tmp_path / f"{replica.run_instance_id}.jsonl"),
+            "runtime_dir": str(tmp_path / f"runtime-{replica.run_instance_id}"),
+            "workspace": str(tmp_path),
+            "status_path": str(tmp_path / f"status-{replica.run_instance_id}.json"),
+            "replay_speed": 1.0,
+            "llm_timing": {"mode": "source_scaled"},
+            "shadow_generation": shadow_generation,
+            "command_timeout_s": 60.0,
+            "run_instance_id": replica.run_instance_id,
+            "task_instance_id": replica.task_instance_id,
+            "source_action_agent_id": "shared-task",
+            "prompt": "replay",
+        }
+        if shadow_mode == "continuum_public":
+            request["continuum_step_limit"] = 1
+        asyncio.run(run_openclaw_host_replay_request(request))
+
+    assert [replica.task_instance_id for replica in replicas] == [
+        "shared-task",
+        "shared-task",
+    ]
+    assert captured_program_ids == [replica.run_instance_id for replica in replicas]
+    assert len(set(captured_program_ids)) == 2
+
+
 def test_shadow_generation_config_rejects_non_loopback_api_base() -> None:
     from trace_collect.openclaw_host_runtime import ShadowGenerationConfig
 
@@ -1420,6 +1530,7 @@ def test_simulate_cli_parses_shadow_generation_options() -> None:
             "7",
             "--shadow-llm-max-concurrency",
             "4",
+            "--shadow-llm-thunderagent",
         ]
     )
 
@@ -1428,6 +1539,7 @@ def test_simulate_cli_parses_shadow_generation_options() -> None:
     assert args.shadow_llm_timeout_s == 12.0
     assert args.shadow_llm_seed == 7
     assert args.shadow_llm_max_concurrency == 4
+    assert args.shadow_llm_mode == "thunderagent"
 
 
 def test_simulate_cli_parses_tool_gap_loan_options() -> None:
@@ -1563,6 +1675,7 @@ def test_simulate_cli_passes_container_cpu_cap(
     ("shadow_kwargs", "match"),
     [
         ({"shadow_llm_max_concurrency": 4}, "requires shadow generation"),
+        ({"shadow_llm_mode": "thunderagent"}, "requires shadow generation"),
         ({"tool_gap_borrower_priority": 1}, "requires a tool-gap loan arm"),
         ({"shadow_llm_api_base": "http://127.0.0.1:8000/v1"}, "together"),
         ({"shadow_llm_model": "meta-llama/Llama-3.1-8B-Instruct"}, "together"),
@@ -1615,6 +1728,36 @@ def test_simulate_rejects_shadow_generation_for_non_openclaw_before_output(
         )
 
     assert not output_dir.exists()
+
+
+def test_continuum_public_requires_causal_step_limit_metadata(tmp_path: Path) -> None:
+    trace_path = _write_host_trace(tmp_path / "openclaw.jsonl", "openclaw-task")
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    records[0].update(scaffold="openclaw", execution_environment="container")
+    trace_path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    task_source = _write_tasks(
+        tmp_path / "tasks.json",
+        {
+            "instance_id": "openclaw-task",
+            "problem_statement": "openclaw",
+            "image_name": "example/openclaw:latest",
+        },
+    )
+
+    with pytest.raises(ValueError, match="causal max_iterations metadata"):
+        asyncio.run(
+            simulate(
+                manifest=_single_trace_manifest(tmp_path, trace_path),
+                task_source=task_source,
+                output_dir=tmp_path / "out",
+                shadow_llm_api_base="http://127.0.0.1:8000/v1",
+                shadow_llm_model="meta-llama/Llama-3.1-8B-Instruct",
+                shadow_llm_mode="continuum_public",
+            )
+        )
 
 
 def test_simulate_rejects_shadow_generation_for_mixed_scaffolds_before_output(

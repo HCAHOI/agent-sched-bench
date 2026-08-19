@@ -1,4 +1,7 @@
-"""Trace-driven CacheWise prefix-scheduling x C100 KV diagnostic."""
+"""Historical CacheWise-inspired prefix x C100 KV diagnostic.
+
+This serial simulator is not the paper's modified vLLM implementation.
+"""
 
 from __future__ import annotations
 

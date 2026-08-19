@@ -14,6 +14,7 @@ from trace_collect.openclaw_host_runtime import (
     ShadowGenerationConfig,
     replay_action_failure_counts,
     replay_framework_failure_count,
+    shadow_generation_payload,
 )
 from trace_collect.simulate_outputs import _make_task_stats, _make_trace_summary
 from trace_collect.simulate_types import (
@@ -372,15 +373,15 @@ async def _run_openclaw_replay_session(
         "container_pythonpath": ctr.pythonpath,
         "replay_speed": replay_speed,
         "shadow_generation": (
-            {
-                "api_base": shadow_generation.api_base,
-                "model": shadow_generation.model,
-                "timeout_s": shadow_generation.timeout_s,
-                "seed": shadow_generation.seed,
-                "admission_slot_paths": list(shadow_generation.admission_slot_paths),
-            }
+            shadow_generation_payload(shadow_generation)
             if shadow_generation is not None
             else None
+        ),
+        **(
+            {"continuum_step_limit": int((loaded.metadata or {})["max_iterations"])}
+            if shadow_generation is not None
+            and shadow_generation.mode == "continuum_public"
+            else {}
         ),
         "tool_gap_loan": (
             {

@@ -47,7 +47,9 @@ from trace_collect.runtime.task_container import (
 )
 from trace_collect.openclaw_host_runtime import (
     ShadowGenerationConfig,
+    ShadowGenerationMode,
     llm_replay_duration_s,
+    shadow_generation_payload,
     validate_llm_replay_timing,
 )
 from trace_collect.simulate_manifest import (
@@ -3086,7 +3088,7 @@ async def _run_worker_wave_async(
                 "container_start_extra_args": list(container_start_extra_args),
                 "exec_timeout_floor_s": replay_exec_timeout_floor_s(),
                 **(
-                    {"shadow_generation": dataclasses.asdict(shadow_generation)}
+                    {"shadow_generation": shadow_generation_payload(shadow_generation)}
                     if shadow_generation is not None
                     else {}
                 ),
@@ -3879,6 +3881,7 @@ async def simulate(
     shadow_llm_timeout_s: float = 120.0,
     shadow_llm_seed: int = 0,
     shadow_llm_max_concurrency: int | None = None,
+    shadow_llm_mode: ShadowGenerationMode = "vllm",
     tool_gap_loan_arm: str | None = None,
     tool_gap_predictions: Path | None = None,
     tool_gap_borrower_priority: int | None = None,
@@ -3914,6 +3917,8 @@ async def simulate(
             raise ValueError("shadow_llm_max_concurrency must be >= 1")
         if shadow_llm_api_base is None:
             raise ValueError("shadow_llm_max_concurrency requires shadow generation")
+    if shadow_llm_mode != "vllm" and shadow_llm_api_base is None:
+        raise ValueError("non-vLLM shadow mode requires shadow generation")
     if tool_gap_loan_arm not in {None, "fixed", "feedback", "predictor"}:
         raise ValueError(f"unknown tool-gap loan arm: {tool_gap_loan_arm}")
     if tool_gap_loan_arm == "predictor" and tool_gap_predictions is None:
@@ -3938,6 +3943,7 @@ async def simulate(
             model=shadow_llm_model,
             timeout_s=shadow_llm_timeout_s,
             seed=shadow_llm_seed,
+            mode=shadow_llm_mode,
         )
     exec_timeout_floor_s = replay_exec_timeout_floor_s()
     resolved_tool_resource_profile: Path | None = None
@@ -4014,6 +4020,19 @@ async def simulate(
             "shadow generation requires OpenClaw for every selected trace; "
             "non-OpenClaw tasks: " + ", ".join(non_openclaw_sessions)
         )
+    if shadow_generation is not None and shadow_generation.mode == "continuum_public":
+        missing_step_limits = [
+            session.task_instance_id
+            for session in loaded_sessions
+            if not isinstance((session.metadata or {}).get("max_iterations"), int)
+            or isinstance((session.metadata or {}).get("max_iterations"), bool)
+            or int((session.metadata or {})["max_iterations"]) < 1
+        ]
+        if missing_step_limits:
+            raise ValueError(
+                "Continuum public mode requires causal max_iterations metadata: "
+                + ", ".join(missing_step_limits[:4])
+            )
     if "--cpus" in container_start_extra_args:
         if non_openclaw_sessions:
             raise ValueError(
@@ -4174,7 +4193,11 @@ async def simulate(
                     "container_start_extra_args": list(container_start_extra_args),
                     "exec_timeout_floor_s": exec_timeout_floor_s,
                     **(
-                        {"shadow_generation": dataclasses.asdict(shadow_generation)}
+                        {
+                            "shadow_generation": shadow_generation_payload(
+                                shadow_generation
+                            )
+                        }
                         if shadow_generation is not None
                         else {}
                     ),
@@ -4314,7 +4337,7 @@ async def simulate(
                 monitoring_policy=monitoring_policy_dict,
                 exec_timeout_floor_s=exec_timeout_floor_s,
                 shadow_generation=(
-                    dataclasses.asdict(shadow_generation)
+                    shadow_generation_payload(shadow_generation)
                     if shadow_generation is not None
                     else None
                 ),

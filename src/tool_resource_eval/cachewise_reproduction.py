@@ -1,4 +1,8 @@
-"""Reproduce CacheWise's argument-cluster reuse ordering on SWE traces."""
+"""Historical CacheWise-inspired argument-cluster diagnostic on SWE traces.
+
+This predates the official predictor release and is not the paper baseline.
+Use ``scripts/baselines/cachewise_official.sh`` for the released predictor.
+"""
 
 from __future__ import annotations
 

@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any, TextIO
+from typing import Any, Literal, TextIO
 from urllib.parse import urlparse
 
 import httpx
@@ -65,6 +65,9 @@ class ReplayActionFailureCounts:
     action_sequence_matches: bool
 
 
+ShadowGenerationMode = Literal["vllm", "thunderagent", "continuum_public"]
+
+
 @dataclass(frozen=True, slots=True)
 class ShadowGenerationConfig:
     """Loopback vLLM settings for fixed-trajectory shadow generation."""
@@ -74,6 +77,7 @@ class ShadowGenerationConfig:
     timeout_s: float
     seed: int
     admission_slot_paths: tuple[str, ...] = ()
+    mode: ShadowGenerationMode = "vllm"
 
     def __post_init__(self) -> None:
         parsed = urlparse(self.api_base)
@@ -90,12 +94,45 @@ class ShadowGenerationConfig:
             raise ValueError("shadow model must be non-empty")
         if not math.isfinite(self.timeout_s) or self.timeout_s <= 0:
             raise ValueError("shadow timeout_s must be finite and > 0")
+        if self.mode not in {"vllm", "thunderagent", "continuum_public"}:
+            raise ValueError(f"unknown shadow generation mode: {self.mode!r}")
         slot_paths = tuple(self.admission_slot_paths)
         if any(not path for path in slot_paths) or len(set(slot_paths)) != len(
             slot_paths
         ):
             raise ValueError("shadow admission slot paths must be unique and non-empty")
         object.__setattr__(self, "admission_slot_paths", slot_paths)
+
+
+def shadow_generation_payload(config: ShadowGenerationConfig) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "api_base": config.api_base,
+        "model": config.model,
+        "timeout_s": config.timeout_s,
+        "seed": config.seed,
+        "admission_slot_paths": list(config.admission_slot_paths),
+    }
+    if config.mode == "thunderagent":
+        payload["thunderagent"] = True
+    elif config.mode == "continuum_public":
+        payload["continuum_public"] = True
+    return payload
+
+
+def shadow_generation_from_payload(payload: dict[str, Any]) -> ShadowGenerationConfig:
+    raw = dict(payload)
+    thunderagent = raw.pop("thunderagent", False)
+    continuum_public = raw.pop("continuum_public", False)
+    if thunderagent and continuum_public:
+        raise ValueError("shadow generation payload has conflicting modes")
+    mode: ShadowGenerationMode = (
+        "thunderagent"
+        if thunderagent
+        else "continuum_public"
+        if continuum_public
+        else "vllm"
+    )
+    return ShadowGenerationConfig(**raw, mode=mode)
 
 
 @dataclass(slots=True)
@@ -416,6 +453,8 @@ class OpenClawReplayProvider(LLMProvider):
         model: str = "replay-openclaw",
         stop_before_final_tool_calls: bool = False,
         shadow_generation: ShadowGenerationConfig | None = None,
+        program_id: str | None = None,
+        continuum_step_limit: int | None = None,
         tool_gap_loan: ToolGapLoanRuntime | None = None,
     ) -> None:
         super().__init__(api_key=None, api_base=None)
@@ -434,6 +473,28 @@ class OpenClawReplayProvider(LLMProvider):
         self._index = 0
         self._stop_before_final_tool_calls = stop_before_final_tool_calls
         self._shadow_generation = shadow_generation
+        self._program_id = program_id
+        program_mode = (
+            shadow_generation is not None
+            and shadow_generation.mode in {"thunderagent", "continuum_public"}
+        )
+        if program_mode:
+            if not program_id:
+                raise ValueError("program-aware shadow generation requires program_id")
+        elif program_id is not None:
+            raise ValueError("program_id requires a program-aware shadow mode")
+        if shadow_generation is not None and shadow_generation.mode == "continuum_public":
+            if (
+                not isinstance(continuum_step_limit, int)
+                or isinstance(continuum_step_limit, bool)
+                or continuum_step_limit < 1
+            ):
+                raise ValueError("Continuum public mode requires a positive step limit")
+        elif continuum_step_limit is not None:
+            raise ValueError("continuum_step_limit requires Continuum public mode")
+        self._continuum_step_limit = continuum_step_limit
+        self._thunderagent_request_started = False
+        self._thunderagent_release_attempted = False
         self._tool_gap_loan = tool_gap_loan
         self._shadow_client = (
             httpx.AsyncClient(timeout=shadow_generation.timeout_s, trust_env=False)
@@ -635,7 +696,34 @@ class OpenClawReplayProvider(LLMProvider):
 
     async def aclose(self) -> None:
         if self._shadow_client is not None:
-            await self._shadow_client.aclose()
+            try:
+                if (
+                    self._shadow_generation is not None
+                    and self._shadow_generation.mode == "thunderagent"
+                    and self._thunderagent_request_started
+                    and not self._thunderagent_release_attempted
+                ):
+                    self._thunderagent_release_attempted = True
+                    assert self._program_id is not None
+                    api_root = self._shadow_generation.api_base.rstrip("/")
+                    if api_root.endswith("/v1"):
+                        api_root = api_root[:-3]
+                    response = await self._shadow_client.post(
+                        f"{api_root}/programs/release",
+                        json={"program_id": self._program_id},
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    if (
+                        not isinstance(payload, dict)
+                        or payload.get("released") is not True
+                    ):
+                        raise RuntimeError(
+                            "ThunderAgent did not release program "
+                            f"{self._program_id!r}: {payload!r}"
+                        )
+            finally:
+                await self._shadow_client.aclose()
 
     async def _shadow_generate(
         self,
@@ -667,6 +755,17 @@ class OpenClawReplayProvider(LLMProvider):
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if self._shadow_generation.mode == "thunderagent":
+            assert self._program_id is not None
+            request["program_id"] = self._program_id
+            self._thunderagent_request_started = True
+        elif self._shadow_generation.mode == "continuum_public":
+            assert self._program_id is not None
+            assert self._continuum_step_limit is not None
+            request["job_id"] = self._program_id
+            # The official client compares its causal call count with the
+            # configured step limit; it does not know the eventual trace length.
+            request["is_last_step"] = self._index >= self._continuum_step_limit
         if (
             self._tool_gap_loan is not None
             and not self._tool_gap_loan.config.can_lend
@@ -1411,7 +1510,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
     llm_timing = dict(request["llm_timing"])
     shadow_payload = request.get("shadow_generation")
     shadow_generation = (
-        ShadowGenerationConfig(**dict(shadow_payload))
+        shadow_generation_from_payload(dict(shadow_payload))
         if shadow_payload is not None
         else None
     )
@@ -1589,6 +1688,18 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 source_terminal_reason == "trace_ended_before_tools"
             ),
             shadow_generation=shadow_generation,
+            program_id=(
+                run_instance_id
+                if shadow_generation is not None
+                and shadow_generation.mode in {"thunderagent", "continuum_public"}
+                else None
+            ),
+            continuum_step_limit=(
+                int(request["continuum_step_limit"])
+                if shadow_generation is not None
+                and shadow_generation.mode == "continuum_public"
+                else None
+            ),
             tool_gap_loan=tool_gap_loan,
         )
         runner = SessionRunner(
@@ -1628,6 +1739,13 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                         "model": shadow_generation.model,
                         "timeout_s": shadow_generation.timeout_s,
                         "seed": shadow_generation.seed,
+                        **(
+                            {"thunderagent": True}
+                            if shadow_generation.mode == "thunderagent"
+                            else {"continuum_public": True}
+                            if shadow_generation.mode == "continuum_public"
+                            else {}
+                        ),
                     }
                 }
                 if shadow_generation is not None

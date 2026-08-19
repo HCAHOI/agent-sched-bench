@@ -357,6 +357,27 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
             "Omit to leave request admission unconstrained."
         ),
     )
+    shadow_mode_group = parser.add_mutually_exclusive_group()
+    shadow_mode_group.add_argument(
+        "--shadow-llm-mode",
+        choices=["vllm", "thunderagent", "continuum-public"],
+        default="vllm",
+        help=(
+            "Shadow serving policy. continuum-public uses the trace's declared "
+            "max_iterations as the official client's known step limit, never "
+            "the observed trace length (default: vllm)."
+        ),
+    )
+    shadow_mode_group.add_argument(
+        "--shadow-llm-thunderagent",
+        action="store_const",
+        const="thunderagent",
+        dest="shadow_llm_mode",
+        help=(
+            "Route shadow requests through the official ThunderAgent proxy, "
+            "with one program ID and release per replayed task."
+        ),
+    )
     parser.add_argument(
         "--tool-gap-loan-arm",
         choices=["fixed", "feedback", "predictor"],
@@ -802,6 +823,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "shadow_llm_timeout_s": args.shadow_llm_timeout_s,
         "shadow_llm_seed": args.shadow_llm_seed,
         "shadow_llm_max_concurrency": args.shadow_llm_max_concurrency,
+        "shadow_llm_mode": args.shadow_llm_mode.replace("-", "_"),
         "tool_gap_loan_arm": args.tool_gap_loan_arm,
         "tool_gap_borrower_priority": args.tool_gap_borrower_priority,
         "tool_gap_predictions": (
