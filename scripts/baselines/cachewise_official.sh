@@ -4,9 +4,11 @@ set -euo pipefail
 readonly REPO_URL="https://github.com/cachewise-project/cachewise-coding-traces.git"
 readonly COMMIT="181c435a090d328d00bbbee4c8eeb27d32f3abd2"
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cache_root="${XDG_CACHE_HOME:-${HOME:?HOME is required}/.cache}"
 checkout="${CACHEWISE_CHECKOUT:-$cache_root/agent-sched-bench/cachewise-$COMMIT}"
 venv="${CACHEWISE_VENV:-$checkout/.venv}"
+repro_python="${CACHEWISE_REPRO_PYTHON:-python3}"
 
 usage() {
   cat <<'EOF'
@@ -18,6 +20,8 @@ manager, or N_rebuild=3 eviction-heap integration, so this is not the full
 CacheWise serving baseline. Its checked-in split trains on 34 of 94 sessions
 and its dynamic MiniBatchKMeans configuration is not the paper's 80% split and
 C20/C50/C100 evaluation.
+Use cachewise_reproduction.sh for the separately published CacheWise vLLM fork
+and the pinned policy-completion patch.
 
 Commands:
   fetch            Fetch and verify the pinned official repository.
@@ -34,18 +38,12 @@ EOF
 }
 
 verify() {
-  test -d "$checkout/.git" || {
+  test -e "$checkout/.git" || {
     echo "missing CacheWise checkout: $checkout" >&2
     exit 1
   }
-  test "$(git -C "$checkout" rev-parse HEAD)" = "$COMMIT" || {
-    echo "CacheWise checkout is not pinned at $COMMIT" >&2
-    exit 1
-  }
-  test "$(git -C "$checkout" remote get-url origin)" = "$REPO_URL" || {
-    echo "CacheWise checkout does not use the official remote" >&2
-    exit 1
-  }
+  "$repro_python" "$script_dir/cachewise_reproduction.py" \
+    verify-predictor "$checkout"
   grep -Fq 'SIM_THRESHOLD = 0.3' \
     "$checkout/tool_duration_prediction/infer.py"
   grep -Fq 'MIN_CLUSTER_SIZE = 30' \
@@ -61,7 +59,7 @@ verify() {
     exit 1
   }
   echo "verified official CacheWise predictor release at $COMMIT"
-  echo "full CacheWise vLLM serving code is not present in this release"
+  echo "serving code is separate; see cachewise_reproduction.sh"
 }
 
 fetch() {
