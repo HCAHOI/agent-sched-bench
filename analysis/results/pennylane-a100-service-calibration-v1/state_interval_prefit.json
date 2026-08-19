@@ -1,0 +1,61 @@
+{
+  "schema": "pennylane-a100-state-interval-prefit-v1",
+  "role": "frozen_before_task_1325_outcome_access",
+  "input": "analysis/results/pennylane-a100-service-calibration-v1/result.json",
+  "fit_tasks": [
+    "PennyLaneAI__pennylane-963",
+    "PennyLaneAI__pennylane-1320"
+  ],
+  "fit_calls": 156,
+  "models": {
+    "latency_ms": {
+      "features": [
+        "intercept",
+        "cold_start",
+        "new_prompt_k_tokens",
+        "resident_prefix_k_tokens",
+        "completion_tokens"
+      ],
+      "coefficients": [
+        0.0,
+        329.29192597800454,
+        127.91073798318016,
+        9.899817050470512,
+        16.809448300988237
+      ],
+      "warm_multiplier": 1.0527060628897549,
+      "cold_multiplier": 1.1818744154613259,
+      "development_coverage": {
+        "warm": 0.9025974025974026,
+        "cold": 1.0
+      }
+    },
+    "ttft_ms": {
+      "features": [
+        "intercept",
+        "cold_start",
+        "new_prompt_k_tokens",
+        "resident_prefix_k_tokens"
+      ],
+      "coefficients": [
+        0.0,
+        370.64464625648776,
+        164.62597449088628,
+        4.250100771418817
+      ],
+      "warm_multiplier": 1.1524307876857138,
+      "cold_multiplier": 1.791783967873416,
+      "development_coverage": {
+        "warm": 0.9025974025974026,
+        "cold": 1.0
+      }
+    }
+  },
+  "validation_task": "PennyLaneAI__pennylane-1325",
+  "gate": {
+    "warm_coverage_min": 0.9,
+    "cold_covered": true,
+    "median_upper_to_actual_max": 1.5
+  },
+  "protocol_commit": "08f0910"
+}
