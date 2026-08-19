@@ -101,10 +101,12 @@ original provider cache field still failed TTFT validation (48.83% median,
 all 70 prompt hashes matched the physical requests, and 16-token block-aligned
 prefix state reduced TTFT error to 24.56% median and 41.73% p90. This exposed
 result cannot repair the original gate. Freeze that exact prefix-state feature
-now, fit task 963 once, and require the unchanged model to pass the same latency
-and TTFT limits on a fresh sequential task-1320 run before the concurrency
-check or scheduler screen. This state is valid only while the prefix is known
-resident; eviction or migration must invalidate it rather than assume a hit.
+now as the longest common prefix with any known-resident earlier request,
+rounded down to vLLM's 16-token cache block. Fit task 963 once, and require the
+unchanged model to pass the same latency and TTFT limits on a fresh sequential
+task-1320 run before the concurrency check or scheduler screen. This state is
+valid only while the prefix is known resident; eviction or migration must
+invalidate it rather than assume a hit.
 
 ## Decision sequence
 
