@@ -20,9 +20,10 @@ boundary map, not evidence that an untested opportunity works.
 | Baseline | What is connected | Fidelity boundary |
 |---|---|---|
 | ThunderAgent | [Pinned official proxy and replay adapter](../../scripts/baselines/thunderagent_official.sh) | Uses the public program-aware inference scheduler. The released core does not consume `docker_ids` or manage tool containers. |
-| Continuum-public | [Pinned official vLLM fork and replay adapter](../../scripts/baselines/continuum_public.sh) | Public code uses a fixed two-second TTL and omits the paper's duration estimator; never report it as full Continuum. |
-| CacheWise-public | [Pinned official predictor](../../scripts/baselines/cachewise_official.sh) | The release contains the predictor and traces, but not the modified vLLM scheduler or eviction integration. |
-| Agentix/Autellix, SAGA, Murakkab | Not connected | No official serving implementation is public; third-party or partial rewrites are not paper baselines. |
+| Continuum | [Pinned public fork](../../scripts/baselines/continuum_public.sh) and [paper-estimator reproduction](../../scripts/baselines/continuum_reproduction.sh) | The public fork uses a fixed two-second TTL. The reproduction restores the published TTL equation on that fork; paper-omitted update details are fixed interpretations and measured costs are valid only for the bound A100 configuration. |
+| CacheWise | [Pinned predictor](../../scripts/baselines/cachewise_official.sh) and [scheduler reproduction](../../scripts/baselines/cachewise_reproduction.sh) on the authors' vLLM fork | The serving-policy core is executable, but the paper does not publish the causal hook that attaches a newly generated tool call to already resident KV blocks. It is not yet an end-to-end paper baseline. |
+| Agentix/Autellix | [PLAS arrival-priority reproduction](../../scripts/baselines/agentix_reproduction.sh) | The paper publishes no code or queue constants. This implements the causally measurable PLAS subset with inferred vLLM engine-step service; it does not claim in-flight demotion, anti-starvation, ATLAS, multi-engine routing, or the custom KV-swap kernel. |
+| SAGA, Murakkab | Not connected | No official serving implementation is public; reproducing these additional full systems is outside the current baseline set. |
 
 ## The CacheWise granularity is an outer tool call
 
