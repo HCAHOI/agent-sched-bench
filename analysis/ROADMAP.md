@@ -32,20 +32,64 @@ parking is closed below. The first system excludes arbitrary process
 checkpointing, workspace migration, online LLM policy generation, a new RPC
 framework, and dynamic TP reconfiguration.
 
+## Next scheduler: event-driven multi-resource backfill
+
+Use two workload scales. The 12-task balanced PennyLane manifest has two unique
+tasks for each of six workload types and is the smallest physical candidate.
+The development simulator uses all 70 ordinary PennyLane tasks, without
+duplicating traces. Each type has 18 top-quartile tasks in that corpus; labels
+overlap and are used only to build workloads and report per-type effects. A
+runtime scheduler may not read a type label derived from a completed trace.
+
+At each LLM/tool boundary or completed feedback sample, maintain one causal
+estimate per ready phase:
+
+`LLM service and KV reuse; CPU work; RSS; Disk bytes/rate; return-time interval`
+
+The first implementation is an event loop, not an optimizer or MIP. It scans
+the ready phases once at each event; 70 tasks are too small to justify a solver.
+
+1. Enforce measured GPU-request, CPU, RSS, and Disk capacity. RSS is a hard
+   placement/admission constraint; CPU and Disk sharing must charge any service
+   slowdown.
+2. Protect the earliest plausible tool return. Admit a non-preemptive LLM
+   borrower only when its conservative finish precedes that return window.
+3. Backfill a ready phase only when it cannot delay the oldest blocked phase.
+   Among safe candidates, choose the one with the lowest resulting maximum
+   utilization across the four resources; ties remain FCFS.
+4. On multiple replicas, retain state locality when lost-prefix or KV-movement
+   cost exceeds avoided queueing; otherwise route to the less-loaded replica.
+5. Update remaining work only from completed clauses and causal eBPF/cgroup
+   samples. An unsupported prediction disables speculative backfill for that
+   phase and falls back to ordinary execution; it never reserves the whole host
+   while other agents retain memory.
+
+| Workload pressure | Signal | Efficient action |
+|---|---|---|
+| LLM-heavy | prompt, cached and output tokens; resident KV | limit overlapping long prefills; prefer state-local or less-loaded GPU |
+| CPU-heavy | CPU work and observed throttling | EAR keeps work-conserving shares; scheduler overlaps complementary phases |
+| Memory-heavy | held RSS and conservative incremental RSS | hard admission/placement fit; no memory overcommit or process snapshot |
+| Disk-heavy | bytes, rate and measured device slowdown | avoid simultaneous high-I/O phases on one device; spread across workers |
+| Long tool gap | elapsed tool time and remaining-time interval | lend the idle GPU opportunity to a waiting agent |
+| Large LLM return | return interval, prompt size and KV location | stop unsafe long borrowing, retain useful KV, and prioritize the return |
+
+The simulator must replace source API LLM seconds with an A100-calibrated
+service model and measure Disk capacity before making either resource a claim.
+Its primary baselines are fixed concurrency, reactive phase-only scheduling,
+and Agentix-style scheduling after an LLM request arrives. The candidate adds
+pre-arrival return protection and joint resource backfill; an exact-future arm
+remains an upper bound. Only a non-dominated session-JCT/TTFT result on the full
+70-task queue authorizes the 12-task physical replay.
+
 ## Decision sequence
 
-### F0 — Protect returns while using tool gaps
+### F0 — Full-corpus causal simulation
 
-Run the already frozen PennyLane `fixed / feedback / native-priority+feedback`
-comparison without changing its cohort, order, hardware, cost, or gate. It asks
-whether tool-gap completion-time gains can coexist with safe TTFT tails. On
-failure, do one bounded queueing-versus-KV-loss diagnosis; continue only if the
-observed state identifies a concrete action.
-
-The attempted A100 run has no formal result: its first two cells validated, but
-the third missed the frozen auxiliary GPU-telemetry cadence. The tracked runner
-now isolates and retains every cell so one invalid cell cannot suppress later
-work. A new run still requires explicit GPU approval.
+Replay the 70 ordinary PennyLane trajectories as one backlog. First establish
+the exact-future ceiling with contention-aware service, then replace future
+state with causal estimates without changing the scheduler. Stop if the causal
+candidate does not improve the JCT/TTFT Pareto frontier over reactive phase-only
+scheduling or if its gain is confined to one workload type.
 
 ### F1/F2 — Tool-state parking and remote placement are closed
 
@@ -56,7 +100,7 @@ RSS utilization was 14.171%. Therefore do not measure restore costs or build the
 remote snapshot-RPC branch for this workload. Reopening requires a new workload
 with independently demonstrated CPU/RSS pressure.
 
-### F3 — Pre-arrival return coordination beyond Agentix
+### F3 — Physical pre-arrival coordination beyond Agentix
 
 Agentix already prioritizes arrived LLM calls by program-level attained service
 and routes long calls to the program's replica while sending short calls to the
@@ -67,9 +111,11 @@ The distinct hypothesis is earlier coordination: while a tool is still running,
 its elapsed time, completed clauses, and causal resource state may identify a
 return window before the next LLM request exists. That state could control
 backfill admission, return priority, and KV retention or placement. Reopen this
-branch only if a physical return-tail diagnosis shows such advance notice would
-change an action; then compare against Agentix-style request-arrival scheduling
-and charge all queueing, repeated prefill, and state movement to JCT and TTFT.
+branch only if the full-corpus simulation shows such advance notice changes
+actions across workload types. Then use the 12-task balanced batch and compare
+against Agentix-style request-arrival scheduling, charging all queueing,
+repeated prefill, and state movement to JCT and TTFT. A run longer than 30
+minutes still requires an estimate and explicit approval.
 
 ### F4 — Study RP x TP only after locality works
 
