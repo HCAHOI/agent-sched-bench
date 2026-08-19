@@ -65,8 +65,13 @@ fetch_all() {
 verify_patch() {
   "$python_bin" "$script_dir/cachewise_reproduction.py" \
     verify-predictor "$predictor_checkout"
-  "$python_bin" "$script_dir/cachewise_reproduction.py" \
-    verify-patch "$vllm_checkout"
+  if test -n "$(git -C "$vllm_checkout" status --porcelain)"; then
+    "$python_bin" "$script_dir/cachewise_reproduction.py" \
+      verify-applied "$vllm_checkout"
+  else
+    "$python_bin" "$script_dir/cachewise_reproduction.py" \
+      verify-patch "$vllm_checkout"
+  fi
 }
 
 prepare() {

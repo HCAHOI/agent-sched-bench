@@ -581,7 +581,7 @@ def verify_applied_patch(checkout: Path) -> None:
         raise RuntimeError("patched vLLM checkout has staged changes")
     if _git(checkout, "ls-files", "--others", "--exclude-standard"):
         raise RuntimeError("patched vLLM checkout has untracked files")
-    actual = _git(checkout, "diff", "--binary", "HEAD", "--")
+    actual = _git(checkout, "diff", "--binary", "--abbrev=9", "HEAD", "--")
     if actual.strip() != VLLM_PATCH.strip():
         raise RuntimeError("patched vLLM checkout differs from the intended patch")
     _git(checkout, "apply", "--reverse", "--check", "-", input_text=VLLM_PATCH)

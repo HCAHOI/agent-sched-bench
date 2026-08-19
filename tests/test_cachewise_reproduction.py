@@ -102,6 +102,9 @@ def test_patch_contract_and_cli_help() -> None:
     assert "conditional-remaining-time eviction" in help_text
     assert "N_rebuild=3" in help_text
     assert "does not publish its tool-call-to-engine attachment hook" in help_text
+    script = SCRIPT.read_text()
+    assert 'git -C "$vllm_checkout" status --porcelain' in script
+    assert 'verify-applied "$vllm_checkout"' in script
 
 
 def test_checkout_integrity_allows_only_explicit_model_artifacts(
@@ -272,6 +275,9 @@ def test_clean_patch_and_deterministic_eviction_scores(tmp_path: Path) -> None:
     )
     try:
         reproduction.apply_vllm_patch(checkout)
+        subprocess.run(
+            ["git", "-C", checkout, "config", "core.abbrev", "7"], check=True
+        )
         reproduction.verify_applied_patch(checkout)
 
         policy_path = checkout / "vllm/v1/core/cachewise_policy.py"
