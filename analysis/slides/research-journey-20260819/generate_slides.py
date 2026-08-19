@@ -563,9 +563,75 @@ def build() -> Presentation:
     text(s, "候选假设：比“工具已经跑了多久”更细的内部进度，能更早判断返回窗口与资源压力。", 0.85, 6.03, 11.6, 0.36, size=15, color=CYAN, bold=True, align=PP_ALIGN.CENTER)
     add_source(s, "边界依据：analysis/offline/related-work.md；候选不等于已成立贡献")
 
-    # 15 — smallest test
+    # 15 — scenarios covered by related work
     s = new_slide(prs)
-    add_title(s, "下一步先做一个最小因果实验，不先造新系统", 15, "把候选差异变成可证伪问题")
+    add_title(s, "它们还覆盖了我们没有真正测过的系统场景", 15, "Related work：比较实验世界")
+    card(
+        s,
+        0.72,
+        1.38,
+        5.95,
+        2.10,
+        "Continuum：更多模型、硬件与真实 agent",
+        "mini-SWE-Agent、BFCL Web、OpenHands；另跑 500 个真实 SWE 任务。采用任务到达流，覆盖 A100/H100/B200、单卡到 4 卡和分布式推理。\n\n我们未覆盖：多模型、多硬件、真实任务到达与 500 个任务的规模。",
+        color=CYAN,
+        body_size=12.4,
+    )
+    card(
+        s,
+        6.88,
+        1.38,
+        5.73,
+        2.10,
+        "ThunderAgent：高并发、多节点与强化学习采样",
+        "coding、routing、science agents 与强化学习采样；最高 96 个并发程序，模型跑在 H100 集群，Docker 工具环境放在独立 CPU 集群，并测环境准备与回收。\n\n我们未覆盖：多节点、超大模型、强化学习与高并发。",
+        color=YELLOW,
+        body_size=12.4,
+    )
+    card(
+        s,
+        0.72,
+        3.82,
+        5.95,
+        2.10,
+        "Agentix：混合程序、并行搜索与多副本",
+        "ShareGPT 对话、BFCL 工具调用、LATS 并行搜索及其混合负载；按任务而非请求生成到达流，使用 1/4/8 张 A100，并测 2–4 个模型副本。\n\n我们未覆盖：并行程序图、混合负载与多副本局部性。",
+        color=PURPLE,
+        body_size=12.4,
+    )
+    card(
+        s,
+        6.88,
+        3.82,
+        5.73,
+        2.10,
+        "我们：工具内部更真实，系统规模更小",
+        "SQLGlot/PennyLane 保留真实命令、子命令与 CPU/内存/读写计数；SWE/TB 提供广度。但物理 GPU 证据只有单 A100、8 个固定任务的回放。\n\n我们未覆盖：任务到达流、多副本、多 GPU、强化学习和混合 agent。",
+        color=GREEN,
+        body_size=12.4,
+    )
+    add_source(s, "场景依据：Continuum §6；ThunderAgent §5；Agentix §6；我们的物理边界见 canonical objective")
+
+    # 16 — realism depends on the claim
+    s = new_slide(prs)
+    add_title(s, "“更真实”不是一个排名，要看我们想证明什么", 16, "现实性是多维的")
+    card(s, 0.76, 1.42, 3.72, 2.02, "证明工具理解", "最真实：同一大型仓库中的新任务，真实执行测试/安装命令，并刻意覆盖冷缓存、热缓存和不同测试范围。我们更接近，但环境对照还不够。", color=BLUE, body_size=12.2)
+    card(s, 4.80, 1.42, 3.72, 2.02, "证明 GPU 服务", "最真实：不同 agent 混合到达、从低负载扫到饱和、多个模型副本，并报告平均与最慢 1% 延迟。三篇相关工作明显更完整。", color=PURPLE, body_size=12.2)
+    card(s, 8.84, 1.42, 3.72, 2.02, "证明 CPU/GPU 协同", "最真实：多个 coding agents 共享模型服务，在独立 CPU 节点执行真实工具；全部等待、变慢和状态移动都计入。ThunderAgent 最接近，但不看 shell 内部。", color=YELLOW, body_size=12.2)
+    text(s, "因此不能只选一种数据分布；需要两层互补验证", 0.88, 3.89, 6.2, 0.36, size=16, bold=True)
+    box(s, 0.88, 4.45, 4.95, 1.22, fill=PANEL, line=CYAN)
+    text(s, "A · 方法是否有效", 1.10, 4.68, 1.70, 0.28, size=14, color=CYAN, bold=True)
+    text(s, "新鲜的同仓库任务 + 真实环境状态\n回答：细粒度状态能不能改进动作？", 2.75, 4.58, 2.78, 0.58, size=12.2, color=MUTED)
+    arrow(s, 5.98, 4.92, 0.70, 0.20, fill=FAINT)
+    box(s, 6.90, 4.45, 4.95, 1.22, fill=PANEL, line=GREEN)
+    text(s, "B · 系统是否实用", 7.12, 4.68, 1.70, 0.28, size=14, color=GREEN, bold=True)
+    text(s, "同仓库与跨仓库混合 + 批量突发与到达流\n回答：在真实竞争下是否仍改善完成时间和尾部？", 8.78, 4.58, 2.78, 0.66, size=12.2, color=MUTED)
+    lesson(s, "下一套实验应保留我们的真实工具粒度，同时补上相关工作的并发、到达流和多副本场景。")
+    add_source(s, "判断：系统规模上 related work 更真实；shell 内部工作上我们的 trace 更真实；两者都不能替代另一方")
+
+    # 17 — smallest test
+    s = new_slide(prs)
+    add_title(s, "下一步先做一个最小因果实验，不先造新系统", 17, "把候选差异变成可证伪问题")
     text(s, "同一批真实 trace，比较三层信息是否真的改变动作", 0.82, 1.46, 7.2, 0.38, size=16, bold=True)
     arms = [
         ("A", "阶段反馈", "只知道：现在在 LLM 还是工具阶段", FAINT),
@@ -587,9 +653,9 @@ def build() -> Presentation:
     lesson(s, "贡献不是“我们看得更细”，而是这份细粒度状态在相同成本下改变了更好的动作。")
     add_source(s, "下一步需冻结 cohort、动作、成本和 GO/STOP 标准后再读结果；不启动新的昂贵实验")
 
-    # 16 — paper arc
+    # 18 — paper arc
     s = new_slide(prs)
-    add_title(s, "如果三个环节都成立，论文故事才完整", 16, "从预测到系统效果")
+    add_title(s, "如果四个环节都成立，论文故事才完整", 18, "从预测到系统效果")
     steps = [
         ("1", "理解工具", "完整命令 → 子命令 → 真实工作", BLUE),
         ("2", "预测状态", "何时返回、CPU/内存/读写如何变化", CYAN),
@@ -611,9 +677,9 @@ def build() -> Presentation:
     lesson(s, "单独的预测准确率不够；系统贡献必须落在完整任务完成时间、尾部与资源成本上。")
     add_source(s, "当前 A 有成熟基础；B 有 trace 回放上界与物理反馈信号；C 尚未成立")
 
-    # 17 — takeaways
+    # 19 — takeaways
     s = new_slide(prs)
-    add_title(s, "带走四句话，然后继续问一个更尖锐的问题", 17, "Takeaways")
+    add_title(s, "带走四句话，然后继续问一个更尖锐的问题", 19, "Takeaways")
     takeaways = [
         ("01", "文本相似，不代表真实工作相似。", CORAL),
         ("02", "同仓库结构能提高预测，但不自动产生调度收益。", BLUE),
