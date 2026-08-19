@@ -108,6 +108,16 @@ task-1320 run before the concurrency check or scheduler screen. This state is
 valid only while the prefix is known resident; eviction or migration must
 invalidate it rather than assume a hit.
 
+The fresh task-1320 transfer is **NO-GO** for this point service model. Latency
+passed at 12.39% median and 29.49% p90 error. TTFT passed the median limit at
+20.91% but missed the p90 limit at 51.22%. Sixty-nine of 86 TTFT predictions
+were conservative overestimates; the largest underestimate was the first cold
+request, which took 974 ms versus 169 ms predicted. Exact prefix state is
+therefore necessary and useful, but not sufficient to support the frozen tail
+claim. Do not run the concurrency probe or full-corpus scheduler from this
+model. Any revisit must preregister cold-start state and a decision-aligned
+one-sided interval on another fresh calibration task; task 1320 is now exposed.
+
 ## Decision sequence
 
 ### F0 — Full-corpus causal simulation
@@ -123,6 +133,9 @@ and return-guarded revocable borrowing. The guarded arm must reduce mean task
 completion by at least 10%, lower makespan, keep modeled all-request p99 TTFT at
 or below 1.05x fixed, and improve at least four of the six workload groups.
 Failure stops this branch before KB or predictor integration.
+
+This branch is currently stopped by the A100 TTFT transfer gate above; no
+full-corpus scheduler outcome exists.
 
 ### F1/F2 — Tool-state parking and remote placement are closed
 
