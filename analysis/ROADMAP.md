@@ -118,6 +118,17 @@ claim. Do not run the concurrency probe or full-corpus scheduler from this
 model. Any revisit must preregister cold-start state and a decision-aligned
 one-sided interval on another fresh calibration task; task 1320 is now exposed.
 
+**State-interval follow-up (frozen after the point-model NO-GO).** Use all
+exposed task-963 and task-1320 calls to fit the same non-negative models with
+one added `cold_start` indicator. For warm and cold calls separately, multiply
+the point estimate by the empirical 90th-percentile `actual / predicted` ratio
+(`higher` quantile); the cold factor is therefore the larger of the two exposed
+first-call ratios. Validate once on fresh task 1325, selected before execution
+as the cheapest unused task with at least 50 LLM calls and a 70k-token prompt.
+Latency and TTFT must each cover at least 90% of warm calls, cover the cold call,
+and have median upper-bound/actual ratio at most 1.5. Failure stops state-aware
+service modeling; success alone authorizes the already frozen concurrency probe.
+
 ## Decision sequence
 
 ### F0 — Full-corpus causal simulation
