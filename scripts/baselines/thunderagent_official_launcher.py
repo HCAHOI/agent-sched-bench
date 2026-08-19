@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI
@@ -43,9 +44,15 @@ def main() -> None:
         acting_token_weight=1.0,
         use_acting_token_decay=True,
     )
-    app = FastAPI(title="ThunderAgent official baseline")
-    app.add_event_handler("startup", router.start)
-    app.add_event_handler("shutdown", router.stop)
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        await router.start()
+        try:
+            yield
+        finally:
+            await router.stop()
+
+    app = FastAPI(title="ThunderAgent official baseline", lifespan=lifespan)
     register_routes(app, router, config)
     uvicorn.run(
         app,
