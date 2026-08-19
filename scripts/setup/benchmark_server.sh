@@ -34,6 +34,22 @@ cd "$REPO_ROOT"
 [ -f pyproject.toml ] || { echo "FATAL: pyproject.toml not found at $REPO_ROOT" >&2; exit 1; }
 echo "== repo: $REPO_ROOT ($(git rev-parse --short HEAD 2>/dev/null || echo 'no git'))"
 
+# --- container runtime -------------------------------------------------------
+command -v docker >/dev/null || {
+  echo "FATAL: docker is required; install it before running benchmark setup" >&2
+  exit 1
+}
+if ! id -nG | tr ' ' '\n' | grep -qx docker; then
+  sudo -n usermod -aG docker "$(id -un)"
+  echo "FATAL: added $(id -un) to the docker group; reconnect and rerun setup" >&2
+  exit 1
+fi
+docker info >/dev/null || {
+  echo "FATAL: docker daemon is unavailable to $(id -un)" >&2
+  exit 1
+}
+echo "== docker: $(docker version --format '{{.Server.Version}}')"
+
 # --- privileged eBPF runtime -------------------------------------------------
 if ! PYTHONPATH=/usr/lib/python3/dist-packages python3 -c 'import bcc' 2>/dev/null; then
   sudo -n apt-get update -qq
