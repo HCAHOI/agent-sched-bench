@@ -81,6 +81,15 @@ pre-arrival return protection and joint resource backfill; an exact-future arm
 remains an upper bound. Only a non-dominated session-JCT/TTFT result on the full
 70-task queue authorizes the 12-task physical replay.
 
+Calibrate A100 service before reading scheduler outcomes. Task 963 supplies 70
+sequential requests; every fifth call is validation and the rest fit a
+non-negative linear model from source-visible uncached prompt, cached prompt,
+and output tokens. TTFT excludes output tokens. Continue only if validation
+median absolute percentage error is at most 25% and p90 is at most 50% for both
+latency and TTFT. Then run one bounded four-request concurrency check from four
+different tasks; the contention rule used by the simulator must bracket its
+observed latency and TTFT rather than be chosen from scheduler results.
+
 ## Decision sequence
 
 ### F0 — Full-corpus causal simulation
@@ -90,6 +99,12 @@ the exact-future ceiling with contention-aware service, then replace future
 state with causal estimates without changing the scheduler. Stop if the causal
 candidate does not improve the JCT/TTFT Pareto frontier over reactive phase-only
 scheduling or if its gain is confined to one workload type.
+
+The exact-future screen compares fixed concurrency four, unprotected borrowing,
+and return-guarded revocable borrowing. The guarded arm must reduce mean task
+completion by at least 10%, lower makespan, keep modeled all-request p99 TTFT at
+or below 1.05x fixed, and improve at least four of the six workload groups.
+Failure stops this branch before KB or predictor integration.
 
 ### F1/F2 — Tool-state parking and remote placement are closed
 
