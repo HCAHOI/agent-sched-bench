@@ -455,8 +455,3 @@ def build_container_tool_overrides(
         ),
         *[UnsupportedReplayTool(name) for name in _UNSUPPORTED_REPLAY_TOOL_NAMES],
     ]
-
-
-def register_tool_overrides(registry: Any, tools: Iterable[Tool]) -> None:
-    for tool in tools:
-        registry.register(tool)

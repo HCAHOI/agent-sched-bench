@@ -30,12 +30,6 @@ class MessageTool(Tool):
         self._default_chat_id = chat_id
         self._default_message_id = message_id
 
-    def set_send_callback(
-        self, callback: Callable[[OutboundMessage], Awaitable[None]]
-    ) -> None:
-        """Set the callback for sending messages."""
-        self._send_callback = callback
-
     def start_turn(self) -> None:
         """Reset per-turn send tracking."""
         self._sent_in_turn = False

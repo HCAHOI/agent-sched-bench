@@ -12,7 +12,6 @@ from tool_resource_eval.cachewise_kv_factorial import (
     _make_room,
     _paper_sized,
     simulate,
-    request_ranks,
 )
 from tool_resource_eval.cachewise_reproduction import (
     Gap,
@@ -284,21 +283,6 @@ def test_suffix_arrival_keeps_greedy_tie_break_for_arrived_sessions() -> None:
 
     assert lru_victim.resident_blocks == 3
     assert later_arrival.resident_blocks == 4
-
-
-def test_request_ranks_follow_fcfs_service_and_gap_timing() -> None:
-    programs = [
-        Program(
-            "a",
-            (
-                Turn(16, 16, 1.0, Gap("a", 0.0, 10.0, "exec", "a")),
-                Turn(16, 16, 1.0, None),
-            ),
-        ),
-        _program("b", 16),
-    ]
-
-    assert request_ranks(programs) == {("a", 0): 0, ("b", 0): 1, ("a", 1): 2}
 
 
 def test_arrival_during_service_releases_suffix_before_growth(monkeypatch) -> None:

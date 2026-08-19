@@ -23,9 +23,7 @@ from scripts.evaluation.evaluate_clause_latency_buckets import (  # noqa: E402
 )
 from scripts.evaluation.evaluate_command_history_residual import (  # noqa: E402
     BUCKETS,
-    DISK,
     SPLIT_MANIFEST,
-    TARGETS,
     Row,
     _fail_closed_metrics,
     _load_rows,

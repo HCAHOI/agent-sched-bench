@@ -10,17 +10,17 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-from typing import Any, Hashable, Mapping, Sequence
+from typing import Any, Hashable, Sequence
 
 _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "src"))
 
-from scripts.evaluation.evaluate_clause_latency_buckets import (
+from scripts.evaluation.evaluate_clause_latency_buckets import (  # noqa: E402
     _accuracy_delta,
     _phase_changes,
 )
-from scripts.evaluation.evaluate_command_history_residual import (
+from scripts.evaluation.evaluate_command_history_residual import (  # noqa: E402
     BUCKETS,
     DISK,
     SPLIT_MANIFEST,
@@ -30,7 +30,7 @@ from scripts.evaluation.evaluate_command_history_residual import (
     _load_rows,
     command_shape,
 )
-from tool_resource.runtime_kb import RESOURCE_BUCKET_LABELS
+from tool_resource.runtime_kb import RESOURCE_BUCKET_LABELS  # noqa: E402
 
 VERSION = "command-outcome-memory-v1"
 ALL_TARGETS = (*TARGETS, DISK)

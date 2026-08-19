@@ -155,7 +155,6 @@ def _nearest_rank_percentile(sorted_values: list[float], percentile: int) -> flo
 
 def _resolve_docker_image(loaded: LoadedTraceSession) -> str | None:
     """Resolve an explicit, task, or recorded benchmark container image."""
-    metadata = loaded.metadata or {}
     explicit = (
         loaded.docker_image_override
         or loaded.task.get("image_name")

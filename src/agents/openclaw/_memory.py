@@ -104,10 +104,6 @@ class MemoryStore:
         with open(self.history_file, "a", encoding="utf-8") as f:
             f.write(entry.rstrip() + "\n\n")
 
-    def get_memory_context(self) -> str:
-        long_term = self.read_long_term()
-        return f"## Long-term Memory\n{long_term}" if long_term else ""
-
     @staticmethod
     def _format_messages(messages: list[dict]) -> str:
         lines = []

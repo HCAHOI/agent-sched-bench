@@ -38,27 +38,6 @@ def get_llm_call_time_ms(data: Mapping[str, Any] | None) -> float | None:
     return None
 
 
-def get_openrouter_latency_ms(data: Mapping[str, Any] | None) -> float | None:
-    """Return OpenRouter total latency when the trace includes it."""
-
-    if not data:
-        return None
-    return _coerce_optional_float(data.get("openrouter_latency_ms"))
-
-
-def get_preferred_llm_latency_ms(data: Mapping[str, Any] | None) -> float:
-    """Return canonical LLM call time, falling back to local wall time."""
-
-    llm_call_time = get_llm_call_time_ms(data)
-    if llm_call_time is not None:
-        return llm_call_time
-    if data:
-        llm_latency = _coerce_optional_float(data.get("llm_latency_ms"))
-        if llm_latency is not None:
-            return llm_latency
-    return get_llm_wall_latency_ms(data)
-
-
 def summarize_llm_latencies(
     records: Iterable[Mapping[str, Any] | None],
 ) -> dict[str, float | int | str]:

@@ -63,6 +63,3 @@ class ResultCollector:
         except asyncio.CancelledError:
             return None
         return self._results.get(session_key)
-
-    def get_result(self, session_key: str) -> str | None:
-        return self._results.get(session_key)

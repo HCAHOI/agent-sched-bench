@@ -282,12 +282,6 @@ class ContainerStartupRecorder:
             phase.update(extra)
         self._phases.append(phase)
 
-    def set_resources(self, samples: list[dict[str, Any]]) -> None:
-        self._resources = {
-            "samples": samples,
-            "summary": summarize_samples(samples),
-        }
-
     def write(
         self,
         *,

@@ -423,41 +423,6 @@ def simulate(
     }
 
 
-def request_ranks(
-    programs: list[Program], *, scheduler: str = "fcfs"
-) -> dict[RequestKey, int]:
-    """Return the fixed request order when cache misses do not affect service."""
-
-    sessions = [Session(program, rank) for rank, program in enumerate(programs)]
-    ranks: dict[RequestKey, int] = {}
-    now_s = 0.0
-    while not all(session.finished for session in sessions):
-        queued = [
-            session
-            for session in sessions
-            if not session.finished and session.arrival_s <= now_s + 1e-12
-        ]
-        if not queued:
-            now_s = min(
-                session.arrival_s for session in sessions if not session.finished
-            )
-            continue
-        current = _choose_session(queued, scheduler)
-        key = (current.program.task_id, current.turn_index)
-        ranks[key] = len(ranks)
-        turn = current.program.turns[current.turn_index]
-        finish_s = now_s + turn.service_s
-        current.turn_index += 1
-        if current.turn_index == len(current.program.turns):
-            current.finished = True
-        else:
-            if turn.gap is None:
-                raise ValueError("non-final turn lacks a CacheWise tool gap")
-            current.arrival_s = finish_s + turn.gap.end - turn.gap.start
-        now_s = finish_s
-    return ranks
-
-
 def _paper_sized(
     prefix_delta: float,
     c100_delta: float,

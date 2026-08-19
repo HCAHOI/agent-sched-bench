@@ -55,10 +55,6 @@ def replay_paired_workload_contract_version() -> int | None:
     return int(raw)
 
 
-def replay_paired_workload_contract_enabled() -> bool:
-    return replay_paired_workload_contract_version() is not None
-
-
 def _seeded_pytest_command(command: str, seed: str) -> str:
     return (
         'export PYTEST_ADDOPTS="${PYTEST_ADDOPTS:+$PYTEST_ADDOPTS }'
