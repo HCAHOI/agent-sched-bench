@@ -94,6 +94,18 @@ requests to four and linearly interpolates from one to the matched median
 four-request latency and TTFT slowdown; it is fixed from this calibration, not
 chosen from scheduler results.
 
+**Calibration amendment (2026-08-19).** The first task-963 extraction used the
+replay output's cached-token field, which was zero for all calls. Joining the
+original provider cache field still failed TTFT validation (48.83% median,
+118.56% p90). A diagnostic reconstructed the exact model-token common prefix;
+all 70 prompt hashes matched the physical requests, and 16-token block-aligned
+prefix state reduced TTFT error to 24.56% median and 41.73% p90. This exposed
+result cannot repair the original gate. Freeze that exact prefix-state feature
+now, fit task 963 once, and require the unchanged model to pass the same latency
+and TTFT limits on a fresh sequential task-1320 run before the concurrency
+check or scheduler screen. This state is valid only while the prefix is known
+resident; eviction or migration must invalidate it rather than assume a hit.
+
 ## Decision sequence
 
 ### F0 — Full-corpus causal simulation
