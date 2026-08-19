@@ -65,7 +65,7 @@ class ReplayActionFailureCounts:
     action_sequence_matches: bool
 
 
-ShadowGenerationMode = Literal["vllm", "thunderagent", "continuum_public"]
+ShadowGenerationMode = Literal["vllm", "thunderagent", "continuum_public", "agentix"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +94,7 @@ class ShadowGenerationConfig:
             raise ValueError("shadow model must be non-empty")
         if not math.isfinite(self.timeout_s) or self.timeout_s <= 0:
             raise ValueError("shadow timeout_s must be finite and > 0")
-        if self.mode not in {"vllm", "thunderagent", "continuum_public"}:
+        if self.mode not in {"vllm", "thunderagent", "continuum_public", "agentix"}:
             raise ValueError(f"unknown shadow generation mode: {self.mode!r}")
         slot_paths = tuple(self.admission_slot_paths)
         if any(not path for path in slot_paths) or len(set(slot_paths)) != len(
@@ -116,6 +116,8 @@ def shadow_generation_payload(config: ShadowGenerationConfig) -> dict[str, Any]:
         payload["thunderagent"] = True
     elif config.mode == "continuum_public":
         payload["continuum_public"] = True
+    elif config.mode == "agentix":
+        payload["agentix"] = True
     return payload
 
 
@@ -123,13 +125,16 @@ def shadow_generation_from_payload(payload: dict[str, Any]) -> ShadowGenerationC
     raw = dict(payload)
     thunderagent = raw.pop("thunderagent", False)
     continuum_public = raw.pop("continuum_public", False)
-    if thunderagent and continuum_public:
+    agentix = raw.pop("agentix", False)
+    if sum(map(bool, (thunderagent, continuum_public, agentix))) > 1:
         raise ValueError("shadow generation payload has conflicting modes")
     mode: ShadowGenerationMode = (
         "thunderagent"
         if thunderagent
         else "continuum_public"
         if continuum_public
+        else "agentix"
+        if agentix
         else "vllm"
     )
     return ShadowGenerationConfig(**raw, mode=mode)
@@ -474,10 +479,11 @@ class OpenClawReplayProvider(LLMProvider):
         self._stop_before_final_tool_calls = stop_before_final_tool_calls
         self._shadow_generation = shadow_generation
         self._program_id = program_id
-        program_mode = (
-            shadow_generation is not None
-            and shadow_generation.mode in {"thunderagent", "continuum_public"}
-        )
+        program_mode = shadow_generation is not None and shadow_generation.mode in {
+            "thunderagent",
+            "continuum_public",
+            "agentix",
+        }
         if program_mode:
             if not program_id:
                 raise ValueError("program-aware shadow generation requires program_id")
@@ -699,7 +705,7 @@ class OpenClawReplayProvider(LLMProvider):
             try:
                 if (
                     self._shadow_generation is not None
-                    and self._shadow_generation.mode == "thunderagent"
+                    and self._shadow_generation.mode in {"thunderagent", "agentix"}
                     and self._thunderagent_request_started
                     and not self._thunderagent_release_attempted
                 ):
@@ -719,7 +725,7 @@ class OpenClawReplayProvider(LLMProvider):
                         or payload.get("released") is not True
                     ):
                         raise RuntimeError(
-                            "ThunderAgent did not release program "
+                            "program-aware scheduler did not release program "
                             f"{self._program_id!r}: {payload!r}"
                         )
             finally:
@@ -755,7 +761,7 @@ class OpenClawReplayProvider(LLMProvider):
             "stream": True,
             "stream_options": {"include_usage": True},
         }
-        if self._shadow_generation.mode == "thunderagent":
+        if self._shadow_generation.mode in {"thunderagent", "agentix"}:
             assert self._program_id is not None
             request["program_id"] = self._program_id
             self._thunderagent_request_started = True
@@ -1691,7 +1697,8 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             program_id=(
                 run_instance_id
                 if shadow_generation is not None
-                and shadow_generation.mode in {"thunderagent", "continuum_public"}
+                and shadow_generation.mode
+                in {"thunderagent", "continuum_public", "agentix"}
                 else None
             ),
             continuum_step_limit=(
@@ -1744,6 +1751,8 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                             if shadow_generation.mode == "thunderagent"
                             else {"continuum_public": True}
                             if shadow_generation.mode == "continuum_public"
+                            else {"agentix": True}
+                            if shadow_generation.mode == "agentix"
                             else {}
                         ),
                     }

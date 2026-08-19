@@ -360,7 +360,7 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
     shadow_mode_group = parser.add_mutually_exclusive_group()
     shadow_mode_group.add_argument(
         "--shadow-llm-mode",
-        choices=["vllm", "thunderagent", "continuum-public"],
+        choices=["vllm", "thunderagent", "continuum-public", "agentix"],
         default="vllm",
         help=(
             "Shadow serving policy. continuum-public uses the trace's declared "
