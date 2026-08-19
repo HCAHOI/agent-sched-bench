@@ -106,3 +106,35 @@ preflight
     )
     assert result.returncode != 0
     assert "not a Git worktree" in result.stderr
+
+
+def test_cell_failure_does_not_suppress_later_cells() -> None:
+    script = f'''source "{RUNNER}"
+cells=(first broken last)
+run_cell() (
+  set -e
+  printf '%s\n' "$1"
+  [[ $1 != broken ]]
+  printf '%s-finished\n' "$1"
+)
+set +e
+run_cells
+rc=$?
+set -e
+printf 'rc=%s\n' "$rc"
+'''
+    result = subprocess.run(
+        ["bash", "-c", script],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    assert result.stdout.splitlines() == [
+        "first",
+        "first-finished",
+        "broken",
+        "last",
+        "last-finished",
+        "rc=1",
+    ]
+    assert "cell broken failed with rc=1" in result.stderr

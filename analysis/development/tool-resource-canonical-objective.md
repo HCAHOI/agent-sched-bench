@@ -335,8 +335,17 @@ The frozen inputs are
 `evaluate_pennylane_native_priority.py`. Cell directories are numbered in the
 frozen order. Every server starts with `--scheduling-policy priority`; use only
 the `/v1/models` readiness probe, not a generative warmup that would populate
-the prefix cache. The driver validates each cell before starting the next and
-never overwrites an existing run root or result.
+the prefix cache. The driver validates each cell immediately and never
+overwrites an existing run root or result.
+
+**Execution amendment, 2026-08-19, before the formal result.** Cell 3 replay
+completed, but its validity check found one 4.66-second GPU telemetry gap above
+the frozen three-second limit. The limit and all effect gates remain unchanged;
+no priority-effect metric was read. Because every cell restarts vLLM and has
+independent telemetry, the driver now runs and validates all six cells even if
+one is invalid, retains each failed cell, and withholds final analysis until all
+six claim-bearing cells are valid. A validity failure therefore cannot leave
+the GPU idle by suppressing later independent cells.
 
 The frozen GO gate requires both repetitions to be valid, feedback and
 priority-feedback each to reduce mean JCT by at least 5% and makespan strictly

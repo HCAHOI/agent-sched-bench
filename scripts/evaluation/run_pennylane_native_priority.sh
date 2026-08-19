@@ -410,6 +410,22 @@ PY
   [[ $validation_rc -eq 0 ]] || exit "$validation_rc"
 )
 
+run_cells() (
+  set -euo pipefail
+  local any_failed=0 cell_name cell_rc
+  for cell_name in "${cells[@]}"; do
+    set +e
+    run_cell "$cell_name"
+    cell_rc=$?
+    set -e
+    [[ $cell_rc -eq 0 ]] && continue
+    printf 'cell %s failed with rc=%s; continuing independent cells\n' \
+      "$cell_name" "$cell_rc" >&2
+    any_failed=1
+  done
+  exit "$any_failed"
+)
+
 run_all() {
   preflight
   local gpu_rows
@@ -475,10 +491,15 @@ PY
   trap 'exit 130' INT
   trap 'exit 143' TERM
 
-  local cell_name
-  for cell_name in "${cells[@]}"; do
-    run_cell "$cell_name"
-  done
+  local cells_rc=0
+  set +e
+  run_cells
+  cells_rc=$?
+  set -e
+  if [[ $cells_rc -ne 0 ]]; then
+    printf 'one or more cells failed; final analysis withheld\n' >&2
+    return "$cells_rc"
+  fi
 
   set +e
   "$python" "$analyzer" --run-root "$run_root" --output "$result_path" \
