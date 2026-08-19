@@ -30,19 +30,25 @@
     "long_gap_threshold_s": 34.790656,
     "llm_heavy": "Top two by the mean percentile rank of cumulative prompt tokens and prompt tokens per shell-exec second.",
     "cpu_heavy": "Top two remaining by the mean percentile rank of average CPU cores and CPU-core-seconds.",
-    "memory_heavy": "Highest remaining sampled peak RSS.",
-    "disk_heavy": "Highest remaining task-level disk read-plus-write delta.",
-    "long_tool_gap": "Highest remaining total duration of LLM-to-LLM gaps longer than the fixed threshold.",
-    "large_llm_return": "Highest remaining mean percentile rank of long-gap count and the largest returning LLM prompt."
+    "memory_heavy": "Top two remaining by sampled peak RSS.",
+    "disk_heavy": "Top two remaining by task-level disk read-plus-write delta.",
+    "large_llm_return": "Top two remaining by the mean percentile rank of long-gap count and the largest returning LLM prompt.",
+    "long_tool_gap": "Top two remaining by total duration of LLM-to-LLM gaps longer than the fixed threshold."
   },
-  "batch_order": [963, 5986, 3483, 6358, 1320, 5716, 2543, 5455],
-  "order_rationale": "The first four tasks expose LLM, CPU, memory, and long-gap pressure concurrently; the last four form a heterogeneous waiting queue.",
+  "amendment": {
+    "date": "2026-08-19",
+    "reason": "The advisor required two unique tasks for every workload type, expanding the batch from 8 to 12 tasks.",
+    "visible_before_amendment": "The 8-task hindsight screen had static mean completion 20440 seconds and tool-only/joint mean completion 6273 seconds.",
+    "integrity_boundary": "The four added tasks were selected by the workload-only rules above; no scheduler outcome was used to choose or replace a task."
+  },
+  "batch_order": [963, 5986, 3483, 6358, 2543, 5455, 1320, 5716, 4343, 6147, 4328, 3921],
+  "order_rationale": "The first four tasks expose LLM, CPU, memory, and long-gap pressure concurrently; the remaining eight form a heterogeneous waiting queue with two tasks per type overall.",
   "batch_totals": {
-    "source_duration_s": 40242.847963,
-    "prompt_tokens": 25288620,
-    "cpu_core_s": 131987.609705,
-    "disk_mb": 58537.789063,
-    "long_gap_s": 35566.330568
+    "source_duration_s": 56787.648449,
+    "prompt_tokens": 37734765,
+    "cpu_core_s": 179901.20815,
+    "disk_mb": 83708.429688,
+    "long_gap_s": 49969.614671
   },
   "tasks": [
     {
@@ -164,19 +170,79 @@
       "long_gap_count": 26,
       "long_gap_s": 8724.597597,
       "largest_return_prompt_tokens": 114278
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4343",
+      "role": "memory_heavy",
+      "source_duration_s": 1792.171199,
+      "llm_calls": 45,
+      "prompt_tokens": 1307924,
+      "prompt_per_exec_s": 842.190723,
+      "average_cpu_cores": 5.456584,
+      "cpu_core_s": 9779.132894,
+      "sampled_peak_rss_mb": 23633.92,
+      "disk_mb": 2992.820313,
+      "long_gap_count": 5,
+      "long_gap_s": 1428.028011,
+      "largest_return_prompt_tokens": 58455
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-4328",
+      "role": "disk_heavy",
+      "source_duration_s": 2694.982655,
+      "llm_calls": 64,
+      "prompt_tokens": 3105362,
+      "prompt_per_exec_s": 1356.774574,
+      "average_cpu_cores": 2.582044,
+      "cpu_core_s": 6958.563315,
+      "sampled_peak_rss_mb": 12093.44,
+      "disk_mb": 17922.910156,
+      "long_gap_count": 7,
+      "long_gap_s": 2151.982525,
+      "largest_return_prompt_tokens": 85565
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-3921",
+      "role": "large_llm_return",
+      "source_duration_s": 4701.06076,
+      "llm_calls": 78,
+      "prompt_tokens": 4682555,
+      "prompt_per_exec_s": 1136.250712,
+      "average_cpu_cores": 1.927603,
+      "cpu_core_s": 9061.780753,
+      "sampled_peak_rss_mb": 12472.32,
+      "disk_mb": 3606.085938,
+      "long_gap_count": 16,
+      "long_gap_s": 3950.641313,
+      "largest_return_prompt_tokens": 114620
+    },
+    {
+      "task_id": "PennyLaneAI__pennylane-6147",
+      "role": "long_tool_gap",
+      "source_duration_s": 7356.585871,
+      "llm_calls": 76,
+      "prompt_tokens": 3350304,
+      "prompt_per_exec_s": 481.255524,
+      "average_cpu_cores": 3.00603,
+      "cpu_core_s": 22114.121483,
+      "sampled_peak_rss_mb": 8677.376,
+      "disk_mb": 648.824219,
+      "long_gap_count": 19,
+      "long_gap_s": 6872.632255,
+      "largest_return_prompt_tokens": 91116
     }
   ],
   "post_selection_diagnostic": {
     "model": "Existing two-second hindsight phase-packing model with recorded source LLM intervals, 4 LLM request slots, 43 CPU cores, and 80000 MiB RSS.",
-    "static_mean_completion_s": 20440.0,
-    "static_makespan_s": 40758.0,
-    "tool_only_mean_completion_s": 6273.0,
-    "tool_only_makespan_s": 12482.0,
-    "joint_mean_completion_s": 6273.0,
-    "joint_makespan_s": 12482.0,
-    "joint_reduction_vs_static": 0.693102,
-    "joint_reduction_vs_tool_only": 0.0,
-    "interpretation": "The batch has substantial task-admission headroom, but recorded API LLM duration is too weak a proxy to establish additional GPU-CPU joint-scheduling value. The batch was not changed after reading this diagnostic."
+    "static_mean_completion_s": 31372.166667,
+    "static_makespan_s": 57654.0,
+    "tool_only_mean_completion_s": 9707.333333,
+    "tool_only_makespan_s": 17508.0,
+    "joint_mean_completion_s": 7210.5,
+    "joint_makespan_s": 15578.0,
+    "joint_reduction_vs_static": 0.770163,
+    "joint_reduction_vs_tool_only": 0.257211,
+    "interpretation": "After the 12-task selection was frozen, the existing hindsight model found substantial admission headroom and an additional joint-resource gain. Recorded API LLM duration is still not an A100 service curve, so this is only a development screen and the batch was not changed after reading it."
   },
   "interpretation_boundary": "This batch was selected from exposed PennyLane traces for development. It can test mechanism plumbing and generate hypotheses, but cannot confirm a scheduling claim."
 }
