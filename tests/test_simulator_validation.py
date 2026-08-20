@@ -1633,9 +1633,18 @@ def test_tool_gap_prediction_file_accepts_only_ordered_exec_subsequence(
         _load_tool_gap_predictions(prediction_path, [session])
 
 
-def test_simulate_cli_passes_container_cpu_cap(
+@pytest.mark.parametrize(
+    ("cpu_args", "expected"),
+    [
+        (("--container-cpus", "2"), ("--cpus", "2")),
+        (("--container-cpuset-cpus", "4-15"), ("--cpuset-cpus", "4-15")),
+    ],
+)
+def test_simulate_cli_passes_container_cpu_control(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    cpu_args: tuple[str, str],
+    expected: tuple[str, str],
 ) -> None:
     from trace_collect.cli import _run_simulate, parse_simulate_args
 
@@ -1650,8 +1659,7 @@ def test_simulate_cli_passes_container_cpu_cap(
         [
             "--manifest",
             "manifest.yaml",
-            "--container-cpus",
-            "2",
+            *cpu_args,
             "--shadow-llm-api-base",
             "http://127.0.0.1:8000/v1",
             "--shadow-llm-model",
@@ -1663,7 +1671,7 @@ def test_simulate_cli_passes_container_cpu_cap(
 
     _run_simulate(args)
 
-    assert captured["container_start_extra_args"] == ("--cpus", "2")
+    assert captured["container_start_extra_args"] == expected
     assert captured["shadow_llm_api_base"] == "http://127.0.0.1:8000/v1"
     assert captured["shadow_llm_model"] == "meta-llama/Llama-3.1-8B-Instruct"
     assert captured["shadow_llm_timeout_s"] == 120.0
@@ -1805,8 +1813,13 @@ def test_simulate_rejects_shadow_generation_for_mixed_scaffolds_before_output(
     assert not output_dir.exists()
 
 
-def test_simulate_rejects_container_cpu_cap_for_non_openclaw_before_output(
+@pytest.mark.parametrize(
+    "container_start_extra_args",
+    [("--cpus", "2"), ("--cpuset-cpus", "4-15")],
+)
+def test_simulate_rejects_container_cpu_control_for_non_openclaw_before_output(
     tmp_path: Path,
+    container_start_extra_args: tuple[str, str],
 ) -> None:
     trace_path = _write_host_trace(tmp_path / "generic.jsonl", "generic-task")
     task_source = _write_tasks(
@@ -1815,22 +1828,27 @@ def test_simulate_rejects_container_cpu_cap_for_non_openclaw_before_output(
     )
     output_dir = tmp_path / "out"
 
-    with pytest.raises(ValueError, match="container CPU cap requires OpenClaw"):
+    with pytest.raises(ValueError, match="container CPU controls require OpenClaw"):
         asyncio.run(
             simulate(
                 manifest=_single_trace_manifest(tmp_path, trace_path),
                 task_source=task_source,
                 output_dir=output_dir,
-                container_start_extra_args=("--cpus", "2"),
+                container_start_extra_args=container_start_extra_args,
             )
         )
 
     assert not output_dir.exists()
 
 
-def test_simulate_rejects_container_cpu_cap_for_terminal_bench_before_work(
+@pytest.mark.parametrize(
+    "container_start_extra_args",
+    [("--cpus", "2"), ("--cpuset-cpus", "4-15")],
+)
+def test_simulate_rejects_container_cpu_control_for_terminal_bench_before_work(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    container_start_extra_args: tuple[str, str],
 ) -> None:
     trace_path = _write_host_trace(
         tmp_path / "terminal-bench.jsonl", "terminal-task"
@@ -1866,14 +1884,14 @@ def test_simulate_rejects_container_cpu_cap_for_terminal_bench_before_work(
         "trace_collect.simulator._prefetch_container_images", fail_prefetch
     )
 
-    with pytest.raises(ValueError, match="does not support Terminal-Bench"):
+    with pytest.raises(ValueError, match="do not support Terminal-Bench"):
         asyncio.run(
             simulate(
                 manifest=_single_trace_manifest(tmp_path, trace_path),
                 task_source=task_source,
                 output_dir=output_dir,
                 container_executable="docker",
-                container_start_extra_args=("--cpus", "2"),
+                container_start_extra_args=container_start_extra_args,
             )
         )
 

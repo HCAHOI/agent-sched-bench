@@ -4033,10 +4033,10 @@ async def simulate(
                 "Continuum public mode requires causal max_iterations metadata: "
                 + ", ".join(missing_step_limits[:4])
             )
-    if "--cpus" in container_start_extra_args:
+    if {"--cpus", "--cpuset-cpus"}.intersection(container_start_extra_args):
         if non_openclaw_sessions:
             raise ValueError(
-                "container CPU cap requires OpenClaw for every selected trace; "
+                "container CPU controls require OpenClaw for every selected trace; "
                 "non-OpenClaw tasks: " + ", ".join(non_openclaw_sessions)
             )
         terminal_bench_sessions = [
@@ -4046,7 +4046,7 @@ async def simulate(
         ]
         if terminal_bench_sessions:
             raise ValueError(
-                "container CPU cap does not support Terminal-Bench compose tasks: "
+                "container CPU controls do not support Terminal-Bench compose tasks: "
                 + ", ".join(terminal_bench_sessions)
             )
     _validate_container_runtime(

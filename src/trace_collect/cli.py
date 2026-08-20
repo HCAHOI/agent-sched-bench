@@ -294,6 +294,14 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         help="CPU cap passed to each replay task container.",
     )
     parser.add_argument(
+        "--container-cpuset-cpus",
+        default=None,
+        help=(
+            "CPU set shared by every replay task container (for example, 4-15). "
+            "This does not impose a per-container CPU quota."
+        ),
+    )
+    parser.add_argument(
         "--network-mode",
         default="host",
         help="Container network mode (default: host). Use 'none' for isolated replay.",
@@ -797,6 +805,12 @@ def _run_simulate(args: argparse.Namespace) -> None:
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
+    container_start_extra_args: list[str] = []
+    if args.container_cpus is not None:
+        container_start_extra_args.extend(("--cpus", format(args.container_cpus, "g")))
+    if args.container_cpuset_cpus is not None:
+        container_start_extra_args.extend(("--cpuset-cpus", args.container_cpuset_cpus))
+
     simulate_kwargs = {
         "manifest": Path(args.manifest),
         "task_source": Path(args.task_source) if args.task_source else None,
@@ -804,11 +818,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "mode": args.mode,
         "container_executable": args.container,
         "network_mode": args.network_mode,
-        "container_start_extra_args": (
-            ("--cpus", format(args.container_cpus, "g"))
-            if args.container_cpus is not None
-            else ()
-        ),
+        "container_start_extra_args": tuple(container_start_extra_args),
         "workers": args.workers,
         "prep_concurrency": args.prep_concurrency,
         "stage_all_before_replay": args.stage_all_before_replay,
