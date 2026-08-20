@@ -8,7 +8,8 @@
     "host": "Ubuntu@216.81.248.54"
   },
   "thunderagent_physical": {
-    "status": "NO-GO at this operating point",
+    "reproduction_status": "PASS",
+    "performance_observation": "No measured benefit at this operating point",
     "implementation": "Official ThunderAgent TR at 7ddc8610270e56d3b109eed8796b3a4360fc67c9",
     "run_root": "/home/Ubuntu/pennylane-thunderagent-baseline-v1-20260819",
     "git_commit": "94de3d657d3291343ad98dd88c55d3c4335b470f",
@@ -84,11 +85,11 @@
       "geomean_mean_jct_reduction": -0.005487454360913802,
       "geomean_p99_ttft_ratio": 1.0152080872263405
     },
-    "frozen_gates": {
+    "frozen_relevance_gates": {
       "mean_jct_and_makespan_improve_in_each_repetition": false,
       "geomean_mean_jct_reduction_at_least_0_05": false,
       "geomean_p99_ttft_ratio_at_most_1_10": true,
-      "go": false
+      "passes_all": false
     },
     "validity": {
       "all_cells_exit_zero": true,
@@ -132,7 +133,7 @@
         "released_programs_per_thunderagent_cell": 8
       },
       "inference": "The workload contains long tool gaps, but concurrency four with an 8B model on an A100 80GB never creates KV-capacity pressure. ThunderAgent therefore performs no pause/resume action and behaves as an extra proxy rather than a scheduler with useful decisions.",
-      "boundary": "This rejects ThunderAgent as useful for this operating point; it does not test the paper's high-concurrency or memory-pressure regime."
+      "boundary": "The official baseline was successfully reproduced. It showed no benefit at this operating point, which does not test the paper's high-concurrency or memory-pressure regime."
     }
   },
   "paper_reproduction_smokes": {
