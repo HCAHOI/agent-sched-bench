@@ -175,13 +175,15 @@ continuum_install_overlay() {
   if test ! -x "$environment/bin/python"; then
     mkdir -p "$(dirname "$environment")"
     uv venv --python "${CONTINUUM_PYTHON:-python3}" "$environment"
-    uv pip install --python "$environment/bin/python" 'vllm==0.10.2'
+    uv pip install --python "$environment/bin/python" \
+      'vllm==0.10.2' 'transformers>=4.55.2,<5'
   fi
   continuum_verify_wheel "$environment" || {
     echo "refusing non-vllm-0.10.2 environment: $environment" >&2
     return 1
   }
-  uv pip install --python "$environment/bin/python" 'lmcache==0.3.7' hf_transfer
+  uv pip install --python "$environment/bin/python" \
+    'transformers>=4.55.2,<5' 'lmcache==0.3.7' hf_transfer
   package_dir="$(continuum_package_dir "$environment")"
   for relative in "${OVERLAY_FILES[@]}"; do
     mkdir -p "$(dirname "$package_dir/$relative")"

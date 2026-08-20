@@ -28,6 +28,7 @@ def test_continuum_public_adapter_contract() -> None:
     assert "fixed 2-second KV pinning" in help_text
     assert "not the" in help_text and "TTL estimator" in help_text
     assert "Do not label it full Continuum" in help_text
+    assert SCRIPT.read_text().count("'transformers>=4.55.2,<5'") == 2
 
     from trace_collect.cli import parse_simulate_args
 
