@@ -187,10 +187,10 @@ continuum_install_overlay() {
   package_dir="$(continuum_package_dir "$environment")"
   for relative in "${OVERLAY_FILES[@]}"; do
     mkdir -p "$(dirname "$package_dir/$relative")"
-    cp "$source/vllm/$relative" "$package_dir/$relative"
+    cp --remove-destination "$source/vllm/$relative" "$package_dir/$relative"
   done
   if test "$variant" = reproduction; then
-    cp "$source/vllm/v1/core/continuum_reproduction.py" \
+    cp --remove-destination "$source/vllm/v1/core/continuum_reproduction.py" \
       "$package_dir/v1/core/continuum_reproduction.py"
   fi
   continuum_verify_overlay "$source" "$environment" "$variant"
