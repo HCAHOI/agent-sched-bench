@@ -12,29 +12,53 @@ concurrency=${CONCURRENCY:-4}
 container_cpuset=${CONTAINER_CPUSET:-}
 container_cpus=${CONTAINER_CPUS:-}
 vllm_cpuset=${VLLM_CPUSET:-}
+continuum_profile=${CONTINUUM_REPRODUCTION_PROFILE:-}
+cachewise_checkout=${CACHEWISE_CHECKOUT:-$HOME/.cache/agent-sched-bench/cachewise-181c435a090d328d00bbbee4c8eeb27d32f3abd2}
+cachewise_models=${CACHEWISE_MODELS_DIR:-$cachewise_checkout/tool_duration_prediction/models}
 if [[ -z "$container_cpuset" && -z "$container_cpus" ]]; then
   container_cpus=2
 fi
 
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 
+has_method() {
+  [[ " ${cells[*]} " == *" $1-r"* ]]
+}
+
 preflight() {
   [[ $(git -C "$repo" status --porcelain) == "" ]] || fail "worktree must be clean"
-  [[ -x "$vllm" && -x "$python" ]] || fail "run benchmark_server setup first"
+  [[ -x "$python" ]] || fail "run benchmark_server setup first"
+  { ! has_method fcfs && ! has_method thunderagent; } || \
+    [[ -x "$vllm" ]] || fail "stock vLLM is not installed"
   [[ -f "$manifest" ]] || fail "missing PennyLane manifest"
   [[ ! -e "$run_root" ]] || fail "run root already exists: $run_root"
   [[ -z "$container_cpuset" || -z "$container_cpus" ]] || fail "choose cpuset or CPU quota, not both"
   [[ -z "$vllm_cpuset" ]] || command -v taskset >/dev/null || fail "taskset is required"
   local cell
   for cell in "${cells[@]}"; do
-    [[ "$cell" =~ ^(fcfs|thunderagent)-r[1-9][0-9]*$ ]] || fail "unsupported cell: $cell"
+    [[ "$cell" =~ ^(fcfs|thunderagent|agentix|continuum-public|continuum-reproduction|cachewise)-r[1-9][0-9]*$ ]] || fail "unsupported cell: $cell"
   done
   command -v docker >/dev/null || fail "docker is required"
   command -v nvidia-smi >/dev/null || fail "nvidia-smi is required"
   curl -fsS http://127.0.0.1:8000/v1/models >/dev/null 2>&1 && fail "port 8000 is busy"
-  curl -fsS http://127.0.0.1:9000/health >/dev/null 2>&1 && fail "port 9000 is busy"
-  "$repo/scripts/baselines/thunderagent_official.sh" verify >/dev/null
-  [[ -x "${THUNDERAGENT_VENV:-$HOME/.cache/agent-sched-bench/ThunderAgent-7ddc8610270e56d3b109eed8796b3a4360fc67c9/.venv}/bin/python" ]] || fail "ThunderAgent is not installed"
+  timeout 1 bash -c '</dev/tcp/127.0.0.1/9000' >/dev/null 2>&1 && fail "port 9000 is busy"
+  if has_method thunderagent; then
+    "$repo/scripts/baselines/thunderagent_official.sh" verify >/dev/null
+  fi
+  if has_method agentix; then
+    "$repo/scripts/baselines/agentix_reproduction.sh" verify >/dev/null
+  fi
+  if has_method continuum-public; then
+    "$repo/scripts/baselines/continuum_public.sh" verify >/dev/null
+  fi
+  if has_method continuum-reproduction; then
+    [[ -f "$continuum_profile" ]] || fail "missing Continuum reproduction profile"
+    "$repo/scripts/baselines/continuum_reproduction.sh" verify >/dev/null
+  fi
+  if has_method cachewise; then
+    [[ -f "$cachewise_models/all_models.pkl" ]] || fail "missing CacheWise models"
+    "$repo/scripts/baselines/cachewise_reproduction.sh" verify >/dev/null
+  fi
   local gpu
   gpu=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits)
   [[ $(wc -l <<<"$gpu") -eq 1 && "$gpu" == *A100* ]] || fail "one A100 is required"
@@ -65,7 +89,7 @@ wait_http() {
 
 run_cell() (
   set -euo pipefail
-  local name=$1 method=${1%-r?} cell="$run_root/$1"
+  local name=$1 method=${1%-r[0-9]*} cell="$run_root/$1"
   local vpid= proxy_pid= monitor_pid= rc=0
   mkdir "$cell"
   cleanup() {
@@ -93,17 +117,36 @@ run_cell() (
   ) >"$cell/gpu.csv" 2>"$cell/gpu.err" &
   monitor_pid=$!
 
-  local vllm_args=(
-    "$vllm" serve "$model" --host 127.0.0.1 --port 8000
-    --tensor-parallel-size 1 --gpu-memory-utilization 0.90
-    --max-model-len 131072 --max-num-seqs 8 --enable-prefix-caching
-    --kv-cache-dtype auto --enforce-eager --scheduling-policy priority
+  local common_args=(
+    --host 127.0.0.1 --port 8000 --tensor-parallel-size 1
+    --gpu-memory-utilization 0.90 --max-model-len 131072
+    --max-num-seqs 8 --enable-prefix-caching --kv-cache-dtype auto
+    --enforce-eager
   )
+  local server=("$vllm" serve "$model" "${common_args[@]}" --scheduling-policy priority)
+  local server_env=(VLLM_NO_USAGE_STATS=1 CUDA_VISIBLE_DEVICES=0)
+  case "$method" in
+    agentix)
+      server=("$repo/scripts/baselines/agentix_reproduction.sh" serve-backend "$model" "${common_args[@]}")
+      server_env+=(AGENTIX_SERVICE_LOG="$cell/agentix-service.jsonl")
+      ;;
+    continuum-public)
+      server=("$repo/scripts/baselines/continuum_public.sh" serve "$model" "${common_args[@]}")
+      server_env+=(RUN_OUTPUT_DIR="$cell/continuum")
+      ;;
+    continuum-reproduction)
+      server=("$repo/scripts/baselines/continuum_reproduction.sh" serve "$model" --dtype bfloat16 --kv-cache-dtype bfloat16)
+      server_env+=(CONTINUUM_REPRODUCTION_PROFILE="$continuum_profile" CONTINUUM_REPRODUCTION_MODE=prefill RUN_OUTPUT_DIR="$cell/continuum")
+      ;;
+    cachewise)
+      server=("$repo/scripts/baselines/cachewise_reproduction.sh" serve "$model" "${common_args[@]}")
+      ;;
+  esac
   local vllm_launch=(setsid)
   [[ -z "$vllm_cpuset" ]] || vllm_launch+=(taskset -c "$vllm_cpuset")
-  printf '%q ' env VLLM_NO_USAGE_STATS=1 CUDA_VISIBLE_DEVICES=0 "${vllm_launch[@]}" "${vllm_args[@]}" >"$cell/vllm.argv"
+  printf '%q ' env "${server_env[@]}" "${vllm_launch[@]}" "${server[@]}" >"$cell/vllm.argv"
   printf '\n' >>"$cell/vllm.argv"
-  VLLM_NO_USAGE_STATS=1 CUDA_VISIBLE_DEVICES=0 "${vllm_launch[@]}" "${vllm_args[@]}" >"$cell/vllm.log" 2>&1 &
+  env "${server_env[@]}" "${vllm_launch[@]}" "${server[@]}" >"$cell/vllm.log" 2>&1 &
   vpid=$!
   wait_http http://127.0.0.1:8000/v1/models "$vpid" "$cell/vllm.log"
 
@@ -117,6 +160,20 @@ run_cell() (
       >"$cell/proxy.log" 2>&1 &
     proxy_pid=$!
     wait_http http://127.0.0.1:9000/health "$proxy_pid" "$cell/proxy.log"
+  elif [[ "$method" == agentix ]]; then
+    api=http://127.0.0.1:9000/v1
+    shadow_mode=agentix
+    setsid "$repo/scripts/baselines/agentix_reproduction.sh" serve-proxy \
+      --backend http://127.0.0.1:8000 \
+      --service-log "$cell/agentix-service.jsonl" \
+      --queue-upper-bounds 0.25,1,4,16 \
+      --event-log "$cell/agentix-events.jsonl" >"$cell/proxy.log" 2>&1 &
+    proxy_pid=$!
+    wait_http http://127.0.0.1:9000/programs/state "$proxy_pid" "$cell/proxy.log"
+  elif [[ "$method" == continuum-public || "$method" == continuum-reproduction ]]; then
+    shadow_mode=continuum-public
+  elif [[ "$method" == cachewise ]]; then
+    shadow_mode=cachewise
   fi
 
   local simulate=(
@@ -133,6 +190,12 @@ run_cell() (
     simulate+=(--container-cpuset-cpus "$container_cpuset")
   else
     simulate+=(--container-cpus "$container_cpus")
+  fi
+  if [[ "$method" == cachewise ]]; then
+    simulate+=(
+      --shadow-llm-cachewise-predictor-checkout "$cachewise_checkout"
+      --shadow-llm-cachewise-models-dir "$cachewise_models"
+    )
   fi
   printf '%q ' env OPENCLAW_REPLAY_PAIRED_WORKLOAD_CONTRACT=2 PYTHONPATH="$repo/src:$repo" "${simulate[@]}" >"$cell/simulate.argv"
   printf '\n' >>"$cell/simulate.argv"
@@ -152,6 +215,7 @@ run_all() {
     CELLS="${cells[*]}" CONCURRENCY="$concurrency" \
     CONTAINER_CPUSET="$container_cpuset" CONTAINER_CPUS="$container_cpus" \
     VLLM_CPUSET="$vllm_cpuset" \
+    CONTINUUM_PROFILE="$continuum_profile" \
     GIT_COMMIT="$(git -C "$repo" rev-parse HEAD)" "$python" - <<'PY'
 import json, os
 from pathlib import Path
@@ -167,7 +231,12 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
     "container_cpuset": os.environ["CONTAINER_CPUSET"] or None,
     "vllm_cpuset": os.environ["VLLM_CPUSET"] or None,
   },
-  "comparison": "official ThunderAgent TR vs stock vLLM default-priority FCFS",
+  "comparison": "paper baselines on one fixed real-tool replay workload",
+  "continuum_reproduction_profile": os.environ["CONTINUUM_PROFILE"] or None,
+  "agentix_queue_upper_bounds_s": [0.25, 1, 4, 16],
+  "cachewise_tool_mapping": {
+    "exec": "Bash", "read_file": "Read", "edit_file": "Edit", "list_dir": "Glob"
+  },
   "primary_metrics": ["mean_task_jct", "makespan", "all_request_p99_ttft"],
   "interpretation": "Physical baseline measurement; no GO/NO-GO gate."
 }, indent=2) + "\n")

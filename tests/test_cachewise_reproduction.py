@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import importlib.util
 import math
 import os
@@ -8,10 +9,16 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from scripts.baselines import cachewise_reproduction as reproduction
+from trace_collect.openclaw_host_runtime import (
+    OpenClawReplayProvider,
+    ShadowGenerationConfig,
+    shadow_generation_payload,
+)
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts/baselines/cachewise_reproduction.sh"
@@ -33,9 +40,7 @@ def test_policy_payload_uses_one_official_selected_curve(monkeypatch) -> None:
             -1,
         ),
     )
-    monkeypatch.setattr(
-        reproduction, "verify_checkout", lambda *_args, **_kwargs: None
-    )
+    monkeypatch.setattr(reproduction, "verify_checkout", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(reproduction, "_load_predictor", lambda _path: fake_predictor)
 
     policy = reproduction.build_policy(
@@ -57,6 +62,10 @@ def test_policy_payload_uses_one_official_selected_curve(monkeypatch) -> None:
 
 
 def test_idle_and_oracle_are_separate_paper_ablations() -> None:
+    assert reproduction.active_policy("session-a")["scope"] == {
+        "session_id": "session-a",
+        "idle_session": False,
+    }
     assert reproduction.idle_policy("session-a")["scope"] == {
         "session_id": "session-a",
         "idle_session": True,
@@ -74,7 +83,8 @@ def test_idle_and_oracle_are_separate_paper_ablations() -> None:
     assert manifest["inferred_not_tuned"]["waiting_ties"] == (
         "arrival time then request ID"
     )
-    assert "causal generated-tool-call attachment hook" in manifest["unpublished"]
+    assert "post_response_update" in manifest["inferred_not_tuned"]
+    assert "causal generated-tool-call attachment hook" not in manifest["unpublished"]
 
 
 def test_patch_contract_and_cli_help() -> None:
@@ -84,6 +94,8 @@ def test_patch_contract_and_cli_help() -> None:
     assert "rebuild_cachewise_heap" in patch
     assert "CachewiseSessionPolicies" in patch
     assert "update_cachewise_session_policy" in patch
+    assert '@router.post("/cachewise/sessions/update")' in patch
+    assert '"update_cachewise_session_policy", policy' in patch
     assert "missing_tokens = max(0, req.num_tokens - matched_tokens)" in patch
     assert "cachewise_eviction_score(block.cachewise_policy, now_s)" in patch
     added_lines = "\n".join(
@@ -102,9 +114,133 @@ def test_patch_contract_and_cli_help() -> None:
     assert "conditional-remaining-time eviction" in help_text
     assert "N_rebuild=3" in help_text
     assert "does not publish its tool-call-to-engine attachment hook" in help_text
+    assert "VLLM_SERVER_DEV_MODE=1" in SCRIPT.read_text()
     script = SCRIPT.read_text()
+    assert 'VLLM_PRECOMPILED_WHEEL_COMMIT="$vllm_upstream_base"' in script
     assert 'git -C "$vllm_checkout" status --porcelain' in script
     assert 'verify-applied "$vllm_checkout"' in script
+
+
+class _CachewiseStreamResponse:
+    def raise_for_status(self) -> None:
+        pass
+
+    async def aiter_lines(self):
+        yield 'data: {"id":"shadow-1","prompt_token_ids":[11],"choices":[{"delta":{"token_ids":[101]},"finish_reason":"length"}]}'
+        yield 'data: {"id":"shadow-1","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}'
+        yield "data: [DONE]"
+
+
+class _CachewiseStream:
+    async def __aenter__(self) -> _CachewiseStreamResponse:
+        return _CachewiseStreamResponse()
+
+    async def __aexit__(self, *_args: object) -> bool:
+        return False
+
+
+class _CachewiseUpdateResponse:
+    def raise_for_status(self) -> None:
+        pass
+
+    def json(self) -> dict[str, bool]:
+        return {"updated": True}
+
+
+class _CachewiseClient:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, Any]]] = []
+
+    def stream(self, _method: str, url: str, *, json: dict[str, Any]):
+        self.events.append((url, json))
+        return _CachewiseStream()
+
+    async def post(self, url: str, *, json: dict[str, Any]):
+        self.events.append((url, json))
+        return _CachewiseUpdateResponse()
+
+    async def aclose(self) -> None:
+        pass
+
+
+def test_replay_attaches_policy_only_after_llm_completion(monkeypatch) -> None:
+    builds: list[tuple[str, str, str]] = []
+
+    class _Builder:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def build(self, session: str, tool: str, arguments: str):
+            builds.append((session, tool, arguments))
+            return {
+                "version": 1,
+                "scope": {"session_id": session, "idle_session": False},
+                "hints": {"duration_curve": [{"t_ms": 0, "prob_still_running": 1}]},
+            }
+
+    monkeypatch.setattr(reproduction, "PolicyBuilder", _Builder)
+    action = {
+        "action_id": "llm-0",
+        "_source_action_index": 0,
+        "data": {
+            "messages_in": [{"role": "user", "content": "work"}],
+            "completion_tokens": 1,
+            "raw_response": {
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "tool_calls": [
+                                {
+                                    "id": "call-0",
+                                    "function": {
+                                        "name": "exec",
+                                        "arguments": '{"command":"pytest -q"}',
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+        },
+    }
+    config = ShadowGenerationConfig(
+        api_base="http://127.0.0.1:8000/v1",
+        model="test-model",
+        timeout_s=12.0,
+        seed=0,
+        mode="cachewise",
+        cachewise_predictor_checkout="/predictor",
+        cachewise_models_dir="/models",
+    )
+    assert shadow_generation_payload(config)["cachewise"] is True
+    provider = OpenClawReplayProvider(
+        llm_actions=[action],
+        replay_speed=1.0,
+        timing_mode="source_scaled",
+        shadow_generation=config,
+        program_id="task-a",
+    )
+    assert provider._shadow_client is not None
+    asyncio.run(provider._shadow_client.aclose())
+    client = _CachewiseClient()
+    provider._shadow_client = client
+
+    asyncio.run(provider.chat([]))
+    asyncio.run(provider.aclose())
+
+    assert builds == [("task-a", "Bash", '{"command":"pytest -q"}')]
+    assert [url for url, _ in client.events] == [
+        "http://127.0.0.1:8000/v1/chat/completions",
+        "http://127.0.0.1:8000/cachewise/sessions/update",
+        "http://127.0.0.1:8000/cachewise/sessions/update",
+    ]
+    assert client.events[0][1]["cachewise_policy"] == reproduction.active_policy(
+        "task-a"
+    )
+    assert client.events[1][1]["scope"]["idle_session"] is False
+    assert client.events[2][1]["scope"]["idle_session"] is True
 
 
 def test_checkout_integrity_allows_only_explicit_model_artifacts(
@@ -117,9 +253,7 @@ def test_checkout_integrity_allows_only_explicit_model_artifacts(
         ["git", "-C", checkout, "config", "user.email", "test@example.com"],
         check=True,
     )
-    subprocess.run(
-        ["git", "-C", checkout, "config", "user.name", "Test"], check=True
-    )
+    subprocess.run(["git", "-C", checkout, "config", "user.name", "Test"], check=True)
     source = checkout / "predictor.py"
     source.write_text("clean = True\n")
     subprocess.run(["git", "-C", checkout, "add", "predictor.py"], check=True)
@@ -303,9 +437,9 @@ def test_clean_patch_and_deterministic_eviction_scores(tmp_path: Path) -> None:
         assert parsed is not None
         attached = parsed["hints"]["attached_monotonic_s"]
         assert module.cachewise_eviction_score(parsed, attached) == pytest.approx(0.5)
-        assert module.cachewise_eviction_score(
-            parsed, attached + 0.5
-        ) == pytest.approx(0.25)
+        assert module.cachewise_eviction_score(parsed, attached + 0.5) == pytest.approx(
+            0.25
+        )
         assert math.isinf(
             module.cachewise_eviction_score(
                 module.parse_cachewise_policy_body(
@@ -314,6 +448,33 @@ def test_clean_patch_and_deterministic_eviction_scores(tmp_path: Path) -> None:
                 attached,
             )
         )
+        for invalid in (
+            {**raw, "hints": {"duration_curve": "bad", "elapsed_ms": 0}},
+            {
+                **raw,
+                "hints": {
+                    "duration_curve": [{"t_ms": 0, "prob_still_running": 2}],
+                    "elapsed_ms": 0,
+                },
+            },
+            {**raw, "hints": {"elapsed_ms": "nan"}},
+            {**raw, "hints": {"elapsed_ms": -1}},
+            {**raw, "hints": {"oracle": None}},
+            {
+                **raw,
+                "hints": {
+                    "oracle": {
+                        "total_duration_ms": "bad",
+                        "ground_truth_idle_s": 1,
+                    }
+                },
+            },
+            {
+                **raw,
+                "hints": {"oracle": {"total_duration_ms": 1, "extra": 1}},
+            },
+        ):
+            assert module.parse_cachewise_policy_body(invalid) is None
 
         oracle = module.parse_cachewise_policy_body(
             reproduction.oracle_policy("session-a", 5000.0)
@@ -419,7 +580,7 @@ def test_clean_patch_and_deterministic_eviction_scores(tmp_path: Path) -> None:
 
         readme = checkout / "README.md"
         readme.write_text(readme.read_text() + "\nunrelated edit\n")
-        with pytest.raises(RuntimeError, match="differs from the intended patch"):
+        with pytest.raises(RuntimeError, match="changes unexpected files"):
             reproduction.verify_applied_patch(checkout)
     finally:
         subprocess.run(

@@ -65,7 +65,9 @@ class ReplayActionFailureCounts:
     action_sequence_matches: bool
 
 
-ShadowGenerationMode = Literal["vllm", "thunderagent", "continuum_public", "agentix"]
+ShadowGenerationMode = Literal[
+    "vllm", "thunderagent", "continuum_public", "agentix", "cachewise"
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +80,8 @@ class ShadowGenerationConfig:
     seed: int
     admission_slot_paths: tuple[str, ...] = ()
     mode: ShadowGenerationMode = "vllm"
+    cachewise_predictor_checkout: str | None = None
+    cachewise_models_dir: str | None = None
 
     def __post_init__(self) -> None:
         parsed = urlparse(self.api_base)
@@ -94,8 +98,23 @@ class ShadowGenerationConfig:
             raise ValueError("shadow model must be non-empty")
         if not math.isfinite(self.timeout_s) or self.timeout_s <= 0:
             raise ValueError("shadow timeout_s must be finite and > 0")
-        if self.mode not in {"vllm", "thunderagent", "continuum_public", "agentix"}:
+        if self.mode not in {
+            "vllm",
+            "thunderagent",
+            "continuum_public",
+            "agentix",
+            "cachewise",
+        }:
             raise ValueError(f"unknown shadow generation mode: {self.mode!r}")
+        cachewise_paths = (
+            self.cachewise_predictor_checkout,
+            self.cachewise_models_dir,
+        )
+        if self.mode == "cachewise":
+            if any(path is None for path in cachewise_paths):
+                raise ValueError("CacheWise mode requires predictor and model paths")
+        elif any(path is not None for path in cachewise_paths):
+            raise ValueError("CacheWise paths require CacheWise mode")
         slot_paths = tuple(self.admission_slot_paths)
         if any(not path for path in slot_paths) or len(set(slot_paths)) != len(
             slot_paths
@@ -118,6 +137,12 @@ def shadow_generation_payload(config: ShadowGenerationConfig) -> dict[str, Any]:
         payload["continuum_public"] = True
     elif config.mode == "agentix":
         payload["agentix"] = True
+    elif config.mode == "cachewise":
+        payload["cachewise"] = True
+        payload["cachewise_predictor_checkout"] = (
+            config.cachewise_predictor_checkout
+        )
+        payload["cachewise_models_dir"] = config.cachewise_models_dir
     return payload
 
 
@@ -126,7 +151,8 @@ def shadow_generation_from_payload(payload: dict[str, Any]) -> ShadowGenerationC
     thunderagent = raw.pop("thunderagent", False)
     continuum_public = raw.pop("continuum_public", False)
     agentix = raw.pop("agentix", False)
-    if sum(map(bool, (thunderagent, continuum_public, agentix))) > 1:
+    cachewise = raw.pop("cachewise", False)
+    if sum(map(bool, (thunderagent, continuum_public, agentix, cachewise))) > 1:
         raise ValueError("shadow generation payload has conflicting modes")
     mode: ShadowGenerationMode = (
         "thunderagent"
@@ -135,6 +161,8 @@ def shadow_generation_from_payload(payload: dict[str, Any]) -> ShadowGenerationC
         if continuum_public
         else "agentix"
         if agentix
+        else "cachewise"
+        if cachewise
         else "vllm"
     )
     return ShadowGenerationConfig(**raw, mode=mode)
@@ -483,6 +511,7 @@ class OpenClawReplayProvider(LLMProvider):
             "thunderagent",
             "continuum_public",
             "agentix",
+            "cachewise",
         }
         if program_mode:
             if not program_id:
@@ -501,6 +530,15 @@ class OpenClawReplayProvider(LLMProvider):
         self._continuum_step_limit = continuum_step_limit
         self._thunderagent_request_started = False
         self._thunderagent_release_attempted = False
+        self._cachewise_policy_active = False
+        self._cachewise_policy_builder: Any = None
+        if shadow_generation is not None and shadow_generation.mode == "cachewise":
+            from scripts.baselines.cachewise_reproduction import PolicyBuilder
+
+            self._cachewise_policy_builder = PolicyBuilder(
+                Path(str(shadow_generation.cachewise_predictor_checkout)),
+                Path(str(shadow_generation.cachewise_models_dir)),
+            )
         self._tool_gap_loan = tool_gap_loan
         self._shadow_client = (
             httpx.AsyncClient(timeout=shadow_generation.timeout_s, trust_env=False)
@@ -661,6 +699,16 @@ class OpenClawReplayProvider(LLMProvider):
             finish_reason = "error"
             if not content:
                 content = "Source trace ended before its final tool call executed."
+        if (
+            shadow_metrics is not None
+            and self._shadow_generation is not None
+            and self._shadow_generation.mode == "cachewise"
+        ):
+            update_started = time.monotonic()
+            await self._update_cachewise_policy(tool_calls)
+            shadow_metrics["cachewise_policy_update_ms"] = round(
+                (time.monotonic() - update_started) * 1000.0, 3
+            )
         extra: dict[str, Any] = {
             "llm_call_time_ms": round((wall_end - wall_start) * 1000, 3),
             "llm_latency_ms": round((wall_end - wall_start) * 1000, 3),
@@ -703,6 +751,12 @@ class OpenClawReplayProvider(LLMProvider):
     async def aclose(self) -> None:
         if self._shadow_client is not None:
             try:
+                if self._cachewise_policy_active:
+                    from scripts.baselines.cachewise_reproduction import idle_policy
+
+                    assert self._program_id is not None
+                    await self._post_cachewise_policy(idle_policy(self._program_id))
+                    self._cachewise_policy_active = False
                 if (
                     self._shadow_generation is not None
                     and self._shadow_generation.mode in {"thunderagent", "agentix"}
@@ -730,6 +784,56 @@ class OpenClawReplayProvider(LLMProvider):
                         )
             finally:
                 await self._shadow_client.aclose()
+
+    async def _update_cachewise_policy(
+        self, tool_calls: list[ToolCallRequest]
+    ) -> None:
+        assert self._program_id is not None
+        if len(tool_calls) > 1:
+            raise RuntimeError("CacheWise replay does not support parallel tool calls")
+        if not tool_calls:
+            from scripts.baselines.cachewise_reproduction import idle_policy
+
+            policy = idle_policy(self._program_id)
+            self._cachewise_policy_active = False
+        else:
+            tool_call = tool_calls[0]
+            tool_name = {
+                "exec": "Bash",
+                "read_file": "Read",
+                "edit_file": "Edit",
+                "list_dir": "Glob",
+            }.get(tool_call.name)
+            if tool_name is None:
+                raise RuntimeError(
+                    f"CacheWise has no adapter for tool {tool_call.name!r}"
+                )
+            policy = self._cachewise_policy_builder.build(
+                self._program_id,
+                tool_name,
+                json.dumps(
+                    tool_call.arguments,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+            )
+            self._cachewise_policy_active = True
+        await self._post_cachewise_policy(policy)
+
+    async def _post_cachewise_policy(self, policy: dict[str, Any]) -> None:
+        assert self._shadow_generation is not None
+        assert self._shadow_client is not None
+        api_root = self._shadow_generation.api_base.rstrip("/")
+        if api_root.endswith("/v1"):
+            api_root = api_root[:-3]
+        response = await self._shadow_client.post(
+            f"{api_root}/cachewise/sessions/update", json=policy
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or payload.get("updated") is not True:
+            raise RuntimeError(f"CacheWise engine rejected policy update: {payload!r}")
 
     async def _shadow_generate(
         self,
@@ -772,6 +876,11 @@ class OpenClawReplayProvider(LLMProvider):
             # The official client compares its causal call count with the
             # configured step limit; it does not know the eventual trace length.
             request["is_last_step"] = self._index >= self._continuum_step_limit
+        elif self._shadow_generation.mode == "cachewise":
+            from scripts.baselines.cachewise_reproduction import active_policy
+
+            assert self._program_id is not None
+            request["cachewise_policy"] = active_policy(self._program_id)
         if (
             self._tool_gap_loan is not None
             and not self._tool_gap_loan.config.can_lend
@@ -1698,7 +1807,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 run_instance_id
                 if shadow_generation is not None
                 and shadow_generation.mode
-                in {"thunderagent", "continuum_public", "agentix"}
+                in {"thunderagent", "continuum_public", "agentix", "cachewise"}
                 else None
             ),
             continuum_step_limit=(
@@ -1753,6 +1862,8 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                             if shadow_generation.mode == "continuum_public"
                             else {"agentix": True}
                             if shadow_generation.mode == "agentix"
+                            else {"cachewise": True}
+                            if shadow_generation.mode == "cachewise"
                             else {}
                         ),
                     }

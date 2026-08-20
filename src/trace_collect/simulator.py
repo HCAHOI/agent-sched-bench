@@ -3882,6 +3882,8 @@ async def simulate(
     shadow_llm_seed: int = 0,
     shadow_llm_max_concurrency: int | None = None,
     shadow_llm_mode: ShadowGenerationMode = "vllm",
+    shadow_llm_cachewise_predictor_checkout: Path | None = None,
+    shadow_llm_cachewise_models_dir: Path | None = None,
     tool_gap_loan_arm: str | None = None,
     tool_gap_predictions: Path | None = None,
     tool_gap_borrower_priority: int | None = None,
@@ -3919,6 +3921,15 @@ async def simulate(
             raise ValueError("shadow_llm_max_concurrency requires shadow generation")
     if shadow_llm_mode != "vllm" and shadow_llm_api_base is None:
         raise ValueError("non-vLLM shadow mode requires shadow generation")
+    cachewise_paths = (
+        shadow_llm_cachewise_predictor_checkout,
+        shadow_llm_cachewise_models_dir,
+    )
+    if shadow_llm_mode == "cachewise":
+        if any(path is None for path in cachewise_paths):
+            raise ValueError("CacheWise mode requires predictor and model paths")
+    elif any(path is not None for path in cachewise_paths):
+        raise ValueError("CacheWise paths require CacheWise mode")
     if tool_gap_loan_arm not in {None, "fixed", "feedback", "predictor"}:
         raise ValueError(f"unknown tool-gap loan arm: {tool_gap_loan_arm}")
     if tool_gap_loan_arm == "predictor" and tool_gap_predictions is None:
@@ -3944,6 +3955,16 @@ async def simulate(
             timeout_s=shadow_llm_timeout_s,
             seed=shadow_llm_seed,
             mode=shadow_llm_mode,
+            cachewise_predictor_checkout=(
+                str(shadow_llm_cachewise_predictor_checkout.resolve())
+                if shadow_llm_cachewise_predictor_checkout is not None
+                else None
+            ),
+            cachewise_models_dir=(
+                str(shadow_llm_cachewise_models_dir.resolve())
+                if shadow_llm_cachewise_models_dir is not None
+                else None
+            ),
         )
     exec_timeout_floor_s = replay_exec_timeout_floor_s()
     resolved_tool_resource_profile: Path | None = None

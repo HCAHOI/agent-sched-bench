@@ -311,6 +311,9 @@ def test_reproduction_serve_rejects_config_overrides() -> None:
     ).stdout.splitlines()
     assert built[:3] == ["/isolated/bin/vllm", "serve", "model"]
     assert built[built.index("--max-model-len") + 1] == "32768"
+    assert built[built.index("--max-num-seqs") + 1] == "8"
+    assert "--enable-prefix-caching" in built
+    assert "--enforce-eager" in built
     assert built[built.index("--dtype") + 1] == "bfloat16"
     assert built[built.index("--kv-cache-dtype") + 1] == "auto"
     for forbidden in ("--revision", "--quantization", "--hf-config-path"):

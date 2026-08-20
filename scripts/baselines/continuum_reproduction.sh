@@ -121,6 +121,9 @@ build_serve_command() {
     --port "${CONTINUUM_PORT:-8000}"
     --gpu-memory-utilization 0.9
     --max-model-len "$max_model_len"
+    --max-num-seqs 8
+    --enable-prefix-caching
+    --enforce-eager
     --dtype "$model_dtype"
     --kv-cache-dtype "$kv_dtype"
   )

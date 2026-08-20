@@ -1372,7 +1372,9 @@ def test_openclaw_host_replay_request_closes_provider_after_runner_failure(
     assert json.loads(status_path.read_text(encoding="utf-8"))["success"] is False
 
 
-@pytest.mark.parametrize("shadow_mode", ["thunderagent", "continuum_public", "agentix"])
+@pytest.mark.parametrize(
+    "shadow_mode", ["thunderagent", "continuum_public", "agentix", "cachewise"]
+)
 def test_program_aware_replay_uses_distinct_manifest_replica_ids(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1443,6 +1445,14 @@ def test_program_aware_replay_uses_distinct_manifest_replica_ids(
             timeout_s=12.0,
             seed=0,
             mode=shadow_mode,
+            **(
+                {
+                    "cachewise_predictor_checkout": "/predictor",
+                    "cachewise_models_dir": "/models",
+                }
+                if shadow_mode == "cachewise"
+                else {}
+            ),
         )
     )
     source_actions = [

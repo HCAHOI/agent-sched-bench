@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -145,3 +147,21 @@ def test_thunderagent_mode_is_recorded_without_changing_plain_metadata() -> None
     assert shadow_generation_payload(
         ShadowGenerationConfig(**kwargs, mode="thunderagent")
     )["thunderagent"] is True
+
+
+def test_paper_baseline_suite_smokes_matching_methods_before_full_run() -> None:
+    root = Path(__file__).parents[1]
+    runner = root / "scripts/evaluation/run_pennylane_thunderagent_baseline.sh"
+    suite = root / "scripts/evaluation/run_pennylane_paper_baseline_suite.sh"
+    subprocess.run(["bash", "-n", runner, suite], check=True)
+    suite_text = suite.read_text()
+    assert "methods=(agentix continuum-public continuum-reproduction cachewise)" in suite_text
+    assert "smoke-$method" in suite_text
+    assert suite_text.index('for method in "${methods[@]}"') < suite_text.index(
+        'RUN_ROOT="$suite_root/full"'
+    )
+    assert "saga" not in suite_text.lower()
+    assert "murakkab" not in suite_text.lower()
+    runner_text = runner.read_text()
+    assert "--shadow-llm-cachewise-predictor-checkout" in runner_text
+    assert "--queue-upper-bounds 0.25,1,4,16" in runner_text

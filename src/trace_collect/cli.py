@@ -368,13 +368,29 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
     shadow_mode_group = parser.add_mutually_exclusive_group()
     shadow_mode_group.add_argument(
         "--shadow-llm-mode",
-        choices=["vllm", "thunderagent", "continuum-public", "agentix"],
+        choices=[
+            "vllm",
+            "thunderagent",
+            "continuum-public",
+            "agentix",
+            "cachewise",
+        ],
         default="vllm",
         help=(
             "Shadow serving policy. continuum-public uses the trace's declared "
             "max_iterations as the official client's known step limit, never "
             "the observed trace length (default: vllm)."
         ),
+    )
+    parser.add_argument(
+        "--shadow-llm-cachewise-predictor-checkout",
+        default=None,
+        help="Pinned official predictor checkout used only by CacheWise mode.",
+    )
+    parser.add_argument(
+        "--shadow-llm-cachewise-models-dir",
+        default=None,
+        help="Official trained predictor models used only by CacheWise mode.",
     )
     shadow_mode_group.add_argument(
         "--shadow-llm-thunderagent",
@@ -834,6 +850,16 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "shadow_llm_seed": args.shadow_llm_seed,
         "shadow_llm_max_concurrency": args.shadow_llm_max_concurrency,
         "shadow_llm_mode": args.shadow_llm_mode.replace("-", "_"),
+        "shadow_llm_cachewise_predictor_checkout": (
+            Path(args.shadow_llm_cachewise_predictor_checkout)
+            if args.shadow_llm_cachewise_predictor_checkout
+            else None
+        ),
+        "shadow_llm_cachewise_models_dir": (
+            Path(args.shadow_llm_cachewise_models_dir)
+            if args.shadow_llm_cachewise_models_dir
+            else None
+        ),
         "tool_gap_loan_arm": args.tool_gap_loan_arm,
         "tool_gap_borrower_priority": args.tool_gap_borrower_priority,
         "tool_gap_predictions": (

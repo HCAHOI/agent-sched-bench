@@ -13,12 +13,10 @@ those placeholders with the published policy equations while retaining the
 authors' request-body transport.
 
 The paper does not publish how the engine learns a just-generated tool call.
-This reproduction therefore uses the fork's ``cachewise_policy`` request-body
-field and an inferred, deterministic payload: the official predictor selects a
-survival curve once outside the engine, then the engine updates conditional
-expected remaining time from that curve at zero model/agent cost.  Experiments
-must attach this payload causally when the tool call becomes known; attaching it
-to the request that will later generate the call is hindsight and is invalid.
+This reproduction adds a narrow engine update endpoint: after an LLM response
+reveals a tool call, the client selects one official survival curve and updates
+that session's resident KV metadata.  Attaching the eventual tool call to the
+request that generates it remains hindsight and is invalid.
 The paper specifies no online miss-feedback or learning rule; similarity misses
 retain the official predictor's overall-per-tool curve fallback.
 """
@@ -26,6 +24,7 @@ retain the official predictor's overall-per-tool curve fallback.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -43,6 +42,35 @@ N_REBUILD = 3
 _MODEL_ARTIFACT_SUFFIXES = (".json", ".pkl")
 
 VLLM_PATCH = r'''
+diff --git a/vllm/entrypoints/serve/cache/api_router.py b/vllm/entrypoints/serve/cache/api_router.py
+index 10015f02c..7d99d1500 100644
+--- a/vllm/entrypoints/serve/cache/api_router.py
++++ b/vllm/entrypoints/serve/cache/api_router.py
+@@ -3,7 +3,7 @@
+__BLANK_CONTEXT__
+__BLANK_CONTEXT__
+ from fastapi import APIRouter, FastAPI, Query, Request
+-from fastapi.responses import Response
++from fastapi.responses import JSONResponse, Response
+__BLANK_CONTEXT__
+ import vllm.envs as envs
+ from vllm.engine.protocol import EngineClient
+@@ -44,6 +44,15 @@ async def reset_prefix_cache(
+     return Response(status_code=200)
+__BLANK_CONTEXT__
+__BLANK_CONTEXT__
++@router.post("/cachewise/sessions/update")
++async def update_cachewise_session(raw_request: Request):
++    policy = await raw_request.json()
++    updated = await engine_client(raw_request).engine_core.call_utility_async(
++        "update_cachewise_session_policy", policy
++    )
++    return JSONResponse(content={"updated": updated})
++
++
+ @router.post("/reset_mm_cache")
+ async def reset_mm_cache(raw_request: Request):
+     """
 diff --git a/vllm/v1/core/block_pool.py b/vllm/v1/core/block_pool.py
 index 96f3bbaa8..9eae13516 100644
 --- a/vllm/v1/core/block_pool.py
@@ -199,7 +227,7 @@ diff --git a/vllm/v1/core/cachewise_policy.py b/vllm/v1/core/cachewise_policy.py
 index 5415ea957..f5db6acf6 100644
 --- a/vllm/v1/core/cachewise_policy.py
 +++ b/vllm/v1/core/cachewise_policy.py
-@@ -1,41 +1,194 @@
+@@ -1,41 +1,209 @@
 -"""Parse cachewise_policy from the client JSON and compute priorities for KV cache."""
 +"""Parse CacheWise metadata and score KV-cache eviction candidates."""
 __BLANK_CONTEXT__
@@ -264,30 +292,45 @@ __BLANK_CONTEXT__
 -    return {"version": _V, "scope": dict(scope) if scope else {}, "hints": dict(hints) if hints else {}}
 __BLANK_CONTEXT__
 +    parsed_hints: dict[str, Any] = {}
-+    curve = _parse_curve(hints.get("duration_curve"))
-+    if curve is not None:
++    if set(hints) - {"duration_curve", "oracle", "elapsed_ms"}:
++        return None
++    if "duration_curve" in hints and "oracle" in hints:
++        return None
++    curve = None
++    if "duration_curve" in hints:
++        curve = _parse_curve(hints["duration_curve"])
++        if curve is None:
++            return None
 +        parsed_hints["duration_curve"] = curve
 +    oracle = hints.get("oracle")
-+    if isinstance(oracle, dict):
++    if "oracle" in hints:
++        if not isinstance(oracle, dict):
++            return None
++        if set(oracle) not in ({"total_duration_ms"}, {"ground_truth_idle_s"}):
++            return None
 +        try:
 +            total_ms = float(oracle["total_duration_ms"])
 +        except (KeyError, TypeError, ValueError):
 +            try:
 +                remaining_ms = float(oracle["ground_truth_idle_s"]) * 1000
 +            except (KeyError, TypeError, ValueError):
-+                pass
++                return None
 +            else:
-+                if math.isfinite(remaining_ms) and remaining_ms >= 0:
-+                    parsed_hints["oracle_remaining_ms"] = remaining_ms
++                if not math.isfinite(remaining_ms) or remaining_ms < 0:
++                    return None
++                parsed_hints["oracle_remaining_ms"] = remaining_ms
 +        else:
-+            if math.isfinite(total_ms) and total_ms >= 0:
-+                parsed_hints["oracle_total_duration_ms"] = total_ms
++            if not math.isfinite(total_ms) or total_ms < 0:
++                return None
++            parsed_hints["oracle_total_duration_ms"] = total_ms
 +
 +    try:
 +        elapsed_ms = float(hints.get("elapsed_ms", 0.0))
 +    except (TypeError, ValueError):
-+        elapsed_ms = 0.0
-+    parsed_hints["elapsed_ms"] = max(0.0, elapsed_ms)
++        return None
++    if not math.isfinite(elapsed_ms) or elapsed_ms < 0:
++        return None
++    parsed_hints["elapsed_ms"] = elapsed_ms
 +    parsed_hints["attached_monotonic_s"] = time.monotonic()
 +    return {
 +        "version": _VERSION,
@@ -423,7 +466,7 @@ __BLANK_CONTEXT__
 +        return 0.0
 +    return _expected_remaining_ms(curve, elapsed_ms) / 1000.0
 diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
-index c0bca1169..750594202 100644
+index c0bca1169..07ecbbbde 100644
 --- a/vllm/v1/core/sched/scheduler.py
 +++ b/vllm/v1/core/sched/scheduler.py
 @@ -63,6 +63,9 @@ from vllm.v1.utils import record_function_or_nullcontext
@@ -498,9 +541,22 @@ __BLANK_CONTEXT__
              if best_key is None or key < best_key:
                  best_key = key
                  best = req
-@@ -1872,8 +1891,16 @@ class Scheduler(SchedulerInterface):
+@@ -1871,9 +1890,29 @@ class Scheduler(SchedulerInterface):
+         """Returns (num_running_reqs, num_waiting_reqs)."""
          return len(self.running), len(self.waiting) + len(self.skipped_waiting)
 __BLANK_CONTEXT__
++    def update_cachewise_session_policy(self, raw_policy: dict[str, Any]) -> bool:
++        """Attach causally observed tool metadata to resident session KV."""
++        from vllm.v1.core.cachewise_policy import parse_cachewise_policy_body
++
++        policy = parse_cachewise_policy_body(raw_policy)
++        if policy is None:
++            raise ValueError("invalid cachewise_policy")
++        self.kv_cache_manager.block_pool.update_cachewise_session_policy(
++            policy, time.monotonic()
++        )
++        return True
++
      def add_request(self, request: Request) -> None:
 +        if request.cachewise_policy is not None:
 +            request.cachewise_policy = (
@@ -515,7 +571,29 @@ __BLANK_CONTEXT__
              update = StreamingUpdate.from_request(request)
              if existing.status != RequestStatus.WAITING_FOR_STREAMING_REQ:
                  assert existing.streaming_queue is not None, "duplicate request id"
+diff --git a/vllm/v1/engine/core.py b/vllm/v1/engine/core.py
+index 0fa59579e..ec53b72b5 100644
+--- a/vllm/v1/engine/core.py
++++ b/vllm/v1/engine/core.py
+@@ -578,6 +578,9 @@ class EngineCore:
+             reset_running_requests, reset_connector
+         )
+__BLANK_CONTEXT__
++    def update_cachewise_session_policy(self, policy: dict[str, Any]) -> bool:
++        return self.scheduler.update_cachewise_session_policy(policy)
++
+     def reset_encoder_cache(self) -> None:
+         """Reset the encoder cache to invalidate all cached encoder outputs.
+__BLANK_CONTEXT__
 '''.replace("__BLANK_CONTEXT__", " ").replace("__INDENTED_BLANK_CONTEXT__", "     ")
+
+_PATCHED_FILE_SHA256 = {
+    "vllm/entrypoints/serve/cache/api_router.py": "dce01df1fc6b690f5e2132b4de18b97591e53f7e842033caadb2a8b8fbd1950f",
+    "vllm/v1/core/block_pool.py": "1cee3a74c550016135ad57e8da88f109b2944f133aa9c47902d961d69c71a73c",
+    "vllm/v1/core/cachewise_policy.py": "a66f80fdf750eb7ec2a52dd4a34161ea88b1140caffa918e831822fa4028e809",
+    "vllm/v1/core/sched/scheduler.py": "cb2135b5d5e81e9006ed54e0ec6c4e3af8f2bfc895b2d8185e71e3f3f1b46a6a",
+    "vllm/v1/engine/core.py": "a477d203291463efc8b0ec9f41d0d399e72771689acb448a695ccdee7fc7b834",
+}
 
 
 def _git(checkout: Path, *args: str, input_text: str | None = None) -> str:
@@ -544,9 +622,7 @@ def verify_checkout(
     allowed_untracked: tuple[str, ...] = (),
 ) -> None:
     _verify_identity(checkout, commit, remote)
-    tracked = _git(
-        checkout, "status", "--porcelain=v1", "--untracked-files=no"
-    )
+    tracked = _git(checkout, "status", "--porcelain=v1", "--untracked-files=no")
     if tracked:
         raise RuntimeError(f"checkout has tracked changes: {tracked}")
     untracked = _git(
@@ -581,9 +657,13 @@ def verify_applied_patch(checkout: Path) -> None:
         raise RuntimeError("patched vLLM checkout has staged changes")
     if _git(checkout, "ls-files", "--others", "--exclude-standard"):
         raise RuntimeError("patched vLLM checkout has untracked files")
-    actual = _git(checkout, "diff", "--binary", "--abbrev=9", "HEAD", "--")
-    if actual.strip() != VLLM_PATCH.strip():
-        raise RuntimeError("patched vLLM checkout differs from the intended patch")
+    changed = set(_git(checkout, "diff", "--name-only", "HEAD", "--").splitlines())
+    if changed != set(_PATCHED_FILE_SHA256):
+        raise RuntimeError("patched vLLM checkout changes unexpected files")
+    for relative, expected in _PATCHED_FILE_SHA256.items():
+        actual = hashlib.sha256((checkout / relative).read_bytes()).hexdigest()
+        if actual != expected:
+            raise RuntimeError(f"patched vLLM file differs: {relative}")
     _git(checkout, "apply", "--reverse", "--check", "-", input_text=VLLM_PATCH)
 
 
@@ -603,6 +683,53 @@ def _load_predictor(checkout: Path) -> ModuleType:
         sys.path.pop(0)
 
 
+class PolicyBuilder:
+    """Load the official predictor once, then score causally observed calls."""
+
+    def __init__(self, predictor_checkout: Path, models_dir: Path) -> None:
+        verify_checkout(
+            predictor_checkout,
+            PREDICTOR_COMMIT,
+            PREDICTOR_REPO,
+            allowed_untracked=("tool_duration_prediction/models/",),
+        )
+        self._predictor = _load_predictor(predictor_checkout)
+        self._models = self._predictor.load_models(models_dir)
+
+    def build(
+        self,
+        session_id: str,
+        tool_name: str,
+        arguments: str,
+        elapsed_ms: float = 0.0,
+    ) -> dict[str, Any]:
+        if not session_id:
+            raise ValueError("session_id must be non-empty")
+        model = (
+            self._models.get(tool_name)
+            or self._models.get(tool_name.lower())
+            or self._models.get(tool_name.capitalize())
+        )
+        if model is None:
+            raise ValueError(f"no official CacheWise model for tool {tool_name!r}")
+        curve, similarity, cluster_id = self._predictor.select_curve(
+            model, self._predictor.canonicalize_text(arguments)
+        )
+        return {
+            "version": 1,
+            "scope": {"session_id": session_id, "idle_session": False},
+            "hints": {
+                "duration_curve": curve,
+                "elapsed_ms": float(elapsed_ms),
+            },
+            "predictor_provenance": {
+                "commit": PREDICTOR_COMMIT,
+                "similarity": float(similarity),
+                "cluster_id": int(cluster_id),
+            },
+        }
+
+
 def build_policy(
     predictor_checkout: Path,
     models_dir: Path,
@@ -611,47 +738,25 @@ def build_policy(
     arguments: str,
     elapsed_ms: float = 0.0,
 ) -> dict[str, Any]:
-    """Select one official curve and serialize the inferred engine payload."""
-
-    if not session_id:
-        raise ValueError("session_id must be non-empty")
-    verify_checkout(
-        predictor_checkout,
-        PREDICTOR_COMMIT,
-        PREDICTOR_REPO,
-        allowed_untracked=("tool_duration_prediction/models/",),
+    return PolicyBuilder(predictor_checkout, models_dir).build(
+        session_id, tool_name, arguments, elapsed_ms
     )
-    predictor = _load_predictor(predictor_checkout)
-    models = predictor.load_models(models_dir)
-    model = (
-        models.get(tool_name)
-        or models.get(tool_name.lower())
-        or models.get(tool_name.capitalize())
-    )
-    if model is None:
-        raise ValueError(f"no official CacheWise model for tool {tool_name!r}")
-    curve, similarity, cluster_id = predictor.select_curve(
-        model, predictor.canonicalize_text(arguments)
-    )
-    return {
-        "version": 1,
-        "scope": {"session_id": session_id, "idle_session": False},
-        "hints": {
-            "duration_curve": curve,
-            "elapsed_ms": float(elapsed_ms),
-        },
-        "predictor_provenance": {
-            "commit": PREDICTOR_COMMIT,
-            "similarity": float(similarity),
-            "cluster_id": int(cluster_id),
-        },
-    }
 
 
 def idle_policy(session_id: str) -> dict[str, Any]:
     return {
         "version": 1,
         "scope": {"session_id": session_id, "idle_session": True},
+        "hints": {"elapsed_ms": 0.0},
+    }
+
+
+def active_policy(session_id: str) -> dict[str, Any]:
+    """Identify resident session KV before its next tool call is known."""
+
+    return {
+        "version": 1,
+        "scope": {"session_id": session_id, "idle_session": False},
         "hints": {"elapsed_ms": 0.0},
     }
 
@@ -690,13 +795,15 @@ def inference_manifest() -> dict[str, Any]:
         },
         "inferred_not_tuned": {
             "policy_transport": "selected survival curve in request body",
+            "post_response_update": (
+                "client attaches source tool metadata after shadow LLM completion"
+            ),
             "attachment_clock": "elapsed at attach plus engine monotonic time",
             "rebuild_phase": "first periodic rescore on schedule iteration 3",
             "score_ties": "author-fork LRU then block ID",
             "waiting_ties": "arrival time then request ID",
         },
         "unpublished": [
-            "causal generated-tool-call attachment hook",
             "paper evaluation session IDs and exact 80/20 split",
             "paper C100 model artifact and fixed-C100 training command",
         ],
@@ -774,9 +881,7 @@ def main() -> None:
     elif args.command == "oracle-policy":
         print(
             json.dumps(
-                oracle_policy(
-                    args.session_id, args.total_duration_ms, args.elapsed_ms
-                ),
+                oracle_policy(args.session_id, args.total_duration_ms, args.elapsed_ms),
                 sort_keys=True,
             )
         )
