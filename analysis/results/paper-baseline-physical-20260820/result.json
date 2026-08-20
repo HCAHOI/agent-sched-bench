@@ -1,0 +1,216 @@
+{
+  "schema": 1,
+  "created_date": "2026-08-20",
+  "scope": "One preregistered ThunderAgent performance comparison and three real-A100 mechanism smokes for paper-derived reproductions.",
+  "hardware": {
+    "gpu": "NVIDIA A100 80GB PCIe",
+    "gpu_count": 1,
+    "host": "Ubuntu@216.81.248.54"
+  },
+  "thunderagent_physical": {
+    "status": "NO-GO at this operating point",
+    "implementation": "Official ThunderAgent TR at 7ddc8610270e56d3b109eed8796b3a4360fc67c9",
+    "run_root": "/home/Ubuntu/pennylane-thunderagent-baseline-v1-20260819",
+    "git_commit": "94de3d657d3291343ad98dd88c55d3c4335b470f",
+    "model": "NousResearch/Meta-Llama-3.1-8B-Instruct",
+    "workload": {
+      "tasks": 8,
+      "concurrency": 4,
+      "container_cpus": 2,
+      "per_cell_counts": {
+        "actions": 972,
+        "llm_calls": 490,
+        "tool_calls": 482,
+        "shell_exec_calls": 370
+      }
+    },
+    "metric_definitions": {
+      "mean_task_jct_s": "Arithmetic mean of ready_to_terminal_s over the same eight tasks.",
+      "makespan_s": "ready_to_all_terminal_s.",
+      "all_request_p99_ttft_ms": "Linearly interpolated empirical p99 over all 490 requests in a cell.",
+      "cross_repetition_mean_jct_reduction": "1 - geometric mean of the two ThunderAgent/FCFS mean-JCT ratios.",
+      "cross_repetition_p99_ratio": "Geometric mean of the two ThunderAgent/FCFS p99-TTFT ratios."
+    },
+    "cells": {
+      "fcfs-r1": {
+        "mean_task_jct_s": 5958.983026543625,
+        "makespan_s": 9174.402197662,
+        "all_request_p95_ttft_ms": 941.09935,
+        "all_request_p99_ttft_ms": 1302.47864,
+        "wall_time_s": 9481.0
+      },
+      "thunderagent-r1": {
+        "mean_task_jct_s": 5966.402811634876,
+        "makespan_s": 9269.372666179002,
+        "all_request_p95_ttft_ms": 997.236899999999,
+        "all_request_p99_ttft_ms": 1290.2190800000003,
+        "wall_time_s": 9336.0
+      },
+      "thunderagent-r2": {
+        "mean_task_jct_s": 6002.953429909252,
+        "makespan_s": 9285.831653602003,
+        "all_request_p95_ttft_ms": 973.9533499999994,
+        "all_request_p99_ttft_ms": 1307.6891500000004,
+        "wall_time_s": 9350.0
+      },
+      "fcfs-r2": {
+        "mean_task_jct_s": 5945.003081407878,
+        "makespan_s": 9119.772501406005,
+        "all_request_p95_ttft_ms": 969.9069999999998,
+        "all_request_p99_ttft_ms": 1256.8609500000007,
+        "wall_time_s": 9180.0
+      }
+    },
+    "paired_comparisons": [
+      {
+        "repetition": 1,
+        "mean_jct_ratio": 1.0012451428470597,
+        "mean_jct_reduction": -0.001245142847059677,
+        "makespan_ratio": 1.0103516792125382,
+        "makespan_reduction": -0.010351679212538212,
+        "p99_ttft_ratio": 0.990587515508124
+      },
+      {
+        "repetition": 2,
+        "mean_jct_ratio": 1.0097477407005229,
+        "mean_jct_reduction": -0.009747740700522867,
+        "makespan_ratio": 1.018208694588642,
+        "makespan_reduction": -0.018208694588641938,
+        "p99_ttft_ratio": 1.0404405913000954
+      }
+    ],
+    "aggregate": {
+      "geomean_mean_jct_ratio": 1.0054874543609138,
+      "geomean_mean_jct_reduction": -0.005487454360913802,
+      "geomean_p99_ttft_ratio": 1.0152080872263405
+    },
+    "frozen_gates": {
+      "mean_jct_and_makespan_improve_in_each_repetition": false,
+      "geomean_mean_jct_reduction_at_least_0_05": false,
+      "geomean_p99_ttft_ratio_at_most_1_10": true,
+      "go": false
+    },
+    "validity": {
+      "all_cells_exit_zero": true,
+      "same_task_order_and_action_sequence": true,
+      "same_request_population": true,
+      "all_tasks_successful": true,
+      "retained_gpu_telemetry": true,
+      "oom_xid_or_traceback_marker": false,
+      "tool_resource_ebpf": "disabled; it is neither an input nor an outcome of this LLM-scheduling comparison",
+      "total_cell_wall_time_s": 37347.0
+    },
+    "mechanism_diagnosis": {
+      "observations": {
+        "thunderagent_pause_events": {
+          "r1": 0,
+          "r2": 0
+        },
+        "thunderagent_resume_events": {
+          "r1": 0,
+          "r2": 0
+        },
+        "proxy_pause_total_s": {
+          "r1": 0.5447,
+          "r2": 0.4713
+        },
+        "proxy_pause_max_s": {
+          "r1": 0.0062,
+          "r2": 0.0045
+        },
+        "maximum_logged_gpu_kv_usage_pct": {
+          "fcfs-r1": 33.6,
+          "thunderagent-r1": 37.6,
+          "thunderagent-r2": 37.0,
+          "fcfs-r2": 38.6
+        },
+        "maximum_logged_vllm_waiting_requests": 0,
+        "tool_intervals_over_5s": {
+          "thunderagent-r1": 120,
+          "thunderagent-r2": 119
+        },
+        "released_programs_per_thunderagent_cell": 8
+      },
+      "inference": "The workload contains long tool gaps, but concurrency four with an 8B model on an A100 80GB never creates KV-capacity pressure. ThunderAgent therefore performs no pause/resume action and behaves as an extra proxy rather than a scheduler with useful decisions.",
+      "boundary": "This rejects ThunderAgent as useful for this operating point; it does not test the paper's high-concurrency or memory-pressure regime."
+    }
+  },
+  "paper_reproduction_smokes": {
+    "purpose": "Real-backend plumbing and mechanism checks only; these are not performance claims.",
+    "agentix": {
+      "status": "PASS",
+      "implementation_commit": "99c970beb0de439ced9ca8593d32f0862d0101f8",
+      "run_root": "/home/Ubuntu/paper-reproduction-smokes-20260820-r2/agentix",
+      "real_completions": 2,
+      "engine_service_rows": 4,
+      "observed_priorities": [
+        0,
+        2
+      ],
+      "observed_program_service_s": [
+        0.046069069001532625,
+        0.07354812000266975
+      ],
+      "release_succeeded": true,
+      "boundary": "Validates the paper-derived PLAS arrival-priority subset and inferred engine-step accounting, not full private Agentix."
+    },
+    "saga": {
+      "status": "PASS",
+      "implementation_commit": "013f19b083ee75b01e0a10d149a5a2413ca329ee",
+      "run_root": "/home/Ubuntu/paper-reproduction-smokes-20260820-r2/saga",
+      "real_completions": 2,
+      "observed_priorities": {
+        "relaxed": 1,
+        "urgent": 0
+      },
+      "release_succeeded": true,
+      "boundary": "Validates the paper-derived AFS arrival-priority subset, not SAGA's private KV manager, migration, or distributed runtime."
+    },
+    "continuum": {
+      "status": "PASS",
+      "implementation_commit": "af21947881820c3b5883be808cfd796f3e098014",
+      "run_root": "/home/Ubuntu/paper-reproduction-smokes-20260820-continuum-r4/continuum",
+      "real_completions": 2,
+      "job_id": "physical-smoke",
+      "terminal_request_marked": true,
+      "validated_max_context_tokens": 16384,
+      "measured_prefill_ms_median": {
+        "8": 13.705327997740824,
+        "512": 42.58046799805015,
+        "2048": 149.36802900047041,
+        "8192": 645.0197259982815,
+        "16384": 1494.937415001914
+      },
+      "runtime_binding": {
+        "model": "NousResearch/Meta-Llama-3.1-8B-Instruct",
+        "gpu": "NVIDIA A100 80GB PCIe",
+        "model_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat16",
+        "tensor_parallel_size": 1
+      },
+      "boundary": "Validates measured-cost ingestion and two real stateful requests, not a performance comparison."
+    }
+  },
+  "failed_smoke_attempts": [
+    {
+      "root": "/home/Ubuntu/paper-reproduction-smokes-20260819",
+      "classification": "plumbing",
+      "causes": [
+        "Agentix backend URL duplicated /v1",
+        "Continuum measurement omitted repository PYTHONPATH",
+        "SAGA validation mishandled CRLF headers"
+      ]
+    },
+    {
+      "root": "/home/Ubuntu/paper-reproduction-smokes-20260820-r2/continuum",
+      "classification": "environment",
+      "cause": "The installed Transformers version was incompatible with vLLM 0.10.2"
+    },
+    {
+      "root": "/home/Ubuntu/paper-reproduction-smokes-20260820-continuum-r3/continuum",
+      "classification": "measurement-environment",
+      "cause": "The prefill profiler used the patched scheduler, which correctly required a job_id"
+    }
+  ],
+  "provenance_note": "All failed-attempt directories were retained. The Continuum R4 profiler used a clean stock vLLM 0.10.2 environment; only serving used the paper-derived patch."
+}
