@@ -2,12 +2,19 @@
 set -euo pipefail
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-model=NousResearch/Meta-Llama-3.1-8B-Instruct
-manifest="$repo/analysis/development/pennylane-native-priority-v1/manifest.yaml"
-run_root=/home/Ubuntu/pennylane-thunderagent-baseline-v1-20260819
+model=${MODEL:-NousResearch/Meta-Llama-3.1-8B-Instruct}
+manifest=${MANIFEST:-$repo/analysis/development/pennylane-native-priority-v1/manifest.yaml}
+run_root=${RUN_ROOT:-/home/Ubuntu/pennylane-thunderagent-baseline-v1-20260819}
 vllm="$repo/.venv/bin/vllm"
 python="$repo/.venv/bin/python"
-cells=(fcfs-r1 thunderagent-r1 thunderagent-r2 fcfs-r2)
+read -r -a cells <<<"${CELLS:-fcfs-r1 thunderagent-r1 thunderagent-r2 fcfs-r2}"
+concurrency=${CONCURRENCY:-4}
+container_cpuset=${CONTAINER_CPUSET:-}
+container_cpus=${CONTAINER_CPUS:-}
+vllm_cpuset=${VLLM_CPUSET:-}
+if [[ -z "$container_cpuset" && -z "$container_cpus" ]]; then
+  container_cpus=2
+fi
 
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 
@@ -16,6 +23,12 @@ preflight() {
   [[ -x "$vllm" && -x "$python" ]] || fail "run benchmark_server setup first"
   [[ -f "$manifest" ]] || fail "missing PennyLane manifest"
   [[ ! -e "$run_root" ]] || fail "run root already exists: $run_root"
+  [[ -z "$container_cpuset" || -z "$container_cpus" ]] || fail "choose cpuset or CPU quota, not both"
+  [[ -z "$vllm_cpuset" ]] || command -v taskset >/dev/null || fail "taskset is required"
+  local cell
+  for cell in "${cells[@]}"; do
+    [[ "$cell" =~ ^(fcfs|thunderagent)-r[1-9][0-9]*$ ]] || fail "unsupported cell: $cell"
+  done
   command -v docker >/dev/null || fail "docker is required"
   command -v nvidia-smi >/dev/null || fail "nvidia-smi is required"
   curl -fsS http://127.0.0.1:8000/v1/models >/dev/null 2>&1 && fail "port 8000 is busy"
@@ -86,9 +99,11 @@ run_cell() (
     --max-model-len 131072 --max-num-seqs 8 --enable-prefix-caching
     --kv-cache-dtype auto --enforce-eager --scheduling-policy priority
   )
-  printf '%q ' env VLLM_NO_USAGE_STATS=1 CUDA_VISIBLE_DEVICES=0 "${vllm_args[@]}" >"$cell/vllm.argv"
+  local vllm_launch=(setsid)
+  [[ -z "$vllm_cpuset" ]] || vllm_launch+=(taskset -c "$vllm_cpuset")
+  printf '%q ' env VLLM_NO_USAGE_STATS=1 CUDA_VISIBLE_DEVICES=0 "${vllm_launch[@]}" "${vllm_args[@]}" >"$cell/vllm.argv"
   printf '\n' >>"$cell/vllm.argv"
-  VLLM_NO_USAGE_STATS=1 CUDA_VISIBLE_DEVICES=0 setsid "${vllm_args[@]}" >"$cell/vllm.log" 2>&1 &
+  VLLM_NO_USAGE_STATS=1 CUDA_VISIBLE_DEVICES=0 "${vllm_launch[@]}" "${vllm_args[@]}" >"$cell/vllm.log" 2>&1 &
   vpid=$!
   wait_http http://127.0.0.1:8000/v1/models "$vpid" "$cell/vllm.log"
 
@@ -107,13 +122,18 @@ run_cell() (
   local simulate=(
     "$python" -m trace_collect.cli simulate --manifest "$manifest"
     --output-dir "$cell/output" --container docker --network-mode host
-    --concurrency 4 --workers 1 --prep-concurrency 8 --stage-all-before-replay
-    --container-cpus 2 --replay-speed 1 --shadow-llm-api-base "$api"
+    --concurrency "$concurrency" --workers 1 --prep-concurrency 8 --stage-all-before-replay
+    --replay-speed 1 --shadow-llm-api-base "$api"
     --shadow-llm-model "$model" --shadow-llm-timeout-s 300
     --shadow-llm-seed 0 --shadow-llm-mode "$shadow_mode"
     --resource-monitoring off --pmu-monitoring off
     --memory-bandwidth-monitoring off
   )
+  if [[ -n "$container_cpuset" ]]; then
+    simulate+=(--container-cpuset-cpus "$container_cpuset")
+  else
+    simulate+=(--container-cpus "$container_cpus")
+  fi
   printf '%q ' env OPENCLAW_REPLAY_PAIRED_WORKLOAD_CONTRACT=2 PYTHONPATH="$repo/src:$repo" "${simulate[@]}" >"$cell/simulate.argv"
   printf '\n' >>"$cell/simulate.argv"
   set +e
@@ -129,6 +149,9 @@ run_all() {
   preflight
   mkdir "$run_root"
   RUN_ROOT="$run_root" MODEL="$model" MANIFEST="$manifest" \
+    CELLS="${cells[*]}" CONCURRENCY="$concurrency" \
+    CONTAINER_CPUSET="$container_cpuset" CONTAINER_CPUS="$container_cpus" \
+    VLLM_CPUSET="$vllm_cpuset" \
     GIT_COMMIT="$(git -C "$repo" rev-parse HEAD)" "$python" - <<'PY'
 import json, os
 from pathlib import Path
@@ -137,15 +160,16 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
   "git_commit": os.environ["GIT_COMMIT"],
   "model": os.environ["MODEL"],
   "manifest": os.environ["MANIFEST"],
-  "cells": ["fcfs-r1", "thunderagent-r1", "thunderagent-r2", "fcfs-r2"],
-  "workload": {"tasks": 8, "concurrency": 4, "container_cpus": 2},
+  "cells": os.environ["CELLS"].split(),
+  "workload": {
+    "concurrency": int(os.environ["CONCURRENCY"]),
+    "container_cpus": float(os.environ["CONTAINER_CPUS"]) if os.environ["CONTAINER_CPUS"] else None,
+    "container_cpuset": os.environ["CONTAINER_CPUSET"] or None,
+    "vllm_cpuset": os.environ["VLLM_CPUSET"] or None,
+  },
   "comparison": "official ThunderAgent TR vs stock vLLM default-priority FCFS",
   "primary_metrics": ["mean_task_jct", "makespan", "all_request_p99_ttft"],
-  "relevance_gate": {
-    "mean_jct_and_makespan_improve_in_each_repetition": True,
-    "geomean_mean_jct_reduction_at_least": 0.05,
-    "geomean_p99_ttft_ratio_at_most": 1.10
-  }
+  "interpretation": "Physical baseline measurement; no GO/NO-GO gate."
 }, indent=2) + "\n")
 PY
   local failed=0 cell
