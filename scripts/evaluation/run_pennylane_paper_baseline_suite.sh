@@ -72,6 +72,12 @@ run_one() {
     CONTINUUM_REPRODUCTION_PROFILE="$profile" "$runner" --run
 }
 
+smoke_succeeded() {
+  local method=$1 cell="$suite_root/smoke-$1/$1-r1"
+  [[ -f "$cell/cell-exit-code" && -f "$cell/simulate-exit-code" ]] &&
+    [[ $(<"$cell/cell-exit-code") == 0 && $(<"$cell/simulate-exit-code") == 0 ]]
+}
+
 check_repo() {
   [[ $(git -C "$repo" status --porcelain) == "" ]] || fail "worktree must be clean"
   "$repo/.venv/bin/python" -c 'import loguru, trace_collect'
@@ -80,15 +86,16 @@ check_repo() {
 run_smokes_and_full() {
   [[ ! -e "$suite_root/full" ]] || fail "full run already exists: $suite_root/full"
 
-  local method
+  local failed=0 method
   for method in "${methods[@]}"; do
-    [[ ! -e "$suite_root/smoke-$method" ]] || fail "smoke already exists: $suite_root/smoke-$method"
-  done
-
-  local failed=0
-  for method in "${methods[@]}"; do
-    run_one "$method" "$smoke_manifest" "$suite_root/smoke-$method" 1 \
-      >"$suite_root/smoke-$method.log" 2>&1 || failed=1
+    smoke_succeeded "$method" && continue
+    [[ ! -e "$suite_root/smoke-$method" ]] || fail "smoke exists without success: $suite_root/smoke-$method"
+    if run_one "$method" "$smoke_manifest" "$suite_root/smoke-$method" 1 \
+      >"$suite_root/smoke-$method.log" 2>&1; then
+      smoke_succeeded "$method" || failed=1
+    else
+      failed=1
+    fi
   done
   (( failed == 0 )) || fail "one or more baseline smokes failed; full runs not started"
 

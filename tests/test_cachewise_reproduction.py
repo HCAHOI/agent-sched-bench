@@ -25,6 +25,12 @@ SCRIPT = Path(__file__).parents[1] / "scripts/baselines/cachewise_reproduction.s
 OFFICIAL_SCRIPT = Path(__file__).parents[1] / "scripts/baselines/cachewise_official.sh"
 
 
+def test_cachewise_server_passes_model_to_legacy_api() -> None:
+    script = SCRIPT.read_text()
+    assert "local model=${1:?model is required}" in script
+    assert '--model "$model" "$@"' in script
+
+
 def test_policy_payload_uses_one_official_selected_curve(monkeypatch) -> None:
     curve = [
         {"t_ms": 0.0, "prob_still_running": 1.0},

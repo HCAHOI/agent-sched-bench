@@ -29,11 +29,12 @@ mcp = ["mcp>=1.0"]
 # GPU-only extra for scripts/serving/measure_kv_swap_cost.py (KV-swap cost measurement).
 # vllm pulls torch + CUDA; install on the H100 box only.
 gpu = ["vllm>=0.6"]
-# GPU-only extra for the W1 connector spike (spike/). Pinned to the vLLM
-# release that introduced KVConnectorBase_V1 + the OffloadingConnector we cite
-# in spike/README.md. Base install stays GPU-free; the spike's CPU logic
-# (control/timing/report) has no dep on this extra.
-serving-spike = ["vllm==0.11.2"]  # exact pin: 0.11.2 changed the connector ctor ABI vs 0.11.0; 0.11.0 needs nvcc at runtime
+# GPU-only serving extra. vLLM is pinned to the connector ABI used by spike/;
+# scikit-learn is the released CacheWise predictor's inference dependency.
+serving-spike = [
+  "vllm==0.11.2",  # exact pin: 0.11.2 changed the connector ctor ABI vs 0.11.0; 0.11.0 needs nvcc at runtime
+  "scikit-learn>=1.4.0",  # CacheWise's released duration predictor
+]
 dev = [
   "pytest>=8.3,<9.0",
   "pytest-asyncio>=0.26,<1.0",

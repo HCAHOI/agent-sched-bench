@@ -101,6 +101,8 @@ install() {
 }
 
 serve() {
+  local model=${1:?model is required}
+  shift
   local vllm_python="${CACHEWISE_VLLM_PYTHON:-$vllm_venv/bin/python}"
   test -x "$vllm_python" || {
     echo "patched vLLM is not installed: $vllm_python" >&2
@@ -109,7 +111,8 @@ serve() {
   "$python_bin" "$script_dir/cachewise_reproduction.py" \
     verify-applied "$vllm_checkout"
   export VLLM_SERVER_DEV_MODE=1
-  exec "$vllm_python" -m vllm.entrypoints.openai.api_server "$@" \
+  exec "$vllm_python" -m vllm.entrypoints.openai.api_server \
+    --model "$model" "$@" \
     --enable-prefix-caching \
     --enable-cachewise-free-heap \
     --prioritize-waiting-by-prefix-cache \
