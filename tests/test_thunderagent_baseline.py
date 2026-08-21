@@ -155,6 +155,7 @@ def test_paper_baseline_suite_smokes_matching_methods_before_full_run() -> None:
     suite = root / "scripts/evaluation/run_pennylane_paper_baseline_suite.sh"
     subprocess.run(["bash", "-n", runner, suite], check=True)
     suite_text = suite.read_text()
+    assert 'export PATH="$HOME/.local/bin:$PATH"' in suite_text
     assert "methods=(agentix continuum-public continuum-reproduction cachewise)" in suite_text
     assert "smoke-$method" in suite_text
     assert suite_text.index('for method in "${methods[@]}"') < suite_text.index(

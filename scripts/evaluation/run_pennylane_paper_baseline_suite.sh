@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export PATH="$HOME/.local/bin:$PATH"
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 model=${MODEL:-NousResearch/Meta-Llama-3.1-8B-Instruct}
