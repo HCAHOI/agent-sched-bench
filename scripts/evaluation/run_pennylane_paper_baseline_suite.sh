@@ -72,15 +72,20 @@ run_one() {
     CONTINUUM_REPRODUCTION_PROFILE="$profile" "$runner" --run
 }
 
-run_suite() {
+check_repo() {
   [[ $(git -C "$repo" status --porcelain) == "" ]] || fail "worktree must be clean"
-  [[ ! -e "$suite_root" ]] || fail "suite root already exists: $suite_root"
-  mkdir "$suite_root"
-  wait_for_current_run
-  install_baselines >"$suite_root/install.log" 2>&1
-  measure_continuum_profile >"$suite_root/profile.log" 2>&1
+  "$repo/.venv/bin/python" -c 'import loguru, trace_collect'
+}
 
-  local failed=0 method
+run_smokes_and_full() {
+  [[ ! -e "$suite_root/full" ]] || fail "full run already exists: $suite_root/full"
+
+  local method
+  for method in "${methods[@]}"; do
+    [[ ! -e "$suite_root/smoke-$method" ]] || fail "smoke already exists: $suite_root/smoke-$method"
+  done
+
+  local failed=0
   for method in "${methods[@]}"; do
     run_one "$method" "$smoke_manifest" "$suite_root/smoke-$method" 1 \
       >"$suite_root/smoke-$method.log" 2>&1 || failed=1
@@ -94,7 +99,25 @@ run_suite() {
     "$runner" --run >"$suite_root/full.log" 2>&1
 }
 
+run_suite() {
+  check_repo
+  [[ ! -e "$suite_root" ]] || fail "suite root already exists: $suite_root"
+  mkdir "$suite_root"
+  wait_for_current_run
+  install_baselines >"$suite_root/install.log" 2>&1
+  measure_continuum_profile >"$suite_root/profile.log" 2>&1
+  run_smokes_and_full
+}
+
+resume_after_profile() {
+  check_repo
+  [[ -d "$suite_root" ]] || fail "suite root is missing: $suite_root"
+  [[ -s "$profile" ]] || fail "measured profile is missing: $profile"
+  run_smokes_and_full
+}
+
 case ${1:-} in
   --run) run_suite ;;
-  *) echo "usage: $0 --run" >&2; exit 2 ;;
+  --resume-after-profile) resume_after_profile ;;
+  *) echo "usage: $0 --run|--resume-after-profile" >&2; exit 2 ;;
 esac

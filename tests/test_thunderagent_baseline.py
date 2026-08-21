@@ -158,6 +158,9 @@ def test_paper_baseline_suite_smokes_matching_methods_before_full_run() -> None:
     assert 'export PATH="$HOME/.local/bin:$PATH"' in suite_text
     assert "--kv-cache-dtype auto --kv-layout-dtype bfloat16" in suite_text
     assert 'RUN_OUTPUT_DIR="$suite_root/profile-continuum"' in suite_text
+    assert '"$repo/.venv/bin/python" -c \'import loguru, trace_collect\'' in suite_text
+    assert "--resume-after-profile) resume_after_profile" in suite_text
+    assert '[[ -s "$profile" ]]' in suite_text
     assert "methods=(agentix continuum-public continuum-reproduction cachewise)" in suite_text
     assert "smoke-$method" in suite_text
     assert suite_text.index('for method in "${methods[@]}"') < suite_text.index(
