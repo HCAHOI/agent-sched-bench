@@ -79,7 +79,9 @@ install() {
     echo "uv is required" >&2
     exit 1
   }
-  uv venv --python "${CACHEWISE_PYTHON:-python3}" "$venv"
+  if test ! -x "$venv/bin/python"; then
+    uv venv --python "${CACHEWISE_PYTHON:-python3}" "$venv"
+  fi
   uv pip install --python "$venv/bin/python" \
     --requirements "$checkout/requirements.txt"
 }
