@@ -35,7 +35,8 @@ install_baselines() {
 }
 
 measure_continuum_profile() {
-  CUDA_VISIBLE_DEVICES=0 PYTHONPATH="$repo/src:$repo" "$continuum_python" \
+  RUN_OUTPUT_DIR="$suite_root/profile-continuum" \
+    CUDA_VISIBLE_DEVICES=0 PYTHONPATH="$repo/src:$repo" "$continuum_python" \
     "$repo/scripts/serving/measure_prefill_cost.py" \
     --model "$model" --kv-cache-dtype auto --kv-layout-dtype bfloat16 \
     --quantization none --context-sweep 8,512,2048,8192,32768,65536,98304,120000 \
