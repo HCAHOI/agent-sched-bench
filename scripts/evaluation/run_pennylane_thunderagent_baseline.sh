@@ -135,7 +135,7 @@ run_cell() (
       server_env+=(RUN_OUTPUT_DIR="$cell/continuum")
       ;;
     continuum-reproduction)
-      server=("$repo/scripts/baselines/continuum_reproduction.sh" serve "$model" --dtype bfloat16 --kv-cache-dtype bfloat16)
+      server=("$repo/scripts/baselines/continuum_reproduction.sh" serve "$model" --dtype bfloat16 --kv-cache-dtype auto)
       server_env+=(CONTINUUM_REPRODUCTION_PROFILE="$continuum_profile" CONTINUUM_REPRODUCTION_MODE=prefill RUN_OUTPUT_DIR="$cell/continuum")
       ;;
     cachewise)

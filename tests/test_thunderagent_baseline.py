@@ -156,6 +156,7 @@ def test_paper_baseline_suite_smokes_matching_methods_before_full_run() -> None:
     subprocess.run(["bash", "-n", runner, suite], check=True)
     suite_text = suite.read_text()
     assert 'export PATH="$HOME/.local/bin:$PATH"' in suite_text
+    assert "--kv-cache-dtype auto --kv-layout-dtype bfloat16" in suite_text
     assert "methods=(agentix continuum-public continuum-reproduction cachewise)" in suite_text
     assert "smoke-$method" in suite_text
     assert suite_text.index('for method in "${methods[@]}"') < suite_text.index(
@@ -164,5 +165,6 @@ def test_paper_baseline_suite_smokes_matching_methods_before_full_run() -> None:
     assert "saga" not in suite_text.lower()
     assert "murakkab" not in suite_text.lower()
     runner_text = runner.read_text()
+    assert 'continuum_reproduction.sh" serve "$model" --dtype bfloat16 --kv-cache-dtype auto' in runner_text
     assert "--shadow-llm-cachewise-predictor-checkout" in runner_text
     assert "--queue-upper-bounds 0.25,1,4,16" in runner_text
