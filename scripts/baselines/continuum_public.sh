@@ -7,10 +7,12 @@ readonly UPSTREAM_URL="https://github.com/vllm-project/vllm.git"
 readonly UPSTREAM_COMMIT="01efc7ef781391e744ed08c3292817a773d654e6"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo="$(cd "$script_dir/../.." && pwd)"
 cache_root="${XDG_CACHE_HOME:-${HOME:?HOME is required}/.cache}"
 checkout="${CONTINUUM_CHECKOUT:-$cache_root/agent-sched-bench/vllm-continuum-public-$COMMIT}"
 upstream_checkout="${CONTINUUM_UPSTREAM_CHECKOUT:-$cache_root/agent-sched-bench/vllm-upstream-$UPSTREAM_COMMIT}"
 venv="${CONTINUUM_VENV:-$cache_root/agent-sched-bench/venvs/continuum-public-$COMMIT}"
+continuum_python="${CONTINUUM_PYTHON:-$repo/.venv/bin/python}"
 
 OVERLAY_FILES=(
   config/scheduler.py
@@ -51,7 +53,7 @@ Environment:
   CONTINUUM_CHECKOUT             clean public-fork checkout directory
   CONTINUUM_UPSTREAM_CHECKOUT    clean upstream v0.10.2 checkout directory
   CONTINUUM_VENV                 isolated public-baseline virtual environment
-  CONTINUUM_PYTHON               Python used by uv (default: python3)
+  CONTINUUM_PYTHON               Python used by uv (default: repo .venv Python)
   CONTINUUM_TENSOR_PARALLEL_SIZE GPU count (default: 1)
   CONTINUUM_PORT                 vLLM port (default: 8000)
   RUN_OUTPUT_DIR                 official scheduler output (default: ./continuum_exp)
@@ -152,6 +154,11 @@ continuum_verify_overlay() {
   }
   package_dir="$(continuum_package_dir "$environment")"
   for relative in "${OVERLAY_FILES[@]}"; do
+    if test "$relative" = entrypoints/openai/api_server.py || \
+       test "$relative" = v1/core/sched/scheduler.py || \
+       { test "$variant" = public && test "$relative" = v1/core/estimate_with_func.py; }; then
+      continue
+    fi
     cmp -s "$source/vllm/$relative" "$package_dir/$relative" || {
       echo "installed overlay differs: $relative" >&2
       return 1
@@ -167,14 +174,20 @@ continuum_verify_overlay() {
     echo "public environment is contaminated by the reproduction sidecar" >&2
     return 1
   fi
+  python3 "$script_dir/continuum_reproduction.py" verify-trace-adapter \
+    "$source/vllm" "$package_dir" "$variant"
 }
 
 continuum_install_overlay() {
   local source="$1" environment="$2" variant="$3" package_dir relative
   command -v uv >/dev/null || { echo "uv is required" >&2; return 1; }
+  test -x "$continuum_python" || {
+    echo "Continuum Python is missing: $continuum_python" >&2
+    return 1
+  }
   if test ! -x "$environment/bin/python"; then
     mkdir -p "$(dirname "$environment")"
-    uv venv --python "${CONTINUUM_PYTHON:-python3}" "$environment"
+    uv venv --python "$continuum_python" "$environment"
     uv pip install --python "$environment/bin/python" \
       'vllm==0.10.2' 'transformers>=4.55.2,<5'
   fi
@@ -193,6 +206,8 @@ continuum_install_overlay() {
     cp --remove-destination "$source/vllm/v1/core/continuum_reproduction.py" \
       "$package_dir/v1/core/continuum_reproduction.py"
   fi
+  python3 "$script_dir/continuum_reproduction.py" install-trace-adapter \
+    "$source/vllm" "$package_dir" "$variant"
   continuum_verify_overlay "$source" "$environment" "$variant"
 }
 
@@ -218,6 +233,7 @@ serve() {
   local model="$1"
   shift
   export RUN_OUTPUT_DIR="${RUN_OUTPUT_DIR:-./continuum_exp}"
+  export VLLM_SERVER_DEV_MODE=1
   mkdir -p "$RUN_OUTPUT_DIR"
   exec "$venv/bin/vllm" serve "$model" \
     --scheduling-policy continuum \

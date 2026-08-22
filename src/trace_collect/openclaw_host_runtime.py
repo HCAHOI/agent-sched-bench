@@ -662,6 +662,8 @@ class OpenClawReplayProvider(LLMProvider):
         self._continuum_step_limit = continuum_step_limit
         self._thunderagent_request_started = False
         self._thunderagent_release_attempted = False
+        self._continuum_request_started = False
+        self._continuum_release_attempted = False
         self._cachewise_policy_active = False
         self._cachewise_policy_builder: Any = None
         if shadow_generation is not None and shadow_generation.mode == "cachewise":
@@ -913,6 +915,31 @@ class OpenClawReplayProvider(LLMProvider):
                             "program-aware scheduler did not release program "
                             f"{self._program_id!r}: {payload!r}"
                         )
+                if (
+                    self._shadow_generation is not None
+                    and self._shadow_generation.mode == "continuum_public"
+                    and self._continuum_request_started
+                    and not self._continuum_release_attempted
+                ):
+                    self._continuum_release_attempted = True
+                    assert self._program_id is not None
+                    api_root = self._shadow_generation.api_base.rstrip("/")
+                    if api_root.endswith("/v1"):
+                        api_root = api_root[:-3]
+                    response = await self._shadow_client.post(
+                        f"{api_root}/continuum/programs/release",
+                        json={"job_id": self._program_id},
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    if (
+                        not isinstance(payload, dict)
+                        or payload.get("released") is not True
+                    ):
+                        raise RuntimeError(
+                            "Continuum did not release program "
+                            f"{self._program_id!r}: {payload!r}"
+                        )
             finally:
                 await self._shadow_client.aclose()
 
@@ -931,6 +958,7 @@ class OpenClawReplayProvider(LLMProvider):
                 "exec": "Bash",
                 "read_file": "Read",
                 "edit_file": "Edit",
+                "write_file": "Write",
                 "list_dir": "Glob",
             }.get(tool_call.name)
             if tool_name is None:
@@ -1002,9 +1030,11 @@ class OpenClawReplayProvider(LLMProvider):
             assert self._program_id is not None
             assert self._continuum_step_limit is not None
             request["job_id"] = self._program_id
+            request["this_func_call"] = self._continuum_source_tool(data)
             # The official client compares its causal call count with the
             # configured step limit; it does not know the eventual trace length.
             request["is_last_step"] = self._index >= self._continuum_step_limit
+            self._continuum_request_started = True
         elif self._shadow_generation.mode == "cachewise":
             from scripts.baselines.cachewise_reproduction import active_policy
 
@@ -1173,6 +1203,25 @@ class OpenClawReplayProvider(LLMProvider):
             ),
             "latency_ms": round((finished_at - started_at) * 1000.0, 3),
         }
+
+    def _continuum_source_tool(self, data: dict[str, Any]) -> str:
+        raw_response = data.get("raw_response")
+        message = self._raw_message(
+            raw_response if isinstance(raw_response, dict) else {}
+        )
+        tool_calls = self._tool_calls(message)
+        if len(tool_calls) > 1:
+            raise RuntimeError("Continuum replay does not support parallel tool calls")
+        if not tool_calls:
+            return ""
+        tool_call = tool_calls[0]
+        if tool_call.name != "exec":
+            return tool_call.name
+        command = tool_call.arguments.get("command")
+        if not isinstance(command, str):
+            raise RuntimeError("Continuum exec replay requires a string command")
+        words = command.split(maxsplit=1)
+        return words[0] if words else "exec"
 
     @staticmethod
     def _shadow_messages(raw_messages: Any) -> list[dict[str, Any]]:

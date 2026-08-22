@@ -22,7 +22,7 @@ fi
 
 usage() {
   cat <<'EOF'
-Usage: cachewise_reproduction.sh fetch|verify|prepare|install|serve|policy|manifest [ARGS...]
+Usage: cachewise_reproduction.sh fetch|verify|verify-installed|prepare|install|serve|policy|manifest [ARGS...]
 
 Fetches the authors' predictor and vLLM fork at exact commits, then applies a
 small patch implementing the paper's conditional-remaining-time eviction,
@@ -31,6 +31,7 @@ fewest-additional-block request policy, and N_rebuild=3 heap refresh.
 Commands:
   fetch          Fetch clean pinned predictor and vLLM checkouts.
   verify         Verify the patch applies cleanly to the pinned vLLM commit.
+  verify-installed Verify the patched serving environment is importable.
   prepare        Fetch and apply the patch; leaves an installable vLLM tree.
   install        Install the patched tree using vLLM's precompiled wheel mode.
   serve ARGS     Start the patched installed vLLM with paper policy flags.
@@ -100,6 +101,16 @@ install() {
   verify_patch
 }
 
+verify_installed() {
+  verify_patch
+  test -x "$vllm_venv/bin/python" || {
+    echo "patched vLLM is not installed: $vllm_venv/bin/python" >&2
+    return 1
+  }
+  "$vllm_venv/bin/python" -c \
+    'import vllm; import vllm.v1.core.cachewise_policy'
+}
+
 serve() {
   local model=${1:?model is required}
   shift
@@ -123,6 +134,7 @@ serve() {
 case "${1:-}" in
   fetch) fetch_all ;;
   verify) fetch_all; verify_patch ;;
+  verify-installed) fetch_all; verify_installed ;;
   prepare) prepare ;;
   install) install ;;
   serve) shift; serve "$@" ;;

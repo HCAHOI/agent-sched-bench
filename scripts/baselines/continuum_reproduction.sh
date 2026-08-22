@@ -7,8 +7,8 @@ source "$here/continuum_public.sh"
 
 public_checkout="$checkout"
 public_venv="$venv"
-checkout="${CONTINUUM_REPRODUCTION_CHECKOUT:-$cache_root/agent-sched-bench/vllm-continuum-reproduction-$COMMIT}"
-venv="${CONTINUUM_REPRODUCTION_VENV:-$cache_root/agent-sched-bench/venvs/continuum-reproduction-$COMMIT}"
+checkout="${CONTINUUM_REPRODUCTION_CHECKOUT:-$cache_root/agent-sched-bench/vllm-continuum-reproduction-v2-$COMMIT}"
+venv="${CONTINUUM_REPRODUCTION_VENV:-$cache_root/agent-sched-bench/venvs/continuum-reproduction-v2-$COMMIT}"
 
 usage() {
   cat <<'EOF'
@@ -164,6 +164,7 @@ serve() {
   )"
   export CONTINUUM_REPRODUCTION_MODEL="$model"
   export RUN_OUTPUT_DIR="${RUN_OUTPUT_DIR:-./continuum_reproduction_exp}"
+  export VLLM_SERVER_DEV_MODE=1
   if test "$CONTINUUM_REPRODUCTION_MODE" = reload; then
     export LMCACHE_MAX_LOCAL_CPU_SIZE=100
   fi

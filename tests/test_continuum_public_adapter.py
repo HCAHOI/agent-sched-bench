@@ -65,16 +65,35 @@ class _Stream:
 class _Client:
     def __init__(self) -> None:
         self.requests: list[dict[str, Any]] = []
+        self.releases: list[tuple[str, dict[str, Any]]] = []
 
     def stream(self, _method: str, _url: str, *, json: dict[str, Any]) -> _Stream:
         self.requests.append(json)
         return _Stream()
 
+    async def post(self, url: str, *, json: dict[str, Any]):
+        self.releases.append((url, json))
+
+        class _Response:
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self) -> dict[str, bool]:
+                return {"released": True}
+
+        return _Response()
+
     async def aclose(self) -> None:
         pass
 
 
-def _source_action(index: int) -> dict[str, Any]:
+def _source_action(index: int, tool: str | None = None) -> dict[str, Any]:
+    message: dict[str, Any] = {"content": "source"}
+    if tool is not None:
+        arguments = '{"command":"pytest -q"}' if tool == "exec" else "{}"
+        message["tool_calls"] = [
+            {"id": f"call-{index}", "function": {"name": tool, "arguments": arguments}}
+        ]
     return {
         "action_type": "llm_call",
         "action_id": f"llm-{index}",
@@ -83,9 +102,7 @@ def _source_action(index: int) -> dict[str, Any]:
             "messages_in": [{"role": "user", "content": f"request {index}"}],
             "completion_tokens": 1,
             "raw_response": {
-                "choices": [
-                    {"finish_reason": "stop", "message": {"content": "source"}}
-                ]
+                "choices": [{"finish_reason": "stop", "message": message}]
             },
         },
     }
@@ -94,7 +111,11 @@ def _source_action(index: int) -> dict[str, Any]:
 def test_continuum_public_sends_only_causal_official_metadata() -> None:
     client = _Client()
     provider = OpenClawReplayProvider(
-        llm_actions=[_source_action(index) for index in range(3)],
+        llm_actions=[
+            _source_action(0, "exec"),
+            _source_action(1, "read_file"),
+            _source_action(2),
+        ],
         replay_speed=1.0,
         timing_mode="source_scaled",
         shadow_generation=ShadowGenerationConfig(
@@ -117,11 +138,21 @@ def test_continuum_public_sends_only_causal_official_metadata() -> None:
 
     assert [request["job_id"] for request in client.requests] == ["task-a", "task-a"]
     assert [request["is_last_step"] for request in client.requests] == [False, True]
+    assert [request["this_func_call"] for request in client.requests] == [
+        "pytest",
+        "read_file",
+    ]
     assert all("last_func_call" not in request for request in client.requests)
-    assert all("this_func_call" not in request for request in client.requests)
-    assert shadow_generation_payload(provider._shadow_generation)[
-        "continuum_public"
-    ] is True
+    assert client.releases == [
+        (
+            "http://127.0.0.1:8000/continuum/programs/release",
+            {"job_id": "task-a"},
+        )
+    ]
+    assert (
+        shadow_generation_payload(provider._shadow_generation)["continuum_public"]
+        is True
+    )
 
 
 def test_continuum_public_requires_declared_step_limit() -> None:

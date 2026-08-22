@@ -200,6 +200,9 @@ def test_paper_baseline_suite_smokes_matching_methods_before_full_run() -> None:
     assert 'export PATH="$HOME/.local/bin:$PATH"' in suite_text
     assert "--kv-cache-dtype auto --kv-layout-dtype bfloat16" in suite_text
     assert 'RUN_OUTPUT_DIR="$suite_root/profile-continuum"' in suite_text
+    assert "full_concurrency=${CONCURRENCY:-4}" in suite_text
+    assert "trace_tool_replay=${TRACE_TOOL_REPLAY:-0}" in suite_text
+    assert 'TRACE_TOOL_REPLAY="$trace_tool_replay"' in suite_text
     assert "\"$repo/.venv/bin/python\" -c 'import loguru, trace_collect'" in suite_text
     assert "--resume-after-profile) resume_after_profile" in suite_text
     assert '[[ -s "$profile" ]]' in suite_text
@@ -217,7 +220,8 @@ def test_paper_baseline_suite_smokes_matching_methods_before_full_run() -> None:
     assert "murakkab" not in suite_text.lower()
     runner_text = runner.read_text()
     assert 'export PATH="$HOME/.local/bin:$PATH"' in runner_text
-    assert '"$python" -c \'import sklearn\'' in runner_text
+    assert "\"$python\" -c 'import sklearn'" in runner_text
+    assert 'cachewise_reproduction.sh" verify-installed' in runner_text
     assert 'summary["completed_traces"] == summary["attempted_traces"]' in runner_text
     assert 'summary["failed_traces"] == 0' in runner_text
     assert 'set +e\n    run_cell "$cell"\n    cell_rc=$?' in runner_text

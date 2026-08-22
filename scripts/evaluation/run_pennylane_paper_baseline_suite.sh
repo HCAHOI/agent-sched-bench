@@ -13,7 +13,10 @@ container_cpuset=${CONTAINER_CPUSET:-4-15}
 vllm_cpuset=${VLLM_CPUSET:-0-3}
 continuum_commit=316a58794a6ff86b216e579b74fd56ed0c5a911f
 continuum_python=${CONTINUUM_VENV:-$HOME/.cache/agent-sched-bench/venvs/continuum-public-$continuum_commit}/bin/python
-profile=$suite_root/continuum-prefill-a100-120k.json
+profile_supplied=${CONTINUUM_REPRODUCTION_PROFILE:+1}
+profile=${CONTINUUM_REPRODUCTION_PROFILE:-$suite_root/continuum-prefill-a100-120k.json}
+full_concurrency=${CONCURRENCY:-4}
+trace_tool_replay=${TRACE_TOOL_REPLAY:-0}
 methods=(agentix continuum-public continuum-reproduction cachewise)
 
 fail() { printf '%s\n' "$*" >&2; exit 1; }
@@ -69,6 +72,7 @@ run_one() {
   MODEL="$model" MANIFEST="$manifest" RUN_ROOT="$root" CELLS="$method-r1" \
     CONCURRENCY="$concurrency" CONTAINER_CPUSET="$container_cpuset" \
     CONTAINER_CPUS= VLLM_CPUSET="$vllm_cpuset" \
+    TRACE_TOOL_REPLAY="$trace_tool_replay" \
     CONTINUUM_REPRODUCTION_PROFILE="$profile" "$runner" --run
 }
 
@@ -101,7 +105,8 @@ run_smokes_and_full() {
 
   MODEL="$model" MANIFEST="$full_manifest" \
     RUN_ROOT="$suite_root/full" CELLS="${methods[*]/%/-r1}" \
-    CONCURRENCY=4 CONTAINER_CPUSET="$container_cpuset" CONTAINER_CPUS= \
+    CONCURRENCY="$full_concurrency" CONTAINER_CPUSET="$container_cpuset" CONTAINER_CPUS= \
+    TRACE_TOOL_REPLAY="$trace_tool_replay" \
     VLLM_CPUSET="$vllm_cpuset" CONTINUUM_REPRODUCTION_PROFILE="$profile" \
     "$runner" --run >"$suite_root/full.log" 2>&1
 }
@@ -112,7 +117,11 @@ run_suite() {
   mkdir "$suite_root"
   wait_for_current_run
   install_baselines >"$suite_root/install.log" 2>&1
-  measure_continuum_profile >"$suite_root/profile.log" 2>&1
+  if [[ -n "$profile_supplied" ]]; then
+    [[ -s "$profile" ]] || fail "provided profile is missing: $profile"
+  else
+    measure_continuum_profile >"$suite_root/profile.log" 2>&1
+  fi
   run_smokes_and_full
 }
 

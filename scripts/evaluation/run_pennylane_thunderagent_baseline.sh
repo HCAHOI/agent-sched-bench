@@ -62,7 +62,7 @@ preflight() {
     [[ -f "$cachewise_models/all_models.pkl" ]] || fail "missing CacheWise models"
     "$python" -c 'import sklearn' || \
       fail "CacheWise requires: uv sync --extra serving-spike"
-    "$repo/scripts/baselines/cachewise_reproduction.sh" verify >/dev/null
+    "$repo/scripts/baselines/cachewise_reproduction.sh" verify-installed >/dev/null
   fi
   local gpu
   gpu=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits)
@@ -261,7 +261,12 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
   "continuum_reproduction_profile": os.environ["CONTINUUM_PROFILE"] or None,
   "agentix_queue_upper_bounds_s": [0.25, 1, 4, 16],
   "cachewise_tool_mapping": {
-    "exec": "Bash", "read_file": "Read", "edit_file": "Edit", "list_dir": "Glob"
+    "exec": "Bash", "read_file": "Read", "edit_file": "Edit",
+    "write_file": "Write", "list_dir": "Glob"
+  },
+  "continuum_replay_transport": {
+    "tool_signal": "source tool signature consumed only at LLM completion",
+    "terminal_signal": "program release after replay completion"
   },
   "primary_metrics": ["mean_task_jct", "makespan", "all_request_p99_ttft"],
   "interpretation": "Physical baseline measurement; no GO/NO-GO gate."

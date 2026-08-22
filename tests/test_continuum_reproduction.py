@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import shutil
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -18,9 +19,11 @@ from scripts.baselines.continuum_reproduction import (
     cold_start_ttl_seconds,
     empirical_ttl_seconds,
     inference_manifest,
+    install_trace_adapter,
     memoryfulness,
     validate_runtime_binding,
     verify_checkout,
+    verify_trace_adapter,
 )
 
 
@@ -140,6 +143,30 @@ def test_history_threshold_selects_global_then_per_tool_cdf() -> None:
     assert estimator.set_up_pin(request) == 1.0
 
 
+def test_replay_tool_signal_and_early_release_are_causal() -> None:
+    class _UnexpectedParser:
+        def parse(self, _text: str) -> str:
+            raise AssertionError("source replay tool should bypass output parsing")
+
+    estimator = ToolCallEstimator(tokenizer=_Tokenizer(), parser=_UnexpectedParser())
+    request = _request("job", last=False)
+    request.this_func_call = "pytest"
+    estimator.request_arrives(request)
+    estimator.request_finished(request)
+
+    assert estimator._programs["job"].last_tool == "pytest"
+    assert estimator.program_finished("job") is True
+    assert estimator.program_finished("job") is False
+    assert estimator._turn_pairs == [(1, 0)]
+    assert "job" not in estimator._programs
+
+    reused = _request("job", last=False)
+    reused.this_func_call = "pytest"
+    estimator.request_arrives(reused)
+    estimator.request_finished(reused)
+    assert estimator.program_finished("job") is True
+
+
 def test_measured_prefill_and_reload_profiles(tmp_path: Path) -> None:
     prefill = tmp_path / "prefill.json"
     prefill.write_text(
@@ -160,7 +187,9 @@ def test_measured_prefill_and_reload_profiles(tmp_path: Path) -> None:
             }
         )
     )
-    assert CacheMissProfile.from_json(prefill, "prefill").estimate_seconds(2) == pytest.approx(0.011)
+    assert CacheMissProfile.from_json(prefill, "prefill").estimate_seconds(
+        2
+    ) == pytest.approx(0.011)
 
     reload = tmp_path / "reload.json"
     reload.write_text(
@@ -255,9 +284,10 @@ def test_wheel_overlay_scripts_are_isolated_and_non_editable(tmp_path: Path) -> 
     reproduction = (SCRIPT_DIR / "continuum_reproduction.sh").read_text()
     assert "--editable" not in public + reproduction
     assert "vllm-continuum-public-" in public
-    assert "vllm-continuum-reproduction-" in reproduction
+    assert "vllm-continuum-reproduction-v2-" in reproduction
     assert "venvs/continuum-public-" in public
-    assert "venvs/continuum-reproduction-" in reproduction
+    assert "venvs/continuum-reproduction-v2-" in reproduction
+    assert 'continuum_python="${CONTINUUM_PYTHON:-$repo/.venv/bin/python}"' in public
     shared = tmp_path / "shared"
     rejected = subprocess.run(
         [SCRIPT_DIR / "continuum_reproduction.sh", "apply"],
@@ -333,9 +363,7 @@ def test_reproduction_serve_rejects_config_overrides() -> None:
 def test_overlay_manifest_is_exact_official_fork_python_delta() -> None:
     upstream = Path("/tmp/vllm-upstream-v0.10.2")
     fork = (
-        Path.home()
-        / ".cache/agent-sched-bench"
-        / f"vllm-continuum-{CONTINUUM_COMMIT}"
+        Path.home() / ".cache/agent-sched-bench" / f"vllm-continuum-{CONTINUUM_COMMIT}"
     )
     if not upstream.is_dir() or not fork.is_dir():
         pytest.skip("upstream and pinned fork checkouts are not cached")
@@ -356,9 +384,7 @@ def test_overlay_manifest_is_exact_official_fork_python_delta() -> None:
 @pytest.mark.slow
 def test_patch_applies_to_clean_pinned_checkout(tmp_path: Path) -> None:
     source = (
-        Path.home()
-        / ".cache/agent-sched-bench"
-        / f"vllm-continuum-{CONTINUUM_COMMIT}"
+        Path.home() / ".cache/agent-sched-bench" / f"vllm-continuum-{CONTINUUM_COMMIT}"
     )
     if not source.is_dir():
         pytest.skip("pinned Continuum checkout is not cached")
@@ -366,26 +392,70 @@ def test_patch_applies_to_clean_pinned_checkout(tmp_path: Path) -> None:
     subprocess.run(
         ["git", "clone", "--quiet", "--no-hardlinks", source, checkout], check=True
     )
-    assert subprocess.run(
-        ["git", "-C", checkout, "status", "--porcelain"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout == ""
+    assert (
+        subprocess.run(
+            ["git", "-C", checkout, "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        == ""
+    )
     apply_to_checkout(checkout)
     verify_checkout(checkout)
     assert (checkout / "vllm/v1/core/continuum_reproduction.py").is_file()
-    assert "continuum_reproduction" in (
-        checkout / "vllm/v1/core/sched/scheduler.py"
-    ).read_text()
+    assert (
+        "continuum_reproduction"
+        in (checkout / "vllm/v1/core/sched/scheduler.py").read_text()
+    )
+
+
+@pytest.mark.slow
+def test_trace_replay_adapter_applies_exactly_to_public_overlay(tmp_path: Path) -> None:
+    source = (
+        Path.home()
+        / ".cache/agent-sched-bench"
+        / f"vllm-continuum-{CONTINUUM_COMMIT}"
+        / "vllm"
+    )
+    if not source.is_dir():
+        pytest.skip("pinned Continuum checkout is not cached")
+    package = tmp_path / "vllm"
+    for relative in (
+        "entrypoints/openai/api_server.py",
+        "v1/core/sched/scheduler.py",
+        "v1/engine/core.py",
+        "v1/core/estimate_with_func.py",
+    ):
+        target = package / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / relative, target)
+
+    install_trace_adapter(source, package, "public")
+    verify_trace_adapter(source, package, "public")
+    assert (
+        '@router.post("/continuum/programs/release")'
+        in (package / "entrypoints/openai/api_server.py").read_text()
+    )
+    assert (
+        "this_func_call = request.this_func_call"
+        in (package / "v1/core/estimate_with_func.py").read_text()
+    )
+    assert (
+        "self.job_to_history.pop(job_id, None)"
+        in (package / "v1/core/estimate_with_func.py").read_text()
+    )
+
+    scheduler = package / "v1/core/sched/scheduler.py"
+    scheduler.write_text(scheduler.read_text() + "\n# pollution\n")
+    with pytest.raises(ValueError, match="differs from expected"):
+        verify_trace_adapter(source, package, "public")
 
 
 @pytest.mark.slow
 def test_patch_rejects_polluted_or_staged_checkout(tmp_path: Path) -> None:
     source = (
-        Path.home()
-        / ".cache/agent-sched-bench"
-        / f"vllm-continuum-{CONTINUUM_COMMIT}"
+        Path.home() / ".cache/agent-sched-bench" / f"vllm-continuum-{CONTINUUM_COMMIT}"
     )
     if not source.is_dir():
         pytest.skip("pinned Continuum checkout is not cached")

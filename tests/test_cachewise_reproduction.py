@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import importlib.util
+import json
 import math
 import os
 import subprocess
@@ -169,7 +170,19 @@ class _CachewiseClient:
         pass
 
 
-def test_replay_attaches_policy_only_after_llm_completion(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("source_tool", "arguments", "predictor_tool"),
+    [
+        ("exec", '{"command":"pytest -q"}', "Bash"),
+        ("write_file", '{"path":"note.txt","content":"x"}', "Write"),
+    ],
+)
+def test_replay_attaches_policy_only_after_llm_completion(
+    monkeypatch,
+    source_tool: str,
+    arguments: str,
+    predictor_tool: str,
+) -> None:
     builds: list[tuple[str, str, str]] = []
 
     class _Builder:
@@ -200,8 +213,8 @@ def test_replay_attaches_policy_only_after_llm_completion(monkeypatch) -> None:
                                 {
                                     "id": "call-0",
                                     "function": {
-                                        "name": "exec",
-                                        "arguments": '{"command":"pytest -q"}',
+                                        "name": source_tool,
+                                        "arguments": arguments,
                                     },
                                 }
                             ]
@@ -236,7 +249,8 @@ def test_replay_attaches_policy_only_after_llm_completion(monkeypatch) -> None:
     asyncio.run(provider.chat([]))
     asyncio.run(provider.aclose())
 
-    assert builds == [("task-a", "Bash", '{"command":"pytest -q"}')]
+    assert [build[:2] for build in builds] == [("task-a", predictor_tool)]
+    assert json.loads(builds[0][2]) == json.loads(arguments)
     assert [url for url, _ in client.events] == [
         "http://127.0.0.1:8000/v1/chat/completions",
         "http://127.0.0.1:8000/cachewise/sessions/update",

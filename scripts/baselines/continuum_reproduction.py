@@ -170,7 +170,9 @@ class CacheMissProfile:
                 mode=mode,
                 model=model,
                 max_context_tokens=max_context,
-                quadratic_seconds=tuple(float(value) / 1000.0 for value in coefficients),
+                quadratic_seconds=tuple(
+                    float(value) / 1000.0 for value in coefficients
+                ),
                 runtime_binding=binding,
             )
         if mode == "reload":
@@ -196,8 +198,7 @@ class CacheMissProfile:
                 reload_ms = row.get("swap_in_ms")
                 tokens = row.get("tokens")
                 if not all(
-                    _positive_number(value)
-                    for value in (byte_count, reload_ms, tokens)
+                    _positive_number(value) for value in (byte_count, reload_ms, tokens)
                 ):
                     raise ValueError(f"{path}: invalid reload measurement")
                 if not math.isclose(
@@ -285,9 +286,7 @@ def validate_runtime_binding(
         raise ValueError("profile lacks a runtime binding")
     config_dtype = str(getattr(model_config, "torch_dtype", "")).removeprefix("torch.")
     resolved_model_dtype = _resolved_dtype(model_dtype, auto_dtype=config_dtype)
-    resolved_kv_dtype = _resolved_dtype(
-        kv_cache_dtype, auto_dtype=resolved_model_dtype
-    )
+    resolved_kv_dtype = _resolved_dtype(kv_cache_dtype, auto_dtype=resolved_model_dtype)
     kv_heads = getattr(
         model_config,
         "num_key_value_heads",
@@ -296,12 +295,18 @@ def validate_runtime_binding(
     attention_heads = getattr(model_config, "num_attention_heads", None)
     hidden_size = getattr(model_config, "hidden_size", None)
     head_dim = getattr(model_config, "head_dim", None)
-    if head_dim is None and isinstance(hidden_size, int) and isinstance(attention_heads, int):
+    if (
+        head_dim is None
+        and isinstance(hidden_size, int)
+        and isinstance(attention_heads, int)
+    ):
         if hidden_size % attention_heads:
             raise ValueError("model hidden size is not divisible by attention heads")
         head_dim = hidden_size // attention_heads
     layers = getattr(model_config, "num_hidden_layers", None)
-    if not all(isinstance(value, int) and value > 0 for value in (layers, kv_heads, head_dim)):
+    if not all(
+        isinstance(value, int) and value > 0 for value in (layers, kv_heads, head_dim)
+    ):
         raise ValueError("model config lacks a complete KV layout")
     if kv_heads % tensor_parallel_size:
         raise ValueError("KV heads are not divisible by tensor parallel size")
@@ -335,7 +340,9 @@ def validate_runtime_binding(
             for name in RuntimeBinding.__dataclass_fields__
             if getattr(actual, name) != getattr(binding, name)
         ]
-        raise ValueError(f"runtime does not match measured profile: {', '.join(differing)}")
+        raise ValueError(
+            f"runtime does not match measured profile: {', '.join(differing)}"
+        )
 
 
 @dataclass
@@ -427,7 +434,6 @@ class ToolCallEstimator:
         self._profile = cache_miss_profile
         self._clock = clock
         self._programs: dict[str, _ProgramState] = {}
-        self._completed_programs: set[str] = set()
         self._turn_pairs: list[tuple[int, int]] = []
         self._global_durations: list[float] = []
         self._durations_by_tool: dict[str, list[float]] = defaultdict(list)
@@ -530,19 +536,33 @@ class ToolCallEstimator:
         now = self._clock()
         job_id = self._job_id(request)
         state = self._programs[job_id]
-        tool = None
+        tool = getattr(request, "this_func_call", None)
         output_ids = getattr(request, "output_token_ids", ())
-        if self.tokenizer is not None and self.parser is not None and output_ids:
+        if (
+            tool is None
+            and self.tokenizer is not None
+            and self.parser is not None
+            and output_ids
+        ):
             text = self.tokenizer.decode(output_ids, skip_special_tokens=True)
             tool = self.parser.parse(text)
-        request.this_func_call = tool
+        request.this_func_call = tool or None
         state.turns += 1
         state.last_finish = now
-        state.last_tool = tool
-        if request.is_last_step and job_id not in self._completed_programs:
-            total = state.turns
-            self._turn_pairs.extend((served, total - served) for served in range(1, total + 1))
-            self._completed_programs.add(job_id)
+        state.last_tool = request.this_func_call
+        if request.is_last_step:
+            self.program_finished(job_id)
+
+    def program_finished(self, job_id: str) -> bool:
+        state = self._programs.get(job_id)
+        if state is None or state.turns < 1:
+            return False
+        total = state.turns
+        self._turn_pairs.extend(
+            (served, total - served) for served in range(1, total + 1)
+        )
+        del self._programs[job_id]
+        return True
 
     def set_up_pin(self, request: Any) -> float:
         self._job_id(request)
@@ -701,7 +721,9 @@ def _patched_scheduler_from_head(checkout: Path) -> str:
     text = _git(checkout, "show", "HEAD:vllm/v1/core/sched/scheduler.py") + "\n"
     for old, new in _SCHEDULER_REPLACEMENTS:
         if text.count(old) != 1:
-            raise ValueError(f"pinned scheduler patch point occurs {text.count(old)} times")
+            raise ValueError(
+                f"pinned scheduler patch point occurs {text.count(old)} times"
+            )
         text = text.replace(old, new)
     return text
 
@@ -746,6 +768,130 @@ def verify_checkout(checkout: str | Path) -> None:
     subprocess.run(["git", "-C", str(checkout), "diff", "--check"], check=True)
 
 
+_TRACE_ADAPTER_COMMON_FILES = (
+    "entrypoints/openai/api_server.py",
+    "v1/core/sched/scheduler.py",
+    "v1/engine/core.py",
+)
+
+
+def _replace_once(text: str, old: str, new: str, *, path: Path) -> str:
+    if text.count(old) != 1:
+        raise ValueError(
+            f"{path}: replay adapter anchor occurs {text.count(old)} times"
+        )
+    return text.replace(old, new)
+
+
+def _trace_adapter_text(path: Path, relative: str, variant: str) -> str:
+    text = path.read_text(encoding="utf-8")
+    if relative == "entrypoints/openai/api_server.py":
+        anchor = '    @router.post("/reset_prefix_cache")\n'
+        addition = """    @router.post("/continuum/programs/release")
+    async def release_continuum_program(raw_request: Request):
+        body = await raw_request.json()
+        job_id = body.get("job_id")
+        if not isinstance(job_id, str) or not job_id:
+            raise HTTPException(status_code=400, detail="job_id is required")
+        released = await engine_client(
+            raw_request).engine_core.call_utility_async(
+                "release_continuum_program", job_id)
+        return JSONResponse(content={"job_id": job_id, "released": released})
+
+
+"""
+        return _replace_once(text, anchor, addition + anchor, path=path)
+    if relative == "v1/engine/core.py":
+        anchor = "    def reset_prefix_cache(self):\n"
+        addition = """    def release_continuum_program(self, job_id: str) -> bool:
+        return self.scheduler.release_continuum_program(job_id)
+
+"""
+        return _replace_once(text, anchor, addition + anchor, path=path)
+    if relative == "v1/core/sched/scheduler.py":
+        anchor = "    def reset_prefix_cache(self) -> bool:\n"
+        addition = """    def release_continuum_program(self, job_id: str) -> bool:
+        known = job_id in self.running_job_id_first_entry_time
+        for request, end_time in list(self.pinned_requests):
+            if request.job_id == job_id:
+                self.unpin_request(request, end_time)
+                known = True
+        self.running_job_id_first_entry_time.pop(job_id, None)
+        self.waiting.job_id_first_entry_time.pop(job_id, None)
+        program_finished = getattr(
+            self.tool_call_estimator, "program_finished", None)
+        if program_finished is not None:
+            known = program_finished(job_id) or known
+        return known
+
+"""
+        return _replace_once(text, anchor, addition + anchor, path=path)
+    if relative == "v1/core/estimate_with_func.py" and variant == "public":
+        text = _replace_once(
+            text,
+            "    def set_up_pin(self, request: Request) -> float:\n",
+            "    def program_finished(self, job_id: str) -> bool:\n"
+            "        return self.job_to_history.pop(job_id, None) is not None\n\n"
+            "    def set_up_pin(self, request: Request) -> float:\n",
+            path=path,
+        )
+        text = _replace_once(
+            text,
+            "        this_func_call = None\n"
+            "        if self.tokenizer is not None and len(request.output_token_ids) > 0:\n",
+            "        this_func_call = request.this_func_call\n"
+            "        if (this_func_call is None and self.tokenizer is not None\n"
+            "                and len(request.output_token_ids) > 0):\n",
+            path=path,
+        )
+        return _replace_once(
+            text,
+            "        request.this_func_call = this_func_call\n",
+            "        request.this_func_call = this_func_call or None\n",
+            path=path,
+        )
+    raise ValueError(f"unsupported replay adapter file: {relative} ({variant})")
+
+
+def _trace_adapter_expected(source_vllm: Path, variant: str) -> dict[str, str]:
+    if variant not in {"public", "reproduction"}:
+        raise ValueError(f"unsupported Continuum variant: {variant}")
+    relatives = list(_TRACE_ADAPTER_COMMON_FILES)
+    if variant == "public":
+        relatives.append("v1/core/estimate_with_func.py")
+    return {
+        relative: _trace_adapter_text(source_vllm / relative, relative, variant)
+        for relative in relatives
+    }
+
+
+def install_trace_adapter(
+    source_vllm: str | Path,
+    package_vllm: str | Path,
+    variant: str,
+) -> None:
+    expected = _trace_adapter_expected(Path(source_vllm), variant)
+    package = Path(package_vllm)
+    for relative, text in expected.items():
+        target = package / relative
+        target.write_text(text, encoding="utf-8")
+        compile(text, str(target), "exec")
+    verify_trace_adapter(source_vllm, package_vllm, variant)
+
+
+def verify_trace_adapter(
+    source_vllm: str | Path,
+    package_vllm: str | Path,
+    variant: str,
+) -> None:
+    expected = _trace_adapter_expected(Path(source_vllm), variant)
+    package = Path(package_vllm)
+    for relative, text in expected.items():
+        target = package / relative
+        if not target.is_file() or target.read_text(encoding="utf-8") != text:
+            raise ValueError(f"{target}: replay adapter differs from expected")
+
+
 def _selected_gpus(tensor_parallel_size: int) -> list[tuple[str, int]]:
     output = subprocess.run(
         [
@@ -776,7 +922,9 @@ def _selected_gpus(tensor_parallel_size: int) -> list[tuple[str, int]]:
     try:
         return [rows[index] for index in indices[:tensor_parallel_size]]
     except KeyError as error:
-        raise ValueError(f"CUDA_VISIBLE_DEVICES names unknown GPU {error.args[0]}") from error
+        raise ValueError(
+            f"CUDA_VISIBLE_DEVICES names unknown GPU {error.args[0]}"
+        ) from error
 
 
 def validate_runtime(
@@ -825,13 +973,29 @@ def inference_manifest() -> dict[str, Any]:
             ),
             "reload_average": "aggregate bytes / aggregate seconds",
         },
+        "trace_replay_transport": {
+            "tool_signal": (
+                "recorded source tool signature, consumed only when the shadow "
+                "LLM request finishes"
+            ),
+            "terminal_signal": "causal program release after replay completion",
+            "algorithm_change": False,
+        },
     }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "command", choices=("apply", "verify", "manifest", "validate-runtime")
+        "command",
+        choices=(
+            "apply",
+            "verify",
+            "manifest",
+            "validate-runtime",
+            "install-trace-adapter",
+            "verify-trace-adapter",
+        ),
     )
     parser.add_argument("arguments", nargs="*")
     args = parser.parse_args()
@@ -851,6 +1015,15 @@ def main() -> None:
             profile, mode, model, model_dtype, kv_dtype, int(tp)
         )
         print(max_context_tokens)
+        return
+    if args.command in {"install-trace-adapter", "verify-trace-adapter"}:
+        if len(args.arguments) != 3:
+            parser.error(f"{args.command} requires SOURCE_VLLM PACKAGE_VLLM VARIANT")
+        source_vllm, package_vllm, variant = args.arguments
+        if args.command == "install-trace-adapter":
+            install_trace_adapter(source_vllm, package_vllm, variant)
+        else:
+            verify_trace_adapter(source_vllm, package_vllm, variant)
         return
     if len(args.arguments) != 1:
         parser.error("apply/verify require exactly one checkout")
