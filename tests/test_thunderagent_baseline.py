@@ -10,8 +10,10 @@ import pytest
 from trace_collect.openclaw_host_runtime import (
     OpenClawReplayProvider,
     ShadowGenerationConfig,
+    _build_trace_replay_tools,
     shadow_generation_payload,
 )
+from trace_collect.simulate_openclaw import replay_trace_tools_enabled
 
 
 class _StreamResponse:
@@ -144,9 +146,47 @@ def test_thunderagent_mode_is_recorded_without_changing_plain_metadata() -> None
     assert "thunderagent" not in shadow_generation_payload(
         ShadowGenerationConfig(**kwargs)
     )
-    assert shadow_generation_payload(
-        ShadowGenerationConfig(**kwargs, mode="thunderagent")
-    )["thunderagent"] is True
+    assert (
+        shadow_generation_payload(
+            ShadowGenerationConfig(**kwargs, mode="thunderagent")
+        )["thunderagent"]
+        is True
+    )
+
+
+def test_trace_tool_replay_checks_call_and_returns_recorded_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actions = [
+        {
+            "action_type": "tool_exec",
+            "data": {
+                "tool_name": "exec",
+                "tool_call_id": "call-1",
+                "tool_args": '{"command":"pytest -q"}',
+                "tool_result": "recorded output",
+                "duration_ms": 0,
+            },
+        }
+    ]
+    tools, state = _build_trace_replay_tools(actions, replay_speed=1.0)
+    tool = tools[0]
+    tool.set_tool_call_context("call-1", {"command": "pytest -q"})
+
+    assert asyncio.run(tool.execute(command="pytest -q")) == "recorded output"
+    assert state.complete
+    assert state.summary()["completed_calls"] == 1
+
+    bad_tools, _ = _build_trace_replay_tools(actions, replay_speed=1.0)
+    bad_tools[0].set_tool_call_context("call-1", {"command": "pytest tests/unit"})
+    with pytest.raises(RuntimeError, match="arguments changed"):
+        asyncio.run(bad_tools[0].execute(command="pytest tests/unit"))
+
+    monkeypatch.setenv("OPENCLAW_REPLAY_TRACE_TOOLS", "1")
+    assert replay_trace_tools_enabled() is True
+    monkeypatch.setenv("OPENCLAW_REPLAY_TRACE_TOOLS", "invalid")
+    with pytest.raises(ValueError, match="must be 0 or 1"):
+        replay_trace_tools_enabled()
 
 
 def test_paper_baseline_suite_smokes_matching_methods_before_full_run() -> None:
@@ -158,12 +198,15 @@ def test_paper_baseline_suite_smokes_matching_methods_before_full_run() -> None:
     assert 'export PATH="$HOME/.local/bin:$PATH"' in suite_text
     assert "--kv-cache-dtype auto --kv-layout-dtype bfloat16" in suite_text
     assert 'RUN_OUTPUT_DIR="$suite_root/profile-continuum"' in suite_text
-    assert '"$repo/.venv/bin/python" -c \'import loguru, trace_collect\'' in suite_text
+    assert "\"$repo/.venv/bin/python\" -c 'import loguru, trace_collect'" in suite_text
     assert "--resume-after-profile) resume_after_profile" in suite_text
     assert '[[ -s "$profile" ]]' in suite_text
     assert 'smoke_succeeded "$method" || failed=1' in suite_text
     assert 'smoke_succeeded "$method" && continue' in suite_text
-    assert "methods=(agentix continuum-public continuum-reproduction cachewise)" in suite_text
+    assert (
+        "methods=(agentix continuum-public continuum-reproduction cachewise)"
+        in suite_text
+    )
     assert "smoke-$method" in suite_text
     assert suite_text.index('for method in "${methods[@]}"') < suite_text.index(
         'RUN_ROOT="$suite_root/full"'
@@ -171,6 +214,11 @@ def test_paper_baseline_suite_smokes_matching_methods_before_full_run() -> None:
     assert "saga" not in suite_text.lower()
     assert "murakkab" not in suite_text.lower()
     runner_text = runner.read_text()
-    assert 'continuum_reproduction.sh" serve "$model" --dtype bfloat16 --kv-cache-dtype auto' in runner_text
+    assert (
+        'continuum_reproduction.sh" serve "$model" --dtype bfloat16 --kv-cache-dtype auto'
+        in runner_text
+    )
     assert "--shadow-llm-cachewise-predictor-checkout" in runner_text
     assert "--queue-upper-bounds 0.25,1,4,16" in runner_text
+    assert 'OPENCLAW_REPLAY_TRACE_TOOLS="$trace_tool_replay"' in runner_text
+    assert '"tool_execution": (' in runner_text

@@ -13,6 +13,7 @@ container_cpuset=${CONTAINER_CPUSET:-}
 container_cpus=${CONTAINER_CPUS:-}
 vllm_cpuset=${VLLM_CPUSET:-}
 continuum_profile=${CONTINUUM_REPRODUCTION_PROFILE:-}
+trace_tool_replay=${TRACE_TOOL_REPLAY:-0}
 cachewise_checkout=${CACHEWISE_CHECKOUT:-$HOME/.cache/agent-sched-bench/cachewise-181c435a090d328d00bbbee4c8eeb27d32f3abd2}
 cachewise_models=${CACHEWISE_MODELS_DIR:-$cachewise_checkout/tool_duration_prediction/models}
 if [[ -z "$container_cpuset" && -z "$container_cpus" ]]; then
@@ -33,6 +34,7 @@ preflight() {
   [[ -f "$manifest" ]] || fail "missing PennyLane manifest"
   [[ ! -e "$run_root" ]] || fail "run root already exists: $run_root"
   [[ -z "$container_cpuset" || -z "$container_cpus" ]] || fail "choose cpuset or CPU quota, not both"
+  [[ "$trace_tool_replay" == 0 || "$trace_tool_replay" == 1 ]] || fail "TRACE_TOOL_REPLAY must be 0 or 1"
   [[ -z "$vllm_cpuset" ]] || command -v taskset >/dev/null || fail "taskset is required"
   local cell
   for cell in "${cells[@]}"; do
@@ -179,13 +181,16 @@ run_cell() (
   local simulate=(
     "$python" -m trace_collect.cli simulate --manifest "$manifest"
     --output-dir "$cell/output" --container docker --network-mode host
-    --concurrency "$concurrency" --workers 1 --prep-concurrency 8 --stage-all-before-replay
+    --concurrency "$concurrency" --workers 1 --prep-concurrency 8
     --replay-speed 1 --shadow-llm-api-base "$api"
     --shadow-llm-model "$model" --shadow-llm-timeout-s 300
     --shadow-llm-seed 0 --shadow-llm-mode "$shadow_mode"
     --resource-monitoring off --pmu-monitoring off
     --memory-bandwidth-monitoring off
   )
+  if [[ "$trace_tool_replay" == 0 ]]; then
+    simulate+=(--stage-all-before-replay)
+  fi
   if [[ -n "$container_cpuset" ]]; then
     simulate+=(--container-cpuset-cpus "$container_cpuset")
   else
@@ -197,10 +202,10 @@ run_cell() (
       --shadow-llm-cachewise-models-dir "$cachewise_models"
     )
   fi
-  printf '%q ' env OPENCLAW_REPLAY_PAIRED_WORKLOAD_CONTRACT=2 PYTHONPATH="$repo/src:$repo" "${simulate[@]}" >"$cell/simulate.argv"
+  printf '%q ' env OPENCLAW_REPLAY_PAIRED_WORKLOAD_CONTRACT=2 OPENCLAW_REPLAY_TRACE_TOOLS="$trace_tool_replay" PYTHONPATH="$repo/src:$repo" "${simulate[@]}" >"$cell/simulate.argv"
   printf '\n' >>"$cell/simulate.argv"
   set +e
-  OPENCLAW_REPLAY_PAIRED_WORKLOAD_CONTRACT=2 PYTHONPATH="$repo/src:$repo" \
+  OPENCLAW_REPLAY_PAIRED_WORKLOAD_CONTRACT=2 OPENCLAW_REPLAY_TRACE_TOOLS="$trace_tool_replay" PYTHONPATH="$repo/src:$repo" \
     "${simulate[@]}" >"$cell/simulate.log" 2>&1
   rc=$?
   set -e
@@ -216,6 +221,7 @@ run_all() {
     CONTAINER_CPUSET="$container_cpuset" CONTAINER_CPUS="$container_cpus" \
     VLLM_CPUSET="$vllm_cpuset" \
     CONTINUUM_PROFILE="$continuum_profile" \
+    TRACE_TOOL_REPLAY="$trace_tool_replay" \
     GIT_COMMIT="$(git -C "$repo" rev-parse HEAD)" "$python" - <<'PY'
 import json, os
 from pathlib import Path
@@ -230,8 +236,13 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
     "container_cpus": float(os.environ["CONTAINER_CPUS"]) if os.environ["CONTAINER_CPUS"] else None,
     "container_cpuset": os.environ["CONTAINER_CPUSET"] or None,
     "vllm_cpuset": os.environ["VLLM_CPUSET"] or None,
+    "tool_execution": (
+      "trace_timed_external_service"
+      if os.environ["TRACE_TOOL_REPLAY"] == "1"
+      else "task_container"
+    ),
   },
-  "comparison": "paper baselines on one fixed real-tool replay workload",
+  "comparison": "paper baselines on one fixed agent-trajectory replay workload",
   "continuum_reproduction_profile": os.environ["CONTINUUM_PROFILE"] or None,
   "agentix_queue_upper_bounds_s": [0.25, 1, 4, 16],
   "cachewise_tool_mapping": {

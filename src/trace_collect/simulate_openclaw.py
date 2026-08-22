@@ -34,6 +34,7 @@ from trace_collect.tool_gap_loan import ToolGapLoanConfig
 
 OPENCLAW_EXEC_TIMEOUT_FLOOR_ENV = "OPENCLAW_REPLAY_EXEC_TIMEOUT_FLOOR_S"
 OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV = "OPENCLAW_REPLAY_PAIRED_WORKLOAD_CONTRACT"
+OPENCLAW_TRACE_TOOL_REPLAY_ENV = "OPENCLAW_REPLAY_TRACE_TOOLS"
 _PYTEST_RANDOM_SEED_RE = re.compile(r"(?m)^Using --randomly-seed=(\d+)\s*$")
 
 
@@ -54,6 +55,13 @@ def replay_paired_workload_contract_version() -> int | None:
     if raw not in {"1", "2"}:
         raise ValueError(f"{OPENCLAW_PAIRED_WORKLOAD_CONTRACT_ENV} must be 1 or 2")
     return int(raw)
+
+
+def replay_trace_tools_enabled() -> bool:
+    raw = os.environ.get(OPENCLAW_TRACE_TOOL_REPLAY_ENV, "0")
+    if raw not in {"0", "1"}:
+        raise ValueError(f"{OPENCLAW_TRACE_TOOL_REPLAY_ENV} must be 0 or 1")
+    return raw == "1"
 
 
 def _seeded_pytest_command(command: str, seed: str) -> str:
@@ -337,6 +345,9 @@ async def _run_openclaw_replay_session(
 
         resource_setup_timeout_s = RESOURCE_OPERATION_TIMEOUTS_S["AwaitTraceReady"]
     exec_timeout_floor_s = replay_exec_timeout_floor_s()
+    trace_tool_replay = replay_trace_tools_enabled()
+    if trace_tool_replay and resource_enabled:
+        raise ValueError("trace tool replay cannot collect live tool resources")
     paired_workload_contract_version = replay_paired_workload_contract_version()
     paired_workload_contract = paired_workload_contract_version is not None
     if paired_workload_contract:
@@ -399,9 +410,7 @@ async def _run_openclaw_replay_session(
                     {
                         "sample_id": prediction.sample_id,
                         "command": prediction.command,
-                        "probability_by_bucket": list(
-                            prediction.probability_by_bucket
-                        ),
+                        "probability_by_bucket": list(prediction.probability_by_bucket),
                         "hard_bucket": prediction.hard_bucket,
                         "provenance": dict(prediction.provenance),
                     }
@@ -421,6 +430,7 @@ async def _run_openclaw_replay_session(
         "paired_workload_contract": paired_workload_contract,
         "paired_workload_contract_version": paired_workload_contract_version,
         "replay_action_contract": replay_action_contract,
+        "trace_tool_replay": trace_tool_replay,
         "tool_resource_profile": tool_resource_profile,
         "tool_resource_run_token": resource_run_token,
         "task_instance_id": loaded.task_instance_id,
@@ -463,7 +473,11 @@ async def _run_openclaw_replay_session(
             "elapsed_s": 0.0,
             "sleep_records": [],
             "agent_execution_environment": "host",
-            "tool_execution_environment": "task_container",
+            "tool_execution_environment": (
+                "trace_timed_external_service"
+                if trace_tool_replay
+                else "task_container"
+            ),
             "tool_container_id": ctr.container_id,
             "tool_container_user": "unknown",
             "openclaw_host_pid": None,
@@ -585,7 +599,8 @@ async def _run_openclaw_replay_session(
             "agent_execution_environment", "host"
         ),
         "tool_execution_environment": status.get(
-            "tool_execution_environment", "task_container"
+            "tool_execution_environment",
+            "trace_timed_external_service" if trace_tool_replay else "task_container",
         ),
         "tool_runtime": status.get("tool_runtime"),
         "tool_container_id": status.get("tool_container_id", ctr.container_id),

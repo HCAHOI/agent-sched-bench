@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import fcntl
 import hashlib
 import ipaddress
@@ -18,6 +19,7 @@ from urllib.parse import urlparse
 import httpx
 
 from agents.openclaw.eval.types import EvalResult
+from agents.openclaw.tools.base import Tool
 from agents.openclaw.tools.container import build_container_tool_overrides
 from llm_call.provider_base import (
     GenerationSettings,
@@ -63,6 +65,135 @@ class ReplayActionFailureCounts:
     replay_failed_actions: int
     unexpected_replay_failed_actions: int
     action_sequence_matches: bool
+
+
+class _TraceToolReplayState:
+    """Replay completed external-tool calls from one source trajectory."""
+
+    def __init__(self, actions: list[dict[str, Any]], replay_speed: float) -> None:
+        if replay_speed <= 0:
+            raise ValueError("replay_speed must be positive")
+        self.replay_speed = replay_speed
+        self.actions: dict[str, dict[str, Any]] = {}
+        self.completed: set[str] = set()
+        self.sleep_records: list[ReplaySleepRecord] = []
+        for action in actions:
+            if action.get("action_type") != "tool_exec":
+                continue
+            data = action.get("data")
+            if not isinstance(data, dict):
+                raise ValueError("trace tool action has no data object")
+            call_id = str(data.get("tool_call_id") or "")
+            if not call_id or call_id in self.actions:
+                raise ValueError("trace tool call IDs must be present and unique")
+            self.actions[call_id] = data
+
+    @staticmethod
+    def _arguments(data: dict[str, Any]) -> dict[str, Any]:
+        raw = data.get("tool_args", {})
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(parsed, dict):
+            raise ValueError("trace tool arguments must be an object")
+        return parsed
+
+    async def execute(
+        self,
+        *,
+        call_id: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> Any:
+        data = self.actions.get(call_id)
+        if data is None:
+            raise RuntimeError(f"trace has no tool call {call_id!r}")
+        if call_id in self.completed:
+            raise RuntimeError(f"trace tool call {call_id!r} executed twice")
+        if data.get("tool_name") != tool_name:
+            raise RuntimeError(
+                f"trace tool mismatch for {call_id!r}: "
+                f"expected {data.get('tool_name')!r}, got {tool_name!r}"
+            )
+        if self._arguments(data) != arguments:
+            raise RuntimeError(f"trace tool arguments changed for {call_id!r}")
+        expected_s = max(0.0, float(data.get("duration_ms") or 0.0) / 1000.0)
+        started = time.monotonic()
+        await asyncio.sleep(expected_s / self.replay_speed)
+        actual_s = time.monotonic() - started
+        self.sleep_records.append(
+            ReplaySleepRecord(
+                phase="tool_trace_replay",
+                expected_s=expected_s / self.replay_speed,
+                actual_s=actual_s,
+                source="source_tool_duration",
+                pid=os.getpid(),
+            )
+        )
+        self.completed.add(call_id)
+        return data.get("tool_result", data.get("result", ""))
+
+    @property
+    def complete(self) -> bool:
+        return self.completed == set(self.actions)
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "mode": "trace_timed_external_service",
+            "expected_calls": len(self.actions),
+            "completed_calls": len(self.completed),
+            "expected_sleep_s": round(
+                sum(record.expected_s for record in self.sleep_records), 6
+            ),
+            "actual_sleep_s": round(
+                sum(record.actual_s for record in self.sleep_records), 6
+            ),
+        }
+
+
+class _TraceReplayTool(Tool):
+    def __init__(self, name: str, state: _TraceToolReplayState) -> None:
+        self._name = name
+        self._state = state
+        self._context: contextvars.ContextVar[tuple[str, dict[str, Any]] | None] = (
+            contextvars.ContextVar(f"trace_tool_{name}", default=None)
+        )
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def description(self) -> str:
+        return "Replay this external tool from a recorded agent trajectory."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {"type": "object", "additionalProperties": True}
+
+    def set_tool_call_context(
+        self, tool_call_id: str, arguments: dict[str, Any]
+    ) -> None:
+        self._context.set((tool_call_id, arguments))
+
+    async def execute(self, **kwargs: Any) -> Any:
+        context = self._context.get()
+        if context is None:
+            raise RuntimeError("trace tool execution has no call context")
+        call_id, arguments = context
+        if arguments != kwargs:
+            raise RuntimeError(f"trace tool arguments were recast for {call_id!r}")
+        return await self._state.execute(
+            call_id=call_id,
+            tool_name=self.name,
+            arguments=arguments,
+        )
+
+
+def _build_trace_replay_tools(
+    source_actions: list[dict[str, Any]], replay_speed: float
+) -> tuple[list[Tool], _TraceToolReplayState]:
+    state = _TraceToolReplayState(source_actions, replay_speed)
+    names = sorted({str(data["tool_name"]) for data in state.actions.values()})
+    return [_TraceReplayTool(name, state) for name in names], state
 
 
 ShadowGenerationMode = Literal[
@@ -139,9 +270,7 @@ def shadow_generation_payload(config: ShadowGenerationConfig) -> dict[str, Any]:
         payload["agentix"] = True
     elif config.mode == "cachewise":
         payload["cachewise"] = True
-        payload["cachewise_predictor_checkout"] = (
-            config.cachewise_predictor_checkout
-        )
+        payload["cachewise_predictor_checkout"] = config.cachewise_predictor_checkout
         payload["cachewise_models_dir"] = config.cachewise_models_dir
     return payload
 
@@ -518,7 +647,10 @@ class OpenClawReplayProvider(LLMProvider):
                 raise ValueError("program-aware shadow generation requires program_id")
         elif program_id is not None:
             raise ValueError("program_id requires a program-aware shadow mode")
-        if shadow_generation is not None and shadow_generation.mode == "continuum_public":
+        if (
+            shadow_generation is not None
+            and shadow_generation.mode == "continuum_public"
+        ):
             if (
                 not isinstance(continuum_step_limit, int)
                 or isinstance(continuum_step_limit, bool)
@@ -547,8 +679,7 @@ class OpenClawReplayProvider(LLMProvider):
         )
         self._shadow_slot_pool = (
             _ShadowRequestSlotPool(shadow_generation.admission_slot_paths)
-            if shadow_generation is not None
-            and shadow_generation.admission_slot_paths
+            if shadow_generation is not None and shadow_generation.admission_slot_paths
             else None
         )
         self.source_terminal_boundary_reached = False
@@ -785,9 +916,7 @@ class OpenClawReplayProvider(LLMProvider):
             finally:
                 await self._shadow_client.aclose()
 
-    async def _update_cachewise_policy(
-        self, tool_calls: list[ToolCallRequest]
-    ) -> None:
+    async def _update_cachewise_policy(self, tool_calls: list[ToolCallRequest]) -> None:
         assert self._program_id is not None
         if len(tool_calls) > 1:
             raise RuntimeError("CacheWise replay does not support parallel tool calls")
@@ -899,9 +1028,13 @@ class OpenClawReplayProvider(LLMProvider):
                 try:
                     chunk = json.loads(payload)
                 except json.JSONDecodeError as exc:
-                    raise RuntimeError("shadow generation returned invalid SSE JSON") from exc
+                    raise RuntimeError(
+                        "shadow generation returned invalid SSE JSON"
+                    ) from exc
                 if not isinstance(chunk, dict):
-                    raise RuntimeError("shadow generation returned a non-object SSE chunk")
+                    raise RuntimeError(
+                        "shadow generation returned a non-object SSE chunk"
+                    )
                 raw_request_id = chunk.get("id")
                 if raw_request_id is not None:
                     if not isinstance(raw_request_id, str) or not raw_request_id:
@@ -935,14 +1068,11 @@ class OpenClawReplayProvider(LLMProvider):
                 raw_usage = chunk.get("usage")
                 if raw_usage is not None:
                     if not isinstance(raw_usage, dict):
-                        raise RuntimeError(
-                            "shadow generation returned malformed usage"
-                        )
+                        raise RuntimeError("shadow generation returned malformed usage")
                     raw_prompt_tokens = raw_usage.get("prompt_tokens")
                     prompt_token_details = raw_usage.get("prompt_tokens_details")
-                    if (
-                        prompt_token_details is not None
-                        and not isinstance(prompt_token_details, dict)
+                    if prompt_token_details is not None and not isinstance(
+                        prompt_token_details, dict
                     ):
                         raise RuntimeError(
                             "shadow generation returned malformed prompt token details"
@@ -968,10 +1098,7 @@ class OpenClawReplayProvider(LLMProvider):
                                 f"{usage_name}"
                             )
                         previous_value = observed_usage_values.get(usage_name)
-                        if (
-                            previous_value is not None
-                            and previous_value != usage_value
-                        ):
+                        if previous_value is not None and previous_value != usage_value:
                             raise RuntimeError(
                                 "shadow generation returned conflicting usage "
                                 f"{usage_name}: {previous_value} and {usage_value}"
@@ -993,7 +1120,9 @@ class OpenClawReplayProvider(LLMProvider):
                         not isinstance(token_id, int) or isinstance(token_id, bool)
                         for token_id in raw_ids
                     ):
-                        raise RuntimeError("shadow generation returned malformed token IDs")
+                        raise RuntimeError(
+                            "shadow generation returned malformed token IDs"
+                        )
                     if raw_ids and first_token_at is None:
                         first_token_at = time.monotonic()
                     token_ids.extend(raw_ids)
@@ -1059,7 +1188,9 @@ class OpenClawReplayProvider(LLMProvider):
             if role == "tool":
                 tool_call_id = raw_message.get("tool_call_id")
                 if not isinstance(tool_call_id, str) or not tool_call_id:
-                    raise RuntimeError("shadow generation tool message has no tool_call_id")
+                    raise RuntimeError(
+                        "shadow generation tool message has no tool_call_id"
+                    )
                 content = raw_message.get("content")
                 messages.append(
                     {
@@ -1075,7 +1206,10 @@ class OpenClawReplayProvider(LLMProvider):
                     }
                 )
                 continue
-            message: dict[str, Any] = {"role": role, "content": raw_message.get("content")}
+            message: dict[str, Any] = {
+                "role": role,
+                "content": raw_message.get("content"),
+            }
             if role == "assistant" and isinstance(raw_message.get("tool_calls"), list):
                 message["tool_calls"] = raw_message["tool_calls"]
                 if not message["content"]:
@@ -1670,6 +1804,9 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
     tool_resource_profile = request.get("tool_resource_profile")
     if tool_resource_profile is not None:
         tool_resource_profile = str(tool_resource_profile)
+    trace_tool_replay = bool(request.get("trace_tool_replay", False))
+    if trace_tool_replay and tool_resource_profile is not None:
+        raise ValueError("trace tool replay cannot collect live tool resources")
     tool_resource_run_token = request.get("tool_resource_run_token")
     if tool_resource_run_token is not None:
         tool_resource_run_token = str(tool_resource_run_token)
@@ -1783,6 +1920,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             resource_trace.add_integrity_error(setup_error)
 
     wall_start = time.time()
+    trace_tool_state: _TraceToolReplayState | None = None
     try:
         await agent.start()
         proof = await container_runtime_proof(
@@ -1818,12 +1956,12 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             ),
             tool_gap_loan=tool_gap_loan,
         )
-        runner = SessionRunner(
-            provider,
-            model=provider.get_default_model(),
-            max_iterations=max(1, len(llm_actions)),
-            context_window_tokens=int(request.get("context_window_tokens") or 65536),
-            tool_overrides=build_container_tools_for_agent(
+        if trace_tool_replay:
+            tool_overrides, trace_tool_state = _build_trace_replay_tools(
+                source_actions, replay_speed
+            )
+        else:
+            tool_overrides = build_container_tools_for_agent(
                 agent,
                 exec_timeout=int(command_timeout_s),
                 exec_timeout_floor=exec_timeout_floor_s,
@@ -1833,11 +1971,25 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 runtime_artifact_root_map=dict(
                     request.get("runtime_artifact_root_map") or {}
                 ),
-                exec_timeout_floor_exempt_call_ids=(timeout_floor_exempt_call_ids),
-            ),
+                exec_timeout_floor_exempt_call_ids=timeout_floor_exempt_call_ids,
+            )
+        runner = SessionRunner(
+            provider,
+            model=provider.get_default_model(),
+            max_iterations=max(1, len(llm_actions)),
+            context_window_tokens=int(request.get("context_window_tokens") or 65536),
+            tool_overrides=tool_overrides,
         )
         metadata_extra = {
             **proof,
+            **(
+                {
+                    "tool_execution_environment": "trace_timed_external_service",
+                    "tool_runtime": "source_trace_duration_and_result",
+                }
+                if trace_tool_replay
+                else {}
+            ),
             "task_instance_id": request["task_instance_id"],
             "source_action_agent_id": request["source_action_agent_id"],
             "source_agent_id": request["source_action_agent_id"],
@@ -1894,8 +2046,16 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             prepare_ms=None,
             runtime_label=runtime_label,
         )
+        if trace_tool_state is not None and not trace_tool_state.complete:
+            raise RuntimeError(
+                "trace tool replay did not consume every source tool call"
+            )
         _update_trace_metadata(output_trace, metadata_extra)
         sleep_records = [record.to_dict() for record in provider.sleep_records]
+        if trace_tool_state is not None:
+            sleep_records.extend(
+                record.to_dict() for record in trace_tool_state.sleep_records
+            )
         action_counts = _worker_trace_action_counts(
             output_trace,
             source_actions,
@@ -1943,6 +2103,11 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             "source_success": request.get("source_success"),
             "source_terminal_reason": source_terminal_reason,
             "provider_request_sequence_matches": (provider.request_sequence_matches),
+            **(
+                {"trace_tool_replay": trace_tool_state.summary()}
+                if trace_tool_state is not None
+                else {}
+            ),
             "telemetry_integrity_failed": (
                 telemetry_run_status["collection_validity"] == "invalid"
             ),
@@ -1960,7 +2125,11 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             "output_trace": str(output_trace),
             "sleep_records": [],
             "agent_execution_environment": "host",
-            "tool_execution_environment": "task_container",
+            "tool_execution_environment": (
+                "trace_timed_external_service"
+                if trace_tool_replay
+                else "task_container"
+            ),
             "tool_container_id": container_id,
             "tool_container_user": "unknown",
             "openclaw_host_pid": os.getpid(),
@@ -1985,6 +2154,11 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 "profile": tool_resource_profile,
                 "service_enabled": bool(tool_resource_profile),
             },
+            **(
+                {"trace_tool_replay": trace_tool_state.summary()}
+                if trace_tool_state is not None
+                else {}
+            ),
             **(
                 {"tool_gap_loan": tool_gap_status}
                 if tool_gap_status is not None

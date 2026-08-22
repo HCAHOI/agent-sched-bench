@@ -1,0 +1,68 @@
+version: 1
+defaults:
+  task_source: ../../../data/swe-rebench/tasks.json
+traces:
+  - label: tobymao__sqlglot-2821
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2821/attempt_1/trace.jsonl
+  - label: PennyLaneAI__pennylane-5835
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-5835/attempt_1/trace.jsonl
+  - label: PennyLaneAI__pennylane-4663
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-4663/attempt_1/trace.jsonl
+  - label: PennyLaneAI__pennylane-2834
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-2834/attempt_1/trace.jsonl
+  - label: tobymao__sqlglot-2659
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2659/attempt_1/trace.jsonl
+  - label: PennyLaneAI__pennylane-2964
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-2964/attempt_1/trace.jsonl
+  - label: tobymao__sqlglot-2800
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2800/attempt_1/trace.jsonl
+  - label: PennyLaneAI__pennylane-4540
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-4540/attempt_1/trace.jsonl
+  - label: tobymao__sqlglot-3333
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3333/attempt_1/trace.jsonl
+  - label: PennyLaneAI__pennylane-3579
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-3579/attempt_1/trace.jsonl
+  - label: tobymao__sqlglot-2305
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2305/attempt_1/trace.jsonl
+  - label: PennyLaneAI__pennylane-5448
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-5448/attempt_1/trace.jsonl
+  - label: tobymao__sqlglot-2507
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2507/attempt_1/trace.jsonl
+  - label: PennyLaneAI__pennylane-4736
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-4736/attempt_1/trace.jsonl
+  - label: tobymao__sqlglot-2521
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2521/attempt_1/trace.jsonl
+  - label: tobymao__sqlglot-4545
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4545/attempt_1/trace.jsonl
+  - label: tobymao__sqlglot-4051
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4051/attempt_1/trace.jsonl
+  - label: PennyLaneAI__pennylane-2654
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-2654/attempt_1/trace.jsonl
+  - label: PennyLaneAI__pennylane-4697
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-4697/attempt_1/trace.jsonl
+  - label: tobymao__sqlglot-4447
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4447/attempt_1/trace.jsonl
+  - label: PennyLaneAI__pennylane-6398
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-6398/attempt_1/trace.jsonl
+  - label: tobymao__sqlglot-2739
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2739/attempt_1/trace.jsonl
+  - label: tobymao__sqlglot-2935
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2935/attempt_1/trace.jsonl
+  - label: PennyLaneAI__pennylane-4251
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-4251/attempt_1/trace.jsonl
+  - label: tobymao__sqlglot-3252
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3252/attempt_1/trace.jsonl
+  - label: PennyLaneAI__pennylane-4161
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-4161/attempt_1/trace.jsonl
+  - label: tobymao__sqlglot-3630
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3630/attempt_1/trace.jsonl
+  - label: tobymao__sqlglot-2296
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2296/attempt_1/trace.jsonl
+  - label: PennyLaneAI__pennylane-5063
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-5063/attempt_1/trace.jsonl
+  - label: tobymao__sqlglot-3150
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3150/attempt_1/trace.jsonl
+  - label: PennyLaneAI__pennylane-1405
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-1405/attempt_1/trace.jsonl
+  - label: PennyLaneAI__pennylane-6049
+    trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-6049/attempt_1/trace.jsonl
