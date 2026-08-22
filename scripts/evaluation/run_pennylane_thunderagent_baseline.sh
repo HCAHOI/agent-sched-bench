@@ -34,7 +34,6 @@ preflight() {
     [[ -x "$vllm" ]] || fail "stock vLLM is not installed"
   [[ -f "$manifest" ]] || fail "missing PennyLane manifest"
   [[ ! -e "$run_root" ]] || fail "run root already exists: $run_root"
-  [[ -z "$container_cpuset" || -z "$container_cpus" ]] || fail "choose cpuset or CPU quota, not both"
   [[ "$trace_tool_replay" == 0 || "$trace_tool_replay" == 1 ]] || fail "TRACE_TOOL_REPLAY must be 0 or 1"
   [[ -z "$vllm_cpuset" ]] || command -v taskset >/dev/null || fail "taskset is required"
   local cell
@@ -196,7 +195,8 @@ run_cell() (
   fi
   if [[ -n "$container_cpuset" ]]; then
     simulate+=(--container-cpuset-cpus "$container_cpuset")
-  else
+  fi
+  if [[ -n "$container_cpus" ]]; then
     simulate+=(--container-cpus "$container_cpus")
   fi
   if [[ "$method" == cachewise ]]; then

@@ -1288,9 +1288,7 @@ def test_openclaw_host_replay_request_closes_provider_after_runner_failure(
     monkeypatch.setattr(
         "trace_collect.openclaw_host_runtime.container_runtime_proof", fake_proof
     )
-    monkeypatch.setattr(
-        "agents.openclaw._session_runner.SessionRunner", _FailingRunner
-    )
+    monkeypatch.setattr("agents.openclaw._session_runner.SessionRunner", _FailingRunner)
     monkeypatch.setattr(
         "trace_collect.openclaw_host_runtime.OpenClawReplayProvider", _FakeProvider
     )
@@ -1648,6 +1646,15 @@ def test_tool_gap_prediction_file_accepts_only_ordered_exec_subsequence(
     [
         (("--container-cpus", "2"), ("--cpus", "2")),
         (("--container-cpuset-cpus", "4-15"), ("--cpuset-cpus", "4-15")),
+        (
+            (
+                "--container-cpus",
+                "2",
+                "--container-cpuset-cpus",
+                "4-15",
+            ),
+            ("--cpus", "2", "--cpuset-cpus", "4-15"),
+        ),
     ],
 )
 def test_simulate_cli_passes_container_cpu_control(
@@ -1781,12 +1788,8 @@ def test_continuum_public_requires_causal_step_limit_metadata(tmp_path: Path) ->
 def test_simulate_rejects_shadow_generation_for_mixed_scaffolds_before_output(
     tmp_path: Path,
 ) -> None:
-    generic_trace = _write_host_trace(
-        tmp_path / "generic.jsonl", "generic-task"
-    )
-    openclaw_trace = _write_host_trace(
-        tmp_path / "openclaw.jsonl", "openclaw-task"
-    )
+    generic_trace = _write_host_trace(tmp_path / "generic.jsonl", "generic-task")
+    openclaw_trace = _write_host_trace(tmp_path / "openclaw.jsonl", "openclaw-task")
     openclaw_records = [
         json.loads(line) for line in openclaw_trace.read_text().splitlines()
     ]
@@ -1860,12 +1863,8 @@ def test_simulate_rejects_container_cpu_control_for_terminal_bench_before_work(
     tmp_path: Path,
     container_start_extra_args: tuple[str, str],
 ) -> None:
-    trace_path = _write_host_trace(
-        tmp_path / "terminal-bench.jsonl", "terminal-task"
-    )
-    trace_records = [
-        json.loads(line) for line in trace_path.read_text().splitlines()
-    ]
+    trace_path = _write_host_trace(tmp_path / "terminal-bench.jsonl", "terminal-task")
+    trace_records = [json.loads(line) for line in trace_path.read_text().splitlines()]
     trace_records[0].update(
         scaffold="openclaw",
         execution_environment="container",
@@ -1908,7 +1907,9 @@ def test_simulate_rejects_container_cpu_control_for_terminal_bench_before_work(
     assert not output_dir.exists()
 
 
-def test_combined_worker_trace_records_shadow_generation_metadata(tmp_path: Path) -> None:
+def test_combined_worker_trace_records_shadow_generation_metadata(
+    tmp_path: Path,
+) -> None:
     from trace_collect.simulate_outputs import _write_combined_worker_trace
     from trace_collect.simulate_types import (
         LLMTimingConfig,
@@ -2144,9 +2145,7 @@ def test_replay_exact_tool_contract_rejects_argument_changes() -> None:
         }
     ]
 
-    counts = replay_action_failure_counts(
-        source, replay, require_exact_tool_calls=True
-    )
+    counts = replay_action_failure_counts(source, replay, require_exact_tool_calls=True)
 
     assert not counts.action_sequence_matches
 
@@ -2186,9 +2185,7 @@ def test_worker_trace_applies_exact_tool_contract(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    counts = _worker_trace_action_counts(
-        trace, source, require_exact_tool_calls=True
-    )
+    counts = _worker_trace_action_counts(trace, source, require_exact_tool_calls=True)
 
     assert not counts.action_sequence_matches
 
@@ -2530,12 +2527,18 @@ def test_allowed_outcome_drift_is_not_a_framework_failure() -> None:
         action_sequence_matches=True,
     )
 
-    assert replay_framework_failure_count(
-        counts, missing_actions=0, require_source_outcome_match=False
-    ) == 0
-    assert replay_framework_failure_count(
-        counts, missing_actions=0, require_source_outcome_match=True
-    ) == 1
+    assert (
+        replay_framework_failure_count(
+            counts, missing_actions=0, require_source_outcome_match=False
+        )
+        == 0
+    )
+    assert (
+        replay_framework_failure_count(
+            counts, missing_actions=0, require_source_outcome_match=True
+        )
+        == 1
+    )
 
 
 def test_openclaw_container_mode_replays_llm_via_host_replay_runner(

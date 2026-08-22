@@ -15,7 +15,7 @@ continuum_commit=316a58794a6ff86b216e579b74fd56ed0c5a911f
 continuum_python=${CONTINUUM_VENV:-$HOME/.cache/agent-sched-bench/venvs/continuum-public-$continuum_commit}/bin/python
 profile_supplied=${CONTINUUM_REPRODUCTION_PROFILE:+1}
 profile=${CONTINUUM_REPRODUCTION_PROFILE:-$suite_root/continuum-prefill-a100-120k.json}
-full_concurrency=${CONCURRENCY:-4}
+full_concurrency=${CONCURRENCY:-16}
 trace_tool_replay=${TRACE_TOOL_REPLAY:-0}
 methods=(agentix continuum-public continuum-reproduction cachewise)
 
@@ -71,7 +71,7 @@ run_one() {
   local method=$1 manifest=$2 root=$3 concurrency=$4
   MODEL="$model" MANIFEST="$manifest" RUN_ROOT="$root" CELLS="$method-r1" \
     CONCURRENCY="$concurrency" CONTAINER_CPUSET="$container_cpuset" \
-    CONTAINER_CPUS= VLLM_CPUSET="$vllm_cpuset" \
+    CONTAINER_CPUS=2 VLLM_CPUSET="$vllm_cpuset" \
     TRACE_TOOL_REPLAY="$trace_tool_replay" \
     CONTINUUM_REPRODUCTION_PROFILE="$profile" "$runner" --run
 }
@@ -105,7 +105,7 @@ run_smokes_and_full() {
 
   MODEL="$model" MANIFEST="$full_manifest" \
     RUN_ROOT="$suite_root/full" CELLS="${methods[*]/%/-r1}" \
-    CONCURRENCY="$full_concurrency" CONTAINER_CPUSET="$container_cpuset" CONTAINER_CPUS= \
+    CONCURRENCY="$full_concurrency" CONTAINER_CPUSET="$container_cpuset" CONTAINER_CPUS=2 \
     TRACE_TOOL_REPLAY="$trace_tool_replay" \
     VLLM_CPUSET="$vllm_cpuset" CONTINUUM_REPRODUCTION_PROFILE="$profile" \
     "$runner" --run >"$suite_root/full.log" 2>&1
