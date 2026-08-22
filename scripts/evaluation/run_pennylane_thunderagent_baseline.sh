@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export PATH="$HOME/.local/bin:$PATH"
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 model=${MODEL:-NousResearch/Meta-Llama-3.1-8B-Instruct}
@@ -59,6 +60,8 @@ preflight() {
   fi
   if has_method cachewise; then
     [[ -f "$cachewise_models/all_models.pkl" ]] || fail "missing CacheWise models"
+    "$python" -c 'import sklearn' || \
+      fail "CacheWise requires: uv sync --extra serving-spike"
     "$repo/scripts/baselines/cachewise_reproduction.sh" verify >/dev/null
   fi
   local gpu
@@ -210,7 +213,19 @@ run_cell() (
   rc=$?
   set -e
   printf '%s\n' "$rc" >"$cell/simulate-exit-code"
-  [[ $rc -eq 0 ]]
+  (( rc == 0 )) || return "$rc"
+  "$python" - "$cell/output/throughput_summary.json" <<'PY'
+import json
+import sys
+
+summary = json.load(open(sys.argv[1]))
+if not (
+    summary["attempted_traces"] > 0
+    and summary["completed_traces"] == summary["attempted_traces"]
+    and summary["failed_traces"] == 0
+):
+    raise SystemExit(f"task failures: {summary['failed_traces']}")
+PY
 )
 
 run_all() {
@@ -252,9 +267,16 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
   "interpretation": "Physical baseline measurement; no GO/NO-GO gate."
 }, indent=2) + "\n")
 PY
-  local failed=0 cell
+  local failed=0 cell cell_rc
   for cell in "${cells[@]}"; do
-    run_cell "$cell" || { printf 'cell %s failed; continuing\n' "$cell" >&2; failed=1; }
+    set +e
+    run_cell "$cell"
+    cell_rc=$?
+    set -e
+    if (( cell_rc != 0 )); then
+      printf 'cell %s failed; continuing\n' "$cell" >&2
+      failed=1
+    fi
   done
   return "$failed"
 }

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -214,6 +216,11 @@ def test_paper_baseline_suite_smokes_matching_methods_before_full_run() -> None:
     assert "saga" not in suite_text.lower()
     assert "murakkab" not in suite_text.lower()
     runner_text = runner.read_text()
+    assert 'export PATH="$HOME/.local/bin:$PATH"' in runner_text
+    assert '"$python" -c \'import sklearn\'' in runner_text
+    assert 'summary["completed_traces"] == summary["attempted_traces"]' in runner_text
+    assert 'summary["failed_traces"] == 0' in runner_text
+    assert 'set +e\n    run_cell "$cell"\n    cell_rc=$?' in runner_text
     assert (
         'continuum_reproduction.sh" serve "$model" --dtype bfloat16 --kv-cache-dtype auto'
         in runner_text
@@ -222,3 +229,176 @@ def test_paper_baseline_suite_smokes_matching_methods_before_full_run() -> None:
     assert "--queue-upper-bounds 0.25,1,4,16" in runner_text
     assert 'OPENCLAW_REPLAY_TRACE_TOOLS="$trace_tool_replay"' in runner_text
     assert '"tool_execution": (' in runner_text
+
+
+def test_baseline_runner_rejects_server_and_task_failures(tmp_path: Path) -> None:
+    source = (
+        Path(__file__).parents[1]
+        / "scripts/evaluation/run_pennylane_thunderagent_baseline.sh"
+    )
+    repo = tmp_path / "repo"
+    runner = repo / "scripts/evaluation" / source.name
+    runner.parent.mkdir(parents=True)
+    runner.write_text(source.read_text())
+
+    def executable(path: Path, body: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/usr/bin/env bash\nset -euo pipefail\n" + body)
+        path.chmod(0o755)
+
+    real_python = sys.executable
+    executable(
+        repo / ".venv/bin/python",
+        f"""if [[ ${{FAKE_NO_SKLEARN:-0}} == 1 && ${{1:-}} == -c && ${{2:-}} == 'import sklearn' ]]; then
+  exit 42
+fi
+if [[ ${{1:-}} == -m ]]; then
+  out=
+  while (( $# )); do
+    [[ $1 == --output-dir ]] && {{ out=$2; break; }}
+    shift
+  done
+  mkdir -p "$out"
+  failed=0
+  [[ $out == *"/${{FAKE_FAILED_CELL:-never}}/output" ]] && failed=1
+  "{real_python}" - "$out/throughput_summary.json" "$failed" <<'PY'
+import json, sys
+failed = int(sys.argv[2])
+json.dump({{"attempted_traces": 1, "completed_traces": 1 - failed,
+           "failed_traces": failed}}, open(sys.argv[1], "w"))
+PY
+  exit 0
+fi
+exec "{real_python}" "$@"
+""",
+    )
+    executable(
+        repo / ".venv/bin/vllm",
+        """[[ ${FAKE_SERVER_FAIL:-0} == 0 ]] || exit 17
+touch "$FAKE_READY"
+trap 'rm -f "$FAKE_READY"; exit 0' TERM INT
+while true; do sleep 1; done
+""",
+    )
+    fake_bin = tmp_path / "bin"
+    executable(fake_bin / "docker", "exit 0\n")
+    executable(
+        fake_bin / "curl",
+        """if [[ $* == *:9000/* ]]; then
+  [[ -f "$FAKE_PROXY_READY" ]]
+else
+  [[ -f "$FAKE_READY" ]]
+fi
+""",
+    )
+    executable(fake_bin / "timeout", "exit 1\n")
+    executable(
+        fake_bin / "git",
+        """case "$*" in
+  *"status --porcelain"*) exit 0 ;;
+  *"rev-parse HEAD"*) echo deadbeef; exit 0 ;;
+esac
+exit 1
+""",
+    )
+    executable(
+        fake_bin / "nvidia-smi",
+        """if [[ $* == *name,memory.total* ]]; then
+  echo 'NVIDIA A100 80GB PCIe, 81920'
+else
+  echo '40, 0, 0'
+fi
+""",
+    )
+    manifest = repo / "manifest.yaml"
+    manifest.write_text("tasks: []\n")
+    base_env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:/usr/bin:/bin",
+        "MODEL": "fake/model",
+        "MANIFEST": str(manifest),
+        "CONCURRENCY": "1",
+        "CONTAINER_CPUS": "1",
+        "CONTAINER_CPUSET": "",
+        "VLLM_CPUSET": "",
+        "TRACE_TOOL_REPLAY": "1",
+        "FAKE_READY": str(tmp_path / "ready"),
+        "FAKE_PROXY_READY": str(tmp_path / "proxy-ready"),
+    }
+
+    summary_root = tmp_path / "summary-failure"
+    summary_run = subprocess.run(
+        ["bash", runner, "--run"],
+        env={
+            **base_env,
+            "RUN_ROOT": str(summary_root),
+            "CELLS": "fcfs-r1 fcfs-r2",
+            "FAKE_FAILED_CELL": "fcfs-r1",
+        },
+        text=True,
+        capture_output=True,
+        timeout=20,
+    )
+    assert summary_run.returncode == 1
+    assert (summary_root / "fcfs-r1/cell-exit-code").read_text().strip() == "1"
+    assert (summary_root / "fcfs-r2/cell-exit-code").read_text().strip() == "0"
+
+    server_root = tmp_path / "server-failure"
+    server_run = subprocess.run(
+        ["bash", runner, "--run"],
+        env={
+            **base_env,
+            "RUN_ROOT": str(server_root),
+            "CELLS": "fcfs-r1",
+            "FAKE_SERVER_FAIL": "1",
+        },
+        text=True,
+        capture_output=True,
+        timeout=20,
+    )
+    assert server_run.returncode == 1
+    assert (server_root / "fcfs-r1/cell-exit-code").read_text().strip() == "1"
+    assert not (server_root / "fcfs-r1/simulate-exit-code").exists()
+
+    thunder = repo / "scripts/baselines/thunderagent_official.sh"
+    executable(
+        thunder,
+        """[[ $1 == verify ]] && exit 0
+[[ $1 == serve ]] && exit 23
+exit 2
+""",
+    )
+    proxy_root = tmp_path / "proxy-failure"
+    proxy_run = subprocess.run(
+        ["bash", runner, "--run"],
+        env={
+            **base_env,
+            "RUN_ROOT": str(proxy_root),
+            "CELLS": "thunderagent-r1",
+        },
+        text=True,
+        capture_output=True,
+        timeout=20,
+    )
+    assert proxy_run.returncode == 1
+    assert (proxy_root / "thunderagent-r1/cell-exit-code").read_text().strip() == "1"
+    assert not (proxy_root / "thunderagent-r1/simulate-exit-code").exists()
+
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "all_models.pkl").touch()
+    cachewise_run = subprocess.run(
+        ["bash", runner, "--preflight"],
+        env={
+            **base_env,
+            "RUN_ROOT": str(tmp_path / "cachewise-preflight"),
+            "CELLS": "cachewise-r1",
+            "CACHEWISE_MODELS_DIR": str(models),
+            "FAKE_NO_SKLEARN": "1",
+        },
+        text=True,
+        capture_output=True,
+        timeout=20,
+    )
+    assert cachewise_run.returncode == 1
+    assert "CacheWise requires: uv sync --extra serving-spike" in cachewise_run.stderr
