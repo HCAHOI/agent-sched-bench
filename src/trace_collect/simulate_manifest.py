@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -167,6 +168,7 @@ def _load_trace_session(
     docker_image_override: str | None = None,
     label: str | None = None,
     manifest_depends_on: tuple[str, ...] = (),
+    arrival_s: float = 0.0,
 ) -> LoadedTraceSession:
     (
         task_instance_id,
@@ -201,6 +203,7 @@ def _load_trace_session(
         docker_image_override=docker_image_override,
         label=label,
         depends_on=_combine_depends_on(manifest_depends_on, task_depends_on),
+        arrival_s=arrival_s,
     )
 
 
@@ -354,6 +357,7 @@ def _load_simulate_manifest(
         docker_image: str | None = None
         label: str | None = None
         depends_on: tuple[str, ...] = ()
+        arrival_s = 0.0
 
         if isinstance(entry, str):
             trace_value = entry
@@ -364,6 +368,7 @@ def _load_simulate_manifest(
                 "docker_image",
                 "label",
                 "depends_on",
+                "arrival_s",
             }
             unknown_entry_keys = set(entry) - allowed_entry_keys
             if unknown_entry_keys:
@@ -380,6 +385,7 @@ def _load_simulate_manifest(
             docker_value = entry.get("docker_image")
             label_value = entry.get("label")
             depends_value = entry.get("depends_on")
+            arrival_value = entry.get("arrival_s", 0.0)
             if docker_value is not None:
                 if not isinstance(docker_value, str) or not docker_value:
                     raise SimulateError(
@@ -397,6 +403,17 @@ def _load_simulate_manifest(
                     depends_value,
                     field=f"simulate manifest trace entry {index} depends_on",
                 )
+            if (
+                not isinstance(arrival_value, (int, float))
+                or isinstance(arrival_value, bool)
+                or not math.isfinite(arrival_value)
+                or arrival_value < 0
+            ):
+                raise SimulateError(
+                    f"simulate manifest trace entry {index} arrival_s "
+                    "must be a finite non-negative number"
+                )
+            arrival_s = float(arrival_value)
         else:
             raise SimulateError(
                 f"simulate manifest trace entry {index} must be a string or object"
@@ -437,6 +454,7 @@ def _load_simulate_manifest(
                 docker_image=docker_image,
                 label=label,
                 depends_on=depends_on,
+                arrival_s=arrival_s,
             )
         )
     return entries

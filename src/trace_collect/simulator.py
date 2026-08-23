@@ -2744,7 +2744,7 @@ async def _run_cloud_model_queue(
     monitoring_policy: dict[str, object] | None = None,
     cleanup_state: _ImageCleanupState | None = None,
     container_start_extra_args: tuple[str, ...] = (),
-) -> tuple[list[PreparedTraceSession], list[ReplayTaskStats]]:
+) -> tuple[list[PreparedTraceSession], list[ReplayTaskStats], float | None]:
     if concurrency < 1:
         raise ValueError("concurrency must be >= 1")
 
@@ -2753,10 +2753,13 @@ async def _run_cloud_model_queue(
     completed_task_ids: set[str] = set()
     completed_session_count = 0
     children_by_dependency: dict[str, list[LoadedTraceSession]] = {}
+    scheduled_arrivals = any(loaded.arrival_s > 0 for loaded in loaded_sessions)
+    arrival_zero_monotonic = time.monotonic()
+    arrival_zero_wall_time_s = time.time()
     for loaded in loaded_sessions:
         for dependency in loaded.depends_on:
             children_by_dependency.setdefault(dependency, []).append(loaded)
-        if not loaded.depends_on:
+        if not scheduled_arrivals and not loaded.depends_on:
             queue.put_nowait(loaded)
             released_session_ids.add(id(loaded))
 
@@ -2765,6 +2768,18 @@ async def _run_cloud_model_queue(
     result_lock = asyncio.Lock()
     worker_count = min(concurrency, len(loaded_sessions))
     first_error: BaseException | None = None
+
+    async def release_scheduled_arrivals() -> None:
+        for loaded in sorted(
+            loaded_sessions,
+            key=lambda item: (item.arrival_s, item.manifest_index),
+        ):
+            await _sleep_until_monotonic(
+                arrival_zero_monotonic + loaded.arrival_s
+            )
+            if first_error is not None:
+                return
+            queue.put_nowait(loaded)
 
     def stop_workers() -> None:
         for _ in range(worker_count):
@@ -2788,6 +2803,7 @@ async def _run_cloud_model_queue(
                 if first_error is not None:
                     continue
 
+                admitted_monotonic = time.monotonic()
                 prepared: PreparedTraceSession | None = None
                 stats: ReplayTaskStats | None = None
                 session_error: BaseException | None = None
@@ -2852,6 +2868,7 @@ async def _run_cloud_model_queue(
                         )
                     except Exception as exc:
                         session_error = exc
+                terminal_monotonic = time.monotonic()
                 try:
                     if prepared is not None and not preparation_already_finalized:
                         await _finalize_prepared_session(prepared)
@@ -2863,6 +2880,21 @@ async def _run_cloud_model_queue(
                     if prepared is not None:
                         prepared_sessions.append(prepared)
                         if stats is not None:
+                            if scheduled_arrivals:
+                                planned_arrival = (
+                                    arrival_zero_monotonic + loaded.arrival_s
+                                )
+                                stats = dataclasses.replace(
+                                    stats,
+                                    admission_wait_s=max(
+                                        0.0,
+                                        admitted_monotonic - planned_arrival,
+                                    ),
+                                    ready_to_terminal_s=max(
+                                        0.0,
+                                        terminal_monotonic - planned_arrival,
+                                    ),
+                                )
                             task_stats.append(stats)
                     if session_error is not None:
                         if first_error is None:
@@ -2884,10 +2916,19 @@ async def _run_cloud_model_queue(
                     await _release_source_image(cleanup_state, loaded.run_instance_id)
                 queue.task_done()
 
+    arrival_task = (
+        asyncio.create_task(release_scheduled_arrivals())
+        if scheduled_arrivals
+        else None
+    )
     worker_results = await asyncio.gather(
         *(worker(index) for index in range(worker_count)),
         return_exceptions=True,
     )
+    if arrival_task is not None:
+        if not arrival_task.done():
+            arrival_task.cancel()
+        await asyncio.gather(arrival_task, return_exceptions=True)
     for result in worker_results:
         if isinstance(result, asyncio.CancelledError):
             raise result
@@ -2895,7 +2936,11 @@ async def _run_cloud_model_queue(
             first_error = result
     if first_error is not None:
         raise first_error
-    return prepared_sessions, task_stats
+    return (
+        prepared_sessions,
+        task_stats,
+        arrival_zero_wall_time_s if scheduled_arrivals else None,
+    )
 
 
 async def _prepare_replay_session_with_shared_limit(
@@ -3996,6 +4041,7 @@ async def simulate(
             docker_image_override=entry.docker_image,
             label=entry.label,
             manifest_depends_on=entry.depends_on,
+            arrival_s=entry.arrival_s,
         )
         for entry in manifest_entries
     ]
@@ -4027,6 +4073,15 @@ async def simulate(
         llm_timing=llm_timing,
     )
     has_dependencies = _has_session_dependencies(loaded_sessions)
+    has_scheduled_arrivals = any(
+        session.arrival_s > 0 for session in loaded_sessions
+    )
+    if has_scheduled_arrivals and stage_all_before_replay:
+        raise ValueError("scheduled arrivals do not support stage_all_before_replay")
+    if has_scheduled_arrivals and workers != 1:
+        raise ValueError("scheduled arrivals require workers=1")
+    if has_scheduled_arrivals and has_dependencies:
+        raise ValueError("scheduled arrivals do not support task dependencies")
     if stage_all_before_replay and has_dependencies:
         raise ValueError(
             "stage_all_before_replay does not support task dependencies"
@@ -4125,6 +4180,7 @@ async def simulate(
     run_wall_start: float | None = None
     run_wall_end: float | None = None
     common_ready_wall_time_s: float | None = None
+    arrival_zero_wall_time_s: float | None = None
     output_path.mkdir(parents=True, exist_ok=True)
     if shadow_generation is not None and shadow_llm_max_concurrency is not None:
         slot_dir = output_path / ".shadow-llm-admission"
@@ -4150,6 +4206,8 @@ async def simulate(
         scheduler_mode = "staged_bounded_queue"
     elif has_dependencies:
         scheduler_mode = "dependency_queue"
+    elif has_scheduled_arrivals:
+        scheduler_mode = "scheduled_arrival_queue"
     else:
         scheduler_mode = "bounded_queue" if workers == 1 else "multi_process_workers"
 
@@ -4306,7 +4364,11 @@ async def simulate(
                     **queue_kwargs,
                 )
             else:
-                prepared_sessions, task_stats = await _run_cloud_model_queue(
+                (
+                    prepared_sessions,
+                    task_stats,
+                    arrival_zero_wall_time_s,
+                ) = await _run_cloud_model_queue(
                     loaded_sessions,
                     cleanup_state=cleanup_state,
                     **queue_kwargs,
@@ -4454,6 +4516,7 @@ async def simulate(
         task_stats=task_stats,
         container_resources=container_resource_summary,
         monitoring_policy=monitoring_policy_dict,
+        arrival_zero_wall_time_s=arrival_zero_wall_time_s,
         common_ready_wall_time_s=common_ready_wall_time_s,
         tool_gap_loan=tool_gap_summary,
     )

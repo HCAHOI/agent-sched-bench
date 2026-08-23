@@ -1037,7 +1037,7 @@ def test_cloud_model_dependency_queue_releases_child_after_parent_finalizes(
     monkeypatch.setattr("trace_collect.simulator._replay_cloud_model_session", fake_replay)
     monkeypatch.setattr("trace_collect.simulator._finalize_prepared_session", fake_finalize)
 
-    _prepared, task_stats = asyncio.run(
+    _prepared, task_stats, arrival_zero_wall_time_s = asyncio.run(
         _run_cloud_model_queue(
             [child, parent],
             output_path=tmp_path / "out",
@@ -1053,6 +1053,8 @@ def test_cloud_model_dependency_queue_releases_child_after_parent_finalizes(
         )
     )
 
+    assert arrival_zero_wall_time_s is None
+
     stats_by_task = {stat.agent_id: stat for stat in task_stats}
     assert stats_by_task["child"].depends_on == ("parent",)
 
@@ -1064,6 +1066,81 @@ def test_cloud_model_dependency_queue_releases_child_after_parent_finalizes(
         "done:child",
         "finalize:child",
     ]
+
+
+def test_cloud_model_queue_releases_sessions_at_manifest_arrivals(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def loaded(task_id: str, manifest_index: int, arrival_s: float) -> LoadedTraceSession:
+        return LoadedTraceSession(
+            source_trace=tmp_path / f"{task_id}.jsonl",
+            task_source=tmp_path / "tasks.json",
+            task_instance_id=task_id,
+            source_action_agent_id=task_id,
+            run_instance_id=task_id,
+            manifest_index=manifest_index,
+            scaffold="generic",
+            metadata={"execution_environment": "host"},
+            summary=None,
+            task={"instance_id": task_id, "problem_statement": task_id},
+            actions=[],
+            iterations={},
+            arrival_s=arrival_s,
+        )
+
+    starts: dict[str, float] = {}
+    sessions = [loaded("now", 0, 0.0), loaded("later", 1, 0.03)]
+
+    async def fake_prepare(loaded_session: LoadedTraceSession, **_kwargs) -> PreparedTraceSession:
+        starts[loaded_session.task_instance_id] = time.monotonic()
+        return PreparedTraceSession(loaded=loaded_session, container=None)
+
+    async def fake_replay(prepared: PreparedTraceSession, **_kwargs) -> ReplayTaskStats:
+        loaded_session = prepared.loaded
+        return ReplayTaskStats(
+            agent_id=loaded_session.agent_id,
+            run_instance_id=loaded_session.run_instance_id,
+            source_agent_id=loaded_session.source_action_agent_id,
+            manifest_index=loaded_session.manifest_index,
+            label=loaded_session.label,
+            source_trace=str(loaded_session.source_trace),
+            success=True,
+            elapsed_s=0.0,
+            action_count=0,
+            llm_call_count=0,
+            tool_exec_count=0,
+            arrival_s=loaded_session.arrival_s,
+        )
+
+    async def fake_finalize(_prepared: PreparedTraceSession) -> None:
+        return None
+
+    monkeypatch.setattr("trace_collect.simulator._prepare_replay_session", fake_prepare)
+    monkeypatch.setattr("trace_collect.simulator._replay_cloud_model_session", fake_replay)
+    monkeypatch.setattr("trace_collect.simulator._finalize_prepared_session", fake_finalize)
+
+    _prepared, stats, arrival_zero_wall_time_s = asyncio.run(
+        _run_cloud_model_queue(
+            sessions,
+            output_path=tmp_path / "out",
+            trace_logger=object(),
+            concurrency=2,
+            container_executable=None,
+            network_mode="host",
+            container_resource_recorder=None,
+            replay_speed=1.0,
+            llm_timing=LLMTimingConfig(),
+            command_timeout_s=1.0,
+            warmup_skip_iterations=0,
+        )
+    )
+
+    assert starts["later"] - starts["now"] >= 0.02
+    later = next(stat for stat in stats if stat.agent_id == "later")
+    assert later.arrival_s == 0.03
+    assert later.ready_to_terminal_s is not None
+    assert arrival_zero_wall_time_s is not None
 
 
 def test_cloud_model_queue_continues_after_container_prep_runtime_error(
@@ -1130,7 +1207,7 @@ def test_cloud_model_queue_continues_after_container_prep_runtime_error(
     monkeypatch.setattr("trace_collect.simulator._finalize_prepared_session", fake_finalize)
     trace_logger = TraceLogger(tmp_path, "prep-fail-soft")
     try:
-        prepared, stats = asyncio.run(
+        prepared, stats, arrival_zero_wall_time_s = asyncio.run(
             _run_cloud_model_queue(
                 [bad, good],
                 output_path=tmp_path / "out",
@@ -1148,6 +1225,7 @@ def test_cloud_model_queue_continues_after_container_prep_runtime_error(
     finally:
         trace_logger.close()
 
+    assert arrival_zero_wall_time_s is None
     assert events == [
         "prepare:broken-networking",
         "prepare:next-task",
@@ -3368,7 +3446,7 @@ def test_throughput_wall_time_excludes_sweep_fixed_image_lifecycle(
                 llm_call_count=1,
                 tool_exec_count=1,
             )
-        ]
+        ], None
 
     async def fake_cleanup(*_args, **_kwargs) -> None:
         clock["value"] += 100.0

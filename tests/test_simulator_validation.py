@@ -109,6 +109,36 @@ def test_simulate_manifest_parses_depends_on(tmp_path: Path) -> None:
     assert entries[1].depends_on == ("parent",)
 
 
+def test_simulate_manifest_parses_and_validates_arrival_s(tmp_path: Path) -> None:
+    trace_path = _write_host_trace(tmp_path / "trace.jsonl", "task-a")
+    task_source = _write_tasks(
+        tmp_path / "tasks.json",
+        {"instance_id": "task-a", "problem_statement": "task"},
+    )
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "traces:",
+                f"  - trace: {json.dumps(str(trace_path))}",
+                f"    task_source: {json.dumps(str(task_source))}",
+                "    arrival_s: 1.25",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from trace_collect.simulate_manifest import _load_simulate_manifest
+
+    assert _load_simulate_manifest(manifest, default_task_source=None)[0].arrival_s == 1.25
+
+    manifest.write_text(manifest.read_text().replace("1.25", "-.inf"))
+    with pytest.raises(SimulateError, match="finite non-negative"):
+        _load_simulate_manifest(manifest, default_task_source=None)
+
+
 def test_simulate_manifest_rejects_invalid_depends_on(tmp_path: Path) -> None:
     trace_path = _write_host_trace(tmp_path / "trace.jsonl", "task-a")
     task_source = _write_tasks(

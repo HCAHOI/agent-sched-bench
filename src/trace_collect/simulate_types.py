@@ -26,6 +26,7 @@ class TraceManifestEntry:
     docker_image: str | None = None
     label: str | None = None
     depends_on: tuple[str, ...] = ()
+    arrival_s: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +46,7 @@ class ReplayTaskStats:
     tool_exec_count: int
     failed_action_count: int = 0
     depends_on: tuple[str, ...] = ()
+    arrival_s: float = 0.0
     admission_wait_s: float | None = None
     ready_to_terminal_s: float | None = None
 
@@ -99,6 +101,7 @@ class LoadedTraceSession:
     docker_image_override: str | None = None
     label: str | None = None
     depends_on: tuple[str, ...] = ()
+    arrival_s: float = 0.0
 
     @property
     def agent_id(self) -> str:

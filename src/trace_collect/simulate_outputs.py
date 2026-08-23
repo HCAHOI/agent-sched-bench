@@ -263,6 +263,7 @@ def _make_task_stats(
         tool_exec_count=tool_exec_count,
         failed_action_count=failed_action_count,
         depends_on=loaded.depends_on,
+        arrival_s=loaded.arrival_s,
     )
 
 
@@ -282,6 +283,7 @@ def _write_throughput_summary(
     task_stats: list[ReplayTaskStats],
     container_resources: dict[str, Any] | None = None,
     monitoring_policy: dict[str, object] | None = None,
+    arrival_zero_wall_time_s: float | None = None,
     common_ready_wall_time_s: float | None = None,
     tool_gap_loan: dict[str, object] | None = None,
 ) -> Path:
@@ -323,6 +325,8 @@ def _write_throughput_summary(
         "tool_exec_count": sum(stat.tool_exec_count for stat in task_stats),
         "tasks": [dataclasses.asdict(stat) for stat in task_stats],
     }
+    if arrival_zero_wall_time_s is not None:
+        payload["arrival_zero_wall_time_s"] = arrival_zero_wall_time_s
     if common_ready_wall_time_s is not None:
         ready_to_terminal = [
             stat.ready_to_terminal_s
