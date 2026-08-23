@@ -234,6 +234,9 @@ def test_paper_baseline_suite_smokes_matching_methods_before_full_run() -> None:
     assert "--queue-upper-bounds 0.25,1,4,16" in runner_text
     assert 'OPENCLAW_REPLAY_TRACE_TOOLS="$trace_tool_replay"' in runner_text
     assert '"tool_execution": (' in runner_text
+    assert 'shadow_llm_timeout_s=${SHADOW_LLM_TIMEOUT_S:-300}' in runner_text
+    assert '--shadow-llm-timeout-s "$shadow_llm_timeout_s"' in runner_text
+    assert '"shadow_llm_timeout_s": float(' in runner_text
 
 
 def test_baseline_runner_rejects_server_and_task_failures(tmp_path: Path) -> None:

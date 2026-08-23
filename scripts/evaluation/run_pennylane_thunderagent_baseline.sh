@@ -15,6 +15,7 @@ container_cpus=${CONTAINER_CPUS:-}
 vllm_cpuset=${VLLM_CPUSET:-}
 continuum_profile=${CONTINUUM_REPRODUCTION_PROFILE:-}
 trace_tool_replay=${TRACE_TOOL_REPLAY:-0}
+shadow_llm_timeout_s=${SHADOW_LLM_TIMEOUT_S:-300}
 cachewise_checkout=${CACHEWISE_CHECKOUT:-$HOME/.cache/agent-sched-bench/cachewise-181c435a090d328d00bbbee4c8eeb27d32f3abd2}
 cachewise_models=${CACHEWISE_MODELS_DIR:-$cachewise_checkout/tool_duration_prediction/models}
 if [[ -z "$container_cpuset" && -z "$container_cpus" ]]; then
@@ -185,7 +186,7 @@ run_cell() (
     --output-dir "$cell/output" --container docker --network-mode host
     --concurrency "$concurrency" --workers 1 --prep-concurrency 8
     --replay-speed 1 --shadow-llm-api-base "$api"
-    --shadow-llm-model "$model" --shadow-llm-timeout-s 300
+    --shadow-llm-model "$model" --shadow-llm-timeout-s "$shadow_llm_timeout_s"
     --shadow-llm-seed 0 --shadow-llm-mode "$shadow_mode"
     --resource-monitoring off --pmu-monitoring off
     --memory-bandwidth-monitoring off
@@ -237,6 +238,7 @@ run_all() {
     VLLM_CPUSET="$vllm_cpuset" \
     CONTINUUM_PROFILE="$continuum_profile" \
     TRACE_TOOL_REPLAY="$trace_tool_replay" \
+    SHADOW_LLM_TIMEOUT_S="$shadow_llm_timeout_s" \
     GIT_COMMIT="$(git -C "$repo" rev-parse HEAD)" "$python" - <<'PY'
 import json, os
 from pathlib import Path
@@ -256,6 +258,7 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
       if os.environ["TRACE_TOOL_REPLAY"] == "1"
       else "task_container"
     ),
+    "shadow_llm_timeout_s": float(os.environ["SHADOW_LLM_TIMEOUT_S"]),
   },
   "comparison": "paper baselines on one fixed agent-trajectory replay workload",
   "continuum_reproduction_profile": os.environ["CONTINUUM_PROFILE"] or None,
