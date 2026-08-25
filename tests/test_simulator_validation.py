@@ -109,6 +109,107 @@ def test_simulate_manifest_parses_depends_on(tmp_path: Path) -> None:
     assert entries[1].depends_on == ("parent",)
 
 
+def test_simulate_manifest_applies_default_docker_image(tmp_path: Path) -> None:
+    trace_path = _write_host_trace(tmp_path / "trace.jsonl", "task-a")
+    task_source = _write_tasks(
+        tmp_path / "tasks.json",
+        {"instance_id": "task-a", "problem_statement": "task"},
+    )
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "requires_trace_tool_replay: true",
+                "defaults:",
+                f"  task_source: {json.dumps(str(task_source))}",
+                "  docker_image: shared/image:latest",
+                "traces:",
+                f"  - trace: {json.dumps(str(trace_path))}",
+                f"  - trace: {json.dumps(str(trace_path))}",
+                "    docker_image: custom/image:latest",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from trace_collect.simulate_manifest import _load_simulate_manifest
+
+    entries = _load_simulate_manifest(manifest, default_task_source=None)
+
+    assert entries[0].docker_image == "shared/image:latest"
+    assert entries[1].docker_image == "custom/image:latest"
+    assert all(entry.requires_trace_tool_replay for entry in entries)
+
+
+@pytest.mark.parametrize(
+    ("replay_env", "message"),
+    [
+        (None, "OPENCLAW_REPLAY_TRACE_TOOLS=1"),
+        ("1", "requires OpenClaw for every trace"),
+    ],
+)
+def test_simulate_rejects_invalid_required_trace_tool_replay_before_work(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    replay_env: str | None,
+    message: str,
+) -> None:
+    trace_path = _write_host_trace(tmp_path / "trace.jsonl", "task-a")
+    trace_records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    trace_records[0]["execution_environment"] = "container"
+    trace_path.write_text(
+        "\n".join(json.dumps(record) for record in trace_records) + "\n",
+        encoding="utf-8",
+    )
+    task_source = _write_tasks(
+        tmp_path / "tasks.json",
+        {
+            "instance_id": "task-a",
+            "problem_statement": "task",
+            "image_name": "task/image:latest",
+        },
+    )
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "requires_trace_tool_replay: true",
+                "defaults:",
+                f"  task_source: {json.dumps(str(task_source))}",
+                "traces:",
+                f"  - trace: {json.dumps(str(trace_path))}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    if replay_env is None:
+        monkeypatch.delenv("OPENCLAW_REPLAY_TRACE_TOOLS", raising=False)
+    else:
+        monkeypatch.setenv("OPENCLAW_REPLAY_TRACE_TOOLS", replay_env)
+
+    async def fail_prefetch(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("prefetch started before replay-mode validation")
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._prefetch_container_images", fail_prefetch
+    )
+
+    with pytest.raises(ValueError, match=message):
+        asyncio.run(
+            simulate(
+                manifest=manifest,
+                output_dir=tmp_path / "out",
+                container_executable="docker",
+            )
+        )
+
+    assert not (tmp_path / "out").exists()
+
+
 def test_simulate_manifest_parses_and_validates_arrival_s(tmp_path: Path) -> None:
     trace_path = _write_host_trace(tmp_path / "trace.jsonl", "task-a")
     task_source = _write_tasks(

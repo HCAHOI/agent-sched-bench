@@ -62,6 +62,7 @@ from trace_collect.simulate_manifest import (
 from trace_collect.simulate_openclaw import (
     _run_openclaw_replay_session,
     replay_exec_timeout_floor_s,
+    replay_trace_tools_enabled,
 )
 from trace_collect.simulate_outputs import (
     _assign_task_output_dir,
@@ -4032,6 +4033,11 @@ async def simulate(
         manifest,
         default_task_source=task_source.resolve() if task_source is not None else None,
     )
+    if any(entry.requires_trace_tool_replay for entry in manifest_entries):
+        if not replay_trace_tools_enabled():
+            raise ValueError(
+                "simulate manifest requires OPENCLAW_REPLAY_TRACE_TOOLS=1"
+            )
 
     loaded_sessions = [
         _load_trace_session(
@@ -4046,6 +4052,17 @@ async def simulate(
         for entry in manifest_entries
     ]
     _assign_replay_instance_ids(loaded_sessions)
+    non_openclaw_sessions = [
+        session.task_instance_id
+        for session in loaded_sessions
+        if session.scaffold != "openclaw"
+    ]
+    if any(entry.requires_trace_tool_replay for entry in manifest_entries):
+        if non_openclaw_sessions:
+            raise ValueError(
+                "trace-tool-replay-only manifest requires OpenClaw for every trace; "
+                "non-OpenClaw tasks: " + ", ".join(non_openclaw_sessions)
+            )
     tool_gap_prediction_map: dict[str, tuple[ToolGapPrediction, ...]] | None = None
     if tool_gap_loan_arm is not None:
         if workers != 1 or not stage_all_before_replay:
@@ -4086,11 +4103,6 @@ async def simulate(
         raise ValueError(
             "stage_all_before_replay does not support task dependencies"
         )
-    non_openclaw_sessions = [
-        session.task_instance_id
-        for session in loaded_sessions
-        if session.scaffold != "openclaw"
-    ]
     if shadow_generation is not None and non_openclaw_sessions:
         raise ValueError(
             "shadow generation requires OpenClaw for every selected trace; "

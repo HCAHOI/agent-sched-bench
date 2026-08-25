@@ -27,6 +27,7 @@ class TraceManifestEntry:
     label: str | None = None
     depends_on: tuple[str, ...] = ()
     arrival_s: float = 0.0
+    requires_trace_tool_replay: bool = False
 
 
 @dataclass(frozen=True, slots=True)

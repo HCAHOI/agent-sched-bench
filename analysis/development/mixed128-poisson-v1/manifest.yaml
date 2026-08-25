@@ -10,9 +10,13 @@
 # Python 3.12 random.Random(42): shuffle PennyLane, shuffle SQLGlot, take 64 each,
 # concatenate in that order, shuffle once, then cumulative expovariate(0.1).
 # The first arrival is fixed at t=0; later arrival_s values are rounded to 6 digits.
+# Scheduling-only: tools must use trace-timed replay. The shared cached image is
+# never executed and avoids pulling 128 task-specific images onto the GPU host.
 version: 1
+requires_trace_tool_replay: true
 defaults:
   task_source: ../../../data/swe-rebench/tasks.json
+  docker_image: swerebench/sweb.eval.x86_64.pennylaneai_1776_pennylane-3579:latest
 traces:
 - label: tobymao__sqlglot-2450
   trace: /home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2450/attempt_1/trace.jsonl

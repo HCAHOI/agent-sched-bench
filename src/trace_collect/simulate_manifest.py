@@ -314,12 +314,19 @@ def _load_simulate_manifest(
 
     base_dir = manifest.parent
     manifest_default_task_source: Path | None = None
+    manifest_default_docker_image: str | None = None
+    manifest_requires_trace_tool_replay = False
     raw_traces: Any
 
     if isinstance(raw, list):
         raw_traces = raw
     elif isinstance(raw, dict):
-        allowed_manifest_keys = {"version", "defaults", "traces"}
+        allowed_manifest_keys = {
+            "version",
+            "defaults",
+            "traces",
+            "requires_trace_tool_replay",
+        }
         unknown_manifest_keys = set(raw) - allowed_manifest_keys
         if unknown_manifest_keys:
             keys = ", ".join(sorted(str(key) for key in unknown_manifest_keys))
@@ -330,10 +337,16 @@ def _load_simulate_manifest(
                 "simulate manifest version must be "
                 f"{SIMULATE_MANIFEST_SCHEMA_VERSION}, got {version!r}"
             )
+        replay_requirement = raw.get("requires_trace_tool_replay", False)
+        if not isinstance(replay_requirement, bool):
+            raise SimulateError(
+                "simulate manifest requires_trace_tool_replay must be a boolean"
+            )
+        manifest_requires_trace_tool_replay = replay_requirement
         defaults = raw.get("defaults") or {}
         if not isinstance(defaults, dict):
             raise SimulateError("simulate manifest defaults must be an object")
-        unknown_default_keys = set(defaults) - {"task_source"}
+        unknown_default_keys = set(defaults) - {"task_source", "docker_image"}
         if unknown_default_keys:
             keys = ", ".join(sorted(str(key) for key in unknown_default_keys))
             raise SimulateError(f"simulate manifest defaults has unsupported keys: {keys}")
@@ -343,6 +356,13 @@ def _load_simulate_manifest(
                 base_dir=base_dir,
                 field="defaults.task_source",
             )
+        if "docker_image" in defaults:
+            docker_value = defaults["docker_image"]
+            if not isinstance(docker_value, str) or not docker_value:
+                raise SimulateError(
+                    "simulate manifest defaults.docker_image must be a non-empty string"
+                )
+            manifest_default_docker_image = docker_value
         raw_traces = raw.get("traces")
     else:
         raise SimulateError("simulate manifest must be a YAML list or object with traces")
@@ -354,7 +374,7 @@ def _load_simulate_manifest(
     for index, entry in enumerate(raw_traces):
         trace_value: Any
         task_value: Any | None = None
-        docker_image: str | None = None
+        docker_image = manifest_default_docker_image
         label: str | None = None
         depends_on: tuple[str, ...] = ()
         arrival_s = 0.0
@@ -455,6 +475,7 @@ def _load_simulate_manifest(
                 label=label,
                 depends_on=depends_on,
                 arrival_s=arrival_s,
+                requires_trace_tool_replay=manifest_requires_trace_tool_replay,
             )
         )
     return entries
