@@ -10,34 +10,35 @@ Published semantics reproduced here:
   deadline slack (Eqs. 8--9).
 
 The authors describe an unpublished 8.5K-line Python / 1.2K-line CUDA vLLM
-extension.  Stock vLLM exposes neither per-session KV eviction priority nor a
-TTL/prefetch/migration API, so the KV functions below are decision-only: they
-never claim to retain or evict real blocks.  The only real scheduling action
-is an explicitly narrower AFS arrival-priority proxy.  It maps higher AFS to a
-smaller integer rank accepted by stock vLLM 0.11.2's priority scheduler.  This
-rank mapping, tie break, and vLLM version are paper-omitted compatibility
-choices.  Already-admitted requests are not reprioritized, capacity is not
-allocated proportionally, and there is no 100ms epoch, 500ms preemption,
-session routing, work stealing, KV migration, or CUDA prefetch.  Consequently
-this executable must be reported as ``saga-afs-arrival-subset``, never SAGA.
+extension.  This reproduction therefore exposes two bounded subsets rather
+than claiming the private system: an AFS arrival-priority proxy and a
+single-GPU KV policy that applies the published WA-LRU score and adaptive TTL
+to stock vLLM 0.11.2's resident prefix blocks.  Pattern/latency inputs must come
+from a frozen causal profile.  There is no speculative prefetch, periodic AFS,
+session routing, work stealing, migration, or multi-worker coordinator.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import math
+import shutil
+import subprocess
 import sys
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 import httpx
+import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
@@ -50,6 +51,12 @@ EXECUTABLE_VLLM_CORE_SHA256 = (
     "7a800832d7e0f0fdd0de27458687f746e19849dac4f852a4aa158f1bad030f0c"
 )
 EXECUTABLE_VLLM_SOURCE_SHA256 = {
+    "v1/core/block_pool.py": (
+        "851bbdf1911e7726fb162afbd081fbfff48dc58279449924c99305ae19a9ea79"
+    ),
+    "v1/core/kv_cache_manager.py": (
+        "39ef4ed095251efab344c84d7b81227127ac29f2a684255dd08dc523319142cf"
+    ),
     "v1/engine/core.py": EXECUTABLE_VLLM_CORE_SHA256,
     "v1/core/sched/request_queue.py": (
         "93e013bcd52490b72038202d718b65c55abb4dd38b94b5a6e4dda7fba2b03d8b"
@@ -82,7 +89,29 @@ EXECUTABLE_VLLM_SOURCE_SHA256 = {
     "v1/engine/core_client.py": (
         "48861ee3dbb142f91f41d4e46ab9e9d80e300e4abc2b6b98b6e3f67ac272bc5a"
     ),
+    "entrypoints/openai/api_server.py": (
+        "63964b55127c7eee24809288901d63b54f540f1733aff0c3d13e32d1e958867c"
+    ),
 }
+PATCHED_VLLM_SOURCE_SHA256 = EXECUTABLE_VLLM_SOURCE_SHA256 | {
+    "v1/core/block_pool.py": (
+        "945f8502fc3480cfd38698b390b1542045a4948e72f6aeec7121f2e73efc9d02"
+    ),
+    "v1/core/kv_cache_manager.py": (
+        "43a17c1a9b18bc28f9d501182aa486ba92a2943489b4ad83468b2b033e0112e5"
+    ),
+    "v1/request.py": "0d8578450670a77d944f7cbada120c09202cc16ae8988c809119303802b7750c",
+    "v1/core/sched/scheduler.py": (
+        "ed2bc2a511a2c3c62842a89720a281009c8bd1043766a9b283f9a8d4eb767415"
+    ),
+    "v1/engine/core.py": (
+        "47e84459ffbf0a08975c1b3e85acce0352cbcbcc5d79e8b7f681b1765cd327f4"
+    ),
+    "entrypoints/openai/api_server.py": (
+        "45681c572060860b78d0b9116ff906cb91abeb834d44a6194be85f93654da389"
+    ),
+}
+VLLM_PATCH = Path(__file__).with_name("saga_vllm.patch")
 
 ALPHA = 0.3
 BETA = 0.5
@@ -146,8 +175,6 @@ def verify_vllm_source_tree(
 ) -> None:
     """Verify the exact official Python path that carries request priority."""
 
-    import hashlib
-
     for relative, wanted in expected.items():
         path = package_root / relative
         if not path.is_file():
@@ -155,6 +182,23 @@ def verify_vllm_source_tree(
         actual = hashlib.sha256(path.read_bytes()).hexdigest()
         if actual != wanted:
             raise ValueError(f"stock vLLM source differs at {relative}: {actual}")
+
+
+def apply_vllm_patch(package_root: Path) -> None:
+    """Apply the exact SAGA subset patch to the pinned wheel sources."""
+
+    verify_vllm_source_tree(package_root)
+    if shutil.which("git") is None:
+        raise RuntimeError("git is required to apply the SAGA vLLM patch")
+    subprocess.run(
+        ["git", "apply", "--check", str(VLLM_PATCH)],
+        cwd=package_root.parent,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "apply", str(VLLM_PATCH)], cwd=package_root.parent, check=True
+    )
+    verify_vllm_source_tree(package_root, expected=PATCHED_VLLM_SOURCE_SHA256)
 
 
 def eviction_score(
@@ -215,6 +259,195 @@ def adaptive_ttl_s(
     return min(base * (1 - 0.5 * memory_pressure(used_fraction)), TTL_MAX_S)
 
 
+class SagaKVIndex:
+    """Session ownership and WA-LRU/TTL ordering for vLLM free blocks."""
+
+    def __init__(
+        self,
+        free_block_ids: Iterable[int],
+        *,
+        total_blocks: int,
+        clock: Clock = time.monotonic,
+    ) -> None:
+        self._clock = clock
+        self._total_blocks = total_blocks
+        self._enabled = False
+        self._owners: dict[int, set[str]] = {}
+        self._sessions: dict[str, dict[str, Any]] = {}
+        self._empty_free = dict.fromkeys(free_block_ids)
+        self._free_groups: dict[frozenset[str], dict[int, None]] = {}
+        self._updates = 0
+        self._evicted_blocks = 0
+        self._hard_fallback_blocks = 0
+
+    def _session(self, session_id: str) -> dict[str, Any]:
+        return self._sessions.setdefault(
+            session_id,
+            {
+                "resident": set(),
+                "reuse_probability": 0.0,
+                "last_access_s": self._clock(),
+                "ttl_until_s": 0.0,
+                "finished": False,
+            },
+        )
+
+    def attach(self, block_id: int, session_id: str | None) -> None:
+        if session_id is None:
+            return
+        self._enabled = True
+        owners = self._owners.setdefault(block_id, set())
+        if session_id not in owners:
+            owners.add(session_id)
+            self._session(session_id)["resident"].add(block_id)
+
+    def untrack_free(self, block_id: int) -> None:
+        self._empty_free.pop(block_id, None)
+        owners = frozenset(self._owners.get(block_id, ()))
+        group = self._free_groups.get(owners)
+        if group is not None:
+            group.pop(block_id, None)
+            if not group:
+                del self._free_groups[owners]
+
+    def track_free(self, block_id: int, *, cached: bool) -> None:
+        self.untrack_free(block_id)
+        if not cached:
+            self._empty_free[block_id] = None
+            return
+        owners = frozenset(self._owners.get(block_id, ()))
+        self._free_groups.setdefault(owners, {})[block_id] = None
+
+    def touch(self, block_id: int, session_id: str | None, *, was_free: bool) -> None:
+        if was_free:
+            self.untrack_free(block_id)
+        self.attach(block_id, session_id)
+        if session_id is not None:
+            self._session(session_id)["last_access_s"] = self._clock()
+
+    def evict(self, block_id: int) -> None:
+        self.untrack_free(block_id)
+        for session_id in self._owners.pop(block_id, ()):
+            state = self._sessions.get(session_id)
+            if state is not None:
+                state["resident"].discard(block_id)
+        self._evicted_blocks += 1
+
+    def _group_key(
+        self, owners: frozenset[str], now_s: float
+    ) -> tuple[bool, float, tuple[str, ...]]:
+        if not owners:
+            return (True, math.inf, ())
+        states = [self._session(session_id) for session_id in owners]
+        all_states = [state for state in self._sessions.values() if state["resident"]]
+        max_idle_s = max(
+            (max(0.0, now_s - state["last_access_s"]) for state in all_states),
+            default=1.0,
+        )
+        max_size = max((len(state["resident"]) for state in all_states), default=1)
+        scores = [
+            ALPHA * max(0.0, now_s - state["last_access_s"]) / max(max_idle_s, 1e-9)
+            + BETA * (1.0 - state["reuse_probability"])
+            + GAMMA * len(state["resident"]) / max_size
+            for state in states
+        ]
+        protected = any(
+            not state["finished"] and now_s < state["ttl_until_s"] for state in states
+        )
+        return (not protected, min(scores), tuple(sorted(owners)))
+
+    def take(self, count: int) -> list[int]:
+        selected: list[int] = []
+        while len(selected) < count:
+            hard_fallback = False
+            if self._empty_free:
+                block_id = next(iter(self._empty_free))
+            else:
+                now_s = self._clock()
+                keys = {
+                    owners: self._group_key(owners, now_s)
+                    for owners in self._free_groups
+                }
+                unprotected = [owners for owners, key in keys.items() if key[0]]
+                candidates = unprotected or list(keys)
+                if not candidates:
+                    raise RuntimeError("SAGA free index is out of sync")
+                hard_fallback = not unprotected
+                owners = max(candidates, key=lambda item: keys[item])
+                block_id = next(iter(self._free_groups[owners]))
+            self.untrack_free(block_id)
+            if hard_fallback:
+                self._hard_fallback_blocks += 1
+            selected.append(block_id)
+        return selected
+
+    def update(self, raw: Mapping[str, object]) -> dict[str, object]:
+        if raw.get("version") != 1:
+            raise ValueError("invalid SAGA policy version")
+        if set(raw) - {
+            "version",
+            "session_id",
+            "reuse_probability",
+            "base_ttl_s",
+            "finished",
+        }:
+            raise ValueError("unknown SAGA policy field")
+        session_id = raw.get("session_id")
+        reuse = raw.get("reuse_probability")
+        base_ttl_s = raw.get("base_ttl_s")
+        finished = raw.get("finished", False)
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError("session_id must be non-empty")
+        reuse = _number(reuse, "reuse_probability")
+        base_ttl_s = _number(base_ttl_s, "base_ttl_s")
+        if reuse > 1:
+            raise ValueError("reuse_probability must be in [0, 1]")
+        if not isinstance(finished, bool):
+            raise ValueError("finished must be boolean")
+        used_fraction = 1.0 - len(self._empty_free) / max(1, self._total_blocks)
+        ttl_s = 0.0 if finished else adaptive_ttl_s([base_ttl_s], used_fraction)
+        now_s = self._clock()
+        self._session(session_id).update(
+            reuse_probability=reuse,
+            last_access_s=now_s,
+            ttl_until_s=now_s + ttl_s,
+            finished=finished,
+        )
+        self._updates += 1
+        return {
+            "updated": True,
+            "session_id": session_id,
+            "ttl_s": ttl_s,
+            "used_fraction": used_fraction,
+        }
+
+    def reset(self, free_block_ids: Iterable[int]) -> None:
+        self._enabled = False
+        self._owners.clear()
+        self._sessions.clear()
+        self._empty_free = dict.fromkeys(free_block_ids)
+        self._free_groups.clear()
+        self._updates = 0
+        self._evicted_blocks = 0
+        self._hard_fallback_blocks = 0
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    def state(self) -> dict[str, object]:
+        return {
+            "enabled": self._enabled,
+            "sessions": len(self._sessions),
+            "managed_resident_blocks": sum(
+                len(state["resident"]) for state in self._sessions.values()
+            ),
+            "updates": self._updates,
+            "evicted_blocks": self._evicted_blocks,
+            "hard_fallback_blocks": self._hard_fallback_blocks,
+        }
+
+
 def kv_policy(payload: Mapping[str, object]) -> dict[str, object]:
     """Return paper KV decisions without pretending stock vLLM applies them."""
 
@@ -246,6 +479,284 @@ def kv_policy(payload: Mapping[str, object]) -> dict[str, object]:
             percentile=_number(payload.get("percentile", 0.95), "percentile"),
         ),
         "boundary": "decision-only; stock vLLM exposes no WA-LRU or TTL API",
+    }
+
+
+class SagaProfile:
+    """Frozen causal tool history used by the SAGA KV subset."""
+
+    def __init__(self, payload: Mapping[str, object]) -> None:
+        if payload.get("schema") != "saga-causal-profile-v1":
+            raise ValueError("invalid SAGA profile schema")
+        required_strings = (
+            "training_manifest",
+            "excluded_evaluation_manifest",
+            "tokenizer",
+        )
+        if any(
+            not isinstance(payload.get(field_name), str) or not payload[field_name]
+            for field_name in required_strings
+        ):
+            raise ValueError("SAGA profile lacks frozen provenance")
+        if not all(
+            Path(str(payload[field_name])).is_absolute()
+            for field_name in ("training_manifest", "excluded_evaluation_manifest")
+        ):
+            raise ValueError("SAGA profile manifest paths must be absolute")
+        task_sets: dict[str, set[str]] = {}
+        for field_name in ("training_task_ids", "evaluation_task_ids"):
+            values = payload.get(field_name)
+            if (
+                not isinstance(values, list)
+                or not values
+                or not all(isinstance(value, str) and value for value in values)
+            ):
+                raise ValueError(f"SAGA profile {field_name} must be non-empty strings")
+            task_sets[field_name] = set(values)
+        if task_sets["training_task_ids"] & task_sets["evaluation_task_ids"]:
+            raise ValueError("SAGA profile training/evaluation tasks overlap")
+        trace_sets: dict[str, set[str]] = {}
+        for field_name in ("training_trace_paths", "evaluation_trace_paths"):
+            values = payload.get(field_name)
+            if (
+                not isinstance(values, list)
+                or not values
+                or not all(
+                    isinstance(value, str) and Path(value).is_absolute()
+                    for value in values
+                )
+            ):
+                raise ValueError(f"SAGA profile {field_name} must be absolute paths")
+            trace_sets[field_name] = set(values)
+        if trace_sets["training_trace_paths"] & trace_sets["evaluation_trace_paths"]:
+            raise ValueError("SAGA profile training/evaluation traces overlap")
+        self._evaluation_task_ids = task_sets["evaluation_task_ids"]
+        self._evaluation_trace_paths = {
+            Path(value).resolve() for value in trace_sets["evaluation_trace_paths"]
+        }
+        self._evaluation_manifest = Path(
+            str(payload["excluded_evaluation_manifest"])
+        ).resolve()
+        tools = payload.get("tools")
+        if not isinstance(tools, Mapping):
+            raise ValueError("SAGA profile tools must be an object")
+        self._tools: dict[str, dict[str, object]] = {}
+        for tool_name, raw in tools.items():
+            if not isinstance(tool_name, str) or not tool_name:
+                raise ValueError("SAGA profile tool names must be non-empty")
+            if not isinstance(raw, Mapping):
+                raise ValueError(f"SAGA profile for {tool_name!r} must be an object")
+            p95_latency_s = raw.get("p95_latency_s")
+            successors = raw.get("successors")
+            p95_latency_s = _number(p95_latency_s, f"{tool_name}.p95_latency_s")
+            if not isinstance(successors, list):
+                raise ValueError(f"{tool_name!r} successors must be a list")
+            parsed_successors: list[dict[str, float]] = []
+            probability_sum = 0.0
+            for index, successor in enumerate(successors):
+                if not isinstance(successor, Mapping):
+                    raise ValueError(f"{tool_name!r} successor {index} is invalid")
+                probability = _number(
+                    successor.get("probability"),
+                    f"{tool_name}.successors[{index}].probability",
+                )
+                observation_tokens = _number(
+                    successor.get("expected_observation_tokens"),
+                    f"{tool_name}.successors[{index}].expected_observation_tokens",
+                )
+                probability_sum += probability
+                parsed_successors.append(
+                    {
+                        "probability": probability,
+                        "expected_observation_tokens": observation_tokens,
+                    }
+                )
+            if probability_sum > 1 + 1e-12:
+                raise ValueError(f"{tool_name!r} successor probabilities exceed 1")
+            self._tools[tool_name] = {
+                "p95_latency_s": p95_latency_s,
+                "successors": parsed_successors,
+            }
+
+    @classmethod
+    def load(cls, path: Path) -> "SagaProfile":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, Mapping):
+            raise ValueError("SAGA profile must be a JSON object")
+        return cls(payload)
+
+    def validate_evaluation_manifest(self, path: Path) -> None:
+        if path.resolve() != self._evaluation_manifest:
+            raise ValueError(
+                "SAGA profile was frozen for a different evaluation manifest"
+            )
+        entries = _manifest_traces(path)
+        if {task_id for task_id, _ in entries} != self._evaluation_task_ids or {
+            trace for _, trace in entries
+        } != self._evaluation_trace_paths:
+            raise ValueError("SAGA evaluation manifest differs from the frozen profile")
+
+    def build(
+        self, session_id: str, tool_name: str, current_context_tokens: int
+    ) -> tuple[dict[str, object], bool]:
+        if not session_id:
+            raise ValueError("session_id must be non-empty")
+        if (
+            not isinstance(current_context_tokens, int)
+            or isinstance(current_context_tokens, bool)
+            or current_context_tokens <= 0
+        ):
+            raise ValueError("current_context_tokens must be a positive integer")
+        profile = self._tools.get(tool_name)
+        if profile is None:
+            return finished_saga_policy(session_id, finished=False), False
+        successors = profile["successors"]
+        assert isinstance(successors, list)
+        reuse = sum(
+            successor["probability"]
+            * current_context_tokens
+            / (current_context_tokens + successor["expected_observation_tokens"])
+            for successor in successors
+        )
+        return (
+            {
+                "version": 1,
+                "session_id": session_id,
+                "reuse_probability": reuse,
+                "base_ttl_s": profile["p95_latency_s"],
+                "finished": False,
+            },
+            True,
+        )
+
+
+def finished_saga_policy(
+    session_id: str, *, finished: bool = True
+) -> dict[str, object]:
+    return {
+        "version": 1,
+        "session_id": session_id,
+        "reuse_probability": 0.0,
+        "base_ttl_s": 0.0,
+        "finished": finished,
+    }
+
+
+def _trace_task_id(path: Path) -> str:
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            row = json.loads(line)
+            if row.get("type") == "trace_metadata":
+                task_id = row.get("task_instance_id", row.get("instance_id"))
+                if isinstance(task_id, str) and task_id:
+                    return task_id
+            if row.get("type") == "action":
+                task_id = row.get("task_instance_id", row.get("instance_id"))
+                if isinstance(task_id, str) and task_id:
+                    return task_id
+    raise ValueError(f"trace lacks a canonical task ID: {path}")
+
+
+def _manifest_traces(path: Path) -> list[tuple[str, Path]]:
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("traces"), list):
+        raise ValueError(f"invalid trace manifest: {path}")
+    entries: list[tuple[str, Path]] = []
+    for index, entry in enumerate(payload["traces"]):
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"manifest trace {index} must be an object")
+        trace = entry.get("trace")
+        if not isinstance(trace, str) or not trace:
+            raise ValueError(f"manifest trace {index} lacks trace")
+        trace_path = Path(trace)
+        if not trace_path.is_absolute():
+            trace_path = path.parent / trace_path
+        trace_path = trace_path.resolve()
+        if not trace_path.is_file():
+            raise FileNotFoundError(f"missing manifest trace: {trace_path}")
+        entries.append((_trace_task_id(trace_path), trace_path))
+    return entries
+
+
+def build_causal_profile(
+    manifest: Path,
+    *,
+    tokenizer: Any,
+    tokenizer_name: str,
+    exclude_manifest: Path,
+) -> dict[str, object]:
+    """Build the paper's per-tool history from explicitly allowed traces."""
+
+    entries = _manifest_traces(manifest)
+    if len({label for label, _ in entries}) != len(entries):
+        raise ValueError("training manifest task IDs must be unique")
+    evaluation_entries = _manifest_traces(exclude_manifest)
+    excluded = {task_id for task_id, _ in evaluation_entries}
+    overlap = sorted(task_id for task_id, _ in entries if task_id in excluded)
+    if overlap:
+        raise ValueError(f"training/evaluation task overlap: {overlap}")
+    training_paths = {trace for _, trace in entries}
+    evaluation_paths = {trace for _, trace in evaluation_entries}
+    if training_paths & evaluation_paths:
+        raise ValueError("training/evaluation trace paths overlap")
+    durations: dict[str, list[float]] = defaultdict(list)
+    transitions: dict[str, dict[str, list[int]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    occurrences: dict[str, int] = defaultdict(int)
+    for label, trace in entries:
+        if not trace.is_file():
+            raise FileNotFoundError(f"missing training trace for {label}: {trace}")
+        actions: list[tuple[str, float, int]] = []
+        with trace.open(encoding="utf-8") as handle:
+            for line in handle:
+                row = json.loads(line)
+                if row.get("type") != "action" or row.get("action_type") != "tool_exec":
+                    continue
+                data = row.get("data")
+                if not isinstance(data, Mapping):
+                    raise ValueError(f"malformed tool action in {trace}")
+                tool_name = data.get("tool_name")
+                if not isinstance(tool_name, str) or not tool_name:
+                    raise ValueError(f"tool action lacks a name in {trace}")
+                duration_s = _number(data.get("duration_ms"), "duration_ms") / 1000.0
+                result = data.get("tool_result")
+                if not isinstance(result, str):
+                    result = json.dumps(result, ensure_ascii=False, sort_keys=True)
+                result_tokens = len(tokenizer.encode(result, add_special_tokens=False))
+                actions.append((tool_name, duration_s, result_tokens))
+                durations[tool_name].append(duration_s)
+                occurrences[tool_name] += 1
+        for current, following in zip(actions, actions[1:]):
+            transitions[current[0]][following[0]].append(current[2])
+    tools: dict[str, object] = {}
+    for tool_name in sorted(durations):
+        successor_rows = []
+        for successor, observations in sorted(transitions[tool_name].items()):
+            successor_rows.append(
+                {
+                    "tool": successor,
+                    "probability": len(observations) / occurrences[tool_name],
+                    "expected_observation_tokens": sum(observations)
+                    / len(observations),
+                    "samples": len(observations),
+                }
+            )
+        tools[tool_name] = {
+            "p95_latency_s": empirical_percentile(durations[tool_name], 0.95),
+            "latency_samples": len(durations[tool_name]),
+            "successors": successor_rows,
+        }
+    return {
+        "schema": "saga-causal-profile-v1",
+        "training_manifest": str(manifest.resolve()),
+        "excluded_evaluation_manifest": str(exclude_manifest.resolve()),
+        "training_task_ids": [task_id for task_id, _ in entries],
+        "evaluation_task_ids": sorted(excluded),
+        "training_trace_paths": [str(trace) for _, trace in entries],
+        "evaluation_trace_paths": sorted(str(trace) for trace in evaluation_paths),
+        "tokenizer": tokenizer_name,
+        "tools": tools,
     }
 
 
@@ -288,9 +799,7 @@ class AFSState:
             or not tenant_id
         ):
             raise ValueError("session_id and tenant_id must be non-empty")
-        deadline_after_s = _number(
-            deadline_after_s, "deadline_after_s", minimum=1e-300
-        )
+        deadline_after_s = _number(deadline_after_s, "deadline_after_s", minimum=1e-300)
         pending: dict[str, float] = {}
         for index, node in enumerate(nodes):
             node_id = node.get("node_id")
@@ -426,7 +935,9 @@ def create_app(
 
     afs = state or AFSState()
     emit = event_sink or (
-        lambda event: print(json.dumps(event, sort_keys=True), file=sys.stderr, flush=True)
+        lambda event: print(
+            json.dumps(event, sort_keys=True), file=sys.stderr, flush=True
+        )
     )
     client = httpx.AsyncClient(
         base_url=backend.rstrip("/"), timeout=None, transport=backend_transport
@@ -449,7 +960,9 @@ def create_app(
             session_id = payload.pop("saga_session_id", None)
             node_id = payload.pop("saga_node_id", None)
             if not isinstance(session_id, str) or not isinstance(node_id, str):
-                raise ValueError("saga_session_id and saga_node_id are required strings")
+                raise ValueError(
+                    "saga_session_id and saga_node_id are required strings"
+                )
             if "priority" in payload:
                 raise ValueError("client priority would invalidate the SAGA subset")
             assignment = afs.assign(session_id, node_id)
@@ -547,7 +1060,9 @@ def create_app(
     async def register(request: Request) -> dict[str, object]:
         payload = await request.json()
         if not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="request JSON must be an object")
+            raise HTTPException(
+                status_code=400, detail="request JSON must be an object"
+            )
         nodes = payload.get("nodes")
         try:
             if not isinstance(nodes, list) or not all(
@@ -629,6 +1144,18 @@ def inference_manifest() -> dict[str, object]:
                 "caller supplies settled causal samples; the paper gives no EMA factor"
             ),
             "memory_pressure_above_high": "clamp to the paper-declared [0,1] domain",
+            "kv_hard_pressure": (
+                "when every free cached block is TTL-protected and allocation must "
+                "progress, evict the highest WA-LRU candidate"
+            ),
+            "shared_prefix_blocks": (
+                "retain for the owner with the lowest eviction score; evict only "
+                "when all owners are unprotected or hard pressure requires it"
+            ),
+            "profile_transport": (
+                "frozen per-tool history supplies latency and successor observation "
+                "lengths; missing tools receive no TTL protection"
+            ),
             "afs_to_vllm": "descending AFS rank at request arrival",
             "equal_afs_tie": "tenant ID lexical order",
             "expired_deadline": (
@@ -638,24 +1165,23 @@ def inference_manifest() -> dict[str, object]:
                 "version": EXECUTABLE_VLLM_VERSION,
                 "official_tag_commit": EXECUTABLE_VLLM_COMMIT,
                 "priority_path_sha256": EXECUTABLE_VLLM_SOURCE_SHA256,
+                "patched_path_sha256": PATCHED_VLLM_SOURCE_SHA256,
                 "reason": "first shared baseline runtime already pinned with stock priority API",
             },
         },
-        "decision_only": [
-            "AEG reuse probability",
-            "WA-LRU eviction score",
-            "tool-call TTL",
-        ],
+        "decision_only": ["AEG/profile construction before a frozen profile exists"],
         "unavailable_private_system": [
-            "WA-LRU/TTL enforcement in vLLM block management",
             "tool-aware speculative CUDA prefetch",
-            "pattern-based AEG inference and its history/model",
+            "authors' exact pattern-based AEG inference and EMA history model",
             "100ms proportional-capacity AFS epochs and 500ms preemption",
             "session-affinity multi-worker routing",
             "randomized work stealing and Llumnix KV migration",
             "Ray/gRPC coordinator and multi-node 64-GPU execution",
         ],
-        "executable_action": "AFS arrival-priority on one stock vLLM worker",
+        "executable_action": [
+            "AFS arrival-priority on one vLLM worker",
+            "single-GPU WA-LRU eviction and tool-call TTL over resident prefix blocks",
+        ],
         "full_saga": False,
     }
 
@@ -674,8 +1200,17 @@ def main(argv: list[str] | None = None) -> None:
     commands.add_parser("manifest")
     verify = commands.add_parser("verify-vllm-tree")
     verify.add_argument("package_root")
+    apply_patch_parser = commands.add_parser("apply-vllm-patch")
+    apply_patch_parser.add_argument("package_root")
+    verify_patched = commands.add_parser("verify-patched-vllm")
+    verify_patched.add_argument("package_root")
     policy = commands.add_parser("kv-policy")
     policy.add_argument("input", help="JSON file or - for stdin")
+    profile = commands.add_parser("build-profile")
+    profile.add_argument("--manifest", type=Path, required=True)
+    profile.add_argument("--exclude-manifest", type=Path, required=True)
+    profile.add_argument("--tokenizer", required=True)
+    profile.add_argument("--output", type=Path, required=True)
     serve = commands.add_parser("serve-afs-subset")
     serve.add_argument("--backend", required=True, help="stock vLLM API root")
     serve.add_argument("--host", default="127.0.0.1")
@@ -687,13 +1222,36 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "verify-vllm-tree":
         verify_vllm_source_tree(Path(args.package_root))
         print(f"verified stock vLLM priority path at {args.package_root}")
+    elif args.command == "apply-vllm-patch":
+        apply_vllm_patch(Path(args.package_root))
+        print(f"applied SAGA KV subset patch at {args.package_root}")
+    elif args.command == "verify-patched-vllm":
+        verify_vllm_source_tree(
+            Path(args.package_root), expected=PATCHED_VLLM_SOURCE_SHA256
+        )
+        print(f"verified SAGA KV subset patch at {args.package_root}")
     elif args.command == "kv-policy":
         print(json.dumps(kv_policy(_load_json(args.input)), indent=2, sort_keys=True))
+    elif args.command == "build-profile":
+        from transformers import AutoTokenizer
+
+        payload = build_causal_profile(
+            args.manifest,
+            exclude_manifest=args.exclude_manifest,
+            tokenizer=AutoTokenizer.from_pretrained(args.tokenizer),
+            tokenizer_name=args.tokenizer,
+        )
+        args.output.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
     else:
         import uvicorn
 
         uvicorn.run(
-            create_app(backend=args.backend), host=args.host, port=args.port, log_level="info"
+            create_app(backend=args.backend),
+            host=args.host,
+            port=args.port,
+            log_level="info",
         )
 
 

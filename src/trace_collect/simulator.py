@@ -3930,6 +3930,7 @@ async def simulate(
     shadow_llm_mode: ShadowGenerationMode = "vllm",
     shadow_llm_cachewise_predictor_checkout: Path | None = None,
     shadow_llm_cachewise_models_dir: Path | None = None,
+    shadow_llm_saga_profile: Path | None = None,
     tool_gap_loan_arm: str | None = None,
     tool_gap_predictions: Path | None = None,
     tool_gap_borrower_priority: int | None = None,
@@ -3976,6 +3977,16 @@ async def simulate(
             raise ValueError("CacheWise mode requires predictor and model paths")
     elif any(path is not None for path in cachewise_paths):
         raise ValueError("CacheWise paths require CacheWise mode")
+    if shadow_llm_mode == "saga":
+        if shadow_llm_saga_profile is None:
+            raise ValueError("SAGA mode requires a frozen causal profile")
+        from scripts.baselines.saga_reproduction import SagaProfile
+
+        SagaProfile.load(shadow_llm_saga_profile).validate_evaluation_manifest(
+            manifest
+        )
+    elif shadow_llm_saga_profile is not None:
+        raise ValueError("SAGA profile requires SAGA mode")
     if tool_gap_loan_arm not in {None, "fixed", "feedback", "predictor"}:
         raise ValueError(f"unknown tool-gap loan arm: {tool_gap_loan_arm}")
     if tool_gap_loan_arm == "predictor" and tool_gap_predictions is None:
@@ -4009,6 +4020,11 @@ async def simulate(
             cachewise_models_dir=(
                 str(shadow_llm_cachewise_models_dir.resolve())
                 if shadow_llm_cachewise_models_dir is not None
+                else None
+            ),
+            saga_profile=(
+                str(shadow_llm_saga_profile.resolve())
+                if shadow_llm_saga_profile is not None
                 else None
             ),
         )

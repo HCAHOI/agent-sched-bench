@@ -233,7 +233,9 @@ def test_simulate_manifest_parses_and_validates_arrival_s(tmp_path: Path) -> Non
 
     from trace_collect.simulate_manifest import _load_simulate_manifest
 
-    assert _load_simulate_manifest(manifest, default_task_source=None)[0].arrival_s == 1.25
+    assert (
+        _load_simulate_manifest(manifest, default_task_source=None)[0].arrival_s == 1.25
+    )
 
     manifest.write_text(manifest.read_text().replace("1.25", "-.inf"))
     with pytest.raises(SimulateError, match="finite non-negative"):
@@ -1502,7 +1504,8 @@ def test_openclaw_host_replay_request_closes_provider_after_runner_failure(
 
 
 @pytest.mark.parametrize(
-    "shadow_mode", ["thunderagent", "continuum_public", "agentix", "cachewise"]
+    "shadow_mode",
+    ["thunderagent", "continuum_public", "agentix", "cachewise", "saga"],
 )
 def test_program_aware_replay_uses_distinct_manifest_replica_ids(
     monkeypatch: pytest.MonkeyPatch,
@@ -1580,6 +1583,8 @@ def test_program_aware_replay_uses_distinct_manifest_replica_ids(
                     "cachewise_models_dir": "/models",
                 }
                 if shadow_mode == "cachewise"
+                else {"saga_profile": "/profile.json"}
+                if shadow_mode == "saga"
                 else {}
             ),
         )
