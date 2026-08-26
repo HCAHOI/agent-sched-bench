@@ -2,16 +2,31 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
+from typing import Any
 
+import httpx
 import uvicorn
 from fastapi import FastAPI
 
-from ThunderAgent.app import register_routes
-from ThunderAgent.config import Config, set_config
-from ThunderAgent.scheduler import MultiBackendRouter
+
+async def _disable_backend_keepalive(router: Any) -> None:
+    """Avoid reusing proxy-to-vLLM connections under high concurrency."""
+    old_client = router.client
+    router.client = httpx.AsyncClient(
+        timeout=900.0,
+        limits=httpx.Limits(
+            max_connections=None,
+            max_keepalive_connections=0,
+        ),
+    )
+    await old_client.aclose()
 
 
 def main() -> None:
+    from ThunderAgent.app import register_routes
+    from ThunderAgent.config import Config, set_config
+    from ThunderAgent.scheduler import MultiBackendRouter
+
     backends = [
         value.strip()
         for value in os.environ.get(
@@ -19,9 +34,7 @@ def main() -> None:
         ).split(",")
         if value.strip()
     ]
-    profile_dir = os.environ.get(
-        "THUNDERAGENT_PROFILE_DIR", "./thunderagent_profiles"
-    )
+    profile_dir = os.environ.get("THUNDERAGENT_PROFILE_DIR", "./thunderagent_profiles")
     config = Config(
         backends=backends,
         router_mode="tr",
@@ -44,8 +57,10 @@ def main() -> None:
         acting_token_weight=1.0,
         use_acting_token_decay=True,
     )
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        await _disable_backend_keepalive(router)
         await router.start()
         try:
             yield

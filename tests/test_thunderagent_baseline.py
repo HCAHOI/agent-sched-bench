@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from trace_collect.openclaw_host_runtime import (
@@ -16,6 +17,9 @@ from trace_collect.openclaw_host_runtime import (
     shadow_generation_payload,
 )
 from trace_collect.simulate_openclaw import replay_trace_tools_enabled
+from scripts.baselines.thunderagent_official_launcher import (
+    _disable_backend_keepalive,
+)
 
 
 class _StreamResponse:
@@ -137,6 +141,19 @@ def test_thunderagent_release_failure_is_fatal() -> None:
         asyncio.run(provider.aclose())
 
 
+def test_thunderagent_backend_connections_are_not_reused() -> None:
+    class Router:
+        client = httpx.AsyncClient()
+
+    router = Router()
+    old_client = router.client
+    asyncio.run(_disable_backend_keepalive(router))
+
+    assert old_client.is_closed
+    assert router.client._transport._pool._max_keepalive_connections == 0
+    asyncio.run(router.client.aclose())
+
+
 def test_thunderagent_mode_is_recorded_without_changing_plain_metadata() -> None:
     kwargs = {
         "api_base": "http://127.0.0.1:9000/v1",
@@ -234,7 +251,7 @@ def test_paper_baseline_suite_smokes_matching_methods_before_full_run() -> None:
     assert "--queue-upper-bounds 0.25,1,4,16" in runner_text
     assert 'OPENCLAW_REPLAY_TRACE_TOOLS="$trace_tool_replay"' in runner_text
     assert '"tool_execution": (' in runner_text
-    assert 'shadow_llm_timeout_s=${SHADOW_LLM_TIMEOUT_S:-300}' in runner_text
+    assert "shadow_llm_timeout_s=${SHADOW_LLM_TIMEOUT_S:-300}" in runner_text
     assert '--shadow-llm-timeout-s "$shadow_llm_timeout_s"' in runner_text
     assert '"shadow_llm_timeout_s": float(' in runner_text
 
