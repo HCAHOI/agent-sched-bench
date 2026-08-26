@@ -18,6 +18,7 @@ trace_tool_replay=${TRACE_TOOL_REPLAY:-0}
 shadow_llm_timeout_s=${SHADOW_LLM_TIMEOUT_S:-300}
 cachewise_checkout=${CACHEWISE_CHECKOUT:-$HOME/.cache/agent-sched-bench/cachewise-181c435a090d328d00bbbee4c8eeb27d32f3abd2}
 cachewise_models=${CACHEWISE_MODELS_DIR:-$cachewise_checkout/tool_duration_prediction/models}
+saga_profile=${SAGA_PROFILE:-}
 if [[ -z "$container_cpuset" && -z "$container_cpus" ]]; then
   container_cpus=2
 fi
@@ -39,7 +40,7 @@ preflight() {
   [[ -z "$vllm_cpuset" ]] || command -v taskset >/dev/null || fail "taskset is required"
   local cell
   for cell in "${cells[@]}"; do
-    [[ "$cell" =~ ^(fcfs|thunderagent|agentix|continuum-public|continuum-reproduction|cachewise)-r[1-9][0-9]*$ ]] || fail "unsupported cell: $cell"
+    [[ "$cell" =~ ^(fcfs|thunderagent|agentix|continuum-public|continuum-reproduction|cachewise|saga)-r[1-9][0-9]*$ ]] || fail "unsupported cell: $cell"
   done
   command -v docker >/dev/null || fail "docker is required"
   command -v nvidia-smi >/dev/null || fail "nvidia-smi is required"
@@ -63,6 +64,10 @@ preflight() {
     "$python" -c 'import sklearn' || \
       fail "CacheWise requires: uv sync --extra serving-spike"
     "$repo/scripts/baselines/cachewise_reproduction.sh" verify-installed >/dev/null
+  fi
+  if has_method saga; then
+    [[ -f "$saga_profile" ]] || fail "missing SAGA causal profile"
+    "$repo/scripts/baselines/saga_reproduction.sh" verify >/dev/null
   fi
   local gpu
   gpu=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits)
@@ -146,6 +151,9 @@ run_cell() (
     cachewise)
       server=("$repo/scripts/baselines/cachewise_reproduction.sh" serve "$model" "${common_args[@]}")
       ;;
+    saga)
+      server=("$repo/scripts/baselines/saga_reproduction.sh" serve-backend "$model" "${common_args[@]}")
+      ;;
   esac
   local vllm_launch=(setsid)
   [[ -z "$vllm_cpuset" ]] || vllm_launch+=(taskset -c "$vllm_cpuset")
@@ -179,6 +187,8 @@ run_cell() (
     shadow_mode=continuum-public
   elif [[ "$method" == cachewise ]]; then
     shadow_mode=cachewise
+  elif [[ "$method" == saga ]]; then
+    shadow_mode=saga
   fi
 
   local simulate=(
@@ -205,6 +215,8 @@ run_cell() (
       --shadow-llm-cachewise-predictor-checkout "$cachewise_checkout"
       --shadow-llm-cachewise-models-dir "$cachewise_models"
     )
+  elif [[ "$method" == saga ]]; then
+    simulate+=(--shadow-llm-saga-profile "$saga_profile")
   fi
   printf '%q ' env OPENCLAW_REPLAY_PAIRED_WORKLOAD_CONTRACT=2 OPENCLAW_REPLAY_TRACE_TOOLS="$trace_tool_replay" PYTHONPATH="$repo/src:$repo" "${simulate[@]}" >"$cell/simulate.argv"
   printf '\n' >>"$cell/simulate.argv"
@@ -237,6 +249,7 @@ run_all() {
     CONTAINER_CPUSET="$container_cpuset" CONTAINER_CPUS="$container_cpus" \
     VLLM_CPUSET="$vllm_cpuset" \
     CONTINUUM_PROFILE="$continuum_profile" \
+    SAGA_PROFILE="$saga_profile" \
     TRACE_TOOL_REPLAY="$trace_tool_replay" \
     SHADOW_LLM_TIMEOUT_S="$shadow_llm_timeout_s" \
     GIT_COMMIT="$(git -C "$repo" rev-parse HEAD)" "$python" - <<'PY'
@@ -262,6 +275,7 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
   },
   "comparison": "paper baselines on one fixed agent-trajectory replay workload",
   "continuum_reproduction_profile": os.environ["CONTINUUM_PROFILE"] or None,
+  "saga_profile": os.environ["SAGA_PROFILE"] or None,
   "agentix_queue_upper_bounds_s": [0.25, 1, 4, 16],
   "cachewise_tool_mapping": {
     "exec": "Bash", "read_file": "Read", "edit_file": "Edit",

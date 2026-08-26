@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import sys
@@ -248,6 +249,9 @@ def test_paper_baseline_suite_smokes_matching_methods_before_full_run() -> None:
         in runner_text
     )
     assert "--shadow-llm-cachewise-predictor-checkout" in runner_text
+    assert 'saga_reproduction.sh" verify' in runner_text
+    assert 'saga_reproduction.sh" serve-backend' in runner_text
+    assert '--shadow-llm-saga-profile "$saga_profile"' in runner_text
     assert "--queue-upper-bounds 0.25,1,4,16" in runner_text
     assert 'OPENCLAW_REPLAY_TRACE_TOOLS="$trace_tool_replay"' in runner_text
     assert '"tool_execution": (' in runner_text
@@ -274,7 +278,8 @@ def test_baseline_runner_rejects_server_and_task_failures(tmp_path: Path) -> Non
     real_python = sys.executable
     executable(
         repo / ".venv/bin/python",
-        f"""if [[ ${{FAKE_NO_SKLEARN:-0}} == 1 && ${{1:-}} == -c && ${{2:-}} == 'import sklearn' ]]; then
+        f"""[[ -z ${{FAKE_PYTHON_CALLS:-}} ]] || printf '%s\\n' "$*" >>"$FAKE_PYTHON_CALLS"
+if [[ ${{FAKE_NO_SKLEARN:-0}} == 1 && ${{1:-}} == -c && ${{2:-}} == 'import sklearn' ]]; then
   exit 42
 fi
 if [[ ${{1:-}} == -m ]]; then
@@ -427,3 +432,64 @@ exit 2
     )
     assert cachewise_run.returncode == 1
     assert "CacheWise requires: uv sync --extra serving-spike" in cachewise_run.stderr
+
+    saga = repo / "scripts/baselines/saga_reproduction.sh"
+    executable(
+        saga,
+        """printf '%s\\n' "$*" >>"$FAKE_SAGA_CALLS"
+[[ $1 == verify ]] && exit 0
+[[ $1 == serve-backend ]] && exec "$(dirname "$0")/../../.venv/bin/vllm"
+exit 2
+""",
+    )
+    missing_profile = subprocess.run(
+        ["bash", runner, "--preflight"],
+        env={
+            **base_env,
+            "RUN_ROOT": str(tmp_path / "saga-missing-profile"),
+            "CELLS": "saga-r1",
+            "SAGA_PROFILE": str(tmp_path / "missing-profile.json"),
+            "FAKE_SAGA_CALLS": str(tmp_path / "saga-missing.calls"),
+        },
+        text=True,
+        capture_output=True,
+        timeout=20,
+    )
+    assert missing_profile.returncode == 1
+    assert "missing SAGA causal profile" in missing_profile.stderr
+
+    profile = tmp_path / "saga-profile.json"
+    profile.write_text("{}\n")
+    saga_root = tmp_path / "saga-success"
+    saga_calls = tmp_path / "saga.calls"
+    python_calls = tmp_path / "python.calls"
+    saga_run = subprocess.run(
+        ["bash", runner, "--run"],
+        env={
+            **base_env,
+            "RUN_ROOT": str(saga_root),
+            "CELLS": "saga-r1",
+            "SAGA_PROFILE": str(profile),
+            "FAKE_SAGA_CALLS": str(saga_calls),
+            "FAKE_PYTHON_CALLS": str(python_calls),
+        },
+        text=True,
+        capture_output=True,
+        timeout=20,
+    )
+    assert saga_run.returncode == 0, saga_run.stderr
+    assert saga_calls.read_text().splitlines() == [
+        "verify",
+        "serve-backend fake/model --host 127.0.0.1 --port 8000 "
+        "--tensor-parallel-size 1 --gpu-memory-utilization 0.90 "
+        "--max-model-len 131072 --max-num-seqs 8 --enable-prefix-caching "
+        "--kv-cache-dtype auto --enforce-eager",
+    ]
+    simulate_call = next(
+        line for line in python_calls.read_text().splitlines() if "trace_collect.cli" in line
+    )
+    assert "--shadow-llm-api-base http://127.0.0.1:8000/v1" in simulate_call
+    assert "--shadow-llm-mode saga" in simulate_call
+    assert f"--shadow-llm-saga-profile {profile}" in simulate_call
+    protocol = json.loads((saga_root / "protocol.json").read_text())
+    assert protocol["saga_profile"] == str(profile)
