@@ -1674,7 +1674,8 @@ def test_simulate_cli_parses_shadow_generation_options() -> None:
             "7",
             "--shadow-llm-max-concurrency",
             "4",
-            "--shadow-llm-thunderagent",
+            "--shadow-llm-mode",
+            "thunderagent",
         ]
     )
 

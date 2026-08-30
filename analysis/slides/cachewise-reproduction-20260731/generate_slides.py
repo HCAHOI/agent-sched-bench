@@ -1216,7 +1216,7 @@ def generate() -> Presentation:
     )
     footer(
         s,
-        "Local protocol: analysis/offline/related-work.md; src/tool_resource_eval/cachewise_reproduction.py::evaluate.",
+        "Receipt: analysis/results/cachewise-swe-reproduction-20260731/result.json; historical evaluator at Git 76fd007:src/tool_resource_eval/cachewise_reproduction.py.",
     )
 
     # 9 — experimental ladder

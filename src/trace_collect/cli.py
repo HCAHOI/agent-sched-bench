@@ -365,8 +365,7 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
             "Omit to leave request admission unconstrained."
         ),
     )
-    shadow_mode_group = parser.add_mutually_exclusive_group()
-    shadow_mode_group.add_argument(
+    parser.add_argument(
         "--shadow-llm-mode",
         choices=[
             "vllm",
@@ -397,16 +396,6 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         "--shadow-llm-saga-profile",
         default=None,
         help="Frozen causal tool profile used only by the SAGA KV subset.",
-    )
-    shadow_mode_group.add_argument(
-        "--shadow-llm-thunderagent",
-        action="store_const",
-        const="thunderagent",
-        dest="shadow_llm_mode",
-        help=(
-            "Route shadow requests through the official ThunderAgent proxy, "
-            "with one program ID and release per replayed task."
-        ),
     )
     parser.add_argument(
         "--tool-gap-loan-arm",

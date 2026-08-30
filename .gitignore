@@ -22,8 +22,12 @@ tmp/
 results/
 !analysis/results/
 !analysis/results/prequential-task-update-20260721/
-traces/
+/traces/
+!/traces/
+/traces/*
+!/traces/README.md
 output/
+/outputs/
 /logs/
 build/
 .claude/

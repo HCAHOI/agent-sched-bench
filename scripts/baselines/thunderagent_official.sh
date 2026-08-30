@@ -15,8 +15,8 @@ Usage: thunderagent_official.sh fetch|verify|install|serve
 
 Runs the official ThunderAgent scheduler pinned at commit 7ddc861. The serve
 mode fixes the paper's vLLM configuration: TR router, five-second monitoring,
-and 2^-t acting-token decay. Point OpenClaw replay at its /v1 endpoint and add
---shadow-llm-thunderagent so each task is tagged and released.
+and 2^-t acting-token decay. Point OpenClaw replay at its /v1 endpoint and use
+--shadow-llm-mode thunderagent so each task is tagged and released.
 
 Environment:
   THUNDERAGENT_CHECKOUT      official checkout directory

@@ -209,34 +209,10 @@ def test_trace_tool_replay_checks_call_and_returns_recorded_result(
         replay_trace_tools_enabled()
 
 
-def test_paper_baseline_suite_smokes_matching_methods_before_full_run() -> None:
+def test_paper_baseline_runner_has_required_policy_checks() -> None:
     root = Path(__file__).parents[1]
-    runner = root / "scripts/evaluation/run_pennylane_thunderagent_baseline.sh"
-    suite = root / "scripts/evaluation/run_pennylane_paper_baseline_suite.sh"
-    subprocess.run(["bash", "-n", runner, suite], check=True)
-    suite_text = suite.read_text()
-    assert 'export PATH="$HOME/.local/bin:$PATH"' in suite_text
-    assert "--kv-cache-dtype auto --kv-layout-dtype bfloat16" in suite_text
-    assert 'RUN_OUTPUT_DIR="$suite_root/profile-continuum"' in suite_text
-    assert "full_concurrency=${CONCURRENCY:-16}" in suite_text
-    assert "trace_tool_replay=${TRACE_TOOL_REPLAY:-0}" in suite_text
-    assert 'TRACE_TOOL_REPLAY="$trace_tool_replay"' in suite_text
-    assert 'CONTAINER_CPUSET="$container_cpuset" CONTAINER_CPUS=2' in suite_text
-    assert "\"$repo/.venv/bin/python\" -c 'import loguru, trace_collect'" in suite_text
-    assert "--resume-after-profile) resume_after_profile" in suite_text
-    assert '[[ -s "$profile" ]]' in suite_text
-    assert 'smoke_succeeded "$method" || failed=1' in suite_text
-    assert 'smoke_succeeded "$method" && continue' in suite_text
-    assert (
-        "methods=(agentix continuum-public continuum-reproduction cachewise)"
-        in suite_text
-    )
-    assert "smoke-$method" in suite_text
-    assert suite_text.index('for method in "${methods[@]}"') < suite_text.index(
-        'RUN_ROOT="$suite_root/full"'
-    )
-    assert "saga" not in suite_text.lower()
-    assert "murakkab" not in suite_text.lower()
+    runner = root / "scripts/evaluation/run_paper_baseline.sh"
+    subprocess.run(["bash", "-n", runner], check=True)
     runner_text = runner.read_text()
     assert 'export PATH="$HOME/.local/bin:$PATH"' in runner_text
     assert "\"$python\" -c 'import sklearn'" in runner_text
@@ -261,10 +237,7 @@ def test_paper_baseline_suite_smokes_matching_methods_before_full_run() -> None:
 
 
 def test_baseline_runner_rejects_server_and_task_failures(tmp_path: Path) -> None:
-    source = (
-        Path(__file__).parents[1]
-        / "scripts/evaluation/run_pennylane_thunderagent_baseline.sh"
-    )
+    source = Path(__file__).parents[1] / "scripts/evaluation/run_paper_baseline.sh"
     repo = tmp_path / "repo"
     runner = repo / "scripts/evaluation" / source.name
     runner.parent.mkdir(parents=True)
@@ -486,7 +459,9 @@ exit 2
         "--kv-cache-dtype auto --enforce-eager",
     ]
     simulate_call = next(
-        line for line in python_calls.read_text().splitlines() if "trace_collect.cli" in line
+        line
+        for line in python_calls.read_text().splitlines()
+        if "trace_collect.cli" in line
     )
     assert "--shadow-llm-api-base http://127.0.0.1:8000/v1" in simulate_call
     assert "--shadow-llm-mode saga" in simulate_call

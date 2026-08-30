@@ -4,8 +4,8 @@ export PATH="$HOME/.local/bin:$PATH"
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 model=${MODEL:-NousResearch/Meta-Llama-3.1-8B-Instruct}
-manifest=${MANIFEST:-$repo/analysis/development/pennylane-native-priority-v1/manifest.yaml}
-run_root=${RUN_ROOT:-/home/Ubuntu/pennylane-thunderagent-baseline-v1-20260819}
+manifest=${MANIFEST:?MANIFEST must name a replay manifest}
+run_root=${RUN_ROOT:?RUN_ROOT must be a new output directory}
 vllm="$repo/.venv/bin/vllm"
 python="$repo/.venv/bin/python"
 read -r -a cells <<<"${CELLS:-fcfs-r1 thunderagent-r1 thunderagent-r2 fcfs-r2}"
@@ -34,7 +34,7 @@ preflight() {
   [[ -x "$python" ]] || fail "run benchmark_server setup first"
   { ! has_method fcfs && ! has_method thunderagent; } || \
     [[ -x "$vllm" ]] || fail "stock vLLM is not installed"
-  [[ -f "$manifest" ]] || fail "missing PennyLane manifest"
+  [[ -f "$manifest" ]] || fail "missing replay manifest: $manifest"
   [[ ! -e "$run_root" ]] || fail "run root already exists: $run_root"
   [[ "$trace_tool_replay" == 0 || "$trace_tool_replay" == 1 ]] || fail "TRACE_TOOL_REPLAY must be 0 or 1"
   [[ -z "$vllm_cpuset" ]] || command -v taskset >/dev/null || fail "taskset is required"

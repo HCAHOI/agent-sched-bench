@@ -1,37 +1,65 @@
 # Analysis index
 
-This directory separates current direction from frozen evidence. For
-tool-resource prediction and scheduling, read these files in order:
+This directory separates current decisions from frozen evidence. Read current
+research state in this order:
 
 1. [`development/tool-resource-canonical-objective.md`](development/tool-resource-canonical-objective.md)
-   — current decisions, metrics, evidence boundaries, and frozen gates.
-2. [`ROADMAP.md`](ROADMAP.md) — the compact research frontier and decision tree.
-3. [`CLAIMS.md`](CLAIMS.md) — retained claims and their supporting evidence.
-4. [`CLOSED-QUESTIONS.md`](CLOSED-QUESTIONS.md) — directions that require new
-   evidence before reopening.
+   — authority for tool-resource targets, causal semantics, KEEP/CLOSE
+   decisions, evidence exposure, and launch boundaries.
+2. [`ROADMAP.md`](ROADMAP.md) — current research frontiers and decision order.
+3. [`CLAIMS.md`](CLAIMS.md) — claims the retained evidence supports, with
+   explicit non-claims.
+4. [`CLOSED-QUESTIONS.md`](CLOSED-QUESTIONS.md) — closed historical branches
+   and the evidence required to reopen them.
 
-If prose conflicts, this order controls interpretation. Frozen result artifacts
-control their reported numbers and provenance.
+If prose conflicts, that order controls interpretation. A frozen result receipt
+controls its own numbers, validity, and provenance.
 
-## Evidence locations
+## Current frontier
 
-- `certification/` — retained calibration, pre-restore accounting, and
-  policy-space adjudication evidence.
-- `results/prequential-task-update-20260721/` — retained development-only
-  completed-task adaptation screen and original audit sidecars.
-- `serving/` — hardware measurements plus inputs for the unfinished W5
-  multi-tenant harness.
-- `offline/` — optional background only; it is not an authority for current
-  status.
+The primary question is whether turn-structured, return-guarded phase leasing
+can preserve the large completion-time gains of program-aware scheduling while
+bounding request starvation. The secondary question is whether compaction can
+retain exact future-action anchors while reducing success-adjusted physical
+prefill and KV cost. Neither is yet a supported system claim; see
+[`ROADMAP.md`](ROADMAP.md).
 
-## Current boundary
+## Result entry points
 
-The active direction treats an agent as a long-lived job alternating between
-GPU inference and remote CPU tool execution. `ROADMAP.md` defines its staged
-frontiers; the canonical objective controls all result interpretation and
-launch authorization. Older W5 material remains historical evidence, not the
-current roadmap.
+| Evidence | Scope | Receipt |
+|---|---|---|
+| Unique-128 paper-baseline stress | Development-exposed, one A100, 128 unique PennyLane/SQLGlot traces, trace-timed tools | [`results/mixed128-poisson-unique-baselines-20260827/result.md`](results/mixed128-poisson-unique-baselines-20260827/result.md) |
+| PennyLane paper-baseline suite | Development-exposed, one A100, 12 tasks at concurrency four, physical tools | [`results/pennylane-paper-baseline-suite-physical-v1.md`](results/pennylane-paper-baseline-suite-physical-v1.md) |
+| ThunderAgent and reproduction smokes | Official ThunderAgent comparison plus Agentix, SAGA, and Continuum mechanism smokes | [`results/paper-baseline-physical-20260820/result.json`](results/paper-baseline-physical-20260820/result.json) |
+| CacheWise SWE predictor ordering | Development-exposed historical local KMeans/C20–C100 reproduction, predating the official release; no live KV pressure or JCT claim | [`results/cachewise-swe-reproduction-20260731/result.json`](results/cachewise-swe-reproduction-20260731/result.json) |
+| Tool-resource prediction and CPU actions | Canonical 5/3/3/3 targets and related action screens | [`results/tool-resource-5-3-3-3-20260804/`](results/tool-resource-5-3-3-3-20260804/) |
+| PennyLane joint/physical phase actions | Hindsight ceilings, causal failures, physical feedback, revocable lease, and parking screens | [`development/tool-resource-canonical-objective.md`](development/tool-resource-canonical-objective.md#result-ledger) |
+| Historical KV stopping lane | Forced-eviction accounting and settled duration-prediction limits | [`CLAIMS.md`](CLAIMS.md#retained-kv-stopping-findings) |
 
-Large or deleted historical outputs are recoverable only where
-`CLOSED-QUESTIONS.md` or a result receipt names a Git object. Do not assume every
-removed local artifact exists in Git history.
+Baseline provenance labels are not interchangeable:
+
+- **Official**: an author-released policy core, possibly wrapped only for replay.
+- **Public**: author-released code whose exposed behavior may be a narrower or
+  older mechanism than the paper.
+- **Reproduction**: this repository reconstructed paper logic or an unpublished
+  integration hook; assumptions belong to this repository.
+- **Subset**: only the named mechanism is present, so the full paper method is
+  not being evaluated.
+
+The exact classification of every executable baseline is in
+[`offline/related-work.md`](offline/related-work.md#executable-baseline-and-result-status)
+and [`../scripts/baselines/README.md`](../scripts/baselines/README.md).
+
+## Directory roles
+
+- `results/` contains immutable result receipts and machine-readable outputs.
+- `development/` contains the current authority, frozen inputs, and protocols
+  still referenced by evaluators or results.
+- `certification/` contains retained calibration and adjudication evidence.
+- `serving/` contains hardware measurements and historical serving inputs; it
+  does not imply a live result exists.
+- `offline/` is related-work and background analysis, not status authority.
+
+Large raw runs may live outside Git. Treat an absolute run path as provenance,
+not a portable artifact; a result is locally recoverable only when its receipt
+also names a retained in-repository file, archive, or Git object.

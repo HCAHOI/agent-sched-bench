@@ -1,210 +1,185 @@
 # Research frontiers
 
-This is the single compact roadmap. Current metrics, retained evidence, exposed
-datasets, and frozen gates remain authoritative in
+This is the compact decision roadmap. Tool-resource metrics, data exposure,
+KEEP/CLOSE decisions, and frozen gates remain authoritative in
 [`development/tool-resource-canonical-objective.md`](development/tool-resource-canonical-objective.md).
 
-## Question and boundary
+## Organizing question
 
-Treat an agent as a long-lived job that alternates between GPU inference and
-remote CPU tool execution while carrying state on both sides:
+Treat an agent session as a long-lived job alternating between inference and
+tool phases while carrying GPU/KV state and tool-side process state:
 
-> Can phase and state information guide admission, priority, placement, and
-> state retention so that agents finish sooner without harming inference tails?
+> Which turn-boundary actions reduce success-adjusted physical cost and task
+> completion time without starving foreground returns or losing information
+> required for later actions?
 
-The scheduling unit is an agent session. Actions occur only at LLM/tool
-boundaries.
+The first system does not include arbitrary process checkpointing, workspace
+migration, online LLM policy generation, a new RPC framework, or dynamic tensor
+parallelism. SSH/RPC are deployment machinery. EAR owns work-conserving
+CPU/RSS elasticity inside workers; static container right-sizing is not a
+contribution.
 
-| Kind | In scope |
-|---|---|
-| Observed state | Current phase; GPU queue; KV/prefix location, size, and reuse cost; causal clause/eBPF feedback |
-| Predicted state | Distribution over tool return time and CPU/RSS/I/O demand |
-| Actions | Borrower admission and return priority; replica routing; KV retain/offload/evict |
-| Objectives | Session JCT, makespan, all-request tail TTFT, resource-time, and measured state movement cost |
+## Evidence that changed the frontier
 
-SSH and RPC are deployment machinery, not the current contribution. Host-local
-telemetry keeps its UDS privilege boundary. EAR owns dynamic CPU/RSS elasticity
-inside workers, so static container right-sizing is not the contribution.
-
-Keep snapshot meanings separate: the existing immutable KB evidence snapshot is
-for reproducibility; GPU KV/prefix state is scheduling state. Tool-container
-parking is closed below. The first system excludes arbitrary process
-checkpointing, workspace migration, online LLM policy generation, a new RPC
-framework, and dynamic TP reconfiguration.
-
-## Next scheduler: event-driven multi-resource backfill
-
-Use two workload scales. The 12-task balanced PennyLane manifest has two unique
-tasks for each of six workload types and is the smallest physical candidate.
-The development simulator uses all 70 ordinary PennyLane tasks, without
-duplicating traces. Each type has 18 top-quartile tasks in that corpus; labels
-overlap and are used only to build workloads and report per-type effects. A
-runtime scheduler may not read a type label derived from a completed trace.
-
-At each LLM/tool boundary or completed feedback sample, maintain one causal
-estimate per ready phase:
-
-`LLM service and KV reuse; CPU work; RSS; Disk bytes/rate; return-time interval`
-
-The first implementation is an event loop, not an optimizer or MIP. It scans
-the ready phases once at each event; 70 tasks are too small to justify a solver.
-
-1. Enforce measured GPU-request, CPU, RSS, and Disk capacity. RSS is a hard
-   placement/admission constraint; CPU and Disk sharing must charge any service
-   slowdown.
-2. Protect the earliest plausible tool return. Admit a non-preemptive LLM
-   borrower only when its conservative finish precedes that return window.
-3. Backfill a ready phase only when it cannot delay the oldest blocked phase.
-   Among safe candidates, choose the one with the lowest resulting maximum
-   utilization across the four resources; ties remain FCFS.
-4. On multiple replicas, retain state locality when lost-prefix or KV-movement
-   cost exceeds avoided queueing; otherwise route to the less-loaded replica.
-5. Update remaining work only from completed clauses and causal eBPF/cgroup
-   samples. An unsupported prediction disables speculative backfill for that
-   phase and falls back to ordinary execution; it never reserves the whole host
-   while other agents retain memory.
-
-| Workload pressure | Signal | Efficient action |
+| Observation | What it establishes | What it does not establish |
 |---|---|---|
-| LLM-heavy | prompt, cached and output tokens; resident KV | limit overlapping long prefills; prefer state-local or less-loaded GPU |
-| CPU-heavy | CPU work and observed throttling | EAR keeps work-conserving shares; scheduler overlaps complementary phases |
-| Memory-heavy | held RSS and conservative incremental RSS | hard admission/placement fit; no memory overcommit or process snapshot |
-| Disk-heavy | bytes, rate and measured device slowdown | avoid simultaneous high-I/O phases on one device; spread across workers |
-| Long tool gap | elapsed tool time and remaining-time interval | lend the idle GPU opportunity to a waiting agent |
-| Large LLM return | return interval, prompt size and KV location | stop unsafe long borrowing, retain useful KV, and prioritize the return |
+| Low-pressure PennyLane paper baselines | At concurrency four, GPU utilization is about 15%, waiting queues are absent, and peak logged KV occupancy is below 41%; GPU policies have little opportunity. | Failure of the paper methods in their target high-pressure regimes. |
+| Unique-128 official ThunderAgent | At real GPU/KV pressure, mean JCT falls 53.4% and throughput rises 57.2% versus FCFS. | A tail-safe result: p99 TTFT rises from 445.2 to 1,524.9 s. Tools are trace-timed. |
+| Unique-128 CacheWise reproduction | A program/KV policy can produce a still larger observed average gain. | Policy attribution until the exact CacheWise fork has a disabled-policy control. |
+| PennyLane physical feedback | Tool-phase admission can reduce mean JCT about 33% and makespan about 42% in two repetitions. | The frozen tail-safe claim; one p99 ratio is 1.115. The hard duration predictor never activates. |
+| Production Copilot characterization | Idle time has distinct intra-turn and cross-turn regimes; compaction is concentrated in token-heavy sessions and creates cache-cold work. | Causal serving benefit, task correctness, server queue/KV state, or physical tool-resource interference. |
 
-The simulator must replace source API LLM seconds with an A100-calibrated
-service model and measure Disk capacity before making either resource a claim.
-Its primary baselines are fixed concurrency, reactive phase-only scheduling,
-and Agentix-style scheduling after an LLM request arrives. The candidate adds
-pre-arrival return protection and joint resource backfill; an exact-future arm
-remains an upper bound. Only a non-dominated session-JCT/TTFT result on the full
-70-task queue authorizes the 12-task physical replay.
+Local receipts are indexed in [`README.md`](README.md#result-entry-points).
+The production study is [Agentic Coding in the Wild](https://arxiv.org/html/2608.00101v1):
+its scale makes it workload evidence, not a replacement for local causal
+evaluation.
 
-Calibrate A100 service before reading scheduler outcomes. Task 963 supplies 70
-sequential requests; every fifth call is validation and the rest fit a
-non-negative linear model from source-visible uncached prompt, cached prompt,
-and output tokens. TTFT excludes output tokens. Continue only if validation
-median absolute percentage error is at most 25% and p90 is at most 50% for both
-latency and TTFT. Then run one bounded four-request concurrency check from four
-different tasks: 963, 5986, 3483, and 6358, selecting in each the source call
-whose prompt is closest to 50,000 tokens and forcing 128 output tokens. Compare
-fresh-server sequential and simultaneous cells. The simulator limits active LLM
-requests to four and linearly interpolates from one to the matched median
-four-request latency and TTFT slowdown; it is fixed from this calibration, not
-chosen from scheduler results.
+## Priority 1 — Turn-structured, return-guarded phase leasing
 
-**Calibration amendment (2026-08-19).** The first task-963 extraction used the
-replay output's cached-token field, which was zero for all calls. Joining the
-original provider cache field still failed TTFT validation (48.83% median,
-118.56% p90). A diagnostic reconstructed the exact model-token common prefix;
-all 70 prompt hashes matched the physical requests, and 16-token block-aligned
-prefix state reduced TTFT error to 24.56% median and 41.73% p90. This exposed
-result cannot repair the original gate. Freeze that exact prefix-state feature
-now as the longest common prefix with any known-resident earlier request,
-rounded down to vLLM's 16-token cache block. Fit task 963 once, and require the
-unchanged model to pass the same latency and TTFT limits on a fresh sequential
-task-1320 run before the concurrency check or scheduler screen. This state is
-valid only while the prefix is known resident; eviction or migration must
-invalidate it rather than assume a hit.
+### Residual question
 
-The fresh task-1320 transfer is **NO-GO** for this point service model. Latency
-passed at 12.39% median and 29.49% p90 error. TTFT passed the median limit at
-20.91% but missed the p90 limit at 51.22%. Sixty-nine of 86 TTFT predictions
-were conservative overestimates; the largest underestimate was the first cold
-request, which took 974 ms versus 169 ms predicted. Exact prefix state is
-therefore necessary and useful, but not sufficient to support the frozen tail
-claim. Do not run the concurrency probe or full-corpus scheduler from this
-model. Any revisit must preregister cold-start state and a decision-aligned
-one-sided interval on another fresh calibration task; task 1320 is now exposed.
+Program-aware scheduling already captures a large average-JCT opportunity.
+The open mechanism question is narrower:
 
-**State-interval follow-up (frozen after the point-model NO-GO).** Use all
-exposed task-963 and task-1320 calls to fit the same non-negative models with
-one added `cold_start` indicator. For warm and cold calls separately, multiply
-the point estimate by the empirical 90th-percentile `actual / predicted` ratio
-(`higher` quantile); the cold factor is therefore the larger of the two exposed
-first-call ratios. Validate once on fresh task 1325, selected before execution
-as the cheapest unused task with at least 50 LLM calls and a 70k-token prompt.
-Latency and TTFT must each cover at least 90% of warm calls, cover the cold call,
-and have median upper-bound/actual ratio at most 1.5. Failure stops state-aware
-service modeling; success alone authorizes the already frozen concurrency probe.
+> Can a scheduler lend otherwise idle inference capacity during a tool phase,
+> then protect the foreground session's return with bounded non-preemptible work,
+> revocation, return priority, and starvation-aware progress accounting?
 
-The fresh task-1325 result is **NO-GO**. All 66 physical request prompts matched
-the source trace. Warm-call coverage passed for latency (65/65) and TTFT
-(60/65), and median slack passed (1.19x and 1.41x). The cold call was not covered:
-latency was 2,239.8 ms versus a 2,194.0 ms upper bound, and TTFT was 971.3 ms
-versus 968.2 ms. The misses are narrow but violate the frozen safety condition,
-so do not run the concurrency probe or full-corpus scheduler from this model.
+This is not a claim of generic backfilling, “joint CPU-GPU scheduling,” output
+length prediction, or raw tool-duration prediction. A new controller is useful
+only if it closes a measurable Pareto gap left by faithful existing methods.
 
-## Decision sequence
+### Baseline closure before invention
 
-### F0 — Full-corpus causal simulation
+1. Run a policy-disabled control on the exact CacheWise vLLM fork. Without it,
+   the Unique-128 CacheWise gain is fork-confounded.
+2. Keep stock FCFS and official ThunderAgent as the control and strong baseline.
+   Integrate applicable public or paper-derived Continuum and Agentix mechanisms
+   with their fidelity limits visible. Do not call a subset the full paper.
+3. Include native priority plus aging as the simple return-protection baseline.
+   The older six-cell native-priority protocol remains frozen but must be
+   reconciled with this baseline matrix before launch; its cohort, amendments,
+   and gates cannot be silently repurposed.
+4. Add fixed concurrency, reactive phase-only admission, and a cost-charged
+   future-aware oracle on identical trajectories. The oracle measures residual
+   action headroom; it is never a feature or a result arm.
 
-Replay the 70 ordinary PennyLane trajectories as one backlog. First establish
-the exact-future ceiling with contention-aware service, then replace future
-state with causal estimates without changing the scheduler. Stop if the causal
-candidate does not improve the JCT/TTFT Pareto frontier over reactive phase-only
-scheduling or if its gain is confined to one workload type.
+Only a non-dominated gap in session JCT/throughput versus all-request TTFT and
+starvation authorizes a new lease controller. If official/simple baselines close
+the oracle gap, this branch stops.
 
-The exact-future screen compares fixed concurrency four, unprotected borrowing,
-and return-guarded revocable borrowing. The guarded arm must reduce mean task
-completion by at least 10%, lower makespan, keep modeled all-request p99 TTFT at
-or below 1.05x fixed, and improve at least four of the six workload groups.
-Failure stops this branch before KB or predictor integration.
+### Candidate action boundary
 
-This branch is currently stopped by the A100 TTFT transfer gate above; no
-full-corpus scheduler outcome exists.
+At an LLM/tool boundary, the candidate may:
 
-### F1/F2 — Tool-state parking and remote placement are closed
+- admit a bounded borrower during an observed foreground tool phase;
+- cap the borrower's non-preemptible inference work before the plausible return;
+- revoke future borrower work and prioritize the returning foreground request;
+- preserve KV locality when its measured reuse value exceeds avoided queueing;
+- use causal completed-clause/eBPF state to update the foreground phase; and
+- account for each session's cumulative service so tail protection does not
+  become permanent starvation of borrowers.
 
-The zero-cost perfect-parking screen changed starts but worsened mean completion
-2.664%: 27 tasks advanced by 113,402 task-seconds while 30 were delayed by
-139,700. It removed only 3.178% of CPU-core-time and 1.316% of RSS-time; baseline
-RSS utilization was 14.171%. Therefore do not measure restore costs or build the
-remote snapshot-RPC branch for this workload. Reopening requires a new workload
-with independently demonstrated CPU/RSS pressure.
+Unavailable tool evidence disables speculation for that phase. It does not
+reserve the whole host. CPU, RSS, Disk, KV movement, proxy wait, and all server
+queueing are charged. Tool-side claims require physical tools; trace-timed tools
+support only GPU/KV claims.
 
-### F3 — Physical pre-arrival coordination beyond Agentix
+### Evaluation order
 
-Agentix already prioritizes arrived LLM calls by program-level attained service
-and routes long calls to the program's replica while sending short calls to the
-least-loaded replica. Native priority or KV-local routing alone is therefore a
-baseline, not our contribution.
+1. **Baseline closure:** exact-fork controls and faithful integrations above.
+2. **Action-headroom screen:** same workload and eligible events for reactive,
+   candidate, and future-aware oracle; no outcome-tuned thresholds.
+3. **Physical primary comparison:** one preregistered high-pressure workload,
+   with per-task JCT, makespan/throughput, all-request mean/p95/p99 TTFT,
+   starvation, prefix/KV state, policy overhead, utilization, and energy.
+4. **Fresh confirmation:** only after a primary gain, on new tasks or a new time
+   period. One result per method is not run-to-run uncertainty.
 
-The distinct hypothesis is earlier coordination: while a tool is still running,
-its elapsed time, completed clauses, and causal resource state may identify a
-return window before the next LLM request exists. That state could control
-backfill admission, return priority, and KV retention or placement. Reopen this
-branch only if the full-corpus simulation shows such advance notice changes
-actions across workload types. Then use the 12-task balanced batch and compare
-against Agentix-style request-arrival scheduling, charging all queueing,
-repeated prefill, and state movement to JCT and TTFT. A run longer than 30
-minutes still requires an estimate and explicit approval.
+The older 12-task balanced PennyLane manifest is a physical low-pressure audit,
+not a substitute for the pressure regime. The 70-task simulator remains
+development-exposed. A new collection is not justified while reusable traces
+can answer the mechanism question.
 
-### F4 — Study RP x TP only after locality works
+## Priority 2 — Action-anchor-preserving adaptive compaction
 
-Confirm whether RP means replica or request parallelism. If it means replicas,
-start with fixed-topology `2 x TP1` versus `1 x TP2`; four GPUs permit
-`4 x TP1 / 2 x TP2 / 1 x TP4`. Dynamic reconfiguration is considered only if
-real phases prefer different layouts long enough to amortize weight and KV
-movement.
+Production workload evidence raises compaction above speculative MoE leasing:
+compaction affects 7.8% of sessions but 44.2% of tokens; in affected sessions it
+cuts prompt tokens by a median 72.8% while reducing cache-hit rate by a median
+66.1%. These are paper observations, not local results.
 
-## Where tool understanding contributes
+The research question is not generic summarization. It is whether compaction can
+retain exact future-action anchors—paths, symbols, diffs, tests, diagnostics,
+commands, unresolved constraints, and repository state—while reducing physical
+prefill/KV cost without reducing task success.
 
-Clause/eBPF feedback describes current work, the KB/predictor estimates future
-tool work, and snapshot metadata prices state reuse. Evaluate them in order:
+Decision order:
 
-1. phase feedback only;
-2. phase feedback plus observed state locality;
-3. state locality plus tool prediction.
+1. Audit which retained traces expose compaction events, pre/post context,
+   cache state, future actions, and task outcomes. Missing paired content or
+   outcomes makes the trace characterization-only.
+2. Complete full-method related-work review before claiming a residual gap.
+3. Compare on identical tasks: full context; the current
+   [`MemoryStore`](../src/agents/openclaw/_memory.py)-style path; deterministic
+   anchor retention plus lossless artifact externalization; and a future-aware
+   oracle that identifies information later reused.
+4. Measure task success first, then success-adjusted prefill latency, KV
+   byte-seconds, cache misses, recomputation, and total physical cost. Token
+   reduction alone is not a gate.
+5. Stop if deterministic retention matches the learned policy, if the oracle
+   shows little residual headroom, or if token savings do not reduce physical
+   cost at unchanged success.
 
-Prediction contributes only if the third arm changes actions and improves
-physical session outcomes; accuracy alone is insufficient.
+This priority has no result, frozen threshold, or launch authorization yet.
 
-The paper arc is:
+## Conditional characterization — cross-turn KV/expert residency
 
-`tool-gap backfill -> KV-local replica placement -> RP x TP interaction`
+Cross-turn gaps may amortize migration; short intra-turn gaps usually do not.
+MoE KV/expert leasing remains an oracle/action-disagreement audit until traces
+contain expert IDs, cache misses, HBM residency, PCIe queues/transfers, and
+contention. Charge KV movement, expert promotion/demotion, return latency, and
+byte-seconds. Existing KV/expert elasticity work is a baseline, not novelty.
+Do not implement a controller before both oracle headroom and a baseline gap
+exist.
 
-GPU/KV, CPU/RSS, and state-location fragmentation must be reported separately.
-Simulation and zero-cost oracles establish headroom only; allocation,
-snapshotting, and migration claims require physical execution.
+## Closed or subordinate branches
+
+- Predictive tool-gap lending under the registered five-bucket mapping: closed;
+  no distinct physical action.
+- Raw command-duration prediction for per-request KV eviction: scoped No-Go;
+  the deadline is already near-optimal and the decision budget is small.
+- CPU-only hard bucket/page carriers and further reservation tuning: closed.
+- Tool-container parking and remote snapshot RPC for current PennyLane: closed
+  by the free-perfect-parking No-Go.
+- Tool-latency priority under the 35-task model: closed by a 0.435% exact-duration
+  oracle ceiling.
+- Generic KB-structure, pip-specific semantics, prediction-weighted shares,
+  arbitrary generated policies, and trace-conditioned agents: closed.
+- PD separation, Disk-aware placement, and RP × TP are subordinate components;
+  revisit only after a primary mechanism exposes the corresponding bottleneck.
+
+## Preserved A100 service-model amendment
+
+The old full-corpus simulator branch is stopped, not silently superseded.
+
+**Calibration amendment, 2026-08-19.** Task 963's replay cached-token field was
+zero. Joining provider cache data still failed the frozen TTFT transfer gate
+(48.83% median, 118.56% p90 error). A post-outcome diagnostic reconstructed the
+exact 16-token-block common prefix and improved the exposed fit to 24.56%/41.73%;
+that could not repair the original gate. The feature was frozen, then tested
+unchanged on fresh task 1320. Latency passed at 12.39%/29.49%, but TTFT was
+20.91%/51.22% and missed the 50% p90 limit. Task 1320 is consumed.
+
+The subsequent cold-start interval follow-up was frozen before task 1325. Warm
+coverage and median slack passed, but the cold call missed both bounds: latency
+2,239.8 ms versus 2,194.0 ms and TTFT 971.3 ms versus 968.2 ms. Under the frozen
+all-cold-calls condition this is a NO-GO, even though the misses are narrow.
+Do not run the old concurrency probe or full-corpus scheduler from this model.
+
+## Authorization boundary
+
+No controller implementation, runtime integration, new collection, or run over
+30 minutes is authorized by this roadmap. A launch needs a current frozen
+comparison, validity gate, cost estimate, and explicit approval. A failed gate
+cannot be repaired on exposed data by changing its cohort, arm, threshold,
+feature, or metric.

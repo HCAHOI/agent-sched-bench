@@ -1,20 +1,22 @@
 # Operations Guide
 
-Operator-facing reference for collecting, replaying, and viewing traces on the
-`dev/cpu-only` branch. This complements `README.md` with exact flags, env vars,
-resume semantics, and benchmark plugin rules.
+Operator-facing reference for collecting, replaying, and viewing traces. This
+complements `README.md` with exact flags, environment variables, resume
+semantics, and benchmark plugin rules.
 
 ## Invariants
 
-This branch is cloud-provider-only. Do not reintroduce:
-
-- local/private OpenAI-compatible endpoints
-- local HF / vLLM / self-hosted model serving
-- internal recording hooks
-- GPU profiling
-
-Provider API bases are validated; localhost, loopback, private, link-local, and
-unspecified addresses are rejected.
+- Trace collection obtains model actions from the registered remote/Codex
+  provider path. Provider API bases reject localhost, loopback, private,
+  link-local, and unspecified addresses.
+- Replay always follows the recorded action sequence and re-executes tool calls
+  in the task runtime. It can use source LLM timing without inference or send
+  fixed-trajectory shadow requests to a separate local vLLM server.
+- `--tool-resource-telemetry clause` is observation-only: it neither queries
+  nor updates the resource KB. Use an explicit tool-resource profile when the
+  KB/predictor services are part of the experiment.
+- Result-affecting configuration belongs in the run artifacts. A directory or
+  config name alone is not evidence that an experiment completed successfully.
 
 ## Trace Collect
 
@@ -33,7 +35,7 @@ PYTHONPATH=src python -m trace_collect.cli \
 ### Required
 
 - `--provider`: one of `openrouter`, `dashscope`, `openai`, `siliconflow`,
-  `deepseek`, `pioneer`.
+  `deepseek`, `pioneer`, or `codex`.
 - `--model`: model slug for the provider.
 - `--scaffold openclaw`.
 - `--mcp-config` for OpenClaw. YAML path, or literal `none` for an explicit
@@ -49,7 +51,10 @@ PYTHONPATH=src python -m trace_collect.cli \
   - `SILICONFLOW_API_KEY`
   - `DEEPSEEK_API_KEY`
   - `PIONEER_API_KEY`
+- Codex uses the ChatGPT subscription credentials written by `codex login`;
+  `CODEX_ACCESS_TOKEN` and `CODEX_ACCOUNT_ID` can override the local login.
 - Override with `--api-key` or `--api-base` for OpenAI-compatible gateways.
+- `--service-tier fast` is supported only by Codex.
 
 ### Task selection
 
@@ -77,13 +82,19 @@ Both `--skip` and `--sample` reject negative values.
 
 `--run-id <existing run dir>` resumes an interrupted run.
 
-An instance is skipped on resume if any of its `attempt_*/run_manifest.json`
-has:
+An instance is accepted and skipped only when one nested
+`attempt_*/run_manifest.json` has `status=completed` or `status=exhausted` and
+its resource evidence, when present, is valid:
 
-- `status=completed`, or
-- `status=exhausted` (max iterations reached).
+- if `resource_observations.json` is absent, the terminal manifest is accepted;
+- if it is present, it must be a JSON object with
+  `telemetry_quality=ok`, `collection_validity=valid`, and `cleanup=ok`;
+- malformed or non-object resource evidence, or any other value for those
+  three fields, makes the attempt non-terminal for resume.
 
-`status=error` attempts are not terminal and will be rerun on resume.
+`status=error` attempts are never accepted, even when the error text or
+`exit_status` mentions max-iteration exhaustion. Resume scans only the nested
+attempt layout; it does not accept legacy flat manifests.
 
 ### Local task cache
 
@@ -119,7 +130,10 @@ During task-container agent runs, stdout is streamed live to the operator termin
 
 ## Trace Simulate
 
-Cloud replay only. No LLM requests are issued during replay.
+The only trace-replay mode is named `cloud_model`. Without
+`--shadow-llm-api-base`, replay uses the recorded LLM timing and issues no new
+model requests. With a shadow API and model, it submits fixed-trajectory
+requests to the serving system while preserving the recorded tool sequence.
 
 ```bash
 PYTHONPATH=src:. uv run python -m trace_collect.cli simulate \
@@ -133,7 +147,11 @@ PYTHONPATH=src:. uv run python -m trace_collect.cli simulate \
 
 ### Modes
 
-- `--mode cloud_model` (default and only supported mode on this branch).
+- `--mode cloud_model` is the only trace format/replay mode.
+- Source-timing replay is CPU-only apart from the real task workload.
+- Shadow serving uses `--shadow-llm-api-base`, `--shadow-llm-model`, and one of
+  the registered `--shadow-llm-mode` policies. It requires a separately
+  launched serving process and does not replace the collection provider.
 
 ### Concurrency
 
@@ -468,13 +486,3 @@ Forbidden:
 3. Register the plugin class in `src/agents/benchmarks/__init__.py`.
 4. Add normalization and config tests.
 5. Do not add CLI flags specific to the new benchmark.
-
-## Explicitly Removed
-
-- `vllm`, `torch`, `transformers`, `accelerate` dependencies
-- `src/serving/` local backend code
-- internal recording hooks (`recording_provider`)
-- local-HF setup (`HF_TOKEN`, `MODEL_PATH`) in `scripts/setup/configure_env.sh`
-- vLLM serving, metrics, startup parsing, and scheduler hooks
-- GPU / `nvidia-smi` profiling and `profile-gpu`
-- `local_model` simulation mode

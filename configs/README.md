@@ -1,30 +1,44 @@
-# Configuration map
+# Configuration Map
 
 | Directory | Role |
 |---|---|
-| `benchmarks/` | Benchmark plugins loaded as `configs/benchmarks/<slug>.yaml`. |
-| `prompts/` | Benchmark-specific prompt templates. |
-| `mcp/` | MCP server definitions passed through the trace-collection CLI. |
-| `simulate/` | Curated replay and static-export configuration. |
-| `trace_collect/` | Trace-collection configuration and compatibility examples. |
-| `experiments/` | Development replay configuration; completed-task profile update is the retained adaptive lane. |
-| `serving/` | Live-system development configuration. |
+| `benchmarks/` | Benchmark plugins loaded as `configs/benchmarks/<slug>.yaml`; owns dataset, image, selection, and prompt defaults. |
+| `corpora/` | Frozen cohort and evaluation-protocol definitions. These describe intended IDs; they do not materialize or validate traces. |
+| `prompts/` | Benchmark-specific collection prompts. |
+| `mcp/` | MCP server definitions passed to trace collection. |
+| `simulate/` | Replay manifest examples and replay documentation. |
+| `trace_collect/` | Legacy collection examples; not the source of benchmark defaults. |
+| `experiments/` | Current development experiment configuration. |
+| `serving/` | GPU serving experiment configuration. |
 
-## W5 multi-tenant configuration
+## Frozen Corpus Definitions
 
-`serving/w5_multitenant.yaml` is the single current W5 matrix definition. It
-owns policies, load levels, workload/task-list inputs, model settings, transfer
-settings, and the runtime restore-cost fraction. Input task lists live under
+| File | Declared cohort | Materialized status in this checkout |
+|---|---|---|
+| `corpora/swe-100.json` | 100 SWE-ReBench task IDs | Referenced trace root has 99 task directories; do not use as a complete 100-task corpus without restoring and validating the missing task. |
+| `corpora/swe-277.json` | 277 SWE-ReBench task IDs | Referenced `fresh-seed42-skip150-n200` root has 275 task directories; the directory name is historical and not the declared count. |
+| `corpora/swe-sqlglot-48-gpt56-ebpf.json` | 24 fit + 24 evaluation SQLGlot tasks | Protocol/preregistration only; it does not name one materialized trace root. Locate the collection through `traces/README.md` and its result receipt. |
+
+These are evidence-bound research definitions, not a live data catalog. Do not
+edit task IDs to match whatever happens to be present. Restore missing data or
+create a separately named amended corpus, and record what evidence was already
+visible.
+
+`swe-100.json` also contains a workstation-specific absolute `trace_root`;
+`swe-277.json` uses a repository-relative root. Always resolve and validate the
+paths on the machine that will run the evaluation. Simulation manifests may
+also intentionally contain absolute paths because task sources and trace roots
+are host-local.
+
+## Serving Configuration
+
+`serving/w5_multitenant.yaml` is the current W5 matrix definition. It owns the
+policies, load levels, task-list inputs, model settings, transfer settings, and
+restore-cost fraction. Its task lists live in
 `analysis/serving/w5-multitenant/inputs/`.
 
-The file is not launch-ready and has no associated result. Before a GPU run:
-
-- generate
-  `analysis/serving/w5-multitenant/prefill_result_llama31_8b.json` on the target
-  hardware;
-- resolve the development trigger table's `rho=1.0` metadata against the
-  configured runtime `restore_cost_fraction: 0.94`;
-- pass the focused CPU tests and independent serving-code review.
-
-Do not infer a result from the presence of the config, and do not silently
-substitute another prefill profile, trigger table, task set, or `rho` value.
+The config is not proof of a completed run and is not launch-ready in this
+checkout: `analysis/serving/w5-multitenant/prefill_result_llama31_8b.json` is
+absent. Generate that hardware-specific input and resolve the documented
+trigger-table/runtime-cost mismatch before launch; do not substitute another
+profile or task set silently.
