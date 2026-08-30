@@ -32,7 +32,7 @@ has_method() {
 preflight() {
   [[ $(git -C "$repo" status --porcelain) == "" ]] || fail "worktree must be clean"
   [[ -x "$python" ]] || fail "run benchmark_server setup first"
-  { ! has_method fcfs && ! has_method thunderagent; } || \
+  { ! has_method fcfs && ! has_method thunderagent && ! has_method native-priority; } || \
     [[ -x "$vllm" ]] || fail "stock vLLM is not installed"
   [[ -f "$manifest" ]] || fail "missing replay manifest: $manifest"
   [[ ! -e "$run_root" ]] || fail "run root already exists: $run_root"
@@ -40,7 +40,7 @@ preflight() {
   [[ -z "$vllm_cpuset" ]] || command -v taskset >/dev/null || fail "taskset is required"
   local cell
   for cell in "${cells[@]}"; do
-    [[ "$cell" =~ ^(fcfs|thunderagent|agentix|continuum-public|continuum-reproduction|cachewise|saga)-r[1-9][0-9]*$ ]] || fail "unsupported cell: $cell"
+    [[ "$cell" =~ ^(fcfs|thunderagent|agentix|continuum-public|continuum-reproduction|native-priority|native-priority-aging|cachewise-disabled|cachewise|saga)-r[1-9][0-9]*$ ]] || fail "unsupported cell: $cell"
   done
   command -v docker >/dev/null || fail "docker is required"
   command -v nvidia-smi >/dev/null || fail "nvidia-smi is required"
@@ -59,10 +59,15 @@ preflight() {
     [[ -f "$continuum_profile" ]] || fail "missing Continuum reproduction profile"
     "$repo/scripts/baselines/continuum_reproduction.sh" verify >/dev/null
   fi
+  if has_method native-priority-aging; then
+    "$repo/scripts/baselines/native_priority_aging.sh" verify >/dev/null
+  fi
   if has_method cachewise; then
     [[ -f "$cachewise_models/all_models.pkl" ]] || fail "missing CacheWise models"
     "$python" -c 'import sklearn' || \
       fail "CacheWise requires: uv sync --extra serving-spike"
+  fi
+  if has_method cachewise || has_method cachewise-disabled; then
     "$repo/scripts/baselines/cachewise_reproduction.sh" verify-installed >/dev/null
   fi
   if has_method saga; then
@@ -148,6 +153,16 @@ run_cell() (
       server=("$repo/scripts/baselines/continuum_reproduction.sh" serve "$model" --dtype bfloat16 --kv-cache-dtype auto)
       server_env+=(CONTINUUM_REPRODUCTION_PROFILE="$continuum_profile" CONTINUUM_REPRODUCTION_MODE=prefill RUN_OUTPUT_DIR="$cell/continuum")
       ;;
+    native-priority-aging)
+      server=("$repo/scripts/baselines/native_priority_aging.sh" serve "$model" "${common_args[@]}")
+      server_env+=(
+        NATIVE_PRIORITY_AGING_BYPASS_LIMIT=8
+        NATIVE_PRIORITY_AGING_EVENT_LOG="$cell/native-priority-aging.jsonl"
+      )
+      ;;
+    cachewise-disabled)
+      server=("$repo/scripts/baselines/cachewise_reproduction.sh" serve-disabled "$model" "${common_args[@]}")
+      ;;
     cachewise)
       server=("$repo/scripts/baselines/cachewise_reproduction.sh" serve "$model" "${common_args[@]}")
       ;;
@@ -185,6 +200,8 @@ run_cell() (
     wait_http http://127.0.0.1:9000/programs/state "$proxy_pid" "$cell/proxy.log"
   elif [[ "$method" == continuum-public || "$method" == continuum-reproduction ]]; then
     shadow_mode=continuum-public
+  elif [[ "$method" == native-priority || "$method" == native-priority-aging ]]; then
+    shadow_mode=native-priority
   elif [[ "$method" == cachewise ]]; then
     shadow_mode=cachewise
   elif [[ "$method" == saga ]]; then
@@ -252,6 +269,7 @@ run_all() {
     SAGA_PROFILE="$saga_profile" \
     TRACE_TOOL_REPLAY="$trace_tool_replay" \
     SHADOW_LLM_TIMEOUT_S="$shadow_llm_timeout_s" \
+    UV_LOCK_SHA256="$(sha256sum "$repo/uv.lock" | awk '{print $1}')" \
     GIT_COMMIT="$(git -C "$repo" rev-parse HEAD)" "$python" - <<'PY'
 import json, os
 from pathlib import Path
@@ -277,6 +295,14 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
   "continuum_reproduction_profile": os.environ["CONTINUUM_PROFILE"] or None,
   "saga_profile": os.environ["SAGA_PROFILE"] or None,
   "agentix_queue_upper_bounds_s": [0.25, 1, 4, 16],
+  "native_priority": {
+    "initial_request_priority": 1,
+    "return_request_priority": 0,
+    "aging_bypass_limit": 8,
+    "aging_unit": "waiting-to-running priority-0 admissions",
+    "dependency_lock_sha256": os.environ["UV_LOCK_SHA256"]
+  },
+  "cachewise_disabled": "same patched fork/config without CacheWise scheduling flags or policy payloads",
   "cachewise_tool_mapping": {
     "exec": "Bash", "read_file": "Read", "edit_file": "Edit",
     "write_file": "Write", "list_dir": "Glob"

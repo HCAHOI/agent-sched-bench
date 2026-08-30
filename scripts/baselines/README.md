@@ -11,6 +11,9 @@ reproduction.
 | `agentix` | `agentix_reproduction.sh` | PLAS arrival-priority subset; no ATLAS, dynamic quantum, KV-swap kernel, or multi-engine routing | `./scripts/baselines/agentix_reproduction.sh install` |
 | `continuum-public` | `continuum_public.sh` | Authors' public fixed-2-second TTL fork, not the paper estimator | `./scripts/baselines/continuum_public.sh install` |
 | `continuum-reproduction` | `continuum_reproduction.sh` | Public fork plus the paper TTL equation; requires a hardware-measured prefill/reload profile | `./scripts/baselines/continuum_reproduction.sh install` |
+| `native-priority` | stock repo vLLM priority scheduler | Priority 1 for each program's initial request, priority 0 for causal tool returns | `bash scripts/setup/benchmark_server.sh --gpu` |
+| `native-priority-aging` | `native_priority_aging.sh` | Same return priority with promotion after one `max_num_seqs=8` batch of bypasses | `./scripts/baselines/native_priority_aging.sh install` |
+| `cachewise-disabled` | `cachewise_reproduction.sh serve-disabled` | Exact CacheWise fork/config control without CacheWise scheduling or policy payloads | `./scripts/baselines/cachewise_reproduction.sh install` |
 | `cachewise` | `cachewise_reproduction.sh` | Authors' vLLM fork plus reconstructed scheduler hooks; the exact paper split and engine attachment hook are unpublished | Run `cachewise_official.sh install`, `cachewise_official.sh train-published`, then `cachewise_reproduction.sh install` |
 | `saga` | `saga_reproduction.sh` | Single-GPU KV/arrival-priority subset; no private multi-GPU routing, migration, or prefetch system | `./scripts/baselines/saga_reproduction.sh install` and build a causal profile |
 
@@ -38,6 +41,7 @@ export CONCURRENCY=4
 ```
 
 Add `agentix-r1`, `continuum-public-r1`, `continuum-reproduction-r1`,
+`native-priority-r1`, `native-priority-aging-r1`, `cachewise-disabled-r1`,
 `cachewise-r1`, or `saga-r1` only after its preparation above. Continuum
 reproduction additionally needs `CONTINUUM_REPRODUCTION_PROFILE`; SAGA needs
 `SAGA_PROFILE`. Use `TRACE_TOOL_REPLAY=0` for real task-container tool execution

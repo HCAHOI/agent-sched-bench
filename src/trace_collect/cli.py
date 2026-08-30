@@ -374,6 +374,7 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
             "agentix",
             "cachewise",
             "saga",
+            "native-priority",
         ],
         default="vllm",
         help=(

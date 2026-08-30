@@ -197,7 +197,13 @@ def _build_trace_replay_tools(
 
 
 ShadowGenerationMode = Literal[
-    "vllm", "thunderagent", "continuum_public", "agentix", "cachewise", "saga"
+    "vllm",
+    "thunderagent",
+    "continuum_public",
+    "agentix",
+    "cachewise",
+    "saga",
+    "native_priority",
 ]
 
 
@@ -237,6 +243,7 @@ class ShadowGenerationConfig:
             "agentix",
             "cachewise",
             "saga",
+            "native_priority",
         }:
             raise ValueError(f"unknown shadow generation mode: {self.mode!r}")
         cachewise_paths = (
@@ -282,6 +289,8 @@ def shadow_generation_payload(config: ShadowGenerationConfig) -> dict[str, Any]:
     elif config.mode == "saga":
         payload["saga"] = True
         payload["saga_profile"] = config.saga_profile
+    elif config.mode == "native_priority":
+        payload["native_priority"] = True
     return payload
 
 
@@ -292,7 +301,23 @@ def shadow_generation_from_payload(payload: dict[str, Any]) -> ShadowGenerationC
     agentix = raw.pop("agentix", False)
     cachewise = raw.pop("cachewise", False)
     saga = raw.pop("saga", False)
-    if sum(map(bool, (thunderagent, continuum_public, agentix, cachewise, saga))) > 1:
+    native_priority = raw.pop("native_priority", False)
+    if (
+        sum(
+            map(
+                bool,
+                (
+                    thunderagent,
+                    continuum_public,
+                    agentix,
+                    cachewise,
+                    saga,
+                    native_priority,
+                ),
+            )
+        )
+        > 1
+    ):
         raise ValueError("shadow generation payload has conflicting modes")
     mode: ShadowGenerationMode = (
         "thunderagent"
@@ -305,6 +330,8 @@ def shadow_generation_from_payload(payload: dict[str, Any]) -> ShadowGenerationC
         if cachewise
         else "saga"
         if saga
+        else "native_priority"
+        if native_priority
         else "vllm"
     )
     return ShadowGenerationConfig(**raw, mode=mode)
@@ -1122,6 +1149,8 @@ class OpenClawReplayProvider(LLMProvider):
         elif self._shadow_generation.mode == "saga":
             assert self._program_id is not None
             request["vllm_xargs"] = {"saga_session_id": self._program_id}
+        elif self._shadow_generation.mode == "native_priority":
+            request["priority"] = 1 if self._index == 1 else 0
         if (
             self._tool_gap_loan is not None
             and not self._tool_gap_loan.config.can_lend

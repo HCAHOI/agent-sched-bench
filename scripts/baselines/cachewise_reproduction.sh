@@ -22,7 +22,7 @@ fi
 
 usage() {
   cat <<'EOF'
-Usage: cachewise_reproduction.sh fetch|verify|verify-installed|prepare|install|serve|policy|manifest [ARGS...]
+Usage: cachewise_reproduction.sh fetch|verify|verify-installed|prepare|install|serve|serve-disabled|policy|manifest [ARGS...]
 
 Fetches the authors' predictor and vLLM fork at exact commits, then applies a
 small patch implementing the paper's conditional-remaining-time eviction,
@@ -35,6 +35,7 @@ Commands:
   prepare        Fetch and apply the patch; leaves an installable vLLM tree.
   install        Install the patched tree using vLLM's precompiled wheel mode.
   serve ARGS     Start the patched installed vLLM with paper policy flags.
+  serve-disabled Start the same fork/config without CacheWise scheduling flags.
   policy ARGS    Generate cachewise_policy JSON with the official predictor.
   manifest       Print published, inferred, and unpublished choices as JSON.
 
@@ -131,6 +132,24 @@ serve() {
     --max-num-batched-tokens 512
 }
 
+serve_disabled() {
+  local model=${1:?model is required}
+  shift
+  local vllm_python="${CACHEWISE_VLLM_PYTHON:-$vllm_venv/bin/python}"
+  test -x "$vllm_python" || {
+    echo "patched vLLM is not installed: $vllm_python" >&2
+    exit 1
+  }
+  "$python_bin" "$script_dir/cachewise_reproduction.py" \
+    verify-applied "$vllm_checkout"
+  export VLLM_SERVER_DEV_MODE=1
+  exec "$vllm_python" -m vllm.entrypoints.openai.api_server \
+    --model "$model" "$@" \
+    --enable-prefix-caching \
+    --enable-chunked-prefill \
+    --max-num-batched-tokens 512
+}
+
 case "${1:-}" in
   fetch) fetch_all ;;
   verify) fetch_all; verify_patch ;;
@@ -138,6 +157,7 @@ case "${1:-}" in
   prepare) prepare ;;
   install) install ;;
   serve) shift; serve "$@" ;;
+  serve-disabled) shift; serve_disabled "$@" ;;
   policy)
     shift
     fetch_one "$predictor_url" "$predictor_commit" "$predictor_checkout"

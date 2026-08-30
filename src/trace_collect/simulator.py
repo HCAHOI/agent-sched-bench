@@ -3989,6 +3989,8 @@ async def simulate(
         raise ValueError("SAGA profile requires SAGA mode")
     if tool_gap_loan_arm not in {None, "fixed", "feedback", "predictor"}:
         raise ValueError(f"unknown tool-gap loan arm: {tool_gap_loan_arm}")
+    if shadow_llm_mode == "native_priority" and tool_gap_loan_arm is not None:
+        raise ValueError("native priority cannot be combined with tool-gap loans")
     if tool_gap_loan_arm == "predictor" and tool_gap_predictions is None:
         raise ValueError("predictor tool-gap loan requires a prediction file")
     if tool_gap_loan_arm != "predictor" and tool_gap_predictions is not None:

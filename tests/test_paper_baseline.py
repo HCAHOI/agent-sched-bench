@@ -15,6 +15,7 @@ from trace_collect.openclaw_host_runtime import (
     OpenClawReplayProvider,
     ShadowGenerationConfig,
     _build_trace_replay_tools,
+    shadow_generation_from_payload,
     shadow_generation_payload,
 )
 from trace_collect.simulate_openclaw import replay_trace_tools_enabled
@@ -174,6 +175,36 @@ def test_thunderagent_mode_is_recorded_without_changing_plain_metadata() -> None
     )
 
 
+def test_native_priority_marks_initial_then_return_requests() -> None:
+    first = _source_action()
+    second = json.loads(json.dumps(first))
+    second["action_id"] = "llm-2"
+    second["_source_action_index"] = 2
+    client = _Client()
+    config = ShadowGenerationConfig(
+        api_base="http://127.0.0.1:8000/v1",
+        model="test-model",
+        timeout_s=12.0,
+        seed=0,
+        mode="native_priority",
+    )
+    provider = OpenClawReplayProvider(
+        llm_actions=[first, second],
+        replay_speed=1.0,
+        timing_mode="source_scaled",
+        shadow_generation=config,
+    )
+    assert provider._shadow_client is not None
+    asyncio.run(provider._shadow_client.aclose())
+    provider._shadow_client = client
+
+    asyncio.run(provider.chat([]))
+    asyncio.run(provider.chat([]))
+
+    assert [request[2]["priority"] for request in client.requests] == [1, 0]
+    assert shadow_generation_from_payload(shadow_generation_payload(config)) == config
+
+
 def test_trace_tool_replay_checks_call_and_returns_recorded_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -227,6 +258,10 @@ def test_paper_baseline_runner_has_required_policy_checks() -> None:
     assert "--shadow-llm-cachewise-predictor-checkout" in runner_text
     assert 'saga_reproduction.sh" verify' in runner_text
     assert 'saga_reproduction.sh" serve-backend' in runner_text
+    assert 'native_priority_aging.sh" verify' in runner_text
+    assert 'native_priority_aging.sh" serve' in runner_text
+    assert 'cachewise_reproduction.sh" serve-disabled' in runner_text
+    assert "shadow_mode=native-priority" in runner_text
     assert '--shadow-llm-saga-profile "$saga_profile"' in runner_text
     assert "--queue-upper-bounds 0.25,1,4,16" in runner_text
     assert 'OPENCLAW_REPLAY_TRACE_TOOLS="$trace_tool_replay"' in runner_text
@@ -234,6 +269,19 @@ def test_paper_baseline_runner_has_required_policy_checks() -> None:
     assert "shadow_llm_timeout_s=${SHADOW_LLM_TIMEOUT_S:-300}" in runner_text
     assert '--shadow-llm-timeout-s "$shadow_llm_timeout_s"' in runner_text
     assert '"shadow_llm_timeout_s": float(' in runner_text
+
+
+def test_cachewise_disabled_keeps_fork_config_without_policy_flags() -> None:
+    source = (
+        Path(__file__).parents[1] / "scripts/baselines/cachewise_reproduction.sh"
+    ).read_text()
+    body = source.split("serve_disabled() {", 1)[1].split("\n}\n", 1)[0]
+
+    assert "--enable-prefix-caching" in body
+    assert "--enable-chunked-prefill" in body
+    assert "--max-num-batched-tokens 512" in body
+    assert "--enable-cachewise-free-heap" not in body
+    assert "--prioritize-waiting-by-prefix-cache" not in body
 
 
 def test_baseline_runner_rejects_server_and_task_failures(tmp_path: Path) -> None:
