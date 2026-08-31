@@ -256,6 +256,11 @@ def test_paper_baseline_runner_has_required_policy_checks() -> None:
         in runner_text
     )
     assert "--shadow-llm-cachewise-predictor-checkout" in runner_text
+    assert "cachewise-oracle-length" in runner_text
+    assert "--shadow-llm-oracle-output-priority" in runner_text
+    assert "CACHEWISE_ORACLE_LENGTH_EVENT_LOG" in runner_text
+    assert "CACHEWISE_ORACLE_PREFILL_MS_PER_TOKEN" in runner_text
+    assert "CACHEWISE_ORACLE_DECODE_MS_PER_TOKEN" in runner_text
     assert 'saga_reproduction.sh" verify' in runner_text
     assert 'saga_reproduction.sh" serve-backend' in runner_text
     assert 'native_priority_aging.sh" verify' in runner_text
@@ -264,11 +269,25 @@ def test_paper_baseline_runner_has_required_policy_checks() -> None:
     assert "shadow_mode=native-priority" in runner_text
     assert '--shadow-llm-saga-profile "$saga_profile"' in runner_text
     assert "--queue-upper-bounds 0.25,1,4,16" in runner_text
+    assert 'proxy_launch+=(taskset -c "$vllm_cpuset")' in runner_text
+    assert '>"$cell/proxy.argv"' in runner_text
     assert 'OPENCLAW_REPLAY_TRACE_TOOLS="$trace_tool_replay"' in runner_text
     assert '"tool_execution": (' in runner_text
     assert "shadow_llm_timeout_s=${SHADOW_LLM_TIMEOUT_S:-300}" in runner_text
     assert '--shadow-llm-timeout-s "$shadow_llm_timeout_s"' in runner_text
     assert '"shadow_llm_timeout_s": float(' in runner_text
+    assert "expected_gpu_name=${EXPECTED_GPU_NAME:-A100}" in runner_text
+    assert "min_gpu_memory_mib=${MIN_GPU_MEMORY_MIB:-80000}" in runner_text
+    assert "gpu_memory_utilization=${GPU_MEMORY_UTILIZATION:-0.90}" in runner_text
+    assert "memory_activity_pct" in runner_text
+    assert "utilization.gpu,utilization.memory" in runner_text
+    assert 'fail "GPU telemetry stopped early"' in runner_text
+    assert 'raise SystemExit("GPU telemetry row is incomplete")' in runner_text
+    assert "stage_all_before_replay=${STAGE_ALL_BEFORE_REPLAY:-1}" in runner_text
+    assert "cleanup_images=${CLEANUP_IMAGES:-0}" in runner_text
+    assert 'simulate+=(--cleanup-images)' in runner_text
+    assert "resource_monitoring=${RESOURCE_MONITORING:-off}" in runner_text
+    assert '--resource-monitoring "$resource_monitoring"' in runner_text
 
 
 def test_cachewise_disabled_keeps_fork_config_without_policy_flags() -> None:
@@ -355,9 +374,9 @@ exit 1
     executable(
         fake_bin / "nvidia-smi",
         """if [[ $* == *name,memory.total* ]]; then
-  echo 'NVIDIA A100 80GB PCIe, 81920'
+  echo "${FAKE_GPU_ROW:-NVIDIA A100 80GB PCIe, 81920}"
 else
-  echo '40, 0, 0'
+  echo "${FAKE_GPU_VALUES:-40, 0, 0, 0}"
 fi
 """,
     )
@@ -411,6 +430,24 @@ fi
     assert (server_root / "fcfs-r1/cell-exit-code").read_text().strip() == "1"
     assert not (server_root / "fcfs-r1/simulate-exit-code").exists()
 
+    telemetry_root = tmp_path / "telemetry-failure"
+    telemetry_run = subprocess.run(
+        ["bash", runner, "--run"],
+        env={
+            **base_env,
+            "RUN_ROOT": str(telemetry_root),
+            "CELLS": "fcfs-r1",
+            "FAKE_GPU_VALUES": "40, 0, 0",
+        },
+        text=True,
+        capture_output=True,
+        timeout=20,
+    )
+    assert telemetry_run.returncode == 1
+    assert (telemetry_root / "fcfs-r1/simulate-exit-code").read_text().strip() == "0"
+    assert (telemetry_root / "fcfs-r1/cell-exit-code").read_text().strip() == "1"
+    assert "GPU telemetry row is incomplete" in telemetry_run.stderr
+
     thunder = repo / "scripts/baselines/thunderagent_official.sh"
     executable(
         thunder,
@@ -454,6 +491,23 @@ exit 2
     assert cachewise_run.returncode == 1
     assert "CacheWise requires: uv sync --extra serving-spike" in cachewise_run.stderr
 
+    oracle_run = subprocess.run(
+        ["bash", runner, "--preflight"],
+        env={
+            **base_env,
+            "RUN_ROOT": str(tmp_path / "oracle-preflight"),
+            "CELLS": "cachewise-oracle-length-r1",
+            "CACHEWISE_MODELS_DIR": str(models),
+            "CACHEWISE_ORACLE_PREFILL_MS_PER_TOKEN": "",
+            "CACHEWISE_ORACLE_DECODE_MS_PER_TOKEN": "",
+        },
+        text=True,
+        capture_output=True,
+        timeout=20,
+    )
+    assert oracle_run.returncode == 1
+    assert "CacheWise Oracle service coefficients must be positive" in oracle_run.stderr
+
     saga = repo / "scripts/baselines/saga_reproduction.sh"
     executable(
         saga,
@@ -493,6 +547,10 @@ exit 2
             "SAGA_PROFILE": str(profile),
             "FAKE_SAGA_CALLS": str(saga_calls),
             "FAKE_PYTHON_CALLS": str(python_calls),
+            "EXPECTED_GPU_NAME": "L40S",
+            "MIN_GPU_MEMORY_MIB": "46000",
+            "GPU_MEMORY_UTILIZATION": "0.95",
+            "FAKE_GPU_ROW": "NVIDIA L40S, 46068",
         },
         text=True,
         capture_output=True,
@@ -502,7 +560,7 @@ exit 2
     assert saga_calls.read_text().splitlines() == [
         "verify",
         "serve-backend fake/model --host 127.0.0.1 --port 8000 "
-        "--tensor-parallel-size 1 --gpu-memory-utilization 0.90 "
+        "--tensor-parallel-size 1 --gpu-memory-utilization 0.95 "
         "--max-model-len 131072 --max-num-seqs 8 --enable-prefix-caching "
         "--kv-cache-dtype auto --enforce-eager",
     ]
@@ -516,3 +574,6 @@ exit 2
     assert f"--shadow-llm-saga-profile {profile}" in simulate_call
     protocol = json.loads((saga_root / "protocol.json").read_text())
     assert protocol["saga_profile"] == str(profile)
+    assert protocol["workload"]["expected_gpu_name"] == "L40S"
+    assert protocol["workload"]["min_gpu_memory_mib"] == 46000
+    assert protocol["workload"]["gpu_memory_utilization"] == 0.95

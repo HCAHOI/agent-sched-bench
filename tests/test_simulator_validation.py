@@ -1025,7 +1025,10 @@ def test_openclaw_replay_provider_charges_streamed_shadow_generation(
         <= shadow_metrics["slot_acquired_wall_time_s"]
         <= shadow_metrics["slot_released_wall_time_s"]
     )
-    assert captured["client_kwargs"] == {"timeout": 12.0, "trust_env": False}
+    client_kwargs = captured["client_kwargs"]
+    assert client_kwargs["timeout"] == 12.0
+    assert client_kwargs["trust_env"] is False
+    assert client_kwargs["limits"].max_keepalive_connections == 0
     assert captured["closed"] is True
     responses = json.loads(
         (tmp_path / "gap-state" / "responses" / "task-0.json").read_text()

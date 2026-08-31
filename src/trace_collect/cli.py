@@ -394,6 +394,11 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         help="Official trained predictor models used only by CacheWise mode.",
     )
     parser.add_argument(
+        "--shadow-llm-oracle-output-priority",
+        action="store_true",
+        help="Use trace completion tokens as CacheWise request priority.",
+    )
+    parser.add_argument(
         "--shadow-llm-saga-profile",
         default=None,
         help="Frozen causal tool profile used only by the SAGA KV subset.",
@@ -855,6 +860,9 @@ def _run_simulate(args: argparse.Namespace) -> None:
             Path(args.shadow_llm_cachewise_models_dir)
             if args.shadow_llm_cachewise_models_dir
             else None
+        ),
+        "shadow_llm_oracle_output_priority": (
+            args.shadow_llm_oracle_output_priority
         ),
         "shadow_llm_saga_profile": (
             Path(args.shadow_llm_saga_profile) if args.shadow_llm_saga_profile else None

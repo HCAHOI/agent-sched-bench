@@ -27,6 +27,8 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import math
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -40,6 +42,134 @@ VLLM_COMMIT = "16cc7d43d0e1a84f68f046e6caecfef21012f3fc"
 VLLM_UPSTREAM_BASE = "b1388b1fbf5aaef47937fabe98931211684666a6"
 N_REBUILD = 3
 _MODEL_ARTIFACT_SUFFIXES = (".json", ".pkl")
+_ORACLE_LENGTH_EVENT_LOG_ENV = "CACHEWISE_ORACLE_LENGTH_EVENT_LOG"
+_ORACLE_PREFILL_MS_PER_TOKEN_ENV = "CACHEWISE_ORACLE_PREFILL_MS_PER_TOKEN"
+_ORACLE_DECODE_MS_PER_TOKEN_ENV = "CACHEWISE_ORACLE_DECODE_MS_PER_TOKEN"
+_ORACLE_LENGTH_MARKER = "# CACHEWISE_ORACLE_LENGTH_V1"
+_ORACLE_LENGTH_HEADER = '''        """Pick the request requiring the fewest additional KV blocks."""
+        if not self.waiting:
+            return None
+        best: Request | None = None
+        best_key: tuple[float, float, str] | None = None
+'''
+_ORACLE_LENGTH_HEADER_PATCH = '''        """Pick the request with the least cache-aware Oracle service."""
+        # CACHEWISE_ORACLE_LENGTH_V1
+        from scripts.baselines.cachewise_reproduction import (
+            cachewise_oracle_length_key,
+            record_cachewise_oracle_length_decision,
+        )
+        if not self.waiting:
+            return None
+        best: Request | None = None
+        best_key: tuple[float, float, str] | None = None
+        cachewise_best: Request | None = None
+        cachewise_best_key: tuple[float, float, str] | None = None
+        candidate_count = 0
+'''
+_ORACLE_LENGTH_KEY = '''            key = (additional_blocks, req.arrival_time, req.request_id)
+            if best_key is None or key < best_key:
+                best_key = key
+                best = req
+'''
+_ORACLE_LENGTH_KEY_PATCH = '''            candidate_count += 1
+            cachewise_key = (
+                float(additional_blocks), req.arrival_time, req.request_id
+            )
+            if cachewise_best_key is None or cachewise_key < cachewise_best_key:
+                cachewise_best_key = cachewise_key
+                cachewise_best = req
+            key = cachewise_oracle_length_key(
+                req, missing_tokens, additional_blocks
+            )
+            if best_key is None or key < best_key:
+                best_key = key
+                best = req
+'''
+_ORACLE_LENGTH_RETURN = '''        return best
+
+
+    def _handle_stopped_request'''
+_ORACLE_LENGTH_RETURN_PATCH = '''        record_cachewise_oracle_length_decision(
+            cachewise_best, best, candidate_count
+        )
+        return best
+
+
+    def _handle_stopped_request'''
+
+
+def cachewise_oracle_length_key(
+    request: Any, missing_tokens: int, additional_blocks: int
+) -> tuple[float, float, str]:
+    """Estimate cache-aware request service using exact trace output length."""
+
+    if os.environ.get(_ORACLE_LENGTH_EVENT_LOG_ENV) is None:
+        return (float(additional_blocks), request.arrival_time, request.request_id)
+    output_tokens = request.priority
+    if not isinstance(output_tokens, int) or output_tokens < 1:
+        raise RuntimeError("CacheWise Oracle request requires positive output tokens")
+    try:
+        prefill_ms_per_token = float(os.environ[_ORACLE_PREFILL_MS_PER_TOKEN_ENV])
+        decode_ms_per_token = float(os.environ[_ORACLE_DECODE_MS_PER_TOKEN_ENV])
+    except (KeyError, ValueError) as exc:
+        raise RuntimeError("CacheWise Oracle service coefficients are required") from exc
+    if not all(
+        math.isfinite(value) and value > 0
+        for value in (prefill_ms_per_token, decode_ms_per_token)
+    ):
+        raise RuntimeError("CacheWise Oracle service coefficients must be positive")
+    service_ms = (
+        missing_tokens * prefill_ms_per_token
+        + output_tokens * decode_ms_per_token
+    )
+    return (service_ms, request.arrival_time, request.request_id)
+
+
+def record_cachewise_oracle_length_decision(
+    cachewise_request: Any, selected_request: Any, candidate_count: int
+) -> None:
+    """Record whether adding exact output length changed CacheWise selection."""
+
+    event_log = os.environ.get(_ORACLE_LENGTH_EVENT_LOG_ENV)
+    if event_log is None or cachewise_request is None or selected_request is None:
+        return
+    event = {
+        "schema": "cachewise-oracle-length-v1",
+        "candidate_count": candidate_count,
+        "cachewise_request_id": cachewise_request.request_id,
+        "cachewise_output_tokens": cachewise_request.priority,
+        "selected_request_id": selected_request.request_id,
+        "selected_output_tokens": selected_request.priority,
+        "selection_changed": cachewise_request.request_id
+        != selected_request.request_id,
+    }
+    with Path(event_log).open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, separators=(",", ":")) + "\n")
+
+
+def patch_cachewise_oracle_length_scheduler(path: Path) -> bool:
+    """Add the optional combined CacheWise and exact-length waiting score."""
+
+    source = path.read_text(encoding="utf-8")
+    if _ORACLE_LENGTH_MARKER in source:
+        return False
+    for anchor in (
+        _ORACLE_LENGTH_HEADER,
+        _ORACLE_LENGTH_KEY,
+        _ORACLE_LENGTH_RETURN,
+    ):
+        if source.count(anchor) != 1:
+            raise ValueError(f"unexpected CacheWise scheduler anchor: {anchor!r}")
+    source = source.replace(
+        _ORACLE_LENGTH_HEADER, _ORACLE_LENGTH_HEADER_PATCH, 1
+    ).replace(_ORACLE_LENGTH_KEY, _ORACLE_LENGTH_KEY_PATCH, 1).replace(
+        _ORACLE_LENGTH_RETURN, _ORACLE_LENGTH_RETURN_PATCH, 1
+    )
+    temporary = path.with_name(path.name + ".cachewise-oracle-length.tmp")
+    temporary.write_text(source, encoding="utf-8")
+    os.chmod(temporary, path.stat().st_mode)
+    os.replace(temporary, path)
+    return True
 
 VLLM_PATCH = r'''
 diff --git a/vllm/entrypoints/serve/cache/api_router.py b/vllm/entrypoints/serve/cache/api_router.py

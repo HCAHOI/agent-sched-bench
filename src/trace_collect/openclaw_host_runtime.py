@@ -219,6 +219,7 @@ class ShadowGenerationConfig:
     mode: ShadowGenerationMode = "vllm"
     cachewise_predictor_checkout: str | None = None
     cachewise_models_dir: str | None = None
+    oracle_output_priority: bool = False
     saga_profile: str | None = None
 
     def __post_init__(self) -> None:
@@ -255,6 +256,8 @@ class ShadowGenerationConfig:
                 raise ValueError("CacheWise mode requires predictor and model paths")
         elif any(path is not None for path in cachewise_paths):
             raise ValueError("CacheWise paths require CacheWise mode")
+        if self.oracle_output_priority and self.mode != "cachewise":
+            raise ValueError("Oracle output priority requires CacheWise mode")
         if self.mode == "saga":
             if self.saga_profile is None:
                 raise ValueError("SAGA mode requires a frozen causal profile")
@@ -286,6 +289,8 @@ def shadow_generation_payload(config: ShadowGenerationConfig) -> dict[str, Any]:
         payload["cachewise"] = True
         payload["cachewise_predictor_checkout"] = config.cachewise_predictor_checkout
         payload["cachewise_models_dir"] = config.cachewise_models_dir
+        if config.oracle_output_priority:
+            payload["oracle_output_priority"] = True
     elif config.mode == "saga":
         payload["saga"] = True
         payload["saga_profile"] = config.saga_profile
@@ -724,7 +729,11 @@ class OpenClawReplayProvider(LLMProvider):
             )
         self._tool_gap_loan = tool_gap_loan
         self._shadow_client = (
-            httpx.AsyncClient(timeout=shadow_generation.timeout_s, trust_env=False)
+            httpx.AsyncClient(
+                timeout=shadow_generation.timeout_s,
+                trust_env=False,
+                limits=httpx.Limits(max_keepalive_connections=0),
+            )
             if shadow_generation is not None
             else None
         )
@@ -1146,6 +1155,8 @@ class OpenClawReplayProvider(LLMProvider):
 
             assert self._program_id is not None
             request["cachewise_policy"] = active_policy(self._program_id)
+            if self._shadow_generation.oracle_output_priority:
+                request["priority"] = requested_tokens
         elif self._shadow_generation.mode == "saga":
             assert self._program_id is not None
             request["vllm_xargs"] = {"saga_session_id": self._program_id}
@@ -2180,7 +2191,12 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                             if shadow_generation.mode == "continuum_public"
                             else {"agentix": True}
                             if shadow_generation.mode == "agentix"
-                            else {"cachewise": True}
+                            else {
+                                "cachewise": True,
+                                "oracle_output_priority": (
+                                    shadow_generation.oracle_output_priority
+                                ),
+                            }
                             if shadow_generation.mode == "cachewise"
                             else {"saga": True}
                             if shadow_generation.mode == "saga"

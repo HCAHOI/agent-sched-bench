@@ -3930,6 +3930,7 @@ async def simulate(
     shadow_llm_mode: ShadowGenerationMode = "vllm",
     shadow_llm_cachewise_predictor_checkout: Path | None = None,
     shadow_llm_cachewise_models_dir: Path | None = None,
+    shadow_llm_oracle_output_priority: bool = False,
     shadow_llm_saga_profile: Path | None = None,
     tool_gap_loan_arm: str | None = None,
     tool_gap_predictions: Path | None = None,
@@ -3977,6 +3978,8 @@ async def simulate(
             raise ValueError("CacheWise mode requires predictor and model paths")
     elif any(path is not None for path in cachewise_paths):
         raise ValueError("CacheWise paths require CacheWise mode")
+    if shadow_llm_oracle_output_priority and shadow_llm_mode != "cachewise":
+        raise ValueError("Oracle output priority requires CacheWise mode")
     if shadow_llm_mode == "saga":
         if shadow_llm_saga_profile is None:
             raise ValueError("SAGA mode requires a frozen causal profile")
@@ -4024,6 +4027,7 @@ async def simulate(
                 if shadow_llm_cachewise_models_dir is not None
                 else None
             ),
+            oracle_output_priority=shadow_llm_oracle_output_priority,
             saga_profile=(
                 str(shadow_llm_saga_profile.resolve())
                 if shadow_llm_saga_profile is not None

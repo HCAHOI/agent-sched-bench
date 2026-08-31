@@ -15,7 +15,15 @@ container_cpus=${CONTAINER_CPUS:-}
 vllm_cpuset=${VLLM_CPUSET:-}
 continuum_profile=${CONTINUUM_REPRODUCTION_PROFILE:-}
 trace_tool_replay=${TRACE_TOOL_REPLAY:-0}
+stage_all_before_replay=${STAGE_ALL_BEFORE_REPLAY:-1}
+cleanup_images=${CLEANUP_IMAGES:-0}
+resource_monitoring=${RESOURCE_MONITORING:-off}
 shadow_llm_timeout_s=${SHADOW_LLM_TIMEOUT_S:-300}
+expected_gpu_name=${EXPECTED_GPU_NAME:-A100}
+min_gpu_memory_mib=${MIN_GPU_MEMORY_MIB:-80000}
+gpu_memory_utilization=${GPU_MEMORY_UTILIZATION:-0.90}
+cachewise_oracle_prefill_ms_per_token=${CACHEWISE_ORACLE_PREFILL_MS_PER_TOKEN:-}
+cachewise_oracle_decode_ms_per_token=${CACHEWISE_ORACLE_DECODE_MS_PER_TOKEN:-}
 cachewise_checkout=${CACHEWISE_CHECKOUT:-$HOME/.cache/agent-sched-bench/cachewise-181c435a090d328d00bbbee4c8eeb27d32f3abd2}
 cachewise_models=${CACHEWISE_MODELS_DIR:-$cachewise_checkout/tool_duration_prediction/models}
 saga_profile=${SAGA_PROFILE:-}
@@ -29,6 +37,10 @@ has_method() {
   [[ " ${cells[*]} " == *" $1-r"* ]]
 }
 
+has_cachewise() {
+  has_method cachewise || has_method cachewise-oracle-length
+}
+
 preflight() {
   [[ $(git -C "$repo" status --porcelain) == "" ]] || fail "worktree must be clean"
   [[ -x "$python" ]] || fail "run benchmark_server setup first"
@@ -37,10 +49,13 @@ preflight() {
   [[ -f "$manifest" ]] || fail "missing replay manifest: $manifest"
   [[ ! -e "$run_root" ]] || fail "run root already exists: $run_root"
   [[ "$trace_tool_replay" == 0 || "$trace_tool_replay" == 1 ]] || fail "TRACE_TOOL_REPLAY must be 0 or 1"
+  [[ "$stage_all_before_replay" == 0 || "$stage_all_before_replay" == 1 ]] || fail "STAGE_ALL_BEFORE_REPLAY must be 0 or 1"
+  [[ "$cleanup_images" == 0 || "$cleanup_images" == 1 ]] || fail "CLEANUP_IMAGES must be 0 or 1"
+  [[ "$resource_monitoring" =~ ^(auto|on|off)$ ]] || fail "RESOURCE_MONITORING must be auto, on, or off"
   [[ -z "$vllm_cpuset" ]] || command -v taskset >/dev/null || fail "taskset is required"
   local cell
   for cell in "${cells[@]}"; do
-    [[ "$cell" =~ ^(fcfs|thunderagent|agentix|continuum-public|continuum-reproduction|native-priority|native-priority-aging|cachewise-disabled|cachewise|saga)-r[1-9][0-9]*$ ]] || fail "unsupported cell: $cell"
+    [[ "$cell" =~ ^(fcfs|thunderagent|agentix|continuum-public|continuum-reproduction|native-priority|native-priority-aging|cachewise-disabled|cachewise|cachewise-oracle-length|saga)-r[1-9][0-9]*$ ]] || fail "unsupported cell: $cell"
   done
   command -v docker >/dev/null || fail "docker is required"
   command -v nvidia-smi >/dev/null || fail "nvidia-smi is required"
@@ -62,12 +77,26 @@ preflight() {
   if has_method native-priority-aging; then
     "$repo/scripts/baselines/native_priority_aging.sh" verify >/dev/null
   fi
-  if has_method cachewise; then
+  if has_cachewise; then
     [[ -f "$cachewise_models/all_models.pkl" ]] || fail "missing CacheWise models"
     "$python" -c 'import sklearn' || \
       fail "CacheWise requires: uv sync --extra serving-spike"
   fi
-  if has_method cachewise || has_method cachewise-disabled; then
+  if has_method cachewise-oracle-length; then
+    "$python" - "$cachewise_oracle_prefill_ms_per_token" \
+      "$cachewise_oracle_decode_ms_per_token" <<'PY'
+import math
+import sys
+
+try:
+    values = [float(value) for value in sys.argv[1:]]
+except ValueError as exc:
+    raise SystemExit("CacheWise Oracle service coefficients must be positive") from exc
+if len(values) != 2 or not all(math.isfinite(value) and value > 0 for value in values):
+    raise SystemExit("CacheWise Oracle service coefficients must be positive")
+PY
+  fi
+  if has_cachewise || has_method cachewise-disabled; then
     "$repo/scripts/baselines/cachewise_reproduction.sh" verify-installed >/dev/null
   fi
   if has_method saga; then
@@ -76,8 +105,10 @@ preflight() {
   fi
   local gpu
   gpu=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits)
-  [[ $(wc -l <<<"$gpu") -eq 1 && "$gpu" == *A100* ]] || fail "one A100 is required"
-  (( ${gpu##*,} >= 80000 )) || fail "A100 80GB is required"
+  [[ $(wc -l <<<"$gpu") -eq 1 && "$gpu" == *"$expected_gpu_name"* ]] || \
+    fail "one $expected_gpu_name GPU is required"
+  (( ${gpu##*,} >= min_gpu_memory_mib )) || \
+    fail "at least $min_gpu_memory_mib MiB GPU memory is required"
 }
 
 stop_group() {
@@ -123,10 +154,10 @@ run_cell() (
   date -u +%FT%TZ >"$cell/start-utc.txt"
 
   (
-    printf 'timestamp_s,power_w,memory_mib,utilization_pct\n'
+    printf 'timestamp_s,power_w,memory_mib,utilization_pct,memory_activity_pct\n'
     while true; do
       printf '%s,' "$(date -u +%s.%N)"
-      nvidia-smi --query-gpu=power.draw,memory.used,utilization.gpu --format=csv,noheader,nounits
+      nvidia-smi --query-gpu=power.draw,memory.used,utilization.gpu,utilization.memory --format=csv,noheader,nounits
       sleep 1
     done
   ) >"$cell/gpu.csv" 2>"$cell/gpu.err" &
@@ -134,7 +165,7 @@ run_cell() (
 
   local common_args=(
     --host 127.0.0.1 --port 8000 --tensor-parallel-size 1
-    --gpu-memory-utilization 0.90 --max-model-len 131072
+    --gpu-memory-utilization "$gpu_memory_utilization" --max-model-len 131072
     --max-num-seqs 8 --enable-prefix-caching --kv-cache-dtype auto
     --enforce-eager
   )
@@ -166,6 +197,14 @@ run_cell() (
     cachewise)
       server=("$repo/scripts/baselines/cachewise_reproduction.sh" serve "$model" "${common_args[@]}")
       ;;
+    cachewise-oracle-length)
+      server=("$repo/scripts/baselines/cachewise_reproduction.sh" serve-oracle-length "$model" "${common_args[@]}")
+      server_env+=(
+        CACHEWISE_ORACLE_LENGTH_EVENT_LOG="$cell/cachewise-oracle-length.jsonl"
+        CACHEWISE_ORACLE_PREFILL_MS_PER_TOKEN="$cachewise_oracle_prefill_ms_per_token"
+        CACHEWISE_ORACLE_DECODE_MS_PER_TOKEN="$cachewise_oracle_decode_ms_per_token"
+      )
+      ;;
     saga)
       server=("$repo/scripts/baselines/saga_reproduction.sh" serve-backend "$model" "${common_args[@]}")
       ;;
@@ -182,9 +221,16 @@ run_cell() (
   if [[ "$method" == thunderagent ]]; then
     api=http://127.0.0.1:9000/v1
     shadow_mode=thunderagent
+    local proxy_launch=(setsid)
+    [[ -z "$vllm_cpuset" ]] || proxy_launch+=(taskset -c "$vllm_cpuset")
+    printf '%q ' env THUNDERAGENT_BACKENDS=http://127.0.0.1:8000 \
+      THUNDERAGENT_PORT=9000 THUNDERAGENT_PROFILE_DIR="$cell/profiles" \
+      "${proxy_launch[@]}" "$repo/scripts/baselines/thunderagent_official.sh" serve \
+      >"$cell/proxy.argv"
+    printf '\n' >>"$cell/proxy.argv"
     THUNDERAGENT_BACKENDS=http://127.0.0.1:8000 \
       THUNDERAGENT_PORT=9000 THUNDERAGENT_PROFILE_DIR="$cell/profiles" \
-      setsid "$repo/scripts/baselines/thunderagent_official.sh" serve \
+      "${proxy_launch[@]}" "$repo/scripts/baselines/thunderagent_official.sh" serve \
       >"$cell/proxy.log" 2>&1 &
     proxy_pid=$!
     wait_http http://127.0.0.1:9000/health "$proxy_pid" "$cell/proxy.log"
@@ -202,7 +248,7 @@ run_cell() (
     shadow_mode=continuum-public
   elif [[ "$method" == native-priority || "$method" == native-priority-aging ]]; then
     shadow_mode=native-priority
-  elif [[ "$method" == cachewise ]]; then
+  elif [[ "$method" == cachewise || "$method" == cachewise-oracle-length ]]; then
     shadow_mode=cachewise
   elif [[ "$method" == saga ]]; then
     shadow_mode=saga
@@ -215,23 +261,26 @@ run_cell() (
     --replay-speed 1 --shadow-llm-api-base "$api"
     --shadow-llm-model "$model" --shadow-llm-timeout-s "$shadow_llm_timeout_s"
     --shadow-llm-seed 0 --shadow-llm-mode "$shadow_mode"
-    --resource-monitoring off --pmu-monitoring off
+    --resource-monitoring "$resource_monitoring" --pmu-monitoring off
     --memory-bandwidth-monitoring off
   )
-  if [[ "$trace_tool_replay" == 0 ]]; then
+  if [[ "$trace_tool_replay" == 0 && "$stage_all_before_replay" == 1 ]]; then
     simulate+=(--stage-all-before-replay)
   fi
+  [[ "$cleanup_images" == 0 ]] || simulate+=(--cleanup-images)
   if [[ -n "$container_cpuset" ]]; then
     simulate+=(--container-cpuset-cpus "$container_cpuset")
   fi
   if [[ -n "$container_cpus" ]]; then
     simulate+=(--container-cpus "$container_cpus")
   fi
-  if [[ "$method" == cachewise ]]; then
+  if [[ "$method" == cachewise || "$method" == cachewise-oracle-length ]]; then
     simulate+=(
       --shadow-llm-cachewise-predictor-checkout "$cachewise_checkout"
       --shadow-llm-cachewise-models-dir "$cachewise_models"
     )
+    [[ "$method" != cachewise-oracle-length ]] || \
+      simulate+=(--shadow-llm-oracle-output-priority)
   elif [[ "$method" == saga ]]; then
     simulate+=(--shadow-llm-saga-profile "$saga_profile")
   fi
@@ -256,6 +305,34 @@ if not (
 ):
     raise SystemExit(f"task failures: {summary['failed_traces']}")
 PY
+  kill -0 "$monitor_pid" 2>/dev/null || fail "GPU telemetry stopped early"
+  kill "$monitor_pid" 2>/dev/null || true
+  wait "$monitor_pid" 2>/dev/null || true
+  monitor_pid=
+  "$python" - "$cell/gpu.csv" "$cell/gpu.err" <<'PY'
+import csv
+import math
+import sys
+from pathlib import Path
+
+csv_path, error_path = map(Path, sys.argv[1:])
+if error_path.read_text().strip():
+    raise SystemExit("GPU telemetry reported an error")
+with csv_path.open(newline="") as handle:
+    rows = list(csv.reader(handle))
+expected = [
+    "timestamp_s", "power_w", "memory_mib",
+    "utilization_pct", "memory_activity_pct",
+]
+if not rows or rows[0] != expected or len(rows) < 2:
+    raise SystemExit("GPU telemetry is missing")
+for row in rows[1:]:
+    if len(row) != len(expected):
+        raise SystemExit("GPU telemetry row is incomplete")
+    values = [float(value.strip()) for value in row]
+    if not all(math.isfinite(value) for value in values):
+        raise SystemExit("GPU telemetry contains a non-finite value")
+PY
 )
 
 run_all() {
@@ -268,7 +345,15 @@ run_all() {
     CONTINUUM_PROFILE="$continuum_profile" \
     SAGA_PROFILE="$saga_profile" \
     TRACE_TOOL_REPLAY="$trace_tool_replay" \
+    STAGE_ALL_BEFORE_REPLAY="$stage_all_before_replay" \
+    CLEANUP_IMAGES="$cleanup_images" \
+    RESOURCE_MONITORING="$resource_monitoring" \
     SHADOW_LLM_TIMEOUT_S="$shadow_llm_timeout_s" \
+    EXPECTED_GPU_NAME="$expected_gpu_name" \
+    MIN_GPU_MEMORY_MIB="$min_gpu_memory_mib" \
+    GPU_MEMORY_UTILIZATION="$gpu_memory_utilization" \
+    CACHEWISE_ORACLE_PREFILL_MS_PER_TOKEN="$cachewise_oracle_prefill_ms_per_token" \
+    CACHEWISE_ORACLE_DECODE_MS_PER_TOKEN="$cachewise_oracle_decode_ms_per_token" \
     UV_LOCK_SHA256="$(sha256sum "$repo/uv.lock" | awk '{print $1}')" \
     GIT_COMMIT="$(git -C "$repo" rev-parse HEAD)" "$python" - <<'PY'
 import json, os
@@ -290,6 +375,12 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
       else "task_container"
     ),
     "shadow_llm_timeout_s": float(os.environ["SHADOW_LLM_TIMEOUT_S"]),
+    "stage_all_before_replay": os.environ["STAGE_ALL_BEFORE_REPLAY"] == "1",
+    "cleanup_images": os.environ["CLEANUP_IMAGES"] == "1",
+    "resource_monitoring": os.environ["RESOURCE_MONITORING"],
+    "expected_gpu_name": os.environ["EXPECTED_GPU_NAME"],
+    "min_gpu_memory_mib": int(os.environ["MIN_GPU_MEMORY_MIB"]),
+    "gpu_memory_utilization": float(os.environ["GPU_MEMORY_UTILIZATION"]),
   },
   "comparison": "paper baselines on one fixed agent-trajectory replay workload",
   "continuum_reproduction_profile": os.environ["CONTINUUM_PROFILE"] or None,
@@ -303,6 +394,17 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
     "dependency_lock_sha256": os.environ["UV_LOCK_SHA256"]
   },
   "cachewise_disabled": "same patched fork/config without CacheWise scheduling flags or policy payloads",
+  "cachewise_oracle_length": {
+    "description": "CacheWise KV and waiting policy plus exact trace output length in a cache-aware service score",
+    "prefill_ms_per_token": (
+      float(os.environ["CACHEWISE_ORACLE_PREFILL_MS_PER_TOKEN"])
+      if os.environ["CACHEWISE_ORACLE_PREFILL_MS_PER_TOKEN"] else None
+    ),
+    "decode_ms_per_token": (
+      float(os.environ["CACHEWISE_ORACLE_DECODE_MS_PER_TOKEN"])
+      if os.environ["CACHEWISE_ORACLE_DECODE_MS_PER_TOKEN"] else None
+    )
+  },
   "cachewise_tool_mapping": {
     "exec": "Bash", "read_file": "Read", "edit_file": "Edit",
     "write_file": "Write", "list_dir": "Glob"
@@ -312,7 +414,7 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
     "terminal_signal": "program release after replay completion"
   },
   "primary_metrics": ["mean_task_jct", "makespan", "all_request_p99_ttft"],
-  "interpretation": "Physical baseline measurement; no GO/NO-GO gate."
+  "interpretation": "Physical baseline measurement; descriptive comparison only."
 }, indent=2) + "\n")
 PY
   local failed=0 cell cell_rc

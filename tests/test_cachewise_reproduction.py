@@ -18,6 +18,7 @@ from scripts.baselines import cachewise_reproduction as reproduction
 from trace_collect.openclaw_host_runtime import (
     OpenClawReplayProvider,
     ShadowGenerationConfig,
+    shadow_generation_from_payload,
     shadow_generation_payload,
 )
 
@@ -30,6 +31,83 @@ def test_cachewise_server_passes_model_to_legacy_api() -> None:
     script = SCRIPT.read_text()
     assert "local model=${1:?model is required}" in script
     assert '--model "$model" "$@"' in script
+    assert "serve-oracle-length" in script
+    assert "patch_oracle_length_scheduler" in script
+    assert 'scheduler=$(scheduler_path "$vllm_python")' in script
+    assert 'patch_oracle_length_scheduler "$vllm_python"' in script
+    assert "unset CACHEWISE_ORACLE_LENGTH_EVENT_LOG" in script
+    assert "unset CACHEWISE_ORACLE_PREFILL_MS_PER_TOKEN" in script
+    assert "unset CACHEWISE_ORACLE_DECODE_MS_PER_TOKEN" in script
+    assert 'waiting_args+=(--prioritize-waiting-by-prefix-cache)' in script
+
+
+def test_cachewise_oracle_length_adds_decode_to_cache_work(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(
+        "CACHEWISE_ORACLE_LENGTH_EVENT_LOG", str(tmp_path / "events.jsonl")
+    )
+    monkeypatch.setenv("CACHEWISE_ORACLE_PREFILL_MS_PER_TOKEN", "0.1")
+    monkeypatch.setenv("CACHEWISE_ORACLE_DECODE_MS_PER_TOKEN", "10")
+    short = SimpleNamespace(priority=32, arrival_time=2.0, request_id="short")
+    long = SimpleNamespace(priority=320, arrival_time=1.0, request_id="long")
+
+    assert reproduction.cachewise_oracle_length_key(short, 1600, 100) < (
+        reproduction.cachewise_oracle_length_key(long, 0, 0)
+    )
+
+    monkeypatch.delenv("CACHEWISE_ORACLE_DECODE_MS_PER_TOKEN")
+    with pytest.raises(RuntimeError, match="service coefficients are required"):
+        reproduction.cachewise_oracle_length_key(short, 1600, 100)
+
+    monkeypatch.setenv("CACHEWISE_ORACLE_DECODE_MS_PER_TOKEN", "nan")
+    with pytest.raises(RuntimeError, match="service coefficients must be positive"):
+        reproduction.cachewise_oracle_length_key(short, 1600, 100)
+
+
+def test_cachewise_oracle_length_reaches_request_priority(monkeypatch) -> None:
+    monkeypatch.setattr(
+        reproduction,
+        "PolicyBuilder",
+        lambda *_args: SimpleNamespace(build=lambda *_build_args: {}),
+    )
+    config = ShadowGenerationConfig(
+        api_base="http://127.0.0.1:8000/v1",
+        model="test-model",
+        timeout_s=12.0,
+        seed=0,
+        mode="cachewise",
+        cachewise_predictor_checkout="/predictor",
+        cachewise_models_dir="/models",
+        oracle_output_priority=True,
+    )
+    assert shadow_generation_from_payload(shadow_generation_payload(config)) == config
+    provider = OpenClawReplayProvider(
+        llm_actions=[
+            {
+                "action_id": "llm-0",
+                "_source_action_index": 0,
+                "data": {
+                    "messages_in": [{"role": "user", "content": "work"}],
+                    "completion_tokens": 1,
+                    "raw_response": {"choices": []},
+                },
+            }
+        ],
+        replay_speed=1.0,
+        timing_mode="source_scaled",
+        shadow_generation=config,
+        program_id="task-a",
+    )
+    assert provider._shadow_client is not None
+    asyncio.run(provider._shadow_client.aclose())
+    client = _CachewiseClient()
+    provider._shadow_client = client
+
+    asyncio.run(provider.chat([]))
+    asyncio.run(provider.aclose())
+
+    assert client.events[0][1]["priority"] == 1
 
 
 def test_policy_payload_uses_one_official_selected_curve(monkeypatch) -> None:

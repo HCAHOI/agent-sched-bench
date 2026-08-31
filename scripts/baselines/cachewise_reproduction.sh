@@ -8,6 +8,7 @@ readonly vllm_commit="16cc7d43d0e1a84f68f046e6caecfef21012f3fc"
 readonly vllm_upstream_base="b1388b1fbf5aaef47937fabe98931211684666a6"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo="$(cd "$script_dir/../.." && pwd)"
 cache_root="${XDG_CACHE_HOME:-${HOME:?HOME is required}/.cache}"
 predictor_checkout="${CACHEWISE_CHECKOUT:-$cache_root/agent-sched-bench/cachewise-$predictor_commit}"
 vllm_checkout="${CACHEWISE_VLLM_CHECKOUT:-$cache_root/agent-sched-bench/cachewise-vllm-reproduction-$vllm_commit}"
@@ -22,7 +23,7 @@ fi
 
 usage() {
   cat <<'EOF'
-Usage: cachewise_reproduction.sh fetch|verify|verify-installed|prepare|install|serve|serve-disabled|policy|manifest [ARGS...]
+Usage: cachewise_reproduction.sh fetch|verify|verify-installed|prepare|install|serve|serve-oracle-length|serve-disabled|policy|manifest [ARGS...]
 
 Fetches the authors' predictor and vLLM fork at exact commits, then applies a
 small patch implementing the paper's conditional-remaining-time eviction,
@@ -35,6 +36,8 @@ Commands:
   prepare        Fetch and apply the patch; leaves an installable vLLM tree.
   install        Install the patched tree using vLLM's precompiled wheel mode.
   serve ARGS     Start the patched installed vLLM with paper policy flags.
+  serve-oracle-length ARGS
+                 Keep CacheWise KV eviction and use vLLM request priorities.
   serve-disabled Start the same fork/config without CacheWise scheduling flags.
   policy ARGS    Generate cachewise_policy JSON with the official predictor.
   manifest       Print published, inferred, and unpublished choices as JSON.
@@ -112,7 +115,41 @@ verify_installed() {
     'import vllm; import vllm.v1.core.cachewise_policy'
 }
 
+scheduler_path() {
+  local vllm_python=${1:?vLLM Python is required}
+  "$vllm_python" - <<'PY'
+import importlib.util
+from pathlib import Path
+
+spec = importlib.util.find_spec("vllm")
+if spec is None or spec.origin is None:
+    raise SystemExit("vLLM is not installed")
+print(Path(spec.origin).parent / "v1/core/sched/scheduler.py")
+PY
+}
+
+patch_oracle_length_scheduler() {
+  local vllm_python=${1:?vLLM Python is required} scheduler
+  scheduler=$(scheduler_path "$vllm_python")
+  PYTHONPATH="$repo" "$vllm_python" - "$scheduler" <<'PY'
+from pathlib import Path
+import sys
+
+from scripts.baselines.cachewise_reproduction import (
+    patch_cachewise_oracle_length_scheduler,
+)
+
+print(
+    "patched"
+    if patch_cachewise_oracle_length_scheduler(Path(sys.argv[1]))
+    else "already patched"
+)
+PY
+}
+
 serve() {
+  local waiting_policy=${1:?waiting policy is required}
+  shift
   local model=${1:?model is required}
   shift
   local vllm_python="${CACHEWISE_VLLM_PYTHON:-$vllm_venv/bin/python}"
@@ -123,11 +160,38 @@ serve() {
   "$python_bin" "$script_dir/cachewise_reproduction.py" \
     verify-applied "$vllm_checkout"
   export VLLM_SERVER_DEV_MODE=1
-  exec "$vllm_python" -m vllm.entrypoints.openai.api_server \
+  local waiting_args=()
+  local oracle_event_log=
+  if [[ "$waiting_policy" == cachewise ]]; then
+    unset CACHEWISE_ORACLE_LENGTH_EVENT_LOG
+    unset CACHEWISE_ORACLE_PREFILL_MS_PER_TOKEN
+    unset CACHEWISE_ORACLE_DECODE_MS_PER_TOKEN
+    waiting_args+=(--prioritize-waiting-by-prefix-cache)
+  elif [[ "$waiting_policy" == oracle-length ]]; then
+    oracle_event_log=${CACHEWISE_ORACLE_LENGTH_EVENT_LOG:?CacheWise Oracle event log is required}
+    : "${CACHEWISE_ORACLE_PREFILL_MS_PER_TOKEN:?CacheWise Oracle prefill coefficient is required}"
+    : "${CACHEWISE_ORACLE_DECODE_MS_PER_TOKEN:?CacheWise Oracle decode coefficient is required}"
+    test ! -e "$oracle_event_log" || {
+      echo "refusing to overwrite $oracle_event_log" >&2
+      exit 1
+    }
+    mkdir -p "$(dirname "$oracle_event_log")"
+    : >"$oracle_event_log"
+    patch_oracle_length_scheduler "$vllm_python"
+    waiting_args+=(--prioritize-waiting-by-prefix-cache)
+  else
+    echo "unknown waiting policy: $waiting_policy" >&2
+    exit 2
+  fi
+  local launch_env=(env PYTHONPATH="$repo${PYTHONPATH:+:$PYTHONPATH}")
+  [[ -z "$oracle_event_log" ]] || \
+    launch_env+=(CACHEWISE_ORACLE_LENGTH_EVENT_LOG="$oracle_event_log")
+  exec "${launch_env[@]}" \
+    "$vllm_python" -m vllm.entrypoints.openai.api_server \
     --model "$model" "$@" \
     --enable-prefix-caching \
     --enable-cachewise-free-heap \
-    --prioritize-waiting-by-prefix-cache \
+    "${waiting_args[@]}" \
     --enable-chunked-prefill \
     --max-num-batched-tokens 512
 }
@@ -156,7 +220,8 @@ case "${1:-}" in
   verify-installed) fetch_all; verify_installed ;;
   prepare) prepare ;;
   install) install ;;
-  serve) shift; serve "$@" ;;
+  serve) shift; serve cachewise "$@" ;;
+  serve-oracle-length) shift; serve oracle-length "$@" ;;
   serve-disabled) shift; serve_disabled "$@" ;;
   policy)
     shift
