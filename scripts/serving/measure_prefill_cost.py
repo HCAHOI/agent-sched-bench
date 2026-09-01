@@ -23,7 +23,7 @@ from scripts.serving.measure_kv_swap_cost import (  # noqa: E402
     derive_kv_layout,
     load_model_config,
 )
-from spike.multitenant import PREFILL_COST_SCHEMA_VERSION  # noqa: E402
+PREFILL_COST_SCHEMA_VERSION = 1
 
 # A near-zero-context baseline (8) measures the wall-clock overhead floor that
 # the CUDA-event reload number does not carry; the rest span the deployment
