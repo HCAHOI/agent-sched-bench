@@ -18,6 +18,7 @@ trace_tool_replay=${TRACE_TOOL_REPLAY:-0}
 stage_all_before_replay=${STAGE_ALL_BEFORE_REPLAY:-1}
 cleanup_images=${CLEANUP_IMAGES:-0}
 resource_monitoring=${RESOURCE_MONITORING:-off}
+serving_metrics=${SERVING_METRICS:-on}
 shadow_llm_timeout_s=${SHADOW_LLM_TIMEOUT_S:-300}
 expected_gpu_name=${EXPECTED_GPU_NAME:-A100}
 min_gpu_memory_mib=${MIN_GPU_MEMORY_MIB:-80000}
@@ -52,6 +53,7 @@ preflight() {
   [[ "$stage_all_before_replay" == 0 || "$stage_all_before_replay" == 1 ]] || fail "STAGE_ALL_BEFORE_REPLAY must be 0 or 1"
   [[ "$cleanup_images" == 0 || "$cleanup_images" == 1 ]] || fail "CLEANUP_IMAGES must be 0 or 1"
   [[ "$resource_monitoring" =~ ^(auto|on|off)$ ]] || fail "RESOURCE_MONITORING must be auto, on, or off"
+  [[ "$serving_metrics" =~ ^(on|off)$ ]] || fail "SERVING_METRICS must be on or off"
   [[ -z "$vllm_cpuset" ]] || command -v taskset >/dev/null || fail "taskset is required"
   local cell
   for cell in "${cells[@]}"; do
@@ -59,6 +61,13 @@ preflight() {
   done
   command -v docker >/dev/null || fail "docker is required"
   command -v nvidia-smi >/dev/null || fail "nvidia-smi is required"
+  if [[ "$serving_metrics" == on ]]; then
+    "$python" -c 'import msgspec, zmq' || fail "serving metrics require msgspec and pyzmq"
+    timeout 1 bash -c '</dev/tcp/127.0.0.1/5557' >/dev/null 2>&1 && \
+      fail "port 5557 is busy"
+    timeout 1 bash -c '</dev/tcp/127.0.0.1/5558' >/dev/null 2>&1 && \
+      fail "port 5558 is busy"
+  fi
   curl -fsS http://127.0.0.1:8000/v1/models >/dev/null 2>&1 && fail "port 8000 is busy"
   timeout 1 bash -c '</dev/tcp/127.0.0.1/9000' >/dev/null 2>&1 && fail "port 9000 is busy"
   if has_method thunderagent; then
@@ -136,13 +145,14 @@ wait_http() {
 run_cell() (
   set -euo pipefail
   local name=$1 method=${1%-r[0-9]*} cell="$run_root/$1"
-  local vpid= proxy_pid= monitor_pid= rc=0
+  local vpid= proxy_pid= monitor_pid= kv_metrics_pid= rc=0
   mkdir "$cell"
   cleanup() {
     local status=$?
     set +e
     (( rc != 0 )) || rc=$status
     [[ -z "$proxy_pid" ]] || stop_group "$proxy_pid"
+    [[ -z "$kv_metrics_pid" ]] || { kill -TERM "$kv_metrics_pid" 2>/dev/null; wait "$kv_metrics_pid" 2>/dev/null; }
     stop_group "$vpid"
     [[ -z "$monitor_pid" ]] || { kill "$monitor_pid" 2>/dev/null; wait "$monitor_pid" 2>/dev/null; }
     date -u +%FT%TZ >"$cell/end-utc.txt"
@@ -169,6 +179,15 @@ run_cell() (
     --max-num-seqs 8 --enable-prefix-caching --kv-cache-dtype auto
     --enforce-eager
   )
+  local observability_args=()
+  if [[ "$serving_metrics" == on ]]; then
+    observability_args=(
+      --enable-prompt-tokens-details
+      --kv-events-config
+      '{"enable_kv_cache_events":true,"publisher":"zmq","endpoint":"tcp://*:5557","replay_endpoint":"tcp://*:5558","buffer_steps":1000000,"hwm":1000000,"max_queue_size":1000000}'
+    )
+    common_args+=("${observability_args[@]}")
+  fi
   local server=("$vllm" serve "$model" "${common_args[@]}" --scheduling-policy priority)
   local server_env=(VLLM_NO_USAGE_STATS=1 CUDA_VISIBLE_DEVICES=0)
   case "$method" in
@@ -181,7 +200,7 @@ run_cell() (
       server_env+=(RUN_OUTPUT_DIR="$cell/continuum")
       ;;
     continuum-reproduction)
-      server=("$repo/scripts/baselines/continuum_reproduction.sh" serve "$model" --dtype bfloat16 --kv-cache-dtype auto)
+      server=("$repo/scripts/baselines/continuum_reproduction.sh" serve "$model" --dtype bfloat16 --kv-cache-dtype auto "${observability_args[@]}")
       server_env+=(CONTINUUM_REPRODUCTION_PROFILE="$continuum_profile" CONTINUUM_REPRODUCTION_MODE=prefill RUN_OUTPUT_DIR="$cell/continuum")
       ;;
     native-priority-aging)
@@ -216,6 +235,33 @@ run_cell() (
   env "${server_env[@]}" "${vllm_launch[@]}" "${server[@]}" >"$cell/vllm.log" 2>&1 &
   vpid=$!
   wait_http http://127.0.0.1:8000/v1/models "$vpid" "$cell/vllm.log"
+  if [[ "$serving_metrics" == on ]]; then
+    curl -fsS http://127.0.0.1:8000/metrics >"$cell/vllm-metrics-start.prom"
+    local metric
+    for metric in \
+      vllm:prefix_cache_queries_total \
+      vllm:prefix_cache_hits_total \
+      vllm:num_preemptions_total \
+      vllm:prompt_tokens_total \
+      vllm:generation_tokens_total; do
+      grep -Fq "$metric" "$cell/vllm-metrics-start.prom" || \
+        fail "vLLM does not expose required metric: $metric"
+    done
+    "$python" "$repo/scripts/evaluation/collect_vllm_kv_events.py" \
+      --endpoint tcp://127.0.0.1:5557 \
+      --replay-endpoint tcp://127.0.0.1:5558 \
+      --ready-file "$cell/kv-events-ready" \
+      --events-jsonl "$cell/kv-events.jsonl" \
+      --summary-json "$cell/kv-events-summary.json" &
+    kv_metrics_pid=$!
+    for _ in $(seq 1 100); do
+      [[ -f "$cell/kv-events-ready" ]] && break
+      kill -0 "$kv_metrics_pid" 2>/dev/null || fail "KV event collector stopped during startup"
+      sleep 0.1
+    done
+    [[ -f "$cell/kv-events-ready" ]] || fail "KV event collector did not become ready"
+    sleep 0.5
+  fi
 
   local api=http://127.0.0.1:8000/v1 shadow_mode=vllm
   if [[ "$method" == thunderagent ]]; then
@@ -305,6 +351,13 @@ if not (
 ):
     raise SystemExit(f"task failures: {summary['failed_traces']}")
 PY
+  if [[ "$serving_metrics" == on ]]; then
+    sleep 1
+    curl -fsS http://127.0.0.1:8000/metrics >"$cell/vllm-metrics-final.prom"
+    kill -TERM "$kv_metrics_pid"
+    wait "$kv_metrics_pid" || fail "KV event collector failed"
+    kv_metrics_pid=
+  fi
   kill -0 "$monitor_pid" 2>/dev/null || fail "GPU telemetry stopped early"
   kill "$monitor_pid" 2>/dev/null || true
   wait "$monitor_pid" 2>/dev/null || true
@@ -333,6 +386,16 @@ for row in rows[1:]:
     if not all(math.isfinite(value) for value in values):
         raise SystemExit("GPU telemetry contains a non-finite value")
 PY
+  if [[ "$serving_metrics" == on ]]; then
+    "$python" "$repo/scripts/evaluation/summarize_serving_metrics.py" \
+      --throughput-summary "$cell/output/throughput_summary.json" \
+      --gpu-csv "$cell/gpu.csv" \
+      --prometheus-start "$cell/vllm-metrics-start.prom" \
+      --prometheus-final "$cell/vllm-metrics-final.prom" \
+      --kv-events-summary "$cell/kv-events-summary.json" \
+      --output "$cell/serving_metrics.json" \
+      --requests-output "$cell/request_metrics.jsonl"
+  fi
 )
 
 run_all() {
@@ -348,6 +411,7 @@ run_all() {
     STAGE_ALL_BEFORE_REPLAY="$stage_all_before_replay" \
     CLEANUP_IMAGES="$cleanup_images" \
     RESOURCE_MONITORING="$resource_monitoring" \
+    SERVING_METRICS="$serving_metrics" \
     SHADOW_LLM_TIMEOUT_S="$shadow_llm_timeout_s" \
     EXPECTED_GPU_NAME="$expected_gpu_name" \
     MIN_GPU_MEMORY_MIB="$min_gpu_memory_mib" \
@@ -378,6 +442,7 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
     "stage_all_before_replay": os.environ["STAGE_ALL_BEFORE_REPLAY"] == "1",
     "cleanup_images": os.environ["CLEANUP_IMAGES"] == "1",
     "resource_monitoring": os.environ["RESOURCE_MONITORING"],
+    "serving_metrics": os.environ["SERVING_METRICS"] == "on",
     "expected_gpu_name": os.environ["EXPECTED_GPU_NAME"],
     "min_gpu_memory_mib": int(os.environ["MIN_GPU_MEMORY_MIB"]),
     "gpu_memory_utilization": float(os.environ["GPU_MEMORY_UTILIZATION"]),
@@ -414,6 +479,13 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
     "terminal_signal": "program release after replay completion"
   },
   "primary_metrics": ["mean_task_jct", "makespan", "all_request_p99_ttft"],
+  "serving_observability": {
+    "request_metrics": "cached prompt tokens, TTFT, TPOT, and decode throughput",
+    "prefix_cache": "whole-run request cached-token fraction plus secondary cumulative vLLM lookup counters",
+    "kv_cache": "all BlockStored and BlockRemoved events plus preemption count and defined recomputation total",
+    "gpu_memory": "nvidia-smi utilization.memory: percent of sample time with device-memory reads or writes",
+    "task_start": "container_startup.started_at: task preparation start before image and container phases"
+  },
   "interpretation": "Physical baseline measurement; descriptive comparison only."
 }, indent=2) + "\n")
 PY

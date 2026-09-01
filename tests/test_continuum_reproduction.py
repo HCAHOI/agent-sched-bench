@@ -322,7 +322,14 @@ def test_reproduction_serve_rejects_config_overrides() -> None:
             text=True,
         )
 
-    valid = validate("--dtype", "bfloat16", "--kv-cache-dtype=auto")
+    valid = validate(
+        "--dtype",
+        "bfloat16",
+        "--kv-cache-dtype=auto",
+        "--enable-prompt-tokens-details",
+        "--kv-events-config",
+        '{"enable_kv_cache_events":true}',
+    )
     assert valid.returncode == 0
     assert valid.stdout == "bfloat16|auto\n"
     built = subprocess.run(
@@ -330,6 +337,8 @@ def test_reproduction_serve_rejects_config_overrides() -> None:
             "bash",
             "-c",
             'source "$1"; venv=/isolated; '
+            "validated_observability_args=(--enable-prompt-tokens-details \
+--kv-events-config '{\"enable_kv_cache_events\":true}'); "
             "build_serve_command model bfloat16 auto 1 32768 prefill; "
             'printf "%s\\n" "${serve_command[@]}"',
             "bash",
@@ -346,6 +355,10 @@ def test_reproduction_serve_rejects_config_overrides() -> None:
     assert "--enforce-eager" in built
     assert built[built.index("--dtype") + 1] == "bfloat16"
     assert built[built.index("--kv-cache-dtype") + 1] == "auto"
+    assert "--enable-prompt-tokens-details" in built
+    assert built[built.index("--kv-events-config") + 1] == (
+        '{"enable_kv_cache_events":true}'
+    )
     for forbidden in ("--revision", "--quantization", "--hf-config-path"):
         invalid = validate(
             "--dtype",

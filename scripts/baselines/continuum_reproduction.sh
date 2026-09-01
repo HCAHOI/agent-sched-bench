@@ -9,6 +9,7 @@ public_checkout="$checkout"
 public_venv="$venv"
 checkout="${CONTINUUM_REPRODUCTION_CHECKOUT:-$cache_root/agent-sched-bench/vllm-continuum-reproduction-v2-$COMMIT}"
 venv="${CONTINUUM_REPRODUCTION_VENV:-$cache_root/agent-sched-bench/venvs/continuum-reproduction-v2-$COMMIT}"
+validated_observability_args=()
 
 usage() {
   cat <<'EOF'
@@ -76,6 +77,7 @@ install() {
 validate_serve_args() {
   validated_model_dtype=""
   validated_kv_dtype=""
+  validated_observability_args=()
   while test "$#" -gt 0; do
     case "$1" in
       --dtype)
@@ -99,6 +101,23 @@ validate_serve_args() {
         test -z "$validated_kv_dtype" || { echo "duplicate --kv-cache-dtype" >&2; return 2; }
         validated_kv_dtype="${1#*=}"
         shift
+        ;;
+      --enable-prompt-tokens-details)
+        [[ " ${validated_observability_args[*]} " != *" --enable-prompt-tokens-details "* ]] || {
+          echo "duplicate --enable-prompt-tokens-details" >&2
+          return 2
+        }
+        validated_observability_args+=("$1")
+        shift
+        ;;
+      --kv-events-config)
+        test "$#" -ge 2 || { echo "--kv-events-config requires a value" >&2; return 2; }
+        [[ " ${validated_observability_args[*]} " != *" --kv-events-config "* ]] || {
+          echo "duplicate --kv-events-config" >&2
+          return 2
+        }
+        validated_observability_args+=("$1" "$2")
+        shift 2
         ;;
       *)
         echo "unsupported vLLM argument: $1" >&2
@@ -126,6 +145,7 @@ build_serve_command() {
     --enforce-eager
     --dtype "$model_dtype"
     --kv-cache-dtype "$kv_dtype"
+    "${validated_observability_args[@]}"
   )
   if test "$mode" = reload; then
     serve_command+=(

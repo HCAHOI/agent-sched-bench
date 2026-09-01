@@ -288,6 +288,12 @@ def test_paper_baseline_runner_has_required_policy_checks() -> None:
     assert 'simulate+=(--cleanup-images)' in runner_text
     assert "resource_monitoring=${RESOURCE_MONITORING:-off}" in runner_text
     assert '--resource-monitoring "$resource_monitoring"' in runner_text
+    assert "serving_metrics=${SERVING_METRICS:-on}" in runner_text
+    assert "--enable-prompt-tokens-details" in runner_text
+    assert "--kv-events-config" in runner_text
+    assert "--replay-endpoint tcp://127.0.0.1:5558" in runner_text
+    assert "collect_vllm_kv_events.py" in runner_text
+    assert "summarize_serving_metrics.py" in runner_text
 
 
 def test_cachewise_disabled_keeps_fork_config_without_policy_flags() -> None:
@@ -392,6 +398,7 @@ fi
         "CONTAINER_CPUSET": "",
         "VLLM_CPUSET": "",
         "TRACE_TOOL_REPLAY": "1",
+        "SERVING_METRICS": "off",
         "FAKE_READY": str(tmp_path / "ready"),
         "FAKE_PROXY_READY": str(tmp_path / "proxy-ready"),
     }
@@ -577,3 +584,4 @@ exit 2
     assert protocol["workload"]["expected_gpu_name"] == "L40S"
     assert protocol["workload"]["min_gpu_memory_mib"] == 46000
     assert protocol["workload"]["gpu_memory_utilization"] == 0.95
+    assert protocol["workload"]["serving_metrics"] is False
