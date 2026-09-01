@@ -1273,6 +1273,84 @@ def test_cloud_model_queue_replaces_completed_tasks_until_measured_cycle_finishe
     assert replacement_summary["background_cancelled"] == 1
 
 
+def test_replacement_load_exits_after_measured_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def loaded(task_id: str, manifest_index: int) -> LoadedTraceSession:
+        return LoadedTraceSession(
+            source_trace=tmp_path / f"{task_id}.jsonl",
+            task_source=tmp_path / "tasks.json",
+            task_instance_id=task_id,
+            source_action_agent_id=task_id,
+            run_instance_id=task_id,
+            manifest_index=manifest_index,
+            scaffold="openclaw",
+            metadata={"execution_environment": "host"},
+            summary=None,
+            task={"instance_id": task_id},
+            actions=[],
+            iterations={},
+        )
+
+    async def fake_prepare(
+        loaded_session: LoadedTraceSession,
+        **_kwargs,
+    ) -> PreparedTraceSession:
+        return PreparedTraceSession(loaded=loaded_session, container=None)
+
+    async def fake_replay(
+        prepared: PreparedTraceSession,
+        **_kwargs,
+    ) -> ReplayTaskStats:
+        if prepared.loaded.run_instance_id == "tail":
+            await asyncio.sleep(0.02)
+        loaded_session = prepared.loaded
+        return ReplayTaskStats(
+            agent_id=loaded_session.agent_id,
+            run_instance_id=loaded_session.run_instance_id,
+            source_agent_id=loaded_session.source_action_agent_id,
+            manifest_index=loaded_session.manifest_index,
+            label=loaded_session.label,
+            source_trace=str(loaded_session.source_trace),
+            success=loaded_session.run_instance_id != "failed",
+            elapsed_s=0.0,
+            action_count=0,
+            llm_call_count=0,
+            tool_exec_count=0,
+            arrival_s=0.0,
+        )
+
+    monkeypatch.setattr("trace_collect.simulator._prepare_replay_session", fake_prepare)
+    monkeypatch.setattr("trace_collect.simulator._replay_cloud_model_session", fake_replay)
+    monkeypatch.setattr(
+        "trace_collect.simulator._finalize_prepared_session",
+        lambda _prepared: asyncio.sleep(0),
+    )
+
+    async def run() -> None:
+        with pytest.raises(RuntimeError, match="replacement load task failed: failed"):
+            await asyncio.wait_for(
+                _run_cloud_model_queue(
+                    [loaded("failed", 0), loaded("tail", 1)],
+                    output_path=tmp_path / "out",
+                    trace_logger=object(),
+                    concurrency=2,
+                    container_executable=None,
+                    network_mode="host",
+                    container_resource_recorder=None,
+                    replay_speed=1.0,
+                    llm_timing=LLMTimingConfig(),
+                    command_timeout_s=1.0,
+                    warmup_skip_iterations=0,
+                    replacement_delay_mean_s=0.001,
+                ),
+                timeout=1.0,
+            )
+
+    asyncio.run(run())
+
+
 def test_cloud_model_queue_continues_after_container_prep_runtime_error(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

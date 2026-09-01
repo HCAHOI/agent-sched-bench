@@ -3032,6 +3032,8 @@ async def _run_cloud_model_queue(
                             measurement_terminal.set()
                         return
                     if first_error is not None:
+                        if replacement_enabled:
+                            return
                         continue
                     completed_task_ids.add(loaded.task_instance_id)
                     completed_session_count += 1
