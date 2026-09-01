@@ -300,6 +300,8 @@ def test_paper_baseline_runner_has_required_policy_checks() -> None:
     assert "collect_dcgm_metrics.py" not in runner_text
     assert "summarize_serving_metrics.py" in runner_text
     assert 'if os.environ["SERVING_METRICS"] == "on"' in runner_text
+    assert '"mean_task_jct_min", "p95_task_jct_min", "tasks_per_hour"' in runner_text
+    assert '"minimum_ratio_to_fcfs": 1.20' in runner_text
 
 
 def test_gpu_setup_installs_cupti_without_dcgm() -> None:

@@ -525,7 +525,14 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
     "tool_signal": "source tool signature consumed only at LLM completion",
     "terminal_signal": "program release after replay completion"
   },
-  "primary_metrics": ["mean_task_jct", "makespan", "all_request_p99_ttft"],
+  "primary_metrics": [
+    "mean_task_jct_min", "p95_task_jct_min", "tasks_per_hour",
+    "makespan", "all_request_p99_ttft"
+  ],
+  "cachewise_requirement": {
+    "metric": "tasks_per_hour",
+    "minimum_ratio_to_fcfs": 1.20
+  },
   "serving_observability": {
     "request_metrics": "cached prompt tokens, TTFT, TPOT, and decode throughput",
     "prefix_cache": "whole-run request cached-token fraction plus secondary cumulative vLLM lookup counters",
