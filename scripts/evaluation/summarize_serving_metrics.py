@@ -435,6 +435,76 @@ def _gpu_summary(
     }
 
 
+def _dcgm_summary(
+    path: Path, window_start_s: float, window_end_s: float
+) -> dict[str, Any]:
+    expected_header = [
+        "timestamp_us",
+        "gpu_id",
+        "field_id",
+        "status",
+        "dram_active_ratio",
+    ]
+    rows: list[tuple[float, float]] = []
+    previous_timestamp: float | None = None
+    try:
+        handle = path.open(newline="")
+    except OSError as exc:
+        raise ValueError(f"cannot read DCGM telemetry {path}: {exc}") from exc
+    with handle:
+        reader = csv.reader(handle)
+        try:
+            header = next(reader)
+        except StopIteration as exc:
+            raise ValueError("DCGM telemetry is empty") from exc
+        if header != expected_header:
+            raise ValueError("DCGM telemetry header is invalid")
+        for line_number, row in enumerate(reader, 2):
+            if len(row) != len(expected_header):
+                raise ValueError(f"DCGM telemetry row {line_number} is incomplete")
+            try:
+                timestamp_us = int(row[0])
+                gpu_id = int(row[1])
+                field_id = int(row[2])
+                ratio = float(row[4])
+            except ValueError as exc:
+                raise ValueError(
+                    f"DCGM telemetry row {line_number} has an invalid value"
+                ) from exc
+            if timestamp_us < 0 or gpu_id != 0 or field_id != 1005 or row[3] != "OK":
+                raise ValueError(f"DCGM telemetry row {line_number} is invalid")
+            if not math.isfinite(ratio) or not 0 <= ratio <= 1:
+                raise ValueError(f"DCGM DRAM ratio is invalid at row {line_number}")
+            timestamp = timestamp_us / 1_000_000.0
+            if previous_timestamp is not None and timestamp <= previous_timestamp:
+                raise ValueError("DCGM timestamps are not strictly increasing")
+            previous_timestamp = timestamp
+            if window_start_s <= timestamp <= window_end_s:
+                rows.append((timestamp, ratio))
+    if not rows:
+        raise ValueError("DCGM telemetry has no samples in the scheduled run window")
+    gaps = [rows[0][0] - window_start_s, window_end_s - rows[-1][0]]
+    gaps.extend(right[0] - left[0] for left, right in zip(rows, rows[1:]))
+    max_gap_s = max(gaps)
+    if max_gap_s > 3.0:
+        raise ValueError(f"DCGM telemetry gap exceeds 3 seconds: {max_gap_s:.6f}")
+    ratios = [row[1] for row in rows]
+    return {
+        "field_id": 1005,
+        "field_name": "DCGM_FI_PROF_DRAM_UTIL_RATIO",
+        "sample_count": len(rows),
+        "max_sample_gap_s": max_gap_s,
+        "mean_ratio": sum(ratios) / len(ratios),
+        "p50_ratio": _percentile(ratios, 0.50),
+        "p95_ratio": _percentile(ratios, 0.95),
+        "max_ratio": max(ratios),
+        "definition": (
+            "fraction of cycles during which data was sent to or received from "
+            "device memory, averaged over each DCGM sampling interval"
+        ),
+    }
+
+
 def _kv_summary(path: Path) -> dict[str, Any]:
     summary = _read_json(path, "KV event summary")
     integer_fields = (
@@ -487,6 +557,7 @@ def summarize(
     *,
     throughput_summary_path: Path,
     gpu_csv_path: Path,
+    dcgm_csv_path: Path,
     prometheus_start_path: Path,
     prometheus_final_path: Path,
     kv_events_summary_path: Path,
@@ -542,6 +613,7 @@ def summarize(
 
     window_end = window_start + makespan_s
     gpu = _gpu_summary(gpu_csv_path, window_start, window_end)
+    gpu["dcgm_dram_active"] = _dcgm_summary(dcgm_csv_path, window_start, window_end)
     kv_events = _kv_summary(kv_events_summary_path)
     all_ttft = [request["ttft_s"] for request in requests]
     first_ttft = [request["ttft_s"] for request in requests if request["first_request"]]
@@ -554,7 +626,7 @@ def summarize(
     prefix_hits = counters["prefix_cache_hits"]
     assert prefix_queries is not None and prefix_hits is not None
     summary = {
-        "schema_version": 1,
+        "schema_version": 2,
         "window": {
             "start_wall_time_s": window_start,
             "start_source": window_source,
@@ -621,6 +693,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--throughput-summary", type=Path, required=True)
     parser.add_argument("--gpu-csv", type=Path, required=True)
+    parser.add_argument("--dcgm-csv", type=Path, required=True)
     parser.add_argument("--prometheus-start", type=Path, required=True)
     parser.add_argument("--prometheus-final", type=Path, required=True)
     parser.add_argument("--kv-events-summary", type=Path, required=True)
@@ -634,6 +707,7 @@ def main() -> None:
     summarize(
         throughput_summary_path=args.throughput_summary,
         gpu_csv_path=args.gpu_csv,
+        dcgm_csv_path=args.dcgm_csv,
         prometheus_start_path=args.prometheus_start,
         prometheus_final_path=args.prometheus_final,
         kv_events_summary_path=args.kv_events_summary,

@@ -87,6 +87,24 @@ echo "== python: $(.venv/bin/python --version)"
 # --- GPU extra ----------------------------------------------------------------
 if [ "$GPU" = "1" ]; then
   command -v nvidia-smi >/dev/null || { echo "FATAL: --gpu but no nvidia-smi" >&2; exit 1; }
+  CUDA_MAJOR=$(nvidia-smi -q | sed -E -n 's/CUDA Version[ :]+([0-9]+)[.].*/\1/p')
+  [ -n "$CUDA_MAJOR" ] || { echo "FATAL: cannot determine CUDA major version" >&2; exit 1; }
+  DCGM_PACKAGE="datacenter-gpu-manager-4-cuda${CUDA_MAJOR}"
+  if ! dpkg-query -W -f='${Status}' "$DCGM_PACKAGE" 2>/dev/null | grep -q 'install ok installed'; then
+    sudo -n apt-get update -qq
+    apt-cache show "$DCGM_PACKAGE" >/dev/null 2>&1 || {
+      echo "FATAL: NVIDIA CUDA apt repository is required for $DCGM_PACKAGE" >&2
+      exit 1
+    }
+    sudo -n apt-get install -y --no-install-recommends "$DCGM_PACKAGE"
+  fi
+  sudo -n systemctl --now enable nvidia-dcgm >/dev/null
+  DCGM_PROFILE=$(dcgmi profile -l -i 0)
+  grep -Eq '(^|[[:space:]])1005([[:space:]]|$).*dram_active' <<<"$DCGM_PROFILE" || {
+    echo "FATAL: GPU does not expose DCGM field 1005 dram_active" >&2
+    exit 1
+  }
+  echo "== dcgm: $(dcgmi --version | awk '/dcgmi  version:/ {print $3}') field 1005 ok"
   uv sync --quiet --extra serving-spike   # exact vllm pin lives in pyproject
   .venv/bin/python - <<'PY'
 import torch, vllm

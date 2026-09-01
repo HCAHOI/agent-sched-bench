@@ -104,6 +104,14 @@ def _artifact(tmp_path: Path) -> dict[str, Path]:
             for timestamp in range(998, 1_053, 2)
         )
     )
+    dcgm_path = tmp_path / "dcgm.csv"
+    dcgm_path.write_text(
+        "timestamp_us,gpu_id,field_id,status,dram_active_ratio\n"
+        + "".join(
+            f"{timestamp * 1_000_000},0,1005,OK,0.3\n"
+            for timestamp in range(998, 1_053, 2)
+        )
+    )
     start_prom = tmp_path / "start.prom"
     final_prom = tmp_path / "final.prom"
     start_prom.write_text(
@@ -133,6 +141,7 @@ def _artifact(tmp_path: Path) -> dict[str, Path]:
     return {
         "throughput_summary_path": summary_path,
         "gpu_csv_path": gpu_path,
+        "dcgm_csv_path": dcgm_path,
         "prometheus_start_path": start_prom,
         "prometheus_final_path": final_prom,
         "kv_events_summary_path": kv_path,
@@ -167,6 +176,8 @@ def test_summarizes_serving_metrics(tmp_path: Path) -> None:
     assert summary["gpu"]["sample_count"] == 26
     assert summary["gpu"]["utilization"]["mean_pct"] == 50.0
     assert summary["gpu"]["memory_activity"]["mean_pct"] == 25.0
+    assert summary["gpu"]["dcgm_dram_active"]["sample_count"] == 26
+    assert summary["gpu"]["dcgm_dram_active"]["mean_ratio"] == 0.3
     assert summary["kv_events"]["removed_tokens"] == 48
     assert summary["task_preparation_started_at"]["task-b"].endswith("10Z")
 
@@ -235,6 +246,27 @@ def test_rejects_gpu_telemetry_gap(tmp_path: Path) -> None:
     gpu.write_text("\n".join(line for line in lines if not line.startswith("1026,")) + "\n")
 
     with pytest.raises(ValueError, match="gap exceeds 3 seconds"):
+        summarize(**paths)
+
+
+def test_rejects_dcgm_telemetry_gap(tmp_path: Path) -> None:
+    paths = _artifact(tmp_path)
+    dcgm = paths["dcgm_csv_path"]
+    lines = dcgm.read_text().splitlines()
+    dcgm.write_text(
+        "\n".join(line for line in lines if not line.startswith("1026000000,")) + "\n"
+    )
+
+    with pytest.raises(ValueError, match="DCGM telemetry gap exceeds 3 seconds"):
+        summarize(**paths)
+
+
+def test_rejects_invalid_dcgm_sample(tmp_path: Path) -> None:
+    paths = _artifact(tmp_path)
+    dcgm = paths["dcgm_csv_path"]
+    dcgm.write_text(dcgm.read_text().replace(",OK,0.3", ",N/A,0.3", 1))
+
+    with pytest.raises(ValueError, match="DCGM telemetry row 2 is invalid"):
         summarize(**paths)
 
 

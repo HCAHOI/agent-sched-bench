@@ -293,7 +293,23 @@ def test_paper_baseline_runner_has_required_policy_checks() -> None:
     assert "--kv-events-config" in runner_text
     assert "--replay-endpoint tcp://127.0.0.1:5558" in runner_text
     assert "collect_vllm_kv_events.py" in runner_text
+    assert "collect_dcgm_metrics.py" in runner_text
+    assert "DCGM collector stopped early" in runner_text
+    assert "1005([[:space:]]|$).*dram_active" in runner_text
+    assert '--dcgm-csv "$cell/dcgm.csv"' in runner_text
     assert "summarize_serving_metrics.py" in runner_text
+    assert 'if os.environ["SERVING_METRICS"] == "on"' in runner_text
+
+
+def test_gpu_setup_installs_and_verifies_dcgm() -> None:
+    setup = (
+        Path(__file__).parents[1] / "scripts/setup/benchmark_server.sh"
+    ).read_text()
+
+    assert 'DCGM_PACKAGE="datacenter-gpu-manager-4-cuda${CUDA_MAJOR}"' in setup
+    assert '--no-install-recommends "$DCGM_PACKAGE"' in setup
+    assert "systemctl --now enable nvidia-dcgm" in setup
+    assert "1005([[:space:]]|$).*dram_active" in setup
 
 
 def test_cachewise_disabled_keeps_fork_config_without_policy_flags() -> None:
