@@ -93,6 +93,7 @@ def measure_prefill(
         # Match the serving default: long prompts are chunked into 2K-token
         # prefills instead of forcing one max-context profiling batch.
         max_num_batched_tokens=2048,
+        scheduling_policy="fcfs",
         enforce_eager=True,  # steady, comparable timings (no cudagraph capture)
         gpu_memory_utilization=0.9,
         seed=seed,
