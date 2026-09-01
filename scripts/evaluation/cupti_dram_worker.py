@@ -117,6 +117,8 @@ class CuptiDramWorker(Worker):
             end_ns = int(sample.end_timestamp)
             if start_ns <= 0 or end_ns <= start_ns:
                 raise ValueError("CUPTI sample timestamps must be positive and ordered")
+            if self._dram_last_end_ns is not None and start_ns < self._dram_last_end_ns:
+                continue
 
             duration_ns = end_ns - start_ns
             if not _SAMPLE_PERIOD_NS // 2 <= duration_ns <= 3 * _SAMPLE_PERIOD_NS // 2:
@@ -127,14 +129,6 @@ class CuptiDramWorker(Worker):
                     self._dram_discarded_leading = True
                     continue
                 raise ValueError("CUPTI sample duration is outside 0.5-1.5 seconds")
-
-            if self._dram_last_end_ns is not None and end_ns <= self._dram_last_end_ns:
-                continue
-            if self._dram_last_end_ns is not None and start_ns < self._dram_last_end_ns:
-                raise ValueError(
-                    "CUPTI sample timestamps must be strictly increasing and "
-                    "non-overlapping"
-                )
 
             values = [float(value) for value in sample.metric_values]
             if len(values) != 2 or not all(

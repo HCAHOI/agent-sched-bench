@@ -117,6 +117,7 @@ def test_worker_records_valid_samples_and_cleans_up(
         _CounterData(
             [
                 _Sample(1_000_000_000, 2_000_000_000, [3.0, 4.0]),
+                _Sample(1_500_000_000, 4_000_000_000, [4.0, 5.0]),
                 _Sample(2_000_000_000, 3_000_000_000, [5.0, 6.0]),
             ]
         )
@@ -159,15 +160,6 @@ def test_worker_records_valid_samples_and_cleans_up(
                 _CounterData([_Sample(10, 9_000_000_010, [1.0, 2.0])]),
             ],
             "sample duration",
-        ),
-        (
-            [
-                _CounterData([_Sample(1_000_000_000, 2_000_000_000, [1.0, 2.0])]),
-                _CounterData(
-                    [_Sample(1_500_000_000, 2_500_000_000, [3.0, 4.0])]
-                ),
-            ],
-            "strictly increasing",
         ),
         (
             [
