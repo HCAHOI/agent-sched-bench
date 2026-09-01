@@ -147,7 +147,7 @@ build_serve_command() {
     --tensor-parallel-size "$tp"
     --host 127.0.0.1
     --port "${CONTINUUM_PORT:-8000}"
-    --gpu-memory-utilization 0.9
+    --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION:-0.90}"
     --max-model-len "$max_model_len"
     --max-num-seqs 8
     --enable-prefix-caching

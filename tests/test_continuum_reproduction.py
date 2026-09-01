@@ -338,7 +338,7 @@ def test_reproduction_serve_rejects_config_overrides() -> None:
         [
             "bash",
             "-c",
-            'source "$1"; venv=/isolated; '
+            'source "$1"; venv=/isolated; GPU_MEMORY_UTILIZATION=0.95; '
             "validated_observability_args=(--enable-prompt-tokens-details \
 --worker-cls scripts.evaluation.cupti_dram_worker.CuptiDramWorker \
 --kv-events-config '{\"enable_kv_cache_events\":true}'); "
@@ -352,6 +352,7 @@ def test_reproduction_serve_rejects_config_overrides() -> None:
         text=True,
     ).stdout.splitlines()
     assert built[:3] == ["/isolated/bin/vllm", "serve", "model"]
+    assert built[built.index("--gpu-memory-utilization") + 1] == "0.95"
     assert built[built.index("--max-model-len") + 1] == "32768"
     assert built[built.index("--max-num-seqs") + 1] == "8"
     assert "--enable-prefix-caching" in built
