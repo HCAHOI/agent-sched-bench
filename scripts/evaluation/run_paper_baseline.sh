@@ -253,7 +253,7 @@ run_cell() (
       ;;
     continuum-reproduction)
       server=("$repo/scripts/baselines/continuum_reproduction.sh" serve "$model" --dtype bfloat16 --kv-cache-dtype auto "${observability_args[@]}")
-      server_env+=(CONTINUUM_REPRODUCTION_PROFILE="$continuum_profile" CONTINUUM_REPRODUCTION_MODE=prefill RUN_OUTPUT_DIR="$cell/continuum")
+      server_env+=(CONTINUUM_REPRODUCTION_PROFILE="$continuum_profile" CONTINUUM_REPRODUCTION_MODE=prefill RUN_OUTPUT_DIR="$cell/continuum" GPU_MEMORY_UTILIZATION="$gpu_memory_utilization")
       ;;
     native-priority-aging)
       server=("$repo/scripts/baselines/native_priority_aging.sh" serve "$model" "${common_args[@]}")
