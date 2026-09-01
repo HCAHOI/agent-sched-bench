@@ -90,7 +90,9 @@ def measure_prefill(
         max_model_len=max_model_len,
         enable_prefix_caching=False,  # force a real prefill every request
         enable_chunked_prefill=True,  # allow long single-request prefills
-        max_num_batched_tokens=max_ctx,  # admit the largest sweep prefill
+        # Match the serving default: long prompts are chunked into 2K-token
+        # prefills instead of forcing one max-context profiling batch.
+        max_num_batched_tokens=2048,
         enforce_eager=True,  # steady, comparable timings (no cudagraph capture)
         gpu_memory_utilization=0.9,
         seed=seed,
