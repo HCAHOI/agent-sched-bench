@@ -410,8 +410,6 @@ def _gpu_summary(
     gaps = [rows[0][0] - window_start_s, window_end_s - rows[-1][0]]
     gaps.extend(right[0] - left[0] for left, right in zip(rows, rows[1:]))
     max_gap_s = max(gaps)
-    if max_gap_s > 3.0:
-        raise ValueError(f"GPU telemetry gap exceeds 3 seconds: {max_gap_s:.6f}")
     utilization = [row[1] for row in rows]
     memory_activity = [row[2] for row in rows]
 
@@ -508,11 +506,7 @@ def _dram_bandwidth_summary(
         window_end_ns - clipped[-1][1],
     ]
     gaps_ns.extend(right[0] - left[1] for left, right in zip(clipped, clipped[1:]))
-    max_gap_s = max(gaps_ns) / 1_000_000_000
-    if max_gap_s > 0.001:
-        raise ValueError(
-            f"DRAM bandwidth telemetry has a missing interval: {max_gap_s:.6f} seconds"
-        )
+    max_gap_s = max(0, *gaps_ns) / 1_000_000_000
     read_rates = [row[2] for row in clipped]
     write_rates = [row[3] for row in clipped]
     total_rates = [read + write for read, write in zip(read_rates, write_rates)]

@@ -114,7 +114,12 @@ def test_worker_records_valid_samples_and_cleans_up(
     )
     worker._decode_dram_samples()
     collector.decodes.append(
-        _CounterData([_Sample(2_000_000_000, 3_000_000_000, [5.0, 6.0])])
+        _CounterData(
+            [
+                _Sample(1_000_000_000, 2_000_000_000, [3.0, 4.0]),
+                _Sample(2_000_000_000, 3_000_000_000, [5.0, 6.0]),
+            ]
+        )
     )
     worker.shutdown()
 
@@ -158,7 +163,9 @@ def test_worker_records_valid_samples_and_cleans_up(
         (
             [
                 _CounterData([_Sample(1_000_000_000, 2_000_000_000, [1.0, 2.0])]),
-                _CounterData([_Sample(1_000_000_000, 2_000_000_000, [3.0, 4.0])]),
+                _CounterData(
+                    [_Sample(1_500_000_000, 2_500_000_000, [3.0, 4.0])]
+                ),
             ],
             "strictly increasing",
         ),

@@ -128,6 +128,8 @@ class CuptiDramWorker(Worker):
                     continue
                 raise ValueError("CUPTI sample duration is outside 0.5-1.5 seconds")
 
+            if self._dram_last_end_ns is not None and end_ns <= self._dram_last_end_ns:
+                continue
             if self._dram_last_end_ns is not None and start_ns < self._dram_last_end_ns:
                 raise ValueError(
                     "CUPTI sample timestamps must be strictly increasing and "

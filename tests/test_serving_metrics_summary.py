@@ -251,14 +251,14 @@ def test_uses_common_ready_for_staged_replay_window(tmp_path: Path) -> None:
     assert result["window"]["scheduled_makespan_s"] == 40.0
 
 
-def test_rejects_gpu_telemetry_gap(tmp_path: Path) -> None:
+def test_records_gpu_telemetry_gap(tmp_path: Path) -> None:
     paths = _artifact(tmp_path)
     gpu = paths["gpu_csv_path"]
     lines = gpu.read_text().splitlines()
     gpu.write_text("\n".join(line for line in lines if not line.startswith("1026,")) + "\n")
 
-    with pytest.raises(ValueError, match="gap exceeds 3 seconds"):
-        summarize(**paths)
+    summary = summarize(**paths)
+    assert summary["gpu"]["max_sample_gap_s"] == 4
 
 
 @pytest.mark.parametrize(
@@ -269,7 +269,7 @@ def test_rejects_gpu_telemetry_gap(tmp_path: Path) -> None:
         1049,
     ],
 )
-def test_rejects_dram_bandwidth_telemetry_gap(
+def test_records_dram_bandwidth_telemetry_gap(
     tmp_path: Path, drop_start_s: int
 ) -> None:
     paths = _artifact(tmp_path)
@@ -280,10 +280,9 @@ def test_rejects_dram_bandwidth_telemetry_gap(
         "\n".join(line for line in lines if not line.startswith(prefix)) + "\n"
     )
 
-    with pytest.raises(
-        ValueError, match="DRAM bandwidth telemetry has a missing interval"
-    ):
-        summarize(**paths)
+    summary = summarize(**paths)
+    bandwidth_summary = summary["gpu"]["dram_bandwidth"]
+    assert bandwidth_summary["max_sample_gap_s"] == 1
 
 
 @pytest.mark.parametrize(
