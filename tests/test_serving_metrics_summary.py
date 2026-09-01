@@ -51,7 +51,8 @@ def _artifact(tmp_path: Path) -> dict[str, Path]:
                         "requested_completion_tokens": generated,
                         "returned_completion_tokens": generated,
                         "finish_reason": "length",
-                        "ttft_ms": index * 1_000 + (1_000 if task == "task-a" else 3_000),
+                        "ttft_ms": index * 1_000
+                        + (1_000 if task == "task-a" else 3_000),
                         "latency_ms": (ended - started) * 1_000,
                     },
                 },
@@ -100,8 +101,7 @@ def _artifact(tmp_path: Path) -> dict[str, Path]:
     gpu_path.write_text(
         "timestamp_s,power_w,memory_mib,utilization_pct,memory_activity_pct\n"
         + "".join(
-            f"{timestamp},200,20000,50,25\n"
-            for timestamp in range(998, 1_053, 2)
+            f"{timestamp},200,20000,50,25\n" for timestamp in range(998, 1_053, 2)
         )
     )
     dram_bandwidth_path = tmp_path / "dram-bandwidth.csv"
@@ -116,10 +116,14 @@ def _artifact(tmp_path: Path) -> dict[str, Path]:
     start_prom = tmp_path / "start.prom"
     final_prom = tmp_path / "final.prom"
     start_prom.write_text(
-        "".join(f'{name}{{engine="0"}} {values[0]}.0\n' for name, values in METRICS.items())
+        "".join(
+            f'{name}{{engine="0"}} {values[0]}.0\n' for name, values in METRICS.items()
+        )
     )
     final_prom.write_text(
-        "".join(f'{name}{{engine="0"}} {values[1]}.0\n' for name, values in METRICS.items())
+        "".join(
+            f'{name}{{engine="0"}} {values[1]}.0\n' for name, values in METRICS.items()
+        )
     )
     kv_path = tmp_path / "kv.json"
     _json(
@@ -164,9 +168,9 @@ def test_summarizes_serving_metrics(tmp_path: Path) -> None:
         "recomputed_prompt_tokens": 1,
         "generation_tokens": 6,
     }
-    assert summary["headline"]["request_usage_cached_prompt_token_ratio"] == pytest.approx(
-        135 / 300
-    )
+    assert summary["headline"][
+        "request_usage_cached_prompt_token_ratio"
+    ] == pytest.approx(135 / 300)
     counters = summary["prometheus_counter_deltas"]
     assert counters["prefix_lookup_token_hit_ratio"] == pytest.approx(80 / 300)
     assert counters["recomputed_prompt_tokens"] == 1
@@ -193,14 +197,122 @@ def test_summarizes_serving_metrics(tmp_path: Path) -> None:
     assert summary["kv_events"]["removed_tokens"] == 48
     assert summary["task_preparation_started_at"]["task-b"].endswith("10Z")
 
-    rows = [json.loads(line) for line in paths["requests_output_path"].read_text().splitlines()]
-    assert [row["request_id"] for row in rows] == ["request-a0", "request-a1", "request-b0"]
+    rows = [
+        json.loads(line)
+        for line in paths["requests_output_path"].read_text().splitlines()
+    ]
+    assert [row["request_id"] for row in rows] == [
+        "request-a0",
+        "request-a1",
+        "request-b0",
+    ]
     assert rows[0]["cached_prompt_tokens"] == 0
     assert rows[0]["cached_prompt_tokens_omitted_zero"] is True
     assert rows[0]["first_request"] is True
+    assert "measurement_task" not in rows[0]
     assert rows[0]["tpot_s"] == 0.5
     assert rows[0]["decode_tokens_per_s"] == 2.0
     assert rows[2]["tpot_s"] is None
+
+
+def test_summarizes_replacement_load_without_counting_it_as_measurement(
+    tmp_path: Path,
+) -> None:
+    paths = _artifact(tmp_path)
+    throughput = json.loads(paths["throughput_summary_path"].read_text())
+    throughput["replacement_load"] = {"enabled": True, "delay_mean_s": 50.0}
+    _json(paths["throughput_summary_path"], throughput)
+    background_id = "task-a__replacement-0001"
+    _json(
+        paths["throughput_summary_path"].parent
+        / background_id
+        / "attempt_1"
+        / "container_startup.json",
+        {
+            "status": "success",
+            "run_instance_id": background_id,
+            "started_at": "2026-09-01T00:00:40Z",
+        },
+    )
+    _json(
+        paths["throughput_summary_path"].parent
+        / "task-b__replacement-0001"
+        / "attempt_1"
+        / "container_startup.json",
+        {
+            "status": "failed",
+            "run_instance_id": "task-b__replacement-0001",
+            "started_at": "2026-09-01T00:00:41Z",
+            "error": {"type": "CancelledError", "message": ""},
+        },
+    )
+    with Path(throughput["trace_file"]).open("a") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "type": "action",
+                    "action_type": "llm_call",
+                    "action_id": "llm_0",
+                    "ts_start": 1_048.0,
+                    "ts_end": 1_049.0,
+                    "data": {
+                        "run_instance_id": background_id,
+                        "shadow_generation": {
+                            "request_id": "request-background-0",
+                            "source_action_index": 0,
+                            "prompt_tokens": 40,
+                            "cached_prompt_tokens": None,
+                            "requested_completion_tokens": 1,
+                            "returned_completion_tokens": 1,
+                            "finish_reason": "length",
+                            "ttft_ms": 500,
+                            "latency_ms": 1_000,
+                        },
+                    },
+                }
+            )
+            + "\n"
+        )
+    final = paths["prometheus_final_path"]
+    final.write_text(
+        final.read_text()
+        .replace(
+            'vllm:prompt_tokens_total{engine="0"} 400.0',
+            'vllm:prompt_tokens_total{engine="0"} 441.0',
+        )
+        .replace(
+            'vllm:generation_tokens_total{engine="0"} 56.0',
+            'vllm:generation_tokens_total{engine="0"} 58.0',
+        )
+    )
+
+    summary = summarize(**paths)
+
+    assert summary["task_count"] == 2
+    assert summary["observed_task_count"] == 3
+    assert summary["request_count"] == 4
+    assert summary["request_token_totals"]["unattributed_prometheus_tokens"] == {
+        "prompt_tokens": 1,
+        "cached_prompt_tokens": 0,
+        "recomputed_prompt_tokens": 0,
+        "generation_tokens": 1,
+    }
+    rows = [
+        json.loads(line)
+        for line in paths["requests_output_path"].read_text().splitlines()
+    ]
+    assert [row["measurement_task"] for row in rows] == [True, True, True, False]
+
+    trace = Path(throughput["trace_file"])
+    trace.write_text(
+        "".join(
+            line
+            for line in trace.read_text().splitlines(keepends=True)
+            if '"request_id": "request-a1"' not in line
+        )
+    )
+    with pytest.raises(ValueError, match="measured request count differs"):
+        summarize(**paths)
 
 
 def test_rejects_inconsistent_cached_usage_counter(tmp_path: Path) -> None:
@@ -255,7 +367,9 @@ def test_records_gpu_telemetry_gap(tmp_path: Path) -> None:
     paths = _artifact(tmp_path)
     gpu = paths["gpu_csv_path"]
     lines = gpu.read_text().splitlines()
-    gpu.write_text("\n".join(line for line in lines if not line.startswith("1026,")) + "\n")
+    gpu.write_text(
+        "\n".join(line for line in lines if not line.startswith("1026,")) + "\n"
+    )
 
     summary = summarize(**paths)
     assert summary["gpu"]["max_sample_gap_s"] == 4

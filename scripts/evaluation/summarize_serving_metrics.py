@@ -90,19 +90,13 @@ def _prometheus_samples(path: Path) -> dict[str, dict[str, float]]:
         if not math.isfinite(value) or value < 0:
             raise ValueError(f"invalid counter {name} in {path}:{line_number}")
         samples[name][labels] = value
-    missing = sorted(
-        name
-        for name in _REQUIRED_COUNTERS.values()
-        if not samples[name]
-    )
+    missing = sorted(name for name in _REQUIRED_COUNTERS.values() if not samples[name])
     if missing:
         raise ValueError(f"Prometheus snapshot {path} lacks: {', '.join(missing)}")
     return samples
 
 
-def _counter_deltas(
-    start_path: Path, final_path: Path
-) -> dict[str, int | None]:
+def _counter_deltas(start_path: Path, final_path: Path) -> dict[str, int | None]:
     start = _prometheus_samples(start_path)
     final = _prometheus_samples(final_path)
     deltas: dict[str, int | None] = {}
@@ -135,8 +129,11 @@ def _counter_deltas(
 
 
 def _load_tasks(
-    summary_path: Path, summary: dict[str, Any]
-) -> tuple[dict[str, dict[str, Any]], float, float, str]:
+    summary_path: Path,
+    summary: dict[str, Any],
+    *,
+    allow_background: bool = False,
+) -> tuple[dict[str, dict[str, Any]], dict[str, str], float, float, str]:
     attempted = _nonnegative_int(
         summary.get("attempted_traces"), "attempted_traces", positive=True
     )
@@ -156,7 +153,9 @@ def _load_tasks(
             raise ValueError(f"invalid or duplicate task ID at tasks[{index}]")
         if task.get("success") is not True:
             raise ValueError(f"task {task_id} did not succeed")
-        arrival_s = _finite(task.get("arrival_s"), f"{task_id}.arrival_s", nonnegative=True)
+        arrival_s = _finite(
+            task.get("arrival_s"), f"{task_id}.arrival_s", nonnegative=True
+        )
         ready_s = _finite(
             task.get("ready_to_terminal_s"),
             f"{task_id}.ready_to_terminal_s",
@@ -194,11 +193,20 @@ def _load_tasks(
     for startup_path in sorted(output_dir.glob("*/attempt_*/container_startup.json")):
         startup = _read_json(startup_path, "container_startup")
         task_id = startup.get("run_instance_id")
-        if task_id not in tasks:
+        if task_id not in tasks and not allow_background:
             raise ValueError(f"unexpected task in {startup_path}: {task_id!r}")
+        if not isinstance(task_id, str) or not task_id:
+            raise ValueError(f"invalid task in {startup_path}: {task_id!r}")
         if task_id in startup_by_task:
             raise ValueError(f"multiple container_startup files for {task_id}")
         if startup.get("status") != "success":
+            if (
+                allow_background
+                and task_id not in tasks
+                and isinstance(startup.get("error"), dict)
+                and startup["error"].get("type") == "CancelledError"
+            ):
+                continue
             raise ValueError(f"container startup did not succeed for {task_id}")
         started_at = startup.get("started_at")
         if not isinstance(started_at, str):
@@ -210,19 +218,26 @@ def _load_tasks(
         if parsed.tzinfo is None:
             raise ValueError(f"started_at lacks timezone for {task_id}")
         startup_by_task[task_id] = started_at
-    if startup_by_task.keys() != tasks.keys():
+    if not tasks.keys() <= startup_by_task.keys():
         missing = sorted(tasks.keys() - startup_by_task.keys())
         raise ValueError(f"missing container_startup files: {', '.join(missing)}")
     for task_id, started_at in startup_by_task.items():
+        if task_id not in tasks:
+            continue
         tasks[task_id] = {
             **tasks[task_id],
             "task_preparation_started_at": started_at,
         }
-    return tasks, window_start, makespan_s, window_source
+    return tasks, startup_by_task, window_start, makespan_s, window_source
 
 
 def _load_requests(
-    trace_path: Path, tasks: dict[str, dict[str, Any]], expected_count: int
+    trace_path: Path,
+    tasks: dict[str, dict[str, Any]],
+    task_startups: dict[str, str],
+    expected_measurement_count: int,
+    *,
+    allow_background: bool = False,
 ) -> list[dict[str, Any]]:
     requests: list[dict[str, Any]] = []
     seen_request_ids: set[str] = set()
@@ -245,7 +260,7 @@ def _load_requests(
                 f"trace line {line_number}.shadow_generation",
             )
             task_id = data.get("run_instance_id")
-            if task_id not in tasks:
+            if task_id not in task_startups:
                 raise ValueError(f"unknown request task at trace line {line_number}")
             request_id = shadow.get("request_id")
             if (
@@ -253,7 +268,9 @@ def _load_requests(
                 or not request_id
                 or request_id in seen_request_ids
             ):
-                raise ValueError(f"invalid or duplicate request ID at trace line {line_number}")
+                raise ValueError(
+                    f"invalid or duplicate request ID at trace line {line_number}"
+                )
             source_index = _nonnegative_int(
                 shadow.get("source_action_index"),
                 f"{request_id}.source_action_index",
@@ -261,7 +278,9 @@ def _load_requests(
             if (task_id, source_index) in seen_task_indices:
                 raise ValueError(f"duplicate source request index for {task_id}")
             prompt_tokens = _nonnegative_int(
-                shadow.get("prompt_tokens"), f"{request_id}.prompt_tokens", positive=True
+                shadow.get("prompt_tokens"),
+                f"{request_id}.prompt_tokens",
+                positive=True,
             )
             requested_tokens = _nonnegative_int(
                 shadow.get("requested_completion_tokens"),
@@ -273,8 +292,13 @@ def _load_requests(
                 f"{request_id}.returned_completion_tokens",
                 positive=True,
             )
-            if requested_tokens != generation_tokens or shadow.get("finish_reason") != "length":
-                raise ValueError(f"request {request_id} did not return its forced length")
+            if (
+                requested_tokens != generation_tokens
+                or shadow.get("finish_reason") != "length"
+            ):
+                raise ValueError(
+                    f"request {request_id} did not return its forced length"
+                )
             raw_cached = shadow.get("cached_prompt_tokens")
             cached_tokens = (
                 None
@@ -283,7 +307,9 @@ def _load_requests(
             )
             if cached_tokens is not None and cached_tokens > prompt_tokens:
                 raise ValueError(f"cached tokens exceed prompt tokens for {request_id}")
-            ttft_ms = _finite(shadow.get("ttft_ms"), f"{request_id}.ttft_ms", nonnegative=True)
+            ttft_ms = _finite(
+                shadow.get("ttft_ms"), f"{request_id}.ttft_ms", nonnegative=True
+            )
             latency_ms = _finite(
                 shadow.get("latency_ms"), f"{request_id}.latency_ms", nonnegative=True
             )
@@ -301,32 +327,40 @@ def _load_requests(
                     "source_action_index": source_index,
                     "request_started_wall_time_s": started_s,
                     "request_ended_wall_time_s": ended_s,
-                    "task_preparation_started_at": tasks[task_id][
-                        "task_preparation_started_at"
-                    ],
+                    "task_preparation_started_at": task_startups[task_id],
                     "prompt_tokens": prompt_tokens,
                     "cached_prompt_tokens": cached_tokens,
                     "generation_tokens": generation_tokens,
                     "ttft_s": ttft_ms / 1000.0,
                     "latency_s": latency_ms / 1000.0,
+                    **(
+                        {"measurement_task": task_id in tasks}
+                        if allow_background
+                        else {}
+                    ),
                 }
             )
             seen_request_ids.add(request_id)
             seen_task_indices.add((task_id, source_index))
-    if len(requests) != expected_count:
+    measured_count = sum(request["task_id"] in tasks for request in requests)
+    if measured_count != expected_measurement_count:
         raise ValueError(
-            f"request count differs: trace={len(requests)}, summary={expected_count}"
+            "measured request count differs: "
+            f"trace={measured_count}, summary={expected_measurement_count}"
         )
-    if {request["task_id"] for request in requests} != tasks.keys():
+    if not allow_background and len(requests) != expected_measurement_count:
+        raise ValueError("request count includes unexpected background tasks")
+    if not tasks.keys() <= {request["task_id"] for request in requests}:
         raise ValueError("combined trace does not contain requests for every task")
 
+    request_task_ids = {request["task_id"] for request in requests}
     first_index = {
         task_id: min(
             request["source_action_index"]
             for request in requests
             if request["task_id"] == task_id
         )
-        for task_id in tasks
+        for task_id in request_task_ids
     }
     for request in requests:
         request["first_request"] = (
@@ -336,13 +370,20 @@ def _load_requests(
         decode_s = request["latency_s"] - request["ttft_s"]
         if decode_tokens:
             if decode_s <= 0:
-                raise ValueError(f"decode interval is not positive for {request['request_id']}")
+                raise ValueError(
+                    f"decode interval is not positive for {request['request_id']}"
+                )
             request["tpot_s"] = decode_s / decode_tokens
             request["decode_tokens_per_s"] = decode_tokens / decode_s
         else:
             request["tpot_s"] = None
             request["decode_tokens_per_s"] = None
-    requests.sort(key=lambda request: (request["request_started_wall_time_s"], request["request_id"]))
+    requests.sort(
+        key=lambda request: (
+            request["request_started_wall_time_s"],
+            request["request_id"],
+        )
+    )
     return requests
 
 
@@ -396,7 +437,9 @@ def _gpu_summary(
         for line_number, row in enumerate(reader, 2):
             if len(row) != len(expected_header):
                 raise ValueError(f"GPU telemetry row {line_number} is incomplete")
-            values = [_finite(value, f"GPU row {line_number}") for value in map(float, row)]
+            values = [
+                _finite(value, f"GPU row {line_number}") for value in map(float, row)
+            ]
             timestamp, _, _, utilization, memory_activity = values
             if previous_timestamp is not None and timestamp <= previous_timestamp:
                 raise ValueError("GPU timestamps are not strictly increasing")
@@ -608,17 +651,30 @@ def summarize(
     if output_path == requests_output_path:
         raise ValueError("summary and request output paths must differ")
     throughput = _read_json(throughput_summary_path, "throughput summary")
-    tasks, window_start, makespan_s, window_source = _load_tasks(
-        throughput_summary_path, throughput
+    replacement_load = throughput.get("replacement_load")
+    replacement_enabled = (
+        isinstance(replacement_load, dict) and replacement_load.get("enabled") is True
     )
-    request_count = _nonnegative_int(
+    tasks, task_startups, window_start, makespan_s, window_source = _load_tasks(
+        throughput_summary_path,
+        throughput,
+        allow_background=replacement_enabled,
+    )
+    expected_request_count = _nonnegative_int(
         throughput.get("llm_call_count"), "llm_call_count", positive=True
     )
     trace_value = throughput.get("trace_file")
     if not isinstance(trace_value, str) or not trace_value:
         raise ValueError("throughput summary lacks trace_file")
     trace_path = Path(trace_value)
-    requests = _load_requests(trace_path, tasks, request_count)
+    requests = _load_requests(
+        trace_path,
+        tasks,
+        task_startups,
+        expected_request_count,
+        allow_background=replacement_enabled,
+    )
+    request_count = len(requests)
     counters = _counter_deltas(prometheus_start_path, prometheus_final_path)
 
     for request in requests:
@@ -637,20 +693,46 @@ def summarize(
         if request["cached_prompt_tokens"] > 0
         and request["cached_prompt_tokens"] + 1 == request["prompt_tokens"]
     )
-    if prompt_tokens != counters["prompt_tokens"]:
-        raise ValueError("request prompt-token total differs from Prometheus")
+    unattributed_counter_tokens: dict[str, int | None] = {}
+
+    def compare_counter(name: str, observed: int, counter: int | None) -> None:
+        if counter is None:
+            unattributed_counter_tokens[name] = None
+        elif replacement_enabled:
+            if observed > counter:
+                raise ValueError(f"request {name} total exceeds Prometheus")
+            unattributed_counter_tokens[name] = counter - observed
+        elif observed != counter:
+            raise ValueError(f"request {name} total differs from Prometheus")
+
+    compare_counter("prompt_tokens", prompt_tokens, counters["prompt_tokens"])
     if (
         counters["cached_prompt_tokens"] is not None
+        and not replacement_enabled
         and cached_tokens != counters["cached_prompt_tokens"]
     ):
         raise ValueError("request cached-token total differs from Prometheus")
     if (
         counters["recomputed_prompt_tokens"] is not None
+        and not replacement_enabled
         and recomputed_tokens != counters["recomputed_prompt_tokens"]
     ):
         raise ValueError("derived recomputed-token total differs from Prometheus")
-    if generation_tokens != counters["generation_tokens"]:
-        raise ValueError("request generation-token total differs from Prometheus")
+    compare_counter(
+        "cached_prompt_tokens",
+        cached_tokens,
+        counters["cached_prompt_tokens"],
+    )
+    compare_counter(
+        "recomputed_prompt_tokens",
+        recomputed_tokens,
+        counters["recomputed_prompt_tokens"],
+    )
+    compare_counter(
+        "generation_tokens",
+        generation_tokens,
+        counters["generation_tokens"],
+    )
 
     window_end = window_start + makespan_s
     gpu = _gpu_summary(gpu_csv_path, window_start, window_end)
@@ -663,7 +745,7 @@ def summarize(
     subsequent_ttft = [
         request["ttft_s"] for request in requests if not request["first_request"]
     ]
-    if len(first_ttft) != len(tasks):
+    if len(first_ttft) != len({request["task_id"] for request in requests}):
         raise ValueError("each task must have exactly one first request")
     prefix_queries = counters["prefix_cache_queries"]
     prefix_hits = counters["prefix_cache_hits"]
@@ -678,11 +760,26 @@ def summarize(
         },
         "request_count": request_count,
         "task_count": len(tasks),
+        **(
+            {
+                "observed_task_count": len(
+                    {request["task_id"] for request in requests}
+                ),
+                "replacement_load": replacement_load,
+            }
+            if replacement_enabled
+            else {}
+        ),
         "request_token_totals": {
             "prompt_tokens": prompt_tokens,
             "cached_prompt_tokens": cached_tokens,
             "recomputed_prompt_tokens": recomputed_tokens,
             "generation_tokens": generation_tokens,
+            **(
+                {"unattributed_prometheus_tokens": unattributed_counter_tokens}
+                if replacement_enabled
+                else {}
+            ),
         },
         "request_token_definitions": {
             "cached_prompt_tokens": (
@@ -701,9 +798,7 @@ def summarize(
         "prometheus_counter_deltas": {
             **counters,
             "prefix_lookup_token_hit_ratio": (
-                prefix_hits / prefix_queries
-                if prefix_queries
-                else None
+                prefix_hits / prefix_queries if prefix_queries else None
             ),
             "prefix_lookup_token_hit_ratio_definition": (
                 "vLLM prefix-cache hit-token counter delta / query-token counter delta"
@@ -714,9 +809,16 @@ def summarize(
             "first_request_per_task": _distribution(first_ttft),
             "subsequent_requests": _distribution(subsequent_ttft),
         },
-        "whole_run_generation_tokens_per_s": generation_tokens / makespan_s,
+        "whole_run_generation_tokens_per_s": (
+            int(counters["generation_tokens"]) / makespan_s
+        ),
         "whole_run_generation_throughput_definition": (
-            "generation token counter delta / scheduled makespan seconds"
+            "generation token counter delta / "
+            + (
+                "measured-cohort makespan seconds"
+                if replacement_enabled
+                else "scheduled makespan seconds"
+            )
         ),
         "gpu": gpu,
         "kv_events": kv_events,

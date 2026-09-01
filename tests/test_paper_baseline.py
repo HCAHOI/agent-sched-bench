@@ -284,8 +284,12 @@ def test_paper_baseline_runner_has_required_policy_checks() -> None:
     assert 'fail "GPU telemetry stopped early"' in runner_text
     assert 'raise SystemExit("GPU telemetry row is incomplete")' in runner_text
     assert "stage_all_before_replay=${STAGE_ALL_BEFORE_REPLAY:-1}" in runner_text
+    assert "replacement_delay_mean_s=${REPLACEMENT_DELAY_MEAN_S:-}" in runner_text
+    assert '--replacement-delay-mean-s "$replacement_delay_mean_s"' in runner_text
+    assert '--replacement-seed "$replacement_seed"' in runner_text
+    assert '"replacement_source": "same trace in a fresh container"' in runner_text
     assert "cleanup_images=${CLEANUP_IMAGES:-0}" in runner_text
-    assert 'simulate+=(--cleanup-images)' in runner_text
+    assert "simulate+=(--cleanup-images)" in runner_text
     assert "resource_monitoring=${RESOURCE_MONITORING:-off}" in runner_text
     assert '--resource-monitoring "$resource_monitoring"' in runner_text
     assert "serving_metrics=${SERVING_METRICS:-on}" in runner_text
@@ -295,7 +299,7 @@ def test_paper_baseline_runner_has_required_policy_checks() -> None:
     assert "collect_vllm_kv_events.py" in runner_text
     assert "scripts.evaluation.cupti_dram_worker.CuptiDramWorker" in runner_text
     assert "CUPTI_DRAM_CSV" in runner_text
-    assert "--ambient-caps=\"+$perfmon_cap\"" in runner_text
+    assert '--ambient-caps="+$perfmon_cap"' in runner_text
     assert '--dram-bandwidth-csv "$cell/dram-bandwidth.csv"' in runner_text
     assert "collect_dcgm_metrics.py" not in runner_text
     assert "summarize_serving_metrics.py" in runner_text
@@ -440,6 +444,10 @@ fi
     assert summary_run.returncode == 1
     assert (summary_root / "fcfs-r1/cell-exit-code").read_text().strip() == "1"
     assert (summary_root / "fcfs-r2/cell-exit-code").read_text().strip() == "0"
+    assert (
+        "replacement_load"
+        not in json.loads((summary_root / "protocol.json").read_text())["workload"]
+    )
 
     server_root = tmp_path / "server-failure"
     server_run = subprocess.run(
@@ -578,6 +586,9 @@ exit 2
             "EXPECTED_GPU_NAME": "L40S",
             "MIN_GPU_MEMORY_MIB": "46000",
             "GPU_MEMORY_UTILIZATION": "0.95",
+            "STAGE_ALL_BEFORE_REPLAY": "0",
+            "REPLACEMENT_DELAY_MEAN_S": "50",
+            "REPLACEMENT_SEED": "7",
             "FAKE_GPU_ROW": "NVIDIA L40S, 46068",
         },
         text=True,
@@ -600,9 +611,13 @@ exit 2
     assert "--shadow-llm-api-base http://127.0.0.1:8000/v1" in simulate_call
     assert "--shadow-llm-mode saga" in simulate_call
     assert f"--shadow-llm-saga-profile {profile}" in simulate_call
+    assert "--replacement-delay-mean-s 50" in simulate_call
+    assert "--replacement-seed 7" in simulate_call
     protocol = json.loads((saga_root / "protocol.json").read_text())
     assert protocol["saga_profile"] == str(profile)
     assert protocol["workload"]["expected_gpu_name"] == "L40S"
     assert protocol["workload"]["min_gpu_memory_mib"] == 46000
     assert protocol["workload"]["gpu_memory_utilization"] == 0.95
     assert protocol["workload"]["serving_metrics"] is False
+    assert protocol["workload"]["replacement_load"]["delay_mean_s"] == 50.0
+    assert protocol["workload"]["replacement_load"]["seed"] == 7

@@ -244,6 +244,22 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--replacement-delay-mean-s",
+        type=positive_float_arg,
+        default=None,
+        help=(
+            "After an original task completes, keep its slot loaded by replaying "
+            "the same trace in a fresh container after an exponential delay with "
+            "this mean. Only original manifest tasks enter throughput metrics."
+        ),
+    )
+    parser.add_argument(
+        "--replacement-seed",
+        type=int,
+        default=42,
+        help="Seed for per-task replacement delays (default: 42).",
+    )
+    parser.add_argument(
         "--resource-monitoring",
         choices=MONITORING_CHOICES,
         default="auto",
@@ -839,6 +855,8 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "workers": args.workers,
         "prep_concurrency": args.prep_concurrency,
         "stage_all_before_replay": args.stage_all_before_replay,
+        "replacement_delay_mean_s": args.replacement_delay_mean_s,
+        "replacement_seed": args.replacement_seed,
         "resource_monitoring": args.resource_monitoring,
         "pmu_monitoring": args.pmu_monitoring,
         "memory_bandwidth_monitoring": args.memory_bandwidth_monitoring,

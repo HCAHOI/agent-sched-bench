@@ -183,6 +183,48 @@ def _append_replay_record(trace_logger: TraceLogger, record: dict[str, Any]) -> 
     handle.flush()
 
 
+def _read_worker_records(
+    trace_file: Path,
+    loaded: LoadedTraceSession,
+    *,
+    status: dict[str, Any],
+    replay_speed: float,
+    allow_truncated_tail: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    emitted_records: list[dict[str, Any]] = []
+    action_records: list[dict[str, Any]] = []
+    if not trace_file.exists():
+        return emitted_records, action_records
+    lines = trace_file.read_text(encoding="utf-8").splitlines()
+    for index, line in enumerate(lines):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            if allow_truncated_tail and index == len(lines) - 1:
+                break
+            raise
+        rtype = record.get("type")
+        if rtype in {"trace_metadata", "event"}:
+            continue
+        if rtype == "action":
+            data = dict(record.get("data") or {})
+            data.setdefault("run_instance_id", loaded.run_instance_id)
+            data.setdefault("task_instance_id", loaded.task_instance_id)
+            data.setdefault("source_action_agent_id", loaded.source_action_agent_id)
+            data.setdefault("source_agent_id", loaded.source_action_agent_id)
+            data.setdefault("manifest_index", loaded.manifest_index)
+            data.setdefault("simulate_source", str(loaded.source_trace))
+            data.setdefault("replay_mode", "openclaw_host_worker")
+            data.setdefault("replay_speed", replay_speed)
+            data.setdefault("openclaw_host_pid", status.get("openclaw_host_pid"))
+            record["data"] = data
+            action_records.append(record)
+        emitted_records.append(record)
+    return emitted_records, action_records
+
+
 def _source_terminal_reason(loaded: LoadedTraceSession) -> str:
     summary = loaded.summary or {}
     if summary.get("success") is not False:
@@ -279,6 +321,14 @@ async def _run_openclaw_worker_process(
     stderr_task = asyncio.create_task(_stream_worker_output(proc.stderr, stderr_path))
     try:
         await asyncio.wait_for(proc.wait(), timeout_s)
+    except asyncio.CancelledError:
+        proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), 5.0)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+        raise
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()
@@ -452,17 +502,30 @@ async def _run_openclaw_replay_session(
         json.dumps(request, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    worker_returncode = await _run_openclaw_worker_process(
-        request_path=request_path,
-        stdout_path=stdout_path,
-        stderr_path=stderr_path,
-        timeout_s=_openclaw_worker_timeout_s(
+    try:
+        worker_returncode = await _run_openclaw_worker_process(
+            request_path=request_path,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            timeout_s=_openclaw_worker_timeout_s(
+                loaded,
+                replay_speed=replay_speed,
+                command_timeout_s=command_timeout_s,
+                setup_timeout_s=resource_setup_timeout_s,
+            ),
+        )
+    except asyncio.CancelledError:
+        emitted_records, _ = _read_worker_records(
+            trace_file,
             loaded,
+            status={},
             replay_speed=replay_speed,
-            command_timeout_s=command_timeout_s,
-            setup_timeout_s=resource_setup_timeout_s,
-        ),
-    )
+            allow_truncated_tail=True,
+        )
+        for record in emitted_records:
+            if record.get("type") == "action":
+                _append_replay_record(trace_logger, record)
+        raise
     if status_path.exists():
         status = json.loads(status_path.read_text(encoding="utf-8"))
     else:
@@ -492,30 +555,12 @@ async def _run_openclaw_replay_session(
             "telemetry_errors": ["worker status unavailable"],
         }
 
-    emitted_records: list[dict[str, Any]] = []
-    replay_action_records: list[dict[str, Any]] = []
-    if trace_file.exists():
-        for line in trace_file.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            rtype = record.get("type")
-            if rtype == "trace_metadata" or rtype == "event":
-                continue
-            if rtype == "action":
-                data = dict(record.get("data") or {})
-                data.setdefault("run_instance_id", loaded.run_instance_id)
-                data.setdefault("task_instance_id", loaded.task_instance_id)
-                data.setdefault("source_action_agent_id", loaded.source_action_agent_id)
-                data.setdefault("source_agent_id", loaded.source_action_agent_id)
-                data.setdefault("manifest_index", loaded.manifest_index)
-                data.setdefault("simulate_source", str(loaded.source_trace))
-                data.setdefault("replay_mode", "openclaw_host_worker")
-                data.setdefault("replay_speed", replay_speed)
-                data.setdefault("openclaw_host_pid", status.get("openclaw_host_pid"))
-                record["data"] = data
-                replay_action_records.append(record)
-            emitted_records.append(record)
+    emitted_records, replay_action_records = _read_worker_records(
+        trace_file,
+        loaded,
+        status=status,
+        replay_speed=replay_speed,
+    )
 
     action_counts = replay_action_failure_counts(
         source_actions,

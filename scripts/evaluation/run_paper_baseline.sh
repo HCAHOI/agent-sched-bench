@@ -16,6 +16,8 @@ vllm_cpuset=${VLLM_CPUSET:-}
 continuum_profile=${CONTINUUM_REPRODUCTION_PROFILE:-}
 trace_tool_replay=${TRACE_TOOL_REPLAY:-0}
 stage_all_before_replay=${STAGE_ALL_BEFORE_REPLAY:-1}
+replacement_delay_mean_s=${REPLACEMENT_DELAY_MEAN_S:-}
+replacement_seed=${REPLACEMENT_SEED:-42}
 cleanup_images=${CLEANUP_IMAGES:-0}
 resource_monitoring=${RESOURCE_MONITORING:-off}
 serving_metrics=${SERVING_METRICS:-on}
@@ -54,6 +56,25 @@ preflight() {
   [[ ! -e "$run_root" ]] || fail "run root already exists: $run_root"
   [[ "$trace_tool_replay" == 0 || "$trace_tool_replay" == 1 ]] || fail "TRACE_TOOL_REPLAY must be 0 or 1"
   [[ "$stage_all_before_replay" == 0 || "$stage_all_before_replay" == 1 ]] || fail "STAGE_ALL_BEFORE_REPLAY must be 0 or 1"
+  if [[ -n "$replacement_delay_mean_s" ]]; then
+    [[ "$replacement_seed" =~ ^-?[0-9]+$ ]] || \
+      fail "REPLACEMENT_SEED must be an integer"
+    "$python" - "$replacement_delay_mean_s" <<'PY'
+import math
+import sys
+
+try:
+    value = float(sys.argv[1])
+except ValueError as exc:
+    raise SystemExit("REPLACEMENT_DELAY_MEAN_S must be positive") from exc
+if not math.isfinite(value) or value <= 0:
+    raise SystemExit("REPLACEMENT_DELAY_MEAN_S must be positive")
+PY
+    [[ "$stage_all_before_replay" == 0 ]] || \
+      fail "replacement load requires STAGE_ALL_BEFORE_REPLAY=0"
+    [[ "$cleanup_images" == 0 ]] || \
+      fail "replacement load requires CLEANUP_IMAGES=0"
+  fi
   [[ "$cleanup_images" == 0 || "$cleanup_images" == 1 ]] || fail "CLEANUP_IMAGES must be 0 or 1"
   [[ "$resource_monitoring" =~ ^(auto|on|off)$ ]] || fail "RESOURCE_MONITORING must be auto, on, or off"
   [[ "$serving_metrics" =~ ^(on|off)$ ]] || fail "SERVING_METRICS must be on or off"
@@ -355,6 +376,12 @@ run_cell() (
   if [[ "$trace_tool_replay" == 0 && "$stage_all_before_replay" == 1 ]]; then
     simulate+=(--stage-all-before-replay)
   fi
+  if [[ -n "$replacement_delay_mean_s" ]]; then
+    simulate+=(
+      --replacement-delay-mean-s "$replacement_delay_mean_s"
+      --replacement-seed "$replacement_seed"
+    )
+  fi
   [[ "$cleanup_images" == 0 ]] || simulate+=(--cleanup-images)
   if [[ -n "$container_cpuset" ]]; then
     simulate+=(--container-cpuset-cpus "$container_cpuset")
@@ -456,6 +483,8 @@ run_all() {
     SAGA_PROFILE="$saga_profile" \
     TRACE_TOOL_REPLAY="$trace_tool_replay" \
     STAGE_ALL_BEFORE_REPLAY="$stage_all_before_replay" \
+    REPLACEMENT_DELAY_MEAN_S="$replacement_delay_mean_s" \
+    REPLACEMENT_SEED="$replacement_seed" \
     CLEANUP_IMAGES="$cleanup_images" \
     RESOURCE_MONITORING="$resource_monitoring" \
     SERVING_METRICS="$serving_metrics" \
@@ -487,6 +516,17 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
     ),
     "shadow_llm_timeout_s": float(os.environ["SHADOW_LLM_TIMEOUT_S"]),
     "stage_all_before_replay": os.environ["STAGE_ALL_BEFORE_REPLAY"] == "1",
+    **(
+      {"replacement_load": {
+        "delay_distribution": "exponential",
+        "delay_mean_s": float(os.environ["REPLACEMENT_DELAY_MEAN_S"]),
+        "seed": int(os.environ["REPLACEMENT_SEED"]),
+        "measured_cycle": 0,
+        "replacement_source": "same trace in a fresh container",
+        "stop_condition": "all measured tasks terminal"
+      }}
+      if os.environ["REPLACEMENT_DELAY_MEAN_S"] else {}
+    ),
     "cleanup_images": os.environ["CLEANUP_IMAGES"] == "1",
     "resource_monitoring": os.environ["RESOURCE_MONITORING"],
     "serving_metrics": os.environ["SERVING_METRICS"] == "on",

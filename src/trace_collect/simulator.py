@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import dataclasses
 import functools
 import hashlib
@@ -8,6 +9,7 @@ import json
 import logging
 import multiprocessing
 import os
+import random
 import shutil
 import subprocess
 import time
@@ -179,7 +181,10 @@ def _load_tool_gap_predictions(
         source_commands = _source_exec_commands(session)
         cursor = 0
         for prediction in predictions:
-            while cursor < len(source_commands) and source_commands[cursor] != prediction.command:
+            while (
+                cursor < len(source_commands)
+                and source_commands[cursor] != prediction.command
+            ):
                 cursor += 1
             if cursor == len(source_commands):
                 raise ValueError(
@@ -2493,9 +2498,8 @@ async def _run_staged_cloud_model_queue(
                 if task_id not in foreground_ids:
                     raise SimulateError(f"invalid tool-gap lender: {task_id!r}")
                 decision_wall_time_s = record.get("decision_wall_time_s")
-                if (
-                    not isinstance(decision_wall_time_s, (int, float))
-                    or isinstance(decision_wall_time_s, bool)
+                if not isinstance(decision_wall_time_s, (int, float)) or isinstance(
+                    decision_wall_time_s, bool
                 ):
                     raise SimulateError("tool-gap loan has no valid decision time")
                 lender = str(task_id)
@@ -2712,15 +2716,16 @@ async def _run_staged_cloud_model_queue(
         *(worker() for _ in range(min(concurrency, len(prepared_sessions)))),
         return_exceptions=True,
     )
-    failures = [result for result in worker_results if isinstance(result, BaseException)]
+    failures = [
+        result for result in worker_results if isinstance(result, BaseException)
+    ]
     if failures:
         await _cleanup_staged_sessions(prepared_sessions, cleanup_state)
         raise SimulateError(
             f"{len(failures)}/{len(worker_results)} staged replay workers failed"
         ) from failures[0]
     ordered_stats = [
-        task_stats[prepared.loaded.run_instance_id]
-        for prepared in prepared_sessions
+        task_stats[prepared.loaded.run_instance_id] for prepared in prepared_sessions
     ]
     return prepared_sessions, ordered_stats, common_ready_wall_time_s
 
@@ -2745,6 +2750,9 @@ async def _run_cloud_model_queue(
     monitoring_policy: dict[str, object] | None = None,
     cleanup_state: _ImageCleanupState | None = None,
     container_start_extra_args: tuple[str, ...] = (),
+    replacement_delay_mean_s: float | None = None,
+    replacement_seed: int = 42,
+    replacement_summary: dict[str, Any] | None = None,
 ) -> tuple[list[PreparedTraceSession], list[ReplayTaskStats], float | None]:
     if concurrency < 1:
         raise ValueError("concurrency must be >= 1")
@@ -2755,11 +2763,34 @@ async def _run_cloud_model_queue(
     completed_session_count = 0
     children_by_dependency: dict[str, list[LoadedTraceSession]] = {}
     scheduled_arrivals = any(loaded.arrival_s > 0 for loaded in loaded_sessions)
-    record_arrival_metrics = (
-        scheduled_arrivals or not _has_session_dependencies(loaded_sessions)
+    record_arrival_metrics = scheduled_arrivals or not _has_session_dependencies(
+        loaded_sessions
     )
     arrival_zero_monotonic = time.monotonic()
     arrival_zero_wall_time_s = time.time()
+    replacement_enabled = replacement_delay_mean_s is not None
+    measurement_run_ids = {loaded.run_instance_id for loaded in loaded_sessions}
+    replacement_start_monotonic = arrival_zero_monotonic + max(
+        (loaded.arrival_s for loaded in loaded_sessions),
+        default=0.0,
+    )
+    replacement_cycles = {loaded.run_instance_id: 0 for loaded in loaded_sessions}
+    bases_by_manifest_index = {
+        loaded.manifest_index: loaded for loaded in loaded_sessions
+    }
+    replacement_rngs = {
+        loaded.manifest_index: random.Random(
+            replacement_seed + loaded.manifest_index * 1_000_003
+        )
+        for loaded in loaded_sessions
+    }
+    pending_replacements: set[asyncio.Task[None]] = set()
+    measurement_terminal = asyncio.Event()
+    measured_terminal = 0
+    measured_completed = 0
+    background_started = 0
+    background_completed = 0
+    background_cancelled = 0
     for loaded in loaded_sessions:
         for dependency in loaded.depends_on:
             children_by_dependency.setdefault(dependency, []).append(loaded)
@@ -2771,16 +2802,79 @@ async def _run_cloud_model_queue(
     task_stats: list[ReplayTaskStats] = []
     result_lock = asyncio.Lock()
     worker_count = min(concurrency, len(loaded_sessions))
+    active_by_worker: dict[int, LoadedTraceSession] = {}
     first_error: BaseException | None = None
+
+    def replacement_for(
+        loaded: LoadedTraceSession,
+        *,
+        terminal_monotonic: float,
+    ) -> tuple[LoadedTraceSession, float]:
+        assert replacement_delay_mean_s is not None
+        base = bases_by_manifest_index[loaded.manifest_index]
+        cycle = replacement_cycles[loaded.run_instance_id] + 1
+        run_instance_id = f"{base.run_instance_id}__replacement-{cycle:04d}"
+        delay_s = replacement_rngs[base.manifest_index].expovariate(
+            1.0 / replacement_delay_mean_s
+        )
+        ready_monotonic = (
+            max(
+                replacement_start_monotonic,
+                terminal_monotonic,
+            )
+            + delay_s
+        )
+        prompt_marker = f"Replay session: {run_instance_id}"
+        actions = copy.deepcopy(base.actions)
+        for action in actions:
+            if action.get("action_type") != "llm_call":
+                continue
+            data = action.get("data")
+            messages = data.get("messages_in") if isinstance(data, dict) else None
+            first = messages[0] if isinstance(messages, list) and messages else None
+            if (
+                not isinstance(first, dict)
+                or first.get("role") != "system"
+                or not isinstance(first.get("content"), str)
+            ):
+                raise ValueError(
+                    f"replacement LLM action lacks a system prompt: {run_instance_id}"
+                )
+            first["content"] = f"{prompt_marker}\n\n{first['content']}"
+        replacement = dataclasses.replace(
+            base,
+            run_instance_id=run_instance_id,
+            actions=actions,
+            arrival_s=max(0.0, ready_monotonic - arrival_zero_monotonic),
+        )
+        replacement_cycles[run_instance_id] = cycle
+        return replacement, ready_monotonic
+
+    def schedule_replacement(
+        loaded: LoadedTraceSession,
+        *,
+        terminal_monotonic: float,
+    ) -> None:
+        replacement, ready_monotonic = replacement_for(
+            loaded,
+            terminal_monotonic=terminal_monotonic,
+        )
+
+        async def release() -> None:
+            await _sleep_until_monotonic(ready_monotonic)
+            if not measurement_terminal.is_set() and first_error is None:
+                queue.put_nowait(replacement)
+
+        task = asyncio.create_task(release())
+        pending_replacements.add(task)
+        task.add_done_callback(pending_replacements.discard)
 
     async def release_scheduled_arrivals() -> None:
         for loaded in sorted(
             loaded_sessions,
             key=lambda item: (item.arrival_s, item.manifest_index),
         ):
-            await _sleep_until_monotonic(
-                arrival_zero_monotonic + loaded.arrival_s
-            )
+            await _sleep_until_monotonic(arrival_zero_monotonic + loaded.arrival_s)
             if first_error is not None:
                 return
             queue.put_nowait(loaded)
@@ -2798,20 +2892,29 @@ async def _run_cloud_model_queue(
                 released_session_ids.add(id(child))
 
     async def worker(worker_index: int) -> None:
+        nonlocal background_cancelled, background_completed, background_started
         nonlocal completed_session_count, first_error
+        nonlocal measured_completed, measured_terminal
         while True:
             loaded = await queue.get()
+            prepared: PreparedTraceSession | None = None
+            preparation_already_finalized = False
+            prepared_finalized = False
+            prepared_recorded = False
             try:
                 if loaded is None:
                     return
                 if first_error is not None:
                     continue
+                active_by_worker[worker_index] = loaded
+
+                cycle = replacement_cycles.get(loaded.run_instance_id, 0)
+                if cycle:
+                    background_started += 1
 
                 admitted_monotonic = time.monotonic()
-                prepared: PreparedTraceSession | None = None
                 stats: ReplayTaskStats | None = None
                 session_error: BaseException | None = None
-                preparation_already_finalized = False
                 try:
                     logger.info(
                         "Worker %d replaying %s (%d ready)",
@@ -2873,9 +2976,18 @@ async def _run_cloud_model_queue(
                     except Exception as exc:
                         session_error = exc
                 terminal_monotonic = time.monotonic()
+                if (
+                    replacement_enabled
+                    and stats is not None
+                    and loaded.run_instance_id in measurement_run_ids
+                ):
+                    measured_terminal += 1
+                    if measured_terminal == len(loaded_sessions):
+                        measurement_terminal.set()
                 try:
                     if prepared is not None and not preparation_already_finalized:
                         await _finalize_prepared_session(prepared)
+                        prepared_finalized = True
                 except Exception as exc:
                     if session_error is None:
                         session_error = exc
@@ -2883,6 +2995,7 @@ async def _run_cloud_model_queue(
                 async with result_lock:
                     if prepared is not None:
                         prepared_sessions.append(prepared)
+                        prepared_recorded = True
                         if stats is not None:
                             if record_arrival_metrics:
                                 planned_arrival = (
@@ -2899,20 +3012,60 @@ async def _run_cloud_model_queue(
                                         terminal_monotonic - planned_arrival,
                                     ),
                                 )
-                            task_stats.append(stats)
+                            if loaded.run_instance_id in measurement_run_ids:
+                                task_stats.append(stats)
                     if session_error is not None:
                         if first_error is None:
                             first_error = session_error
-                            stop_workers()
+                            if replacement_enabled:
+                                measurement_terminal.set()
+                            else:
+                                stop_workers()
+                        if replacement_enabled:
+                            return
                         continue
+                    if replacement_enabled and stats is not None and not stats.success:
+                        if first_error is None:
+                            first_error = RuntimeError(
+                                f"replacement load task failed: {loaded.run_instance_id}"
+                            )
+                            measurement_terminal.set()
+                        return
                     if first_error is not None:
                         continue
                     completed_task_ids.add(loaded.task_instance_id)
                     completed_session_count += 1
                     release_ready_children(loaded.task_instance_id)
-                    if completed_session_count == len(loaded_sessions):
+                    if replacement_enabled:
+                        if loaded.run_instance_id in measurement_run_ids:
+                            measured_completed += 1
+                        elif stats is not None:
+                            background_completed += 1
+                        if measurement_terminal.is_set():
+                            return
+                        else:
+                            schedule_replacement(
+                                loaded,
+                                terminal_monotonic=terminal_monotonic,
+                            )
+                    elif completed_session_count == len(loaded_sessions):
                         stop_workers()
+            except asyncio.CancelledError:
+                if prepared is not None and not (
+                    preparation_already_finalized or prepared_finalized
+                ):
+                    await _finalize_prepared_session(prepared)
+                    prepared_finalized = True
+                if loaded is not None and replacement_cycles.get(
+                    loaded.run_instance_id, 0
+                ):
+                    background_cancelled += 1
+                if prepared is not None and not prepared_recorded:
+                    async with result_lock:
+                        prepared_sessions.append(prepared)
+                raise
             finally:
+                active_by_worker.pop(worker_index, None)
                 # Release the source image after finalize (container stopped),
                 # so per-task unique images are removed as soon as no pending
                 # session references them.
@@ -2925,21 +3078,49 @@ async def _run_cloud_model_queue(
         if scheduled_arrivals
         else None
     )
-    worker_results = await asyncio.gather(
-        *(worker(index) for index in range(worker_count)),
-        return_exceptions=True,
-    )
+    worker_tasks = [asyncio.create_task(worker(index)) for index in range(worker_count)]
+    if replacement_enabled:
+        await measurement_terminal.wait()
+        for task in pending_replacements:
+            task.cancel()
+        await asyncio.gather(*pending_replacements, return_exceptions=True)
+        for index, task in enumerate(worker_tasks):
+            active = active_by_worker.get(index)
+            if active is None or active.run_instance_id not in measurement_run_ids:
+                task.cancel()
+    worker_results = await asyncio.gather(*worker_tasks, return_exceptions=True)
     if arrival_task is not None:
         if not arrival_task.done():
             arrival_task.cancel()
         await asyncio.gather(arrival_task, return_exceptions=True)
     for result in worker_results:
-        if isinstance(result, asyncio.CancelledError):
+        if isinstance(result, asyncio.CancelledError) and not replacement_enabled:
             raise result
         if isinstance(result, Exception) and first_error is None:
             first_error = result
     if first_error is not None:
         raise first_error
+    if replacement_summary is not None:
+        replacement_summary.update(
+            {
+                "enabled": replacement_enabled,
+                "delay_distribution": "exponential",
+                "delay_mean_s": replacement_delay_mean_s,
+                "seed": replacement_seed,
+                "measured_cycle": 0,
+                "measured_task_count": len(loaded_sessions),
+                "measured_terminal": measured_terminal,
+                "measured_completed": measured_completed,
+                "background_started": background_started,
+                "background_completed": background_completed,
+                "background_cancelled": background_cancelled,
+                "replacement_start_s": max(
+                    (loaded.arrival_s for loaded in loaded_sessions),
+                    default=0.0,
+                ),
+                "prompt_session_marker": True,
+            }
+        )
     return (
         prepared_sessions,
         task_stats,
@@ -3540,10 +3721,10 @@ async def _replay_cloud_model_action(
                 mapped_artifact_path,
                 mapped_exists,
             ) = _remap_runtime_artifact_tool_args(
-                    tool_name=tool_name,
-                    tool_args_json=tool_args,
-                    runtime_root_map=prepared_session.runtime_artifact_root_map,
-                )
+                tool_name=tool_name,
+                tool_args_json=tool_args,
+                runtime_root_map=prepared_session.runtime_artifact_root_map,
+            )
             if original_artifact_path is None and isinstance(tool_args, str):
                 from trace_collect.openclaw_tools import (
                     source_runtime_artifact_path_from_tool_call,
@@ -3949,6 +4130,8 @@ async def simulate(
     cleanup_images: bool = False,
     container_start_extra_args: tuple[str, ...] = (),
     stage_all_before_replay: bool = False,
+    replacement_delay_mean_s: float | None = None,
+    replacement_seed: int = 42,
 ) -> Path:
     if mode != "cloud_model":
         raise ValueError(f"Unsupported simulate mode: {mode}")
@@ -3960,8 +4143,12 @@ async def simulate(
         raise ValueError("stage_all_before_replay requires workers=1")
     if prep_concurrency < 0:
         raise ValueError("prep_concurrency must be >= 0")
+    if replacement_delay_mean_s is not None and replacement_delay_mean_s <= 0:
+        raise ValueError("replacement_delay_mean_s must be positive")
     if (shadow_llm_api_base is None) != (shadow_llm_model is None):
-        raise ValueError("shadow_llm_api_base and shadow_llm_model must be supplied together")
+        raise ValueError(
+            "shadow_llm_api_base and shadow_llm_model must be supplied together"
+        )
     if shadow_llm_max_concurrency is not None:
         if (
             isinstance(shadow_llm_max_concurrency, bool)
@@ -3988,9 +4175,7 @@ async def simulate(
             raise ValueError("SAGA mode requires a frozen causal profile")
         from scripts.baselines.saga_reproduction import SagaProfile
 
-        SagaProfile.load(shadow_llm_saga_profile).validate_evaluation_manifest(
-            manifest
-        )
+        SagaProfile.load(shadow_llm_saga_profile).validate_evaluation_manifest(manifest)
     elif shadow_llm_saga_profile is not None:
         raise ValueError("SAGA profile requires SAGA mode")
     if tool_gap_loan_arm not in {None, "fixed", "feedback", "predictor"}:
@@ -4060,9 +4245,7 @@ async def simulate(
     )
     if any(entry.requires_trace_tool_replay for entry in manifest_entries):
         if not replay_trace_tools_enabled():
-            raise ValueError(
-                "simulate manifest requires OPENCLAW_REPLAY_TRACE_TOOLS=1"
-            )
+            raise ValueError("simulate manifest requires OPENCLAW_REPLAY_TRACE_TOOLS=1")
 
     loaded_sessions = [
         _load_trace_session(
@@ -4095,7 +4278,9 @@ async def simulate(
                 "tool-gap loan requires workers=1 and stage_all_before_replay"
             )
         if concurrency != 4 or len(loaded_sessions) != 8:
-            raise ValueError("tool-gap loan requires concurrency=4 and exactly 8 traces")
+            raise ValueError(
+                "tool-gap loan requires concurrency=4 and exactly 8 traces"
+            )
         if shadow_generation is None:
             raise ValueError("tool-gap loan requires shadow generation")
         if shadow_llm_max_concurrency is not None:
@@ -4115,9 +4300,7 @@ async def simulate(
         llm_timing=llm_timing,
     )
     has_dependencies = _has_session_dependencies(loaded_sessions)
-    has_scheduled_arrivals = any(
-        session.arrival_s > 0 for session in loaded_sessions
-    )
+    has_scheduled_arrivals = any(session.arrival_s > 0 for session in loaded_sessions)
     if has_scheduled_arrivals and stage_all_before_replay:
         raise ValueError("scheduled arrivals do not support stage_all_before_replay")
     if has_scheduled_arrivals and workers != 1:
@@ -4125,9 +4308,16 @@ async def simulate(
     if has_scheduled_arrivals and has_dependencies:
         raise ValueError("scheduled arrivals do not support task dependencies")
     if stage_all_before_replay and has_dependencies:
-        raise ValueError(
-            "stage_all_before_replay does not support task dependencies"
-        )
+        raise ValueError("stage_all_before_replay does not support task dependencies")
+    if replacement_delay_mean_s is not None:
+        if workers != 1 or stage_all_before_replay or has_dependencies:
+            raise ValueError(
+                "task replacement requires workers=1, direct replay, and no dependencies"
+            )
+        if cleanup_images:
+            raise ValueError("task replacement requires cached source images")
+        if non_openclaw_sessions:
+            raise ValueError("task replacement requires OpenClaw traces")
     if shadow_generation is not None and non_openclaw_sessions:
         raise ValueError(
             "shadow generation requires OpenClaw for every selected trace; "
@@ -4218,6 +4408,9 @@ async def simulate(
     run_wall_end: float | None = None
     common_ready_wall_time_s: float | None = None
     arrival_zero_wall_time_s: float | None = None
+    replacement_summary: dict[str, Any] | None = (
+        {} if replacement_delay_mean_s is not None else None
+    )
     output_path.mkdir(parents=True, exist_ok=True)
     if shadow_generation is not None and shadow_llm_max_concurrency is not None:
         slot_dir = output_path / ".shadow-llm-admission"
@@ -4244,7 +4437,11 @@ async def simulate(
     elif has_dependencies:
         scheduler_mode = "dependency_queue"
     elif has_scheduled_arrivals:
-        scheduler_mode = "scheduled_arrival_queue"
+        scheduler_mode = (
+            "scheduled_arrival_replacement_queue"
+            if replacement_delay_mean_s is not None
+            else "scheduled_arrival_queue"
+        )
     else:
         scheduler_mode = "bounded_queue" if workers == 1 else "multi_process_workers"
 
@@ -4305,6 +4502,18 @@ async def simulate(
                     "workers": workers,
                     "prep_concurrency": prep_concurrency,
                     "stage_all_before_replay": stage_all_before_replay,
+                    **(
+                        {
+                            "replacement_load": {
+                                "delay_distribution": "exponential",
+                                "delay_mean_s": replacement_delay_mean_s,
+                                "seed": replacement_seed,
+                                "measured_cycle": 0,
+                            }
+                        }
+                        if replacement_delay_mean_s is not None
+                        else {}
+                    ),
                     "monitoring": monitoring_policy_dict,
                     "container_start_extra_args": list(container_start_extra_args),
                     "exec_timeout_floor_s": exec_timeout_floor_s,
@@ -4323,10 +4532,12 @@ async def simulate(
                                 "arm": tool_gap_loan_arm,
                                 "state_dir": str(output_path / ".tool-gap-loan"),
                                 "foreground_task_ids": [
-                                    item.task_instance_id for item in loaded_sessions[:4]
+                                    item.task_instance_id
+                                    for item in loaded_sessions[:4]
                                 ],
                                 "waiting_task_ids": [
-                                    item.task_instance_id for item in loaded_sessions[4:]
+                                    item.task_instance_id
+                                    for item in loaded_sessions[4:]
                                 ],
                                 "prediction_file": (
                                     str(tool_gap_predictions)
@@ -4408,6 +4619,9 @@ async def simulate(
                 ) = await _run_cloud_model_queue(
                     loaded_sessions,
                     cleanup_state=cleanup_state,
+                    replacement_delay_mean_s=replacement_delay_mean_s,
+                    replacement_seed=replacement_seed,
+                    replacement_summary=replacement_summary,
                     **queue_kwargs,
                 )
         else:
@@ -4556,6 +4770,7 @@ async def simulate(
         arrival_zero_wall_time_s=arrival_zero_wall_time_s,
         common_ready_wall_time_s=common_ready_wall_time_s,
         tool_gap_loan=tool_gap_summary,
+        replacement_load=replacement_summary,
     )
     if cleanup_state is not None:
         logger.info(

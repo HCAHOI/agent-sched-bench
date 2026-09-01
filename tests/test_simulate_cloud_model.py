@@ -1143,6 +1143,136 @@ def test_cloud_model_queue_releases_sessions_at_manifest_arrivals(
     assert arrival_zero_wall_time_s is not None
 
 
+def test_cloud_model_queue_replaces_completed_tasks_until_measured_cycle_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def loaded(
+        task_id: str, manifest_index: int, arrival_s: float
+    ) -> LoadedTraceSession:
+        return LoadedTraceSession(
+            source_trace=tmp_path / f"{task_id}.jsonl",
+            task_source=tmp_path / "tasks.json",
+            task_instance_id=task_id,
+            source_action_agent_id=task_id,
+            run_instance_id=task_id,
+            manifest_index=manifest_index,
+            scaffold="openclaw",
+            metadata={"execution_environment": "host"},
+            summary=None,
+            task={"instance_id": task_id, "problem_statement": f"issue {task_id}"},
+            actions=[
+                {
+                    "type": "action",
+                    "action_type": "llm_call",
+                    "data": {
+                        "messages_in": [{"role": "system", "content": "instructions"}]
+                    },
+                }
+            ],
+            iterations={},
+            arrival_s=arrival_s,
+        )
+
+    sessions = [loaded("short", 0, 0.0), loaded("tail", 1, 0.02)]
+    prepared_ids: list[str] = []
+    finalized_ids: list[str] = []
+    replacement_started_at: list[float] = []
+    replacement_cancelled_at: list[float] = []
+    tail_finalized_at: list[float] = []
+
+    async def fake_prepare(
+        loaded_session: LoadedTraceSession,
+        **_kwargs,
+    ) -> PreparedTraceSession:
+        prepared_ids.append(loaded_session.run_instance_id)
+        return PreparedTraceSession(loaded=loaded_session, container=None)
+
+    async def fake_replay(
+        prepared: PreparedTraceSession,
+        **_kwargs,
+    ) -> ReplayTaskStats:
+        loaded_session = prepared.loaded
+        if "__replacement-" in loaded_session.run_instance_id:
+            replacement_started_at.append(time.monotonic())
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                replacement_cancelled_at.append(time.monotonic())
+                raise
+        elif loaded_session.task_instance_id == "tail":
+            await asyncio.sleep(0.04)
+        return ReplayTaskStats(
+            agent_id=loaded_session.agent_id,
+            run_instance_id=loaded_session.run_instance_id,
+            source_agent_id=loaded_session.source_action_agent_id,
+            manifest_index=loaded_session.manifest_index,
+            label=loaded_session.label,
+            source_trace=str(loaded_session.source_trace),
+            success=True,
+            elapsed_s=0.0,
+            action_count=0,
+            llm_call_count=0,
+            tool_exec_count=0,
+            arrival_s=loaded_session.arrival_s,
+        )
+
+    async def fake_finalize(prepared: PreparedTraceSession) -> None:
+        if prepared.loaded.run_instance_id == "tail":
+            await asyncio.sleep(0.02)
+            tail_finalized_at.append(time.monotonic())
+        finalized_ids.append(prepared.loaded.run_instance_id)
+
+    monkeypatch.setattr("trace_collect.simulator._prepare_replay_session", fake_prepare)
+    monkeypatch.setattr(
+        "trace_collect.simulator._replay_cloud_model_session", fake_replay
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator._finalize_prepared_session", fake_finalize
+    )
+
+    replacement_summary: dict[str, object] = {}
+    started_at = time.monotonic()
+    prepared, stats, arrival_zero_wall_time_s = asyncio.run(
+        _run_cloud_model_queue(
+            sessions,
+            output_path=tmp_path / "out",
+            trace_logger=object(),
+            concurrency=2,
+            container_executable=None,
+            network_mode="host",
+            container_resource_recorder=None,
+            replay_speed=1.0,
+            llm_timing=LLMTimingConfig(),
+            command_timeout_s=1.0,
+            warmup_skip_iterations=0,
+            replacement_delay_mean_s=0.0001,
+            replacement_seed=42,
+            replacement_summary=replacement_summary,
+        )
+    )
+
+    assert arrival_zero_wall_time_s is not None
+    assert {stat.run_instance_id for stat in stats} == {"short", "tail"}
+    assert replacement_started_at[0] - started_at >= 0.015
+    replacement = next(
+        item.loaded
+        for item in prepared
+        if "__replacement-" in item.loaded.run_instance_id
+    )
+    assert replacement.actions[0]["data"]["messages_in"][0]["content"] == (
+        f"Replay session: {replacement.run_instance_id}\n\ninstructions"
+    )
+    assert replacement_cancelled_at[0] < tail_finalized_at[0]
+    assert replacement.run_instance_id in prepared_ids
+    assert replacement.run_instance_id in finalized_ids
+    assert replacement_summary["measured_completed"] == 2
+    assert replacement_summary["measured_terminal"] == 2
+    assert replacement_summary["background_started"] == 1
+    assert replacement_summary["background_completed"] == 0
+    assert replacement_summary["background_cancelled"] == 1
+
+
 def test_cloud_model_queue_continues_after_container_prep_runtime_error(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -4638,6 +4768,7 @@ def test_cloud_model_bounded_queue_records_arrival_metrics(
     summary = json.loads((tmp_path / "out" / "throughput_summary.json").read_text())
     task = summary["tasks"][0]
     assert summary["scheduler_mode"] == "bounded_queue"
+    assert "replacement_load" not in summary
     assert summary["arrival_zero_wall_time_s"] > 0
     assert task["admission_wait_s"] is not None
     assert task["ready_to_terminal_s"] >= task["admission_wait_s"]
@@ -4693,6 +4824,7 @@ def test_cloud_model_manifest_replays_multiple_sessions(
     assert metadata["manifest"] == str(manifest)
     assert metadata["concurrency"] == 2
     assert metadata["scheduler_mode"] == "bounded_queue"
+    assert "replacement_load" not in metadata
     assert metadata["source_trace_count"] == 2
     assert set(metadata["source_traces"]) == {str(trace_a), str(trace_b)}
     assert {record["agent_id"] for record in summaries} == {"task-a", "task-b"}
