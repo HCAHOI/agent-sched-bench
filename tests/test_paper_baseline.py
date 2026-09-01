@@ -293,23 +293,26 @@ def test_paper_baseline_runner_has_required_policy_checks() -> None:
     assert "--kv-events-config" in runner_text
     assert "--replay-endpoint tcp://127.0.0.1:5558" in runner_text
     assert "collect_vllm_kv_events.py" in runner_text
-    assert "collect_dcgm_metrics.py" in runner_text
-    assert "DCGM collector stopped early" in runner_text
-    assert "1005([[:space:]]|$).*dram_active" in runner_text
-    assert '--dcgm-csv "$cell/dcgm.csv"' in runner_text
+    assert "scripts.evaluation.cupti_dram_worker.CuptiDramWorker" in runner_text
+    assert "CUPTI_DRAM_CSV" in runner_text
+    assert "--ambient-caps=\"+$perfmon_cap\"" in runner_text
+    assert '--dram-bandwidth-csv "$cell/dram-bandwidth.csv"' in runner_text
+    assert "collect_dcgm_metrics.py" not in runner_text
     assert "summarize_serving_metrics.py" in runner_text
     assert 'if os.environ["SERVING_METRICS"] == "on"' in runner_text
 
 
-def test_gpu_setup_installs_and_verifies_dcgm() -> None:
+def test_gpu_setup_installs_cupti_without_dcgm() -> None:
     setup = (
         Path(__file__).parents[1] / "scripts/setup/benchmark_server.sh"
     ).read_text()
 
-    assert 'DCGM_PACKAGE="datacenter-gpu-manager-4-cuda${CUDA_MAJOR}"' in setup
-    assert '--no-install-recommends "$DCGM_PACKAGE"' in setup
-    assert "systemctl --now enable nvidia-dcgm" in setup
-    assert "1005([[:space:]]|$).*dram_active" in setup
+    assert "systemctl disable --now nvidia-dcgm" in setup
+    assert "cupti-python==13.3.1" in setup
+    assert "nvidia-cuda-cupti==13.3.75" in setup
+    assert "cuda-bindings==13.3.1" in setup
+    assert 'uv pip install --target "$CUPTI_DRAM_OVERLAY" --no-deps' in setup
+    assert "systemctl --now enable nvidia-dcgm" not in setup
 
 
 def test_cachewise_disabled_keeps_fork_config_without_policy_flags() -> None:

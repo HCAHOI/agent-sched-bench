@@ -435,72 +435,119 @@ def _gpu_summary(
     }
 
 
-def _dcgm_summary(
+def _dram_bandwidth_summary(
     path: Path, window_start_s: float, window_end_s: float
 ) -> dict[str, Any]:
     expected_header = [
-        "timestamp_us",
+        "start_timestamp_ns",
+        "end_timestamp_ns",
         "gpu_id",
-        "field_id",
-        "status",
-        "dram_active_ratio",
+        "read_bytes_per_s",
+        "write_bytes_per_s",
     ]
-    rows: list[tuple[float, float]] = []
-    previous_timestamp: float | None = None
+    rows: list[tuple[int, int, float, float]] = []
+    previous_end_ns: int | None = None
     try:
         handle = path.open(newline="")
     except OSError as exc:
-        raise ValueError(f"cannot read DCGM telemetry {path}: {exc}") from exc
+        raise ValueError(f"cannot read DRAM bandwidth telemetry {path}: {exc}") from exc
     with handle:
         reader = csv.reader(handle)
         try:
             header = next(reader)
         except StopIteration as exc:
-            raise ValueError("DCGM telemetry is empty") from exc
+            raise ValueError("DRAM bandwidth telemetry is empty") from exc
         if header != expected_header:
-            raise ValueError("DCGM telemetry header is invalid")
+            raise ValueError("DRAM bandwidth telemetry header is invalid")
         for line_number, row in enumerate(reader, 2):
             if len(row) != len(expected_header):
-                raise ValueError(f"DCGM telemetry row {line_number} is incomplete")
+                raise ValueError(
+                    f"DRAM bandwidth telemetry row {line_number} is incomplete"
+                )
             try:
-                timestamp_us = int(row[0])
-                gpu_id = int(row[1])
-                field_id = int(row[2])
-                ratio = float(row[4])
+                start_ns = int(row[0])
+                end_ns = int(row[1])
+                gpu_id = int(row[2])
+                read_bytes_per_s = float(row[3])
+                write_bytes_per_s = float(row[4])
             except ValueError as exc:
                 raise ValueError(
-                    f"DCGM telemetry row {line_number} has an invalid value"
+                    f"DRAM bandwidth telemetry row {line_number} has an invalid value"
                 ) from exc
-            if timestamp_us < 0 or gpu_id != 0 or field_id != 1005 or row[3] != "OK":
-                raise ValueError(f"DCGM telemetry row {line_number} is invalid")
-            if not math.isfinite(ratio) or not 0 <= ratio <= 1:
-                raise ValueError(f"DCGM DRAM ratio is invalid at row {line_number}")
-            timestamp = timestamp_us / 1_000_000.0
-            if previous_timestamp is not None and timestamp <= previous_timestamp:
-                raise ValueError("DCGM timestamps are not strictly increasing")
-            previous_timestamp = timestamp
-            if window_start_s <= timestamp <= window_end_s:
-                rows.append((timestamp, ratio))
+            if start_ns < 0 or end_ns <= start_ns or gpu_id != 0:
+                raise ValueError(
+                    f"DRAM bandwidth telemetry row {line_number} is invalid"
+                )
+            if previous_end_ns is not None and start_ns < previous_end_ns:
+                raise ValueError(
+                    "DRAM bandwidth timestamps are not increasing and non-overlapping"
+                )
+            if not all(
+                math.isfinite(value) and value >= 0
+                for value in (read_bytes_per_s, write_bytes_per_s)
+            ):
+                raise ValueError(f"DRAM bandwidth rate is invalid at row {line_number}")
+            previous_end_ns = end_ns
+            if (
+                end_ns > window_start_s * 1_000_000_000
+                and start_ns < window_end_s * 1_000_000_000
+            ):
+                rows.append((start_ns, end_ns, read_bytes_per_s, write_bytes_per_s))
     if not rows:
-        raise ValueError("DCGM telemetry has no samples in the scheduled run window")
-    gaps = [rows[0][0] - window_start_s, window_end_s - rows[-1][0]]
-    gaps.extend(right[0] - left[0] for left, right in zip(rows, rows[1:]))
-    max_gap_s = max(gaps)
-    if max_gap_s > 3.0:
-        raise ValueError(f"DCGM telemetry gap exceeds 3 seconds: {max_gap_s:.6f}")
-    ratios = [row[1] for row in rows]
+        raise ValueError(
+            "DRAM bandwidth telemetry has no samples in the scheduled run window"
+        )
+    window_start_ns = window_start_s * 1_000_000_000
+    window_end_ns = window_end_s * 1_000_000_000
+    clipped = [
+        (max(start, window_start_ns), min(end, window_end_ns), read, write)
+        for start, end, read, write in rows
+    ]
+    gaps_ns = [
+        clipped[0][0] - window_start_ns,
+        window_end_ns - clipped[-1][1],
+    ]
+    gaps_ns.extend(right[0] - left[1] for left, right in zip(clipped, clipped[1:]))
+    max_gap_s = max(gaps_ns) / 1_000_000_000
+    if max_gap_s > 0.001:
+        raise ValueError(
+            f"DRAM bandwidth telemetry has a missing interval: {max_gap_s:.6f} seconds"
+        )
+    read_rates = [row[2] for row in clipped]
+    write_rates = [row[3] for row in clipped]
+    total_rates = [read + write for read, write in zip(read_rates, write_rates)]
+
+    def stats(values: list[float]) -> dict[str, float]:
+        gb_per_s = [value / 1_000_000_000 for value in values]
+        return {
+            "mean_gb_per_s": sum(gb_per_s) / len(gb_per_s),
+            "p50_gb_per_s": _percentile(gb_per_s, 0.50),
+            "p95_gb_per_s": _percentile(gb_per_s, 0.95),
+            "max_gb_per_s": max(gb_per_s),
+        }
+
+    read_bytes = sum(
+        read * (end - start) / 1_000_000_000 for start, end, read, _ in clipped
+    )
+    write_bytes = sum(
+        write * (end - start) / 1_000_000_000 for start, end, _, write in clipped
+    )
     return {
-        "field_id": 1005,
-        "field_name": "DCGM_FI_PROF_DRAM_UTIL_RATIO",
         "sample_count": len(rows),
         "max_sample_gap_s": max_gap_s,
-        "mean_ratio": sum(ratios) / len(ratios),
-        "p50_ratio": _percentile(ratios, 0.50),
-        "p95_ratio": _percentile(ratios, 0.95),
-        "max_ratio": max(ratios),
+        "read": stats(read_rates),
+        "write": stats(write_rates),
+        "total": stats(total_rates),
+        "integrated_bytes": {
+            "read": read_bytes,
+            "write": write_bytes,
+            "total": read_bytes + write_bytes,
+        },
+        "scope": "CUDA context",
         "definition": (
-            "fraction of cycles during which data was sent to or received from "
-            "device memory, averaged over each DCGM sampling interval"
+            "CUPTI PM Sampling dram__bytes_read.sum.per_second and "
+            "dram__bytes_write.sum.per_second for the CUDA context attached to "
+            "the collector; values do not include other CUDA contexts"
         ),
     }
 
@@ -557,7 +604,7 @@ def summarize(
     *,
     throughput_summary_path: Path,
     gpu_csv_path: Path,
-    dcgm_csv_path: Path,
+    dram_bandwidth_csv_path: Path,
     prometheus_start_path: Path,
     prometheus_final_path: Path,
     kv_events_summary_path: Path,
@@ -613,7 +660,9 @@ def summarize(
 
     window_end = window_start + makespan_s
     gpu = _gpu_summary(gpu_csv_path, window_start, window_end)
-    gpu["dcgm_dram_active"] = _dcgm_summary(dcgm_csv_path, window_start, window_end)
+    gpu["dram_bandwidth"] = _dram_bandwidth_summary(
+        dram_bandwidth_csv_path, window_start, window_end
+    )
     kv_events = _kv_summary(kv_events_summary_path)
     all_ttft = [request["ttft_s"] for request in requests]
     first_ttft = [request["ttft_s"] for request in requests if request["first_request"]]
@@ -626,7 +675,7 @@ def summarize(
     prefix_hits = counters["prefix_cache_hits"]
     assert prefix_queries is not None and prefix_hits is not None
     summary = {
-        "schema_version": 2,
+        "schema_version": 3,
         "window": {
             "start_wall_time_s": window_start,
             "start_source": window_source,
@@ -693,7 +742,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--throughput-summary", type=Path, required=True)
     parser.add_argument("--gpu-csv", type=Path, required=True)
-    parser.add_argument("--dcgm-csv", type=Path, required=True)
+    parser.add_argument("--dram-bandwidth-csv", type=Path, required=True)
     parser.add_argument("--prometheus-start", type=Path, required=True)
     parser.add_argument("--prometheus-final", type=Path, required=True)
     parser.add_argument("--kv-events-summary", type=Path, required=True)
@@ -707,7 +756,7 @@ def main() -> None:
     summarize(
         throughput_summary_path=args.throughput_summary,
         gpu_csv_path=args.gpu_csv,
-        dcgm_csv_path=args.dcgm_csv,
+        dram_bandwidth_csv_path=args.dram_bandwidth_csv,
         prometheus_start_path=args.prometheus_start,
         prometheus_final_path=args.prometheus_final,
         kv_events_summary_path=args.kv_events_summary,

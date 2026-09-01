@@ -110,6 +110,15 @@ validate_serve_args() {
         validated_observability_args+=("$1")
         shift
         ;;
+      --worker-cls)
+        test "$#" -ge 2 || { echo "--worker-cls requires a value" >&2; return 2; }
+        [[ " ${validated_observability_args[*]} " != *" --worker-cls "* ]] || {
+          echo "duplicate --worker-cls" >&2
+          return 2
+        }
+        validated_observability_args+=("$1" "$2")
+        shift 2
+        ;;
       --kv-events-config)
         test "$#" -ge 2 || { echo "--kv-events-config requires a value" >&2; return 2; }
         [[ " ${validated_observability_args[*]} " != *" --kv-events-config "* ]] || {

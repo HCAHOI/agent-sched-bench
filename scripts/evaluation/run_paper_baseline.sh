@@ -27,7 +27,9 @@ cachewise_oracle_prefill_ms_per_token=${CACHEWISE_ORACLE_PREFILL_MS_PER_TOKEN:-}
 cachewise_oracle_decode_ms_per_token=${CACHEWISE_ORACLE_DECODE_MS_PER_TOKEN:-}
 cachewise_checkout=${CACHEWISE_CHECKOUT:-$HOME/.cache/agent-sched-bench/cachewise-181c435a090d328d00bbbee4c8eeb27d32f3abd2}
 cachewise_models=${CACHEWISE_MODELS_DIR:-$cachewise_checkout/tool_duration_prediction/models}
-dcgm_bindings=/usr/share/datacenter-gpu-manager-4/bindings/python3
+cupti_overlay=${CUPTI_DRAM_OVERLAY:-${XDG_CACHE_HOME:-$HOME/.cache}/agent-sched-bench/cupti-dram-13.3.1}
+cupti_lib=$cupti_overlay/nvidia/cu13/lib
+perfmon_cap=
 saga_profile=${SAGA_PROFILE:-}
 if [[ -z "$container_cpuset" && -z "$container_cpus" ]]; then
   container_cpus=2
@@ -64,14 +66,19 @@ preflight() {
   command -v nvidia-smi >/dev/null || fail "nvidia-smi is required"
   if [[ "$serving_metrics" == on ]]; then
     "$python" -c 'import msgspec, zmq' || fail "serving metrics require msgspec and pyzmq"
-    command -v dcgmi >/dev/null || fail "serving metrics require DCGM"
-    [[ -d "$dcgm_bindings" ]] || fail "DCGM Python bindings are missing"
-    PYTHONPATH="$dcgm_bindings" "$python" -c \
-      'import dcgm_agent, dcgm_fields, dcgm_structs, pydcgm' || \
-      fail "DCGM Python bindings cannot be imported"
-    dcgmi profile -l -i 0 | grep -Eq \
-      '(^|[[:space:]])1005([[:space:]]|$).*dram_active' || \
-      fail "GPU does not expose DCGM field 1005 dram_active"
+    [[ -f "$cupti_lib/libcupti.so.13" && -f "$cupti_lib/libnvperf_host.so" \
+       && -d "$cupti_overlay/cuda-bindings/cuda/bindings" ]] || \
+      fail "CUPTI DRAM support is missing; rerun benchmark_server.sh --gpu"
+    PYTHONPATH="$cupti_overlay" LD_LIBRARY_PATH="$cupti_lib" "$python" -c \
+      'from cupti.pm_sampling import Collector' || \
+      fail "CUPTI Python PM sampling cannot be imported"
+    command -v setpriv >/dev/null || fail "serving metrics require setpriv"
+    perfmon_cap=$(setpriv --list-caps | awk '$0 == "perfmon" || $0 == "cap_38" { print; exit }')
+    [[ -n "$perfmon_cap" ]] || fail "setpriv cannot name CAP_PERFMON"
+    sudo -n true || fail "serving metrics require passwordless sudo for CAP_PERFMON"
+    if command -v systemctl >/dev/null && systemctl is-active --quiet nvidia-dcgm; then
+      fail "nvidia-dcgm must be stopped before CUPTI DRAM sampling"
+    fi
     timeout 1 bash -c '</dev/tcp/127.0.0.1/5557' >/dev/null 2>&1 && \
       fail "port 5557 is busy"
     timeout 1 bash -c '</dev/tcp/127.0.0.1/5558' >/dev/null 2>&1 && \
@@ -154,7 +161,7 @@ wait_http() {
 run_cell() (
   set -euo pipefail
   local name=$1 method=${1%-r[0-9]*} cell="$run_root/$1"
-  local vpid= proxy_pid= monitor_pid= kv_metrics_pid= dcgm_pid= rc=0
+  local vpid= proxy_pid= monitor_pid= kv_metrics_pid= rc=0
   mkdir "$cell"
   cleanup() {
     local status=$?
@@ -162,7 +169,6 @@ run_cell() (
     (( rc != 0 )) || rc=$status
     [[ -z "$proxy_pid" ]] || stop_group "$proxy_pid"
     [[ -z "$kv_metrics_pid" ]] || { kill -TERM "$kv_metrics_pid" 2>/dev/null; wait "$kv_metrics_pid" 2>/dev/null; }
-    [[ -z "$dcgm_pid" ]] || { kill -TERM "$dcgm_pid" 2>/dev/null; wait "$dcgm_pid" 2>/dev/null; }
     stop_group "$vpid"
     [[ -z "$monitor_pid" ]] || { kill "$monitor_pid" 2>/dev/null; wait "$monitor_pid" 2>/dev/null; }
     date -u +%FT%TZ >"$cell/end-utc.txt"
@@ -183,20 +189,6 @@ run_cell() (
   ) >"$cell/gpu.csv" 2>"$cell/gpu.err" &
   monitor_pid=$!
 
-  if [[ "$serving_metrics" == on ]]; then
-    PYTHONPATH="$dcgm_bindings" "$python" \
-      "$repo/scripts/evaluation/collect_dcgm_metrics.py" \
-      --output-csv "$cell/dcgm.csv" \
-      --ready-file "$cell/dcgm-ready" >"$cell/dcgm.log" 2>"$cell/dcgm.err" &
-    dcgm_pid=$!
-    for _ in $(seq 1 200); do
-      [[ -f "$cell/dcgm-ready" ]] && break
-      kill -0 "$dcgm_pid" 2>/dev/null || fail "DCGM collector stopped during startup"
-      sleep 0.1
-    done
-    [[ -f "$cell/dcgm-ready" ]] || fail "DCGM collector did not become ready"
-  fi
-
   local common_args=(
     --host 127.0.0.1 --port 8000 --tensor-parallel-size 1
     --gpu-memory-utilization "$gpu_memory_utilization" --max-model-len 131072
@@ -206,6 +198,7 @@ run_cell() (
   local observability_args=()
   if [[ "$serving_metrics" == on ]]; then
     observability_args=(
+      --worker-cls scripts.evaluation.cupti_dram_worker.CuptiDramWorker
       --enable-prompt-tokens-details
       --kv-events-config
       '{"enable_kv_cache_events":true,"publisher":"zmq","endpoint":"tcp://*:5557","replay_endpoint":"tcp://*:5558","buffer_steps":1000000,"hwm":1000000,"max_queue_size":1000000}'
@@ -214,6 +207,20 @@ run_cell() (
   fi
   local server=("$vllm" serve "$model" "${common_args[@]}" --scheduling-policy priority)
   local server_env=(VLLM_NO_USAGE_STATS=1 CUDA_VISIBLE_DEVICES=0)
+  if [[ "$serving_metrics" == on ]]; then
+    local cupti_pythonpath=$cupti_overlay
+    if [[ "$method" == continuum-public || "$method" == continuum-reproduction ]]; then
+      cupti_pythonpath="$cupti_overlay/cuda-bindings:$cupti_pythonpath"
+    fi
+    server_env+=(
+      CUPTI_DRAM_CSV="$cell/dram-bandwidth.csv"
+      CUPTI_DRAM_READY="$cell/dram-bandwidth-ready"
+      CUPTI_DRAM_ERROR="$cell/dram-bandwidth.err"
+      PYTHONPATH="$cupti_pythonpath:$repo${PYTHONPATH:+:$PYTHONPATH}"
+      LD_LIBRARY_PATH="$cupti_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+      LD_PRELOAD="$cupti_lib/libcupti.so.13${LD_PRELOAD:+:$LD_PRELOAD}"
+    )
+  fi
   case "$method" in
     agentix)
       server=("$repo/scripts/baselines/agentix_reproduction.sh" serve-backend "$model" "${common_args[@]}")
@@ -253,13 +260,24 @@ run_cell() (
       ;;
   esac
   local vllm_launch=(setsid)
+  if [[ "$serving_metrics" == on ]]; then
+    vllm_launch+=(
+      sudo -n setpriv --reuid="$(id -un)" --regid="$(id -gn)" --init-groups
+      --inh-caps="+$perfmon_cap" --ambient-caps="+$perfmon_cap"
+      env HOME="$HOME" PATH="$PATH" "${server_env[@]}"
+    )
+  else
+    vllm_launch+=(env "${server_env[@]}")
+  fi
   [[ -z "$vllm_cpuset" ]] || vllm_launch+=(taskset -c "$vllm_cpuset")
-  printf '%q ' env "${server_env[@]}" "${vllm_launch[@]}" "${server[@]}" >"$cell/vllm.argv"
+  printf '%q ' "${vllm_launch[@]}" "${server[@]}" >"$cell/vllm.argv"
   printf '\n' >>"$cell/vllm.argv"
-  env "${server_env[@]}" "${vllm_launch[@]}" "${server[@]}" >"$cell/vllm.log" 2>&1 &
+  "${vllm_launch[@]}" "${server[@]}" >"$cell/vllm.log" 2>&1 &
   vpid=$!
   wait_http http://127.0.0.1:8000/v1/models "$vpid" "$cell/vllm.log"
   if [[ "$serving_metrics" == on ]]; then
+    [[ -f "$cell/dram-bandwidth-ready" ]] || fail "CUPTI DRAM sampler did not become ready"
+    [[ ! -s "$cell/dram-bandwidth.err" ]] || fail "CUPTI DRAM sampler reported an error"
     curl -fsS http://127.0.0.1:8000/metrics >"$cell/vllm-metrics-start.prom"
     local metric
     for metric in \
@@ -381,11 +399,10 @@ PY
     kill -TERM "$kv_metrics_pid"
     wait "$kv_metrics_pid" || fail "KV event collector failed"
     kv_metrics_pid=
-    kill -0 "$dcgm_pid" 2>/dev/null || fail "DCGM collector stopped early"
-    kill -TERM "$dcgm_pid"
-    wait "$dcgm_pid" || fail "DCGM collector failed"
-    dcgm_pid=
-    [[ ! -s "$cell/dcgm.err" ]] || fail "DCGM collector reported an error"
+    stop_group "$vpid"
+    vpid=
+    [[ -s "$cell/dram-bandwidth.csv" ]] || fail "CUPTI DRAM telemetry is missing"
+    [[ ! -s "$cell/dram-bandwidth.err" ]] || fail "CUPTI DRAM sampler reported an error"
   fi
   kill -0 "$monitor_pid" 2>/dev/null || fail "GPU telemetry stopped early"
   kill "$monitor_pid" 2>/dev/null || true
@@ -419,7 +436,7 @@ PY
     "$python" "$repo/scripts/evaluation/summarize_serving_metrics.py" \
       --throughput-summary "$cell/output/throughput_summary.json" \
       --gpu-csv "$cell/gpu.csv" \
-      --dcgm-csv "$cell/dcgm.csv" \
+      --dram-bandwidth-csv "$cell/dram-bandwidth.csv" \
       --prometheus-start "$cell/vllm-metrics-start.prom" \
       --prometheus-final "$cell/vllm-metrics-final.prom" \
       --kv-events-summary "$cell/kv-events-summary.json" \
@@ -514,7 +531,7 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
     "prefix_cache": "whole-run request cached-token fraction plus secondary cumulative vLLM lookup counters",
     "kv_cache": "all BlockStored and BlockRemoved events plus preemption count and defined recomputation total",
     "gpu_memory": (
-      "DCGM field 1005 DRAM-cycle utilization plus nvidia-smi device-memory activity time"
+      "vLLM worker CUDA-context DRAM read/write bytes per second from CUPTI PM sampling, plus nvidia-smi device-memory activity time"
       if os.environ["SERVING_METRICS"] == "on"
       else "nvidia-smi device-memory activity time"
     ),

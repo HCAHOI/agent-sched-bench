@@ -87,30 +87,36 @@ echo "== python: $(.venv/bin/python --version)"
 # --- GPU extra ----------------------------------------------------------------
 if [ "$GPU" = "1" ]; then
   command -v nvidia-smi >/dev/null || { echo "FATAL: --gpu but no nvidia-smi" >&2; exit 1; }
-  CUDA_MAJOR=$(nvidia-smi -q | sed -E -n 's/CUDA Version[ :]+([0-9]+)[.].*/\1/p')
-  [ -n "$CUDA_MAJOR" ] || { echo "FATAL: cannot determine CUDA major version" >&2; exit 1; }
-  DCGM_PACKAGE="datacenter-gpu-manager-4-cuda${CUDA_MAJOR}"
-  if ! dpkg-query -W -f='${Status}' "$DCGM_PACKAGE" 2>/dev/null | grep -q 'install ok installed'; then
-    sudo -n apt-get update -qq
-    apt-cache show "$DCGM_PACKAGE" >/dev/null 2>&1 || {
-      echo "FATAL: NVIDIA CUDA apt repository is required for $DCGM_PACKAGE" >&2
-      exit 1
-    }
-    sudo -n apt-get install -y --no-install-recommends "$DCGM_PACKAGE"
+  if command -v systemctl >/dev/null && systemctl is-active --quiet nvidia-dcgm; then
+    sudo -n systemctl disable --now nvidia-dcgm >/dev/null
   fi
-  sudo -n systemctl --now enable nvidia-dcgm >/dev/null
-  DCGM_PROFILE=$(dcgmi profile -l -i 0)
-  grep -Eq '(^|[[:space:]])1005([[:space:]]|$).*dram_active' <<<"$DCGM_PROFILE" || {
-    echo "FATAL: GPU does not expose DCGM field 1005 dram_active" >&2
+  uv sync --quiet --extra serving-spike   # exact vllm pin lives in pyproject
+  CUPTI_DRAM_OVERLAY="${XDG_CACHE_HOME:-$HOME/.cache}/agent-sched-bench/cupti-dram-13.3.1"
+  CUPTI_DRAM_LIB="$CUPTI_DRAM_OVERLAY/nvidia/cu13/lib"
+  if [ ! -f "$CUPTI_DRAM_LIB/libcupti.so.13" ]; then
+    mkdir -p "$CUPTI_DRAM_OVERLAY"
+    uv pip install --target "$CUPTI_DRAM_OVERLAY" --no-deps \
+      'cupti-python==13.3.1' 'nvidia-cuda-cupti==13.3.75' \
+      'cuda-pathfinder==1.8.0' 'pyelftools==0.33'
+  fi
+  if [ ! -d "$CUPTI_DRAM_OVERLAY/cuda-bindings/cuda/bindings" ]; then
+    mkdir -p "$CUPTI_DRAM_OVERLAY/cuda-bindings"
+    uv pip install --target "$CUPTI_DRAM_OVERLAY/cuda-bindings" --no-deps \
+      'cuda-bindings==13.3.1'
+  fi
+  PYTHONPATH="$CUPTI_DRAM_OVERLAY" LD_LIBRARY_PATH="$CUPTI_DRAM_LIB" \
+    .venv/bin/python -c 'from cupti.pm_sampling import Collector'
+  command -v setpriv >/dev/null || { echo "FATAL: setpriv is required for CUPTI" >&2; exit 1; }
+  setpriv --list-caps | grep -Eq '^(perfmon|cap_38)$' || {
+    echo "FATAL: setpriv cannot name CAP_PERFMON" >&2
     exit 1
   }
-  echo "== dcgm: $(dcgmi --version | awk '/dcgmi  version:/ {print $3}') field 1005 ok"
-  uv sync --quiet --extra serving-spike   # exact vllm pin lives in pyproject
   .venv/bin/python - <<'PY'
 import torch, vllm
 assert torch.cuda.is_available(), "CUDA not available in torch"
 print(f"== vllm {vllm.__version__}, torch {torch.__version__}, cuda ok")
 PY
+  echo "== cupti: 13.3.1 context DRAM byte sampling ready"
   # platform summary — Gen4 vs Gen5 changes transfer economics; say it loudly.
   nvidia-smi --query-gpu=name,memory.total,pcie.link.gen.max,pcie.link.width.max,driver_version \
     --format=csv,noheader | sed 's/^/== gpu: /'

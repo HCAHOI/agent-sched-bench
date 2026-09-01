@@ -327,6 +327,8 @@ def test_reproduction_serve_rejects_config_overrides() -> None:
         "bfloat16",
         "--kv-cache-dtype=auto",
         "--enable-prompt-tokens-details",
+        "--worker-cls",
+        "scripts.evaluation.cupti_dram_worker.CuptiDramWorker",
         "--kv-events-config",
         '{"enable_kv_cache_events":true}',
     )
@@ -338,6 +340,7 @@ def test_reproduction_serve_rejects_config_overrides() -> None:
             "-c",
             'source "$1"; venv=/isolated; '
             "validated_observability_args=(--enable-prompt-tokens-details \
+--worker-cls scripts.evaluation.cupti_dram_worker.CuptiDramWorker \
 --kv-events-config '{\"enable_kv_cache_events\":true}'); "
             "build_serve_command model bfloat16 auto 1 32768 prefill; "
             'printf "%s\\n" "${serve_command[@]}"',
@@ -356,6 +359,9 @@ def test_reproduction_serve_rejects_config_overrides() -> None:
     assert built[built.index("--dtype") + 1] == "bfloat16"
     assert built[built.index("--kv-cache-dtype") + 1] == "auto"
     assert "--enable-prompt-tokens-details" in built
+    assert built[built.index("--worker-cls") + 1] == (
+        "scripts.evaluation.cupti_dram_worker.CuptiDramWorker"
+    )
     assert built[built.index("--kv-events-config") + 1] == (
         '{"enable_kv_cache_events":true}'
     )

@@ -104,12 +104,13 @@ def _artifact(tmp_path: Path) -> dict[str, Path]:
             for timestamp in range(998, 1_053, 2)
         )
     )
-    dcgm_path = tmp_path / "dcgm.csv"
-    dcgm_path.write_text(
-        "timestamp_us,gpu_id,field_id,status,dram_active_ratio\n"
+    dram_bandwidth_path = tmp_path / "dram-bandwidth.csv"
+    dram_bandwidth_path.write_text(
+        "start_timestamp_ns,end_timestamp_ns,gpu_id,"
+        "read_bytes_per_s,write_bytes_per_s\n"
         + "".join(
-            f"{timestamp * 1_000_000},0,1005,OK,0.3\n"
-            for timestamp in range(998, 1_053, 2)
+            f"{start * 1_000_000_000},{end * 1_000_000_000},0,1000000000,2000000000\n"
+            for start, end in [(start, start + 1) for start in range(998, 1052)]
         )
     )
     start_prom = tmp_path / "start.prom"
@@ -141,7 +142,7 @@ def _artifact(tmp_path: Path) -> dict[str, Path]:
     return {
         "throughput_summary_path": summary_path,
         "gpu_csv_path": gpu_path,
-        "dcgm_csv_path": dcgm_path,
+        "dram_bandwidth_csv_path": dram_bandwidth_path,
         "prometheus_start_path": start_prom,
         "prometheus_final_path": final_prom,
         "kv_events_summary_path": kv_path,
@@ -176,8 +177,19 @@ def test_summarizes_serving_metrics(tmp_path: Path) -> None:
     assert summary["gpu"]["sample_count"] == 26
     assert summary["gpu"]["utilization"]["mean_pct"] == 50.0
     assert summary["gpu"]["memory_activity"]["mean_pct"] == 25.0
-    assert summary["gpu"]["dcgm_dram_active"]["sample_count"] == 26
-    assert summary["gpu"]["dcgm_dram_active"]["mean_ratio"] == 0.3
+    assert summary["schema_version"] == 3
+    bandwidth = summary["gpu"]["dram_bandwidth"]
+    assert bandwidth["sample_count"] == 50
+    assert bandwidth["max_sample_gap_s"] == 0
+    assert bandwidth["scope"] == "CUDA context"
+    assert bandwidth["read"]["mean_gb_per_s"] == 1.0
+    assert bandwidth["write"]["p95_gb_per_s"] == 2.0
+    assert bandwidth["total"]["max_gb_per_s"] == 3.0
+    assert bandwidth["integrated_bytes"] == {
+        "read": 50_000_000_000.0,
+        "write": 100_000_000_000.0,
+        "total": 150_000_000_000.0,
+    }
     assert summary["kv_events"]["removed_tokens"] == 48
     assert summary["task_preparation_started_at"]["task-b"].endswith("10Z")
 
@@ -249,24 +261,74 @@ def test_rejects_gpu_telemetry_gap(tmp_path: Path) -> None:
         summarize(**paths)
 
 
-def test_rejects_dcgm_telemetry_gap(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "drop_start_s",
+    [
+        1000,
+        1026,
+        1049,
+    ],
+)
+def test_rejects_dram_bandwidth_telemetry_gap(
+    tmp_path: Path, drop_start_s: int
+) -> None:
     paths = _artifact(tmp_path)
-    dcgm = paths["dcgm_csv_path"]
-    lines = dcgm.read_text().splitlines()
-    dcgm.write_text(
-        "\n".join(line for line in lines if not line.startswith("1026000000,")) + "\n"
+    bandwidth = paths["dram_bandwidth_csv_path"]
+    lines = bandwidth.read_text().splitlines()
+    prefix = f"{drop_start_s * 1_000_000_000},"
+    bandwidth.write_text(
+        "\n".join(line for line in lines if not line.startswith(prefix)) + "\n"
     )
 
-    with pytest.raises(ValueError, match="DCGM telemetry gap exceeds 3 seconds"):
+    with pytest.raises(
+        ValueError, match="DRAM bandwidth telemetry has a missing interval"
+    ):
         summarize(**paths)
 
 
-def test_rejects_invalid_dcgm_sample(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        (",0,1000000000,", ",1,1000000000,", "row 2 is invalid"),
+        (
+            "998000000000,999000000000",
+            "998000000000,998000000000",
+            "row 2 is invalid",
+        ),
+        (",1000000000,2000000000", ",-1,2000000000", "rate is invalid"),
+        (",1000000000,2000000000", ",nan,2000000000", "rate is invalid"),
+    ],
+)
+def test_rejects_invalid_dram_bandwidth_sample(
+    tmp_path: Path, old: str, new: str, message: str
+) -> None:
     paths = _artifact(tmp_path)
-    dcgm = paths["dcgm_csv_path"]
-    dcgm.write_text(dcgm.read_text().replace(",OK,0.3", ",N/A,0.3", 1))
+    bandwidth = paths["dram_bandwidth_csv_path"]
+    bandwidth.write_text(bandwidth.read_text().replace(old, new, 1))
 
-    with pytest.raises(ValueError, match="DCGM telemetry row 2 is invalid"):
+    with pytest.raises(ValueError, match=message):
+        summarize(**paths)
+
+
+def test_rejects_overlapping_dram_bandwidth_samples(tmp_path: Path) -> None:
+    paths = _artifact(tmp_path)
+    bandwidth = paths["dram_bandwidth_csv_path"]
+    bandwidth.write_text(
+        bandwidth.read_text().replace(
+            "1002000000000,1003000000000", "1001500000000,1003000000000"
+        )
+    )
+
+    with pytest.raises(ValueError, match="increasing and non-overlapping"):
+        summarize(**paths)
+
+
+def test_rejects_dram_bandwidth_without_window_coverage(tmp_path: Path) -> None:
+    paths = _artifact(tmp_path)
+    bandwidth = paths["dram_bandwidth_csv_path"]
+    bandwidth.write_text(bandwidth.read_text().splitlines()[0] + "\n")
+
+    with pytest.raises(ValueError, match="has no samples in the scheduled run window"):
         summarize(**paths)
 
 
