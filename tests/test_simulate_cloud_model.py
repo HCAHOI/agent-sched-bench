@@ -1225,7 +1225,7 @@ def test_cloud_model_queue_continues_after_container_prep_runtime_error(
     finally:
         trace_logger.close()
 
-    assert arrival_zero_wall_time_s is None
+    assert arrival_zero_wall_time_s is not None
     assert events == [
         "prepare:broken-networking",
         "prepare:next-task",
@@ -4612,6 +4612,35 @@ def test_cloud_model_replay_marks_warmup_iterations(
 
     assert llm_record["data"]["sim_metrics"]["warmup"] is True
     assert tool_record["data"]["sim_metrics"]["warmup"] is True
+
+
+def test_cloud_model_bounded_queue_records_arrival_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(trace_path, agent_id="task-a")
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=10.0,
+        )
+    )
+
+    summary = json.loads((tmp_path / "out" / "throughput_summary.json").read_text())
+    task = summary["tasks"][0]
+    assert summary["scheduler_mode"] == "bounded_queue"
+    assert summary["arrival_zero_wall_time_s"] > 0
+    assert task["admission_wait_s"] is not None
+    assert task["ready_to_terminal_s"] >= task["admission_wait_s"]
 
 
 def test_cloud_model_manifest_replays_multiple_sessions(

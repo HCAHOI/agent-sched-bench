@@ -2755,6 +2755,9 @@ async def _run_cloud_model_queue(
     completed_session_count = 0
     children_by_dependency: dict[str, list[LoadedTraceSession]] = {}
     scheduled_arrivals = any(loaded.arrival_s > 0 for loaded in loaded_sessions)
+    record_arrival_metrics = (
+        scheduled_arrivals or not _has_session_dependencies(loaded_sessions)
+    )
     arrival_zero_monotonic = time.monotonic()
     arrival_zero_wall_time_s = time.time()
     for loaded in loaded_sessions:
@@ -2881,7 +2884,7 @@ async def _run_cloud_model_queue(
                     if prepared is not None:
                         prepared_sessions.append(prepared)
                         if stats is not None:
-                            if scheduled_arrivals:
+                            if record_arrival_metrics:
                                 planned_arrival = (
                                     arrival_zero_monotonic + loaded.arrival_s
                                 )
@@ -2940,7 +2943,7 @@ async def _run_cloud_model_queue(
     return (
         prepared_sessions,
         task_stats,
-        arrival_zero_wall_time_s if scheduled_arrivals else None,
+        arrival_zero_wall_time_s if record_arrival_metrics else None,
     )
 
 
