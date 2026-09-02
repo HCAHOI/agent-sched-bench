@@ -664,6 +664,7 @@ class OpenClawReplayProvider(LLMProvider):
         program_id: str | None = None,
         continuum_step_limit: int | None = None,
         tool_gap_loan: ToolGapLoanRuntime | None = None,
+        cachewise_tool_duration_scale: float = 1.0,
     ) -> None:
         super().__init__(api_key=None, api_base=None)
         validate_llm_replay_timing(
@@ -712,6 +713,7 @@ class OpenClawReplayProvider(LLMProvider):
         self._continuum_request_started = False
         self._continuum_release_attempted = False
         self._cachewise_policy_active = False
+        self._cachewise_tool_duration_scale = cachewise_tool_duration_scale
         self._cachewise_policy_builder: Any = None
         if shadow_generation is not None and shadow_generation.mode == "cachewise":
             from scripts.baselines.cachewise_reproduction import PolicyBuilder
@@ -1053,6 +1055,7 @@ class OpenClawReplayProvider(LLMProvider):
                     separators=(",", ":"),
                     sort_keys=True,
                 ),
+                duration_scale=self._cachewise_tool_duration_scale,
             )
             self._cachewise_policy_active = True
         await self._post_cachewise_policy(policy)
@@ -2136,6 +2139,9 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 else None
             ),
             tool_gap_loan=tool_gap_loan,
+            cachewise_tool_duration_scale=(
+                1.0 / trace_tool_replay_speed if trace_tool_replay else 1.0
+            ),
         )
         if trace_tool_replay:
             tool_overrides, trace_tool_state = _build_trace_replay_tools(

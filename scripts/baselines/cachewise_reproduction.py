@@ -832,9 +832,12 @@ class PolicyBuilder:
         tool_name: str,
         arguments: str,
         elapsed_ms: float = 0.0,
+        duration_scale: float = 1.0,
     ) -> dict[str, Any]:
         if not session_id:
             raise ValueError("session_id must be non-empty")
+        if not math.isfinite(duration_scale) or duration_scale <= 0:
+            raise ValueError("duration_scale must be positive")
         model = (
             self._models.get(tool_name)
             or self._models.get(tool_name.lower())
@@ -845,6 +848,9 @@ class PolicyBuilder:
         curve, similarity, cluster_id = self._predictor.select_curve(
             model, self._predictor.canonicalize_text(arguments)
         )
+        curve = [
+            {**point, "t_ms": float(point["t_ms"]) * duration_scale} for point in curve
+        ]
         return {
             "version": 1,
             "scope": {"session_id": session_id, "idle_session": False},
@@ -856,6 +862,7 @@ class PolicyBuilder:
                 "commit": PREDICTOR_COMMIT,
                 "similarity": float(similarity),
                 "cluster_id": int(cluster_id),
+                "duration_scale": duration_scale,
             },
         }
 
@@ -867,9 +874,10 @@ def build_policy(
     tool_name: str,
     arguments: str,
     elapsed_ms: float = 0.0,
+    duration_scale: float = 1.0,
 ) -> dict[str, Any]:
     return PolicyBuilder(predictor_checkout, models_dir).build(
-        session_id, tool_name, arguments, elapsed_ms
+        session_id, tool_name, arguments, elapsed_ms, duration_scale
     )
 
 

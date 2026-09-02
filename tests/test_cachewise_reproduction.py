@@ -25,6 +25,7 @@ from trace_collect.openclaw_host_runtime import (
 
 SCRIPT = Path(__file__).parents[1] / "scripts/baselines/cachewise_reproduction.sh"
 OFFICIAL_SCRIPT = Path(__file__).parents[1] / "scripts/baselines/cachewise_official.sh"
+RUNTIME = Path(__file__).parents[1] / "src/trace_collect/openclaw_host_runtime.py"
 
 
 def test_cachewise_server_passes_model_to_legacy_api() -> None:
@@ -135,15 +136,32 @@ def test_policy_payload_uses_one_official_selected_curve(monkeypatch) -> None:
         "Bash",
         " PYTEST ",
         125.0,
+        0.25,
     )
 
     assert policy["hints"] == {
-        "duration_curve": curve,
+        "duration_curve": [
+            {"t_ms": 0.0, "prob_still_running": 1.0},
+            {"t_ms": 250.0, "prob_still_running": 0.0},
+        ],
         "elapsed_ms": 125.0,
     }
     assert policy["scope"]["session_id"] == "session-a"
     assert policy["predictor_provenance"]["cluster_id"] == -1
     assert policy["predictor_provenance"]["similarity"] == 0.2
+    assert policy["predictor_provenance"]["duration_scale"] == 0.25
+
+    default_policy = reproduction.build_policy(
+        Path("predictor"), Path("models"), "session-a", "Bash", "pytest"
+    )
+    assert default_policy["hints"]["duration_curve"] == curve
+    with pytest.raises(ValueError, match="duration_scale must be positive"):
+        reproduction.build_policy(
+            Path("predictor"), Path("models"), "session-a", "Bash", "pytest", 0, 0
+        )
+
+    runtime = RUNTIME.read_text()
+    assert "1.0 / trace_tool_replay_speed if trace_tool_replay else 1.0" in runtime
 
 
 def test_idle_and_oracle_are_separate_paper_ablations() -> None:
@@ -261,14 +279,21 @@ def test_replay_attaches_policy_only_after_llm_completion(
     arguments: str,
     predictor_tool: str,
 ) -> None:
-    builds: list[tuple[str, str, str]] = []
+    builds: list[tuple[str, str, str, float]] = []
 
     class _Builder:
         def __init__(self, *_args: object) -> None:
             pass
 
-        def build(self, session: str, tool: str, arguments: str):
-            builds.append((session, tool, arguments))
+        def build(
+            self,
+            session: str,
+            tool: str,
+            arguments: str,
+            *,
+            duration_scale: float,
+        ):
+            builds.append((session, tool, arguments, duration_scale))
             return {
                 "version": 1,
                 "scope": {"session_id": session, "idle_session": False},
@@ -318,6 +343,7 @@ def test_replay_attaches_policy_only_after_llm_completion(
         timing_mode="source_scaled",
         shadow_generation=config,
         program_id="task-a",
+        cachewise_tool_duration_scale=0.25,
     )
     assert provider._shadow_client is not None
     asyncio.run(provider._shadow_client.aclose())
@@ -329,6 +355,7 @@ def test_replay_attaches_policy_only_after_llm_completion(
 
     assert [build[:2] for build in builds] == [("task-a", predictor_tool)]
     assert json.loads(builds[0][2]) == json.loads(arguments)
+    assert builds[0][3] == 0.25
     assert [url for url, _ in client.events] == [
         "http://127.0.0.1:8000/v1/chat/completions",
         "http://127.0.0.1:8000/cachewise/sessions/update",
