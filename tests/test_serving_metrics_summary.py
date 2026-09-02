@@ -413,6 +413,28 @@ def test_records_dram_bandwidth_telemetry_gap(
     assert bandwidth_summary["max_sample_gap_s"] == 1
 
 
+def test_weights_dram_bandwidth_by_sample_duration(tmp_path: Path) -> None:
+    paths = _artifact(tmp_path)
+    bandwidth = paths["dram_bandwidth_csv_path"]
+    rows = [
+        "start_timestamp_ns,end_timestamp_ns,gpu_id,"
+        "read_bytes_per_s,write_bytes_per_s"
+    ]
+    for cycle in range(25):
+        start_ns = (1000 + 2 * cycle) * 1_000_000_000
+        rows.append(f"{start_ns},{start_ns + 500_000_000},0,0,0")
+        rows.append(
+            f"{start_ns + 500_000_000},{start_ns + 2_000_000_000},"
+            "0,10000000000,0"
+        )
+    bandwidth.write_text("\n".join(rows) + "\n")
+
+    summary = summarize(**paths)["gpu"]["dram_bandwidth"]
+    assert summary["read"]["mean_gb_per_s"] == 7.5
+    assert summary["read"]["p50_gb_per_s"] == 10.0
+    assert summary["integrated_bytes"]["read"] == 375_000_000_000.0
+
+
 @pytest.mark.parametrize(
     ("old", "new", "message"),
     [

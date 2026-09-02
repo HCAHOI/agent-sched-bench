@@ -553,13 +553,29 @@ def _dram_bandwidth_summary(
     read_rates = [row[2] for row in clipped]
     write_rates = [row[3] for row in clipped]
     total_rates = [read + write for read, write in zip(read_rates, write_rates)]
+    durations_s = [(end - start) / 1_000_000_000 for start, end, _, _ in clipped]
 
     def stats(values: list[float]) -> dict[str, float]:
         gb_per_s = [value / 1_000_000_000 for value in values]
+        total_duration_s = sum(durations_s)
+
+        def weighted_percentile(quantile: float) -> float:
+            target = quantile * total_duration_s
+            elapsed = 0.0
+            for value, duration in sorted(zip(gb_per_s, durations_s)):
+                elapsed += duration
+                if elapsed >= target:
+                    return value
+            return max(gb_per_s)
+
         return {
-            "mean_gb_per_s": sum(gb_per_s) / len(gb_per_s),
-            "p50_gb_per_s": _percentile(gb_per_s, 0.50),
-            "p95_gb_per_s": _percentile(gb_per_s, 0.95),
+            "mean_gb_per_s": sum(
+                value * duration
+                for value, duration in zip(gb_per_s, durations_s)
+            )
+            / total_duration_s,
+            "p50_gb_per_s": weighted_percentile(0.50),
+            "p95_gb_per_s": weighted_percentile(0.95),
             "max_gb_per_s": max(gb_per_s),
         }
 

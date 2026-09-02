@@ -44,9 +44,7 @@ class CuptiDramWorker(Worker):
 
         self._dram_stop = threading.Event()
         self._dram_error: BaseException | None = None
-        self._dram_last_start_ns: int | None = None
         self._dram_last_end_ns: int | None = None
-        self._dram_discarded_leading = False
         self._dram_collector: Any = None
         self._dram_started = False
         self._dram_thread: threading.Thread | None = None
@@ -120,16 +118,6 @@ class CuptiDramWorker(Worker):
             if self._dram_last_end_ns is not None and start_ns < self._dram_last_end_ns:
                 continue
 
-            duration_ns = end_ns - start_ns
-            if not _SAMPLE_PERIOD_NS // 2 <= duration_ns <= 3 * _SAMPLE_PERIOD_NS // 2:
-                if (
-                    self._dram_last_start_ns is None
-                    and not self._dram_discarded_leading
-                ):
-                    self._dram_discarded_leading = True
-                    continue
-                raise ValueError("CUPTI sample duration is outside 0.5-1.5 seconds")
-
             values = [float(value) for value in sample.metric_values]
             if len(values) != 2 or not all(
                 math.isfinite(value) and value >= 0 for value in values
@@ -138,8 +126,11 @@ class CuptiDramWorker(Worker):
                     "CUPTI DRAM rates must be two finite non-negative values"
                 )
 
+            duration_ns = end_ns - start_ns
+            if not _SAMPLE_PERIOD_NS // 2 <= duration_ns <= 3 * _SAMPLE_PERIOD_NS // 2:
+                continue
+
             self._dram_writer.writerow([start_ns, end_ns, 0, *values])
-            self._dram_last_start_ns = start_ns
             self._dram_last_end_ns = end_ns
             wrote = True
         if wrote:
