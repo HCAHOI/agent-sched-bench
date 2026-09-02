@@ -215,12 +215,13 @@ def test_summarizes_serving_metrics(tmp_path: Path) -> None:
     assert rows[2]["tpot_s"] is None
 
 
-def test_summarizes_replacement_load_without_counting_it_as_measurement(
-    tmp_path: Path,
+@pytest.mark.parametrize("load_key", ["replacement_load", "background_load"])
+def test_summarizes_background_load_without_counting_it_as_measurement(
+    tmp_path: Path, load_key: str
 ) -> None:
     paths = _artifact(tmp_path)
     throughput = json.loads(paths["throughput_summary_path"].read_text())
-    throughput["replacement_load"] = {"enabled": True, "delay_mean_s": 50.0}
+    throughput[load_key] = {"enabled": True, "delay_mean_s": 50.0}
     _json(paths["throughput_summary_path"], throughput)
     background_id = "task-a__replacement-0001"
     _json(
@@ -291,6 +292,8 @@ def test_summarizes_replacement_load_without_counting_it_as_measurement(
     assert summary["task_count"] == 2
     assert summary["observed_task_count"] == 3
     assert summary["request_count"] == 4
+    assert summary[load_key] == throughput[load_key]
+    assert ({"replacement_load", "background_load"} - {load_key}).isdisjoint(summary)
     assert summary["request_token_totals"]["unattributed_prometheus_tokens"] == {
         "prompt_tokens": 1,
         "cached_prompt_tokens": 0,
@@ -312,6 +315,17 @@ def test_summarizes_replacement_load_without_counting_it_as_measurement(
         )
     )
     with pytest.raises(ValueError, match="measured request count differs"):
+        summarize(**paths)
+
+
+def test_rejects_both_background_load_formats(tmp_path: Path) -> None:
+    paths = _artifact(tmp_path)
+    throughput = json.loads(paths["throughput_summary_path"].read_text())
+    throughput["replacement_load"] = {"enabled": False}
+    throughput["background_load"] = {"enabled": False}
+    _json(paths["throughput_summary_path"], throughput)
+
+    with pytest.raises(ValueError, match="both load configurations"):
         summarize(**paths)
 
 

@@ -2730,6 +2730,37 @@ async def _run_staged_cloud_model_queue(
     return prepared_sessions, ordered_stats, common_ready_wall_time_s
 
 
+def _actions_with_replay_session_marker(
+    loaded: LoadedTraceSession,
+    run_instance_id: str,
+) -> list[dict[str, Any]]:
+    actions = copy.deepcopy(loaded.actions)
+    found_llm = False
+    for action in actions:
+        if action.get("action_type") != "llm_call":
+            continue
+        found_llm = True
+        data = action.get("data")
+        messages = data.get("messages_in") if isinstance(data, dict) else None
+        first = messages[0] if isinstance(messages, list) and messages else None
+        if (
+            not isinstance(first, dict)
+            or first.get("role") != "system"
+            or not isinstance(first.get("content"), str)
+        ):
+            raise ValueError(
+                f"replay session marker requires a system prompt: {run_instance_id}"
+            )
+        first["content"] = (
+            f"Replay session: {run_instance_id}\n\n{first['content']}"
+        )
+    if not found_llm:
+        raise ValueError(
+            f"replay session marker requires an LLM action: {run_instance_id}"
+        )
+    return actions
+
+
 async def _run_cloud_model_queue(
     loaded_sessions: list[LoadedTraceSession],
     *,
@@ -2753,6 +2784,7 @@ async def _run_cloud_model_queue(
     replacement_delay_mean_s: float | None = None,
     replacement_seed: int = 42,
     replacement_summary: dict[str, Any] | None = None,
+    background_summary: dict[str, Any] | None = None,
 ) -> tuple[list[PreparedTraceSession], list[ReplayTaskStats], float | None]:
     if concurrency < 1:
         raise ValueError("concurrency must be >= 1")
@@ -2762,14 +2794,31 @@ async def _run_cloud_model_queue(
     completed_task_ids: set[str] = set()
     completed_session_count = 0
     children_by_dependency: dict[str, list[LoadedTraceSession]] = {}
-    scheduled_arrivals = any(loaded.arrival_s > 0 for loaded in loaded_sessions)
+    manifest_background_run_ids = {
+        loaded.run_instance_id
+        for loaded in loaded_sessions
+        if not loaded.measurement_task
+    }
+    manifest_background_enabled = bool(manifest_background_run_ids)
+    scheduled_arrivals = manifest_background_enabled or any(
+        loaded.arrival_s > 0 for loaded in loaded_sessions
+    )
     record_arrival_metrics = scheduled_arrivals or not _has_session_dependencies(
         loaded_sessions
     )
     arrival_zero_monotonic = time.monotonic()
     arrival_zero_wall_time_s = time.time()
     replacement_enabled = replacement_delay_mean_s is not None
-    measurement_run_ids = {loaded.run_instance_id for loaded in loaded_sessions}
+    if replacement_enabled and manifest_background_enabled:
+        raise ValueError(
+            "task replacement cannot be combined with manifest background tasks"
+        )
+    managed_background_enabled = replacement_enabled or manifest_background_enabled
+    measurement_run_ids = {
+        loaded.run_instance_id for loaded in loaded_sessions if loaded.measurement_task
+    }
+    if not measurement_run_ids:
+        raise ValueError("at least one measurement task is required")
     replacement_start_monotonic = arrival_zero_monotonic + max(
         (loaded.arrival_s for loaded in loaded_sessions),
         default=0.0,
@@ -2786,11 +2835,13 @@ async def _run_cloud_model_queue(
     }
     pending_replacements: set[asyncio.Task[None]] = set()
     measurement_terminal = asyncio.Event()
+    measurement_terminal_monotonic: float | None = None
     measured_terminal = 0
     measured_completed = 0
     background_started = 0
     background_completed = 0
     background_cancelled = 0
+    dequeued_run_ids: set[str] = set()
     for loaded in loaded_sessions:
         for dependency in loaded.depends_on:
             children_by_dependency.setdefault(dependency, []).append(loaded)
@@ -2802,8 +2853,16 @@ async def _run_cloud_model_queue(
     task_stats: list[ReplayTaskStats] = []
     result_lock = asyncio.Lock()
     worker_count = min(concurrency, len(loaded_sessions))
+    background_slots = asyncio.Semaphore(max(0, worker_count - 1))
     active_by_worker: dict[int, LoadedTraceSession] = {}
     first_error: BaseException | None = None
+
+    def mark_measurement_terminal() -> None:
+        nonlocal measurement_terminal_monotonic
+        if measurement_terminal.is_set():
+            return
+        measurement_terminal_monotonic = time.monotonic()
+        measurement_terminal.set()
 
     def replacement_for(
         loaded: LoadedTraceSession,
@@ -2824,27 +2883,10 @@ async def _run_cloud_model_queue(
             )
             + delay_s
         )
-        prompt_marker = f"Replay session: {run_instance_id}"
-        actions = copy.deepcopy(base.actions)
-        for action in actions:
-            if action.get("action_type") != "llm_call":
-                continue
-            data = action.get("data")
-            messages = data.get("messages_in") if isinstance(data, dict) else None
-            first = messages[0] if isinstance(messages, list) and messages else None
-            if (
-                not isinstance(first, dict)
-                or first.get("role") != "system"
-                or not isinstance(first.get("content"), str)
-            ):
-                raise ValueError(
-                    f"replacement LLM action lacks a system prompt: {run_instance_id}"
-                )
-            first["content"] = f"{prompt_marker}\n\n{first['content']}"
         replacement = dataclasses.replace(
             base,
             run_instance_id=run_instance_id,
-            actions=actions,
+            actions=_actions_with_replay_session_marker(base, run_instance_id),
             arrival_s=max(0.0, ready_monotonic - arrival_zero_monotonic),
         )
         replacement_cycles[run_instance_id] = cycle
@@ -2870,14 +2912,31 @@ async def _run_cloud_model_queue(
         task.add_done_callback(pending_replacements.discard)
 
     async def release_scheduled_arrivals() -> None:
-        for loaded in sorted(
+        ordered = sorted(
             loaded_sessions,
             key=lambda item: (item.arrival_s, item.manifest_index),
-        ):
+        )
+        if not manifest_background_enabled:
+            for loaded in ordered:
+                await _sleep_until_monotonic(
+                    arrival_zero_monotonic + loaded.arrival_s
+                )
+                if first_error is not None:
+                    return
+                queue.put_nowait(loaded)
+            return
+
+        async def release(loaded: LoadedTraceSession) -> None:
             await _sleep_until_monotonic(arrival_zero_monotonic + loaded.arrival_s)
-            if first_error is not None:
+            if not loaded.measurement_task:
+                await background_slots.acquire()
+            if first_error is not None or measurement_terminal.is_set():
+                if not loaded.measurement_task:
+                    background_slots.release()
                 return
             queue.put_nowait(loaded)
+
+        await asyncio.gather(*(release(loaded) for loaded in ordered))
 
     def stop_workers() -> None:
         for _ in range(worker_count):
@@ -2904,12 +2963,15 @@ async def _run_cloud_model_queue(
             try:
                 if loaded is None:
                     return
+                dequeued_run_ids.add(loaded.run_instance_id)
                 if first_error is not None:
                     continue
                 active_by_worker[worker_index] = loaded
 
                 cycle = replacement_cycles.get(loaded.run_instance_id, 0)
                 if cycle:
+                    background_started += 1
+                elif loaded.run_instance_id in manifest_background_run_ids:
                     background_started += 1
 
                 admitted_monotonic = time.monotonic()
@@ -2982,8 +3044,25 @@ async def _run_cloud_model_queue(
                     and loaded.run_instance_id in measurement_run_ids
                 ):
                     measured_terminal += 1
-                    if measured_terminal == len(loaded_sessions):
-                        measurement_terminal.set()
+                    if measured_terminal == len(measurement_run_ids):
+                        mark_measurement_terminal()
+                if (
+                    loaded.run_instance_id in manifest_background_run_ids
+                    and session_error is not None
+                    and first_error is None
+                ):
+                    first_error = session_error
+                    mark_measurement_terminal()
+                if (
+                    loaded.run_instance_id in manifest_background_run_ids
+                    and stats is not None
+                    and not stats.success
+                    and first_error is None
+                ):
+                    first_error = RuntimeError(
+                        f"manifest background task failed: {loaded.run_instance_id}"
+                    )
+                    mark_measurement_terminal()
                 try:
                     if prepared is not None and not preparation_already_finalized:
                         await _finalize_prepared_session(prepared)
@@ -3017,11 +3096,11 @@ async def _run_cloud_model_queue(
                     if session_error is not None:
                         if first_error is None:
                             first_error = session_error
-                            if replacement_enabled:
-                                measurement_terminal.set()
+                            if managed_background_enabled:
+                                mark_measurement_terminal()
                             else:
                                 stop_workers()
-                        if replacement_enabled:
+                        if managed_background_enabled:
                             return
                         continue
                     if replacement_enabled and stats is not None and not stats.success:
@@ -3029,12 +3108,31 @@ async def _run_cloud_model_queue(
                             first_error = RuntimeError(
                                 f"replacement load task failed: {loaded.run_instance_id}"
                             )
-                            measurement_terminal.set()
+                            mark_measurement_terminal()
+                        return
+                    if (
+                        loaded.run_instance_id in manifest_background_run_ids
+                        and stats is not None
+                        and not stats.success
+                    ):
+                        if first_error is None:
+                            first_error = RuntimeError(
+                                "manifest background task failed: "
+                                f"{loaded.run_instance_id}"
+                            )
+                            mark_measurement_terminal()
                         return
                     if first_error is not None:
-                        if replacement_enabled:
+                        if managed_background_enabled:
                             return
                         continue
+                    if (
+                        manifest_background_enabled
+                        and loaded.run_instance_id in measurement_run_ids
+                    ):
+                        measured_terminal += 1
+                        if measured_terminal == len(measurement_run_ids):
+                            mark_measurement_terminal()
                     completed_task_ids.add(loaded.task_instance_id)
                     completed_session_count += 1
                     release_ready_children(loaded.task_instance_id)
@@ -3050,6 +3148,13 @@ async def _run_cloud_model_queue(
                                 loaded,
                                 terminal_monotonic=terminal_monotonic,
                             )
+                    elif manifest_background_enabled:
+                        if loaded.run_instance_id in manifest_background_run_ids:
+                            background_completed += 1
+                        else:
+                            measured_completed += 1
+                        if measurement_terminal.is_set():
+                            return
                     elif completed_session_count == len(loaded_sessions):
                         stop_workers()
             except asyncio.CancelledError:
@@ -3058,8 +3163,9 @@ async def _run_cloud_model_queue(
                 ):
                     await _finalize_prepared_session(prepared)
                     prepared_finalized = True
-                if loaded is not None and replacement_cycles.get(
-                    loaded.run_instance_id, 0
+                if loaded is not None and (
+                    replacement_cycles.get(loaded.run_instance_id, 0)
+                    or loaded.run_instance_id in manifest_background_run_ids
                 ):
                     background_cancelled += 1
                 if prepared is not None and not prepared_recorded:
@@ -3073,6 +3179,11 @@ async def _run_cloud_model_queue(
                 # session references them.
                 if cleanup_state is not None and loaded is not None:
                     await _release_source_image(cleanup_state, loaded.run_instance_id)
+                if (
+                    loaded is not None
+                    and loaded.run_instance_id in manifest_background_run_ids
+                ):
+                    background_slots.release()
                 queue.task_done()
 
     arrival_task = (
@@ -3081,14 +3192,21 @@ async def _run_cloud_model_queue(
         else None
     )
     worker_tasks = [asyncio.create_task(worker(index)) for index in range(worker_count)]
-    if replacement_enabled:
+    if managed_background_enabled:
         await measurement_terminal.wait()
+        if arrival_task is not None and not arrival_task.done():
+            arrival_task.cancel()
+            await asyncio.gather(arrival_task, return_exceptions=True)
         for task in pending_replacements:
             task.cancel()
         await asyncio.gather(*pending_replacements, return_exceptions=True)
         for index, task in enumerate(worker_tasks):
             active = active_by_worker.get(index)
-            if active is None or active.run_instance_id not in measurement_run_ids:
+            if (
+                (manifest_background_enabled and first_error is not None)
+                or active is None
+                or active.run_instance_id not in measurement_run_ids
+            ):
                 task.cancel()
     worker_results = await asyncio.gather(*worker_tasks, return_exceptions=True)
     if arrival_task is not None:
@@ -3096,10 +3214,14 @@ async def _run_cloud_model_queue(
             arrival_task.cancel()
         await asyncio.gather(arrival_task, return_exceptions=True)
     for result in worker_results:
-        if isinstance(result, asyncio.CancelledError) and not replacement_enabled:
+        if isinstance(result, asyncio.CancelledError) and not managed_background_enabled:
             raise result
         if isinstance(result, Exception) and first_error is None:
             first_error = result
+    if cleanup_state is not None and manifest_background_enabled:
+        for loaded in loaded_sessions:
+            if loaded.run_instance_id not in dequeued_run_ids:
+                await _release_source_image(cleanup_state, loaded.run_instance_id)
     if first_error is not None:
         raise first_error
     if replacement_summary is not None:
@@ -3119,6 +3241,25 @@ async def _run_cloud_model_queue(
                 "replacement_start_s": max(
                     (loaded.arrival_s for loaded in loaded_sessions),
                     default=0.0,
+                ),
+                "prompt_session_marker": True,
+            }
+        )
+    if background_summary is not None:
+        if measurement_terminal_monotonic is None:
+            raise AssertionError("measurement terminal time was not recorded")
+        background_summary.update(
+            {
+                "_measurement_terminal_monotonic": measurement_terminal_monotonic,
+                "enabled": manifest_background_enabled,
+                "source": "manifest",
+                "measured_task_count": len(measurement_run_ids),
+                "background_task_count": len(manifest_background_run_ids),
+                "background_started": background_started,
+                "background_completed": background_completed,
+                "background_cancelled": background_started - background_completed,
+                "background_not_started": (
+                    len(manifest_background_run_ids) - background_started
                 ),
                 "prompt_session_marker": True,
             }
@@ -4258,10 +4399,24 @@ async def simulate(
             label=entry.label,
             manifest_depends_on=entry.depends_on,
             arrival_s=entry.arrival_s,
+            measurement_task=entry.measurement_task,
         )
         for entry in manifest_entries
     ]
     _assign_replay_instance_ids(loaded_sessions)
+    has_manifest_background = any(
+        not session.measurement_task for session in loaded_sessions
+    )
+    if has_manifest_background and replacement_delay_mean_s is not None:
+        raise ValueError(
+            "task replacement cannot be combined with manifest background tasks"
+        )
+    for session in loaded_sessions:
+        if not session.measurement_task:
+            session.actions = _actions_with_replay_session_marker(
+                session,
+                session.run_instance_id,
+            )
     non_openclaw_sessions = [
         session.task_instance_id
         for session in loaded_sessions
@@ -4302,7 +4457,9 @@ async def simulate(
         llm_timing=llm_timing,
     )
     has_dependencies = _has_session_dependencies(loaded_sessions)
-    has_scheduled_arrivals = any(session.arrival_s > 0 for session in loaded_sessions)
+    has_scheduled_arrivals = has_manifest_background or any(
+        session.arrival_s > 0 for session in loaded_sessions
+    )
     if has_scheduled_arrivals and stage_all_before_replay:
         raise ValueError("scheduled arrivals do not support stage_all_before_replay")
     if has_scheduled_arrivals and workers != 1:
@@ -4413,6 +4570,9 @@ async def simulate(
     replacement_summary: dict[str, Any] | None = (
         {} if replacement_delay_mean_s is not None else None
     )
+    background_summary: dict[str, Any] | None = (
+        {} if has_manifest_background else None
+    )
     output_path.mkdir(parents=True, exist_ok=True)
     if shadow_generation is not None and shadow_llm_max_concurrency is not None:
         slot_dir = output_path / ".shadow-llm-admission"
@@ -4439,11 +4599,12 @@ async def simulate(
     elif has_dependencies:
         scheduler_mode = "dependency_queue"
     elif has_scheduled_arrivals:
-        scheduler_mode = (
-            "scheduled_arrival_replacement_queue"
-            if replacement_delay_mean_s is not None
-            else "scheduled_arrival_queue"
-        )
+        if replacement_delay_mean_s is not None:
+            scheduler_mode = "scheduled_arrival_replacement_queue"
+        elif has_manifest_background:
+            scheduler_mode = "scheduled_arrival_background_queue"
+        else:
+            scheduler_mode = "scheduled_arrival_queue"
     else:
         scheduler_mode = "bounded_queue" if workers == 1 else "multi_process_workers"
 
@@ -4514,6 +4675,24 @@ async def simulate(
                             }
                         }
                         if replacement_delay_mean_s is not None
+                        else {}
+                    ),
+                    **(
+                        {
+                            "background_load": {
+                                "source": "manifest",
+                                "measured_task_count": sum(
+                                    session.measurement_task
+                                    for session in loaded_sessions
+                                ),
+                                "background_task_count": sum(
+                                    not session.measurement_task
+                                    for session in loaded_sessions
+                                ),
+                                "prompt_session_marker": True,
+                            }
+                        }
+                        if has_manifest_background
                         else {}
                     ),
                     "monitoring": monitoring_policy_dict,
@@ -4624,6 +4803,7 @@ async def simulate(
                     replacement_delay_mean_s=replacement_delay_mean_s,
                     replacement_seed=replacement_seed,
                     replacement_summary=replacement_summary,
+                    background_summary=background_summary,
                     **queue_kwargs,
                 )
         else:
@@ -4746,6 +4926,20 @@ async def simulate(
 
     if run_wall_start is None or run_wall_end is None:
         raise AssertionError("simulate wall-clock measurement was not recorded")
+    headline_wall_time_s = run_wall_end - run_wall_start
+    if background_summary is not None:
+        measurement_terminal_monotonic = float(
+            background_summary.pop("_measurement_terminal_monotonic")
+        )
+        headline_wall_time_s = max(
+            0.0,
+            measurement_terminal_monotonic - run_wall_start,
+        )
+        background_summary["measurement_wall_time_s"] = headline_wall_time_s
+        background_summary["teardown_wall_time_s"] = max(
+            0.0,
+            run_wall_end - measurement_terminal_monotonic,
+        )
     trace_file = output_path / f"{run_id}.jsonl"
     tool_gap_summary = None
     if tool_gap_loan_arm is not None:
@@ -4765,7 +4959,7 @@ async def simulate(
         workers=workers,
         prep_concurrency=prep_concurrency,
         trace_file=trace_file,
-        wall_time_s=run_wall_end - run_wall_start,
+        wall_time_s=headline_wall_time_s,
         task_stats=task_stats,
         container_resources=container_resource_summary,
         monitoring_policy=monitoring_policy_dict,
@@ -4773,6 +4967,7 @@ async def simulate(
         common_ready_wall_time_s=common_ready_wall_time_s,
         tool_gap_loan=tool_gap_summary,
         replacement_load=replacement_summary,
+        background_load=background_summary,
     )
     if cleanup_state is not None:
         logger.info(

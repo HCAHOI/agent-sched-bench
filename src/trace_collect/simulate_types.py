@@ -27,6 +27,7 @@ class TraceManifestEntry:
     label: str | None = None
     depends_on: tuple[str, ...] = ()
     arrival_s: float = 0.0
+    measurement_task: bool = True
     requires_trace_tool_replay: bool = False
 
 
@@ -103,6 +104,7 @@ class LoadedTraceSession:
     label: str | None = None
     depends_on: tuple[str, ...] = ()
     arrival_s: float = 0.0
+    measurement_task: bool = True
 
     @property
     def agent_id(self) -> str:
@@ -122,6 +124,7 @@ class WorkerTraceInput:
     task_instance_id: str
     source_action_agent_id: str
     depends_on: tuple[str, ...] = ()
+    measurement_task: bool = True
 
 
 @dataclass(frozen=True, slots=True)

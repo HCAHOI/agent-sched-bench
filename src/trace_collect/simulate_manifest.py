@@ -169,6 +169,7 @@ def _load_trace_session(
     label: str | None = None,
     manifest_depends_on: tuple[str, ...] = (),
     arrival_s: float = 0.0,
+    measurement_task: bool = True,
 ) -> LoadedTraceSession:
     (
         task_instance_id,
@@ -204,6 +205,7 @@ def _load_trace_session(
         label=label,
         depends_on=_combine_depends_on(manifest_depends_on, task_depends_on),
         arrival_s=arrival_s,
+        measurement_task=measurement_task,
     )
 
 
@@ -251,6 +253,7 @@ def _worker_trace_input(session: LoadedTraceSession) -> WorkerTraceInput:
         task_instance_id=session.task_instance_id,
         source_action_agent_id=session.source_action_agent_id,
         depends_on=session.depends_on,
+        measurement_task=session.measurement_task,
     )
 
 
@@ -264,6 +267,7 @@ def _load_worker_trace_inputs(inputs: list[WorkerTraceInput]) -> list[LoadedTrac
             docker_image_override=entry.docker_image_override,
             label=entry.label,
             manifest_depends_on=entry.depends_on,
+            measurement_task=entry.measurement_task,
         )
         if session.task_instance_id != entry.task_instance_id:
             raise SimulateError(
@@ -378,6 +382,7 @@ def _load_simulate_manifest(
         label: str | None = None
         depends_on: tuple[str, ...] = ()
         arrival_s = 0.0
+        measurement_task = True
 
         if isinstance(entry, str):
             trace_value = entry
@@ -389,6 +394,7 @@ def _load_simulate_manifest(
                 "label",
                 "depends_on",
                 "arrival_s",
+                "measurement_task",
             }
             unknown_entry_keys = set(entry) - allowed_entry_keys
             if unknown_entry_keys:
@@ -406,6 +412,7 @@ def _load_simulate_manifest(
             label_value = entry.get("label")
             depends_value = entry.get("depends_on")
             arrival_value = entry.get("arrival_s", 0.0)
+            measurement_value = entry.get("measurement_task", True)
             if docker_value is not None:
                 if not isinstance(docker_value, str) or not docker_value:
                     raise SimulateError(
@@ -434,6 +441,12 @@ def _load_simulate_manifest(
                     "must be a finite non-negative number"
                 )
             arrival_s = float(arrival_value)
+            if not isinstance(measurement_value, bool):
+                raise SimulateError(
+                    f"simulate manifest trace entry {index} measurement_task "
+                    "must be a boolean"
+                )
+            measurement_task = measurement_value
         else:
             raise SimulateError(
                 f"simulate manifest trace entry {index} must be a string or object"
@@ -475,7 +488,10 @@ def _load_simulate_manifest(
                 label=label,
                 depends_on=depends_on,
                 arrival_s=arrival_s,
+                measurement_task=measurement_task,
                 requires_trace_tool_replay=manifest_requires_trace_tool_replay,
             )
         )
+    if not any(entry.measurement_task for entry in entries):
+        raise SimulateError("simulate manifest requires at least one measurement task")
     return entries

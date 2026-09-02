@@ -1143,6 +1143,147 @@ def test_cloud_model_queue_releases_sessions_at_manifest_arrivals(
     assert arrival_zero_wall_time_s is not None
 
 
+def test_manifest_background_stops_with_measurements_and_stays_out_of_headlines(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    manifest = tmp_path / "manifest.yaml"
+    _write_trace(
+        trace_path,
+        agent_id="task-a",
+        scaffold="tongyi-deepresearch",
+        execution_environment="host",
+    )
+    records = _read_jsonl(trace_path)
+    llm_action = next(record for record in records if record.get("action_type") == "llm_call")
+    llm_action["data"]["messages_in"] = [
+        {"role": "system", "content": "instructions"},
+        {"role": "user", "content": "fix bug"},
+    ]
+    trace_path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    _write_host_tasks(task_source, "task-a")
+    quoted_trace = json.dumps(str(trace_path))
+    manifest.write_text(
+        f"- trace: {quoted_trace}\n"
+        "  measurement_task: false\n"
+        f"- trace: {quoted_trace}\n"
+        "  measurement_task: false\n"
+        f"- trace: {quoted_trace}\n"
+        f"- trace: {quoted_trace}\n"
+        "  measurement_task: false\n"
+        "  arrival_s: 60\n",
+        encoding="utf-8",
+    )
+
+    background_started = asyncio.Event()
+    prepared_ids: list[str] = []
+    cancelled_ids: list[str] = []
+    prompts: dict[str, str] = {}
+
+    async def fake_prepare(
+        loaded: LoadedTraceSession,
+        **_kwargs,
+    ) -> PreparedTraceSession:
+        prepared_ids.append(loaded.run_instance_id)
+        return PreparedTraceSession(loaded=loaded)
+
+    async def fake_replay(
+        prepared: PreparedTraceSession,
+        **_kwargs,
+    ) -> ReplayTaskStats:
+        loaded = prepared.loaded
+        prompts[loaded.run_instance_id] = loaded.actions[0]["data"]["messages_in"][0][
+            "content"
+        ]
+        if loaded.measurement_task:
+            await background_started.wait()
+            await asyncio.sleep(0.01)
+        else:
+            background_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled_ids.append(loaded.run_instance_id)
+                raise
+        return ReplayTaskStats(
+            agent_id=loaded.agent_id,
+            run_instance_id=loaded.run_instance_id,
+            source_agent_id=loaded.source_action_agent_id,
+            manifest_index=loaded.manifest_index,
+            label=loaded.label,
+            source_trace=str(loaded.source_trace),
+            success=True,
+            elapsed_s=0.0,
+            action_count=1,
+            llm_call_count=1,
+            tool_exec_count=0,
+            arrival_s=loaded.arrival_s,
+        )
+
+    async def fake_finalize(prepared: PreparedTraceSession) -> None:
+        if not prepared.loaded.measurement_task:
+            await asyncio.sleep(0.05)
+
+    monkeypatch.setattr("trace_collect.simulator._prepare_replay_session", fake_prepare)
+    monkeypatch.setattr("trace_collect.simulator._replay_cloud_model_session", fake_replay)
+    monkeypatch.setattr(
+        "trace_collect.simulator._finalize_prepared_session",
+        fake_finalize,
+    )
+
+    asyncio.run(
+        asyncio.wait_for(
+            simulate(
+                manifest=manifest,
+                task_source=task_source,
+                output_dir=tmp_path / "out",
+                concurrency=2,
+                replay_speed=100.0,
+                resource_monitoring="off",
+                pmu_monitoring="off",
+                memory_bandwidth_monitoring="off",
+            ),
+            timeout=1.0,
+        )
+    )
+
+    summary = json.loads((tmp_path / "out" / "throughput_summary.json").read_text())
+    measured_id = "task-a__replica-003"
+    active_background_id = "task-a__replica-001"
+    assert summary["scheduler_mode"] == "scheduled_arrival_background_queue"
+    assert summary["attempted_traces"] == 1
+    assert [task["run_instance_id"] for task in summary["tasks"]] == [measured_id]
+    background_load = dict(summary["background_load"])
+    measurement_wall_time_s = background_load.pop("measurement_wall_time_s")
+    teardown_wall_time_s = background_load.pop("teardown_wall_time_s")
+    assert background_load == {
+        "enabled": True,
+        "source": "manifest",
+        "measured_task_count": 1,
+        "background_task_count": 3,
+        "background_started": 1,
+        "background_completed": 0,
+        "background_cancelled": 1,
+        "background_not_started": 2,
+        "prompt_session_marker": True,
+    }
+    assert summary["wall_time_s"] == measurement_wall_time_s
+    assert measurement_wall_time_s < teardown_wall_time_s
+    assert "replacement_load" not in summary
+    assert prompts[measured_id] == "instructions"
+    assert prompts[active_background_id] == (
+        f"Replay session: {active_background_id}\n\ninstructions"
+    )
+    assert cancelled_ids == [active_background_id]
+    assert "task-a__replica-002" not in prepared_ids
+    assert "task-a__replica-004" not in prepared_ids
+
+
 def test_cloud_model_queue_replaces_completed_tasks_until_measured_cycle_finishes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -287,6 +287,7 @@ def _write_throughput_summary(
     common_ready_wall_time_s: float | None = None,
     tool_gap_loan: dict[str, object] | None = None,
     replacement_load: dict[str, object] | None = None,
+    background_load: dict[str, object] | None = None,
 ) -> Path:
     attempted = len(task_stats)
     completed = sum(1 for stat in task_stats if stat.success)
@@ -340,6 +341,8 @@ def _write_throughput_summary(
         payload["tool_gap_loan"] = tool_gap_loan
     if replacement_load is not None:
         payload["replacement_load"] = replacement_load
+    if background_load is not None:
+        payload["background_load"] = background_load
     if llm_timing.mode == "ttft_tpot":
         payload["llm_ttft_ms"] = llm_timing.ttft_ms
         payload["llm_tpot_ms"] = llm_timing.tpot_ms

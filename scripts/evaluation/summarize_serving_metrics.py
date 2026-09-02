@@ -651,14 +651,18 @@ def summarize(
     if output_path == requests_output_path:
         raise ValueError("summary and request output paths must differ")
     throughput = _read_json(throughput_summary_path, "throughput summary")
+    if "replacement_load" in throughput and "background_load" in throughput:
+        raise ValueError("throughput summary cannot contain both load configurations")
     replacement_load = throughput.get("replacement_load")
-    replacement_enabled = (
-        isinstance(replacement_load, dict) and replacement_load.get("enabled") is True
+    background_load = throughput.get("background_load")
+    load_config = background_load if "background_load" in throughput else replacement_load
+    background_enabled = (
+        isinstance(load_config, dict) and load_config.get("enabled") is True
     )
     tasks, task_startups, window_start, makespan_s, window_source = _load_tasks(
         throughput_summary_path,
         throughput,
-        allow_background=replacement_enabled,
+        allow_background=background_enabled,
     )
     expected_request_count = _nonnegative_int(
         throughput.get("llm_call_count"), "llm_call_count", positive=True
@@ -672,7 +676,7 @@ def summarize(
         tasks,
         task_startups,
         expected_request_count,
-        allow_background=replacement_enabled,
+        allow_background=background_enabled,
     )
     request_count = len(requests)
     counters = _counter_deltas(prometheus_start_path, prometheus_final_path)
@@ -698,7 +702,7 @@ def summarize(
     def compare_counter(name: str, observed: int, counter: int | None) -> None:
         if counter is None:
             unattributed_counter_tokens[name] = None
-        elif replacement_enabled:
+        elif background_enabled:
             if observed > counter:
                 raise ValueError(f"request {name} total exceeds Prometheus")
             unattributed_counter_tokens[name] = counter - observed
@@ -708,13 +712,13 @@ def summarize(
     compare_counter("prompt_tokens", prompt_tokens, counters["prompt_tokens"])
     if (
         counters["cached_prompt_tokens"] is not None
-        and not replacement_enabled
+        and not background_enabled
         and cached_tokens != counters["cached_prompt_tokens"]
     ):
         raise ValueError("request cached-token total differs from Prometheus")
     if (
         counters["recomputed_prompt_tokens"] is not None
-        and not replacement_enabled
+        and not background_enabled
         and recomputed_tokens != counters["recomputed_prompt_tokens"]
     ):
         raise ValueError("derived recomputed-token total differs from Prometheus")
@@ -765,9 +769,13 @@ def summarize(
                 "observed_task_count": len(
                     {request["task_id"] for request in requests}
                 ),
-                "replacement_load": replacement_load,
+                (
+                    "background_load"
+                    if "background_load" in throughput
+                    else "replacement_load"
+                ): load_config,
             }
-            if replacement_enabled
+            if background_enabled
             else {}
         ),
         "request_token_totals": {
@@ -777,7 +785,7 @@ def summarize(
             "generation_tokens": generation_tokens,
             **(
                 {"unattributed_prometheus_tokens": unattributed_counter_tokens}
-                if replacement_enabled
+                if background_enabled
                 else {}
             ),
         },
@@ -816,7 +824,7 @@ def summarize(
             "generation token counter delta / "
             + (
                 "measured-cohort makespan seconds"
-                if replacement_enabled
+                if background_enabled
                 else "scheduled makespan seconds"
             )
         ),
