@@ -71,7 +71,7 @@ class _TraceToolReplayState:
     """Replay completed external-tool calls from one source trajectory."""
 
     def __init__(self, actions: list[dict[str, Any]], replay_speed: float) -> None:
-        if replay_speed <= 0:
+        if not math.isfinite(replay_speed) or replay_speed <= 0:
             raise ValueError("replay_speed must be positive")
         self.replay_speed = replay_speed
         self.actions: dict[str, dict[str, Any]] = {}
@@ -138,6 +138,7 @@ class _TraceToolReplayState:
     def summary(self) -> dict[str, Any]:
         return {
             "mode": "trace_timed_external_service",
+            "replay_speed": self.replay_speed,
             "expected_calls": len(self.actions),
             "completed_calls": len(self.completed),
             "expected_sleep_s": round(
@@ -1976,6 +1977,9 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
     if tool_resource_profile is not None:
         tool_resource_profile = str(tool_resource_profile)
     trace_tool_replay = bool(request.get("trace_tool_replay", False))
+    trace_tool_replay_speed = float(
+        os.environ.get("OPENCLAW_REPLAY_TRACE_TOOL_SPEED", replay_speed)
+    )
     if trace_tool_replay and tool_resource_profile is not None:
         raise ValueError("trace tool replay cannot collect live tool resources")
     tool_resource_run_token = request.get("tool_resource_run_token")
@@ -2135,7 +2139,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
         )
         if trace_tool_replay:
             tool_overrides, trace_tool_state = _build_trace_replay_tools(
-                source_actions, replay_speed
+                source_actions, trace_tool_replay_speed
             )
         else:
             tool_overrides = build_container_tools_for_agent(
@@ -2163,6 +2167,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
                 {
                     "tool_execution_environment": "trace_timed_external_service",
                     "tool_runtime": "source_trace_duration_and_result",
+                    "tool_replay_speed": trace_tool_replay_speed,
                 }
                 if trace_tool_replay
                 else {}

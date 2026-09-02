@@ -208,6 +208,14 @@ def test_native_priority_marks_initial_then_return_requests() -> None:
 def test_trace_tool_replay_checks_call_and_returns_recorded_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    sleeps: list[float] = []
+
+    async def record_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(
+        "trace_collect.openclaw_host_runtime.asyncio.sleep", record_sleep
+    )
     actions = [
         {
             "action_type": "tool_exec",
@@ -216,17 +224,19 @@ def test_trace_tool_replay_checks_call_and_returns_recorded_result(
                 "tool_call_id": "call-1",
                 "tool_args": '{"command":"pytest -q"}',
                 "tool_result": "recorded output",
-                "duration_ms": 0,
+                "duration_ms": 4000,
             },
         }
     ]
-    tools, state = _build_trace_replay_tools(actions, replay_speed=1.0)
+    tools, state = _build_trace_replay_tools(actions, replay_speed=4.0)
     tool = tools[0]
     tool.set_tool_call_context("call-1", {"command": "pytest -q"})
 
     assert asyncio.run(tool.execute(command="pytest -q")) == "recorded output"
+    assert sleeps == [1.0]
     assert state.complete
     assert state.summary()["completed_calls"] == 1
+    assert state.summary()["replay_speed"] == 4.0
 
     bad_tools, _ = _build_trace_replay_tools(actions, replay_speed=1.0)
     bad_tools[0].set_tool_call_context("call-1", {"command": "pytest tests/unit"})
@@ -273,6 +283,7 @@ def test_paper_baseline_runner_has_required_policy_checks() -> None:
     assert 'proxy_launch+=(taskset -c "$vllm_cpuset")' in runner_text
     assert '>"$cell/proxy.argv"' in runner_text
     assert 'OPENCLAW_REPLAY_TRACE_TOOLS="$trace_tool_replay"' in runner_text
+    assert 'OPENCLAW_REPLAY_TRACE_TOOL_SPEED="$trace_tool_replay_speed"' in runner_text
     assert '"tool_execution": (' in runner_text
     assert "shadow_llm_timeout_s=${SHADOW_LLM_TIMEOUT_S:-300}" in runner_text
     assert '--shadow-llm-timeout-s "$shadow_llm_timeout_s"' in runner_text
@@ -424,6 +435,7 @@ fi
         "CONTAINER_CPUSET": "",
         "VLLM_CPUSET": "",
         "TRACE_TOOL_REPLAY": "1",
+        "TRACE_TOOL_REPLAY_SPEED": "4",
         "SERVING_METRICS": "off",
         "FAKE_READY": str(tmp_path / "ready"),
         "FAKE_PROXY_READY": str(tmp_path / "proxy-ready"),
@@ -445,10 +457,9 @@ fi
     assert summary_run.returncode == 1
     assert (summary_root / "fcfs-r1/cell-exit-code").read_text().strip() == "1"
     assert (summary_root / "fcfs-r2/cell-exit-code").read_text().strip() == "0"
-    assert (
-        "replacement_load"
-        not in json.loads((summary_root / "protocol.json").read_text())["workload"]
-    )
+    workload = json.loads((summary_root / "protocol.json").read_text())["workload"]
+    assert "replacement_load" not in workload
+    assert workload["tool_replay_speed"] == 4.0
 
     server_root = tmp_path / "server-failure"
     server_run = subprocess.run(

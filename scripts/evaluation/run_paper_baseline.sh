@@ -15,6 +15,7 @@ container_cpus=${CONTAINER_CPUS:-}
 vllm_cpuset=${VLLM_CPUSET:-}
 continuum_profile=${CONTINUUM_REPRODUCTION_PROFILE:-}
 trace_tool_replay=${TRACE_TOOL_REPLAY:-0}
+trace_tool_replay_speed=${TRACE_TOOL_REPLAY_SPEED:-1}
 stage_all_before_replay=${STAGE_ALL_BEFORE_REPLAY:-1}
 replacement_delay_mean_s=${REPLACEMENT_DELAY_MEAN_S:-}
 replacement_seed=${REPLACEMENT_SEED:-42}
@@ -55,6 +56,20 @@ preflight() {
   [[ -f "$manifest" ]] || fail "missing replay manifest: $manifest"
   [[ ! -e "$run_root" ]] || fail "run root already exists: $run_root"
   [[ "$trace_tool_replay" == 0 || "$trace_tool_replay" == 1 ]] || fail "TRACE_TOOL_REPLAY must be 0 or 1"
+  "$python" - "$trace_tool_replay" "$trace_tool_replay_speed" <<'PY'
+import math
+import sys
+
+enabled = sys.argv[1] == "1"
+try:
+    speed = float(sys.argv[2])
+except ValueError as exc:
+    raise SystemExit("TRACE_TOOL_REPLAY_SPEED must be positive") from exc
+if not math.isfinite(speed) or speed <= 0:
+    raise SystemExit("TRACE_TOOL_REPLAY_SPEED must be positive")
+if not enabled and speed != 1:
+    raise SystemExit("TRACE_TOOL_REPLAY_SPEED requires TRACE_TOOL_REPLAY=1")
+PY
   [[ "$stage_all_before_replay" == 0 || "$stage_all_before_replay" == 1 ]] || fail "STAGE_ALL_BEFORE_REPLAY must be 0 or 1"
   if [[ -n "$replacement_delay_mean_s" ]]; then
     [[ "$replacement_seed" =~ ^-?[0-9]+$ ]] || \
@@ -399,10 +414,10 @@ run_cell() (
   elif [[ "$method" == saga ]]; then
     simulate+=(--shadow-llm-saga-profile "$saga_profile")
   fi
-  printf '%q ' env OPENCLAW_REPLAY_PAIRED_WORKLOAD_CONTRACT=2 OPENCLAW_REPLAY_TRACE_TOOLS="$trace_tool_replay" PYTHONPATH="$repo/src:$repo" "${simulate[@]}" >"$cell/simulate.argv"
+  printf '%q ' env OPENCLAW_REPLAY_PAIRED_WORKLOAD_CONTRACT=2 OPENCLAW_REPLAY_TRACE_TOOLS="$trace_tool_replay" OPENCLAW_REPLAY_TRACE_TOOL_SPEED="$trace_tool_replay_speed" PYTHONPATH="$repo/src:$repo" "${simulate[@]}" >"$cell/simulate.argv"
   printf '\n' >>"$cell/simulate.argv"
   set +e
-  OPENCLAW_REPLAY_PAIRED_WORKLOAD_CONTRACT=2 OPENCLAW_REPLAY_TRACE_TOOLS="$trace_tool_replay" PYTHONPATH="$repo/src:$repo" \
+  OPENCLAW_REPLAY_PAIRED_WORKLOAD_CONTRACT=2 OPENCLAW_REPLAY_TRACE_TOOLS="$trace_tool_replay" OPENCLAW_REPLAY_TRACE_TOOL_SPEED="$trace_tool_replay_speed" PYTHONPATH="$repo/src:$repo" \
     "${simulate[@]}" >"$cell/simulate.log" 2>&1
   rc=$?
   set -e
@@ -482,6 +497,7 @@ run_all() {
     CONTINUUM_PROFILE="$continuum_profile" \
     SAGA_PROFILE="$saga_profile" \
     TRACE_TOOL_REPLAY="$trace_tool_replay" \
+    TRACE_TOOL_REPLAY_SPEED="$trace_tool_replay_speed" \
     STAGE_ALL_BEFORE_REPLAY="$stage_all_before_replay" \
     REPLACEMENT_DELAY_MEAN_S="$replacement_delay_mean_s" \
     REPLACEMENT_SEED="$replacement_seed" \
@@ -513,6 +529,11 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
       "trace_timed_external_service"
       if os.environ["TRACE_TOOL_REPLAY"] == "1"
       else "task_container"
+    ),
+    "tool_replay_speed": (
+      float(os.environ["TRACE_TOOL_REPLAY_SPEED"])
+      if os.environ["TRACE_TOOL_REPLAY"] == "1"
+      else None
     ),
     "shadow_llm_timeout_s": float(os.environ["SHADOW_LLM_TIMEOUT_S"]),
     "stage_all_before_replay": os.environ["STAGE_ALL_BEFORE_REPLAY"] == "1",
