@@ -7,14 +7,14 @@ source "$here/continuum_public.sh"
 
 public_checkout="$checkout"
 public_venv="$venv"
-checkout="${CONTINUUM_REPRODUCTION_CHECKOUT:-$cache_root/agent-sched-bench/vllm-continuum-reproduction-v2-$COMMIT}"
-venv="${CONTINUUM_REPRODUCTION_VENV:-$cache_root/agent-sched-bench/venvs/continuum-reproduction-v2-$COMMIT}"
+checkout="${CONTINUUM_REPRODUCTION_CHECKOUT:-$cache_root/agent-sched-bench/vllm-continuum-reproduction-v3-$COMMIT}"
+venv="${CONTINUUM_REPRODUCTION_VENV:-$cache_root/agent-sched-bench/venvs/continuum-reproduction-v3-$COMMIT}"
 validated_observability_args=()
 
 usage() {
   cat <<'EOF'
 Usage: continuum_reproduction.sh apply|verify|install|manifest
-       continuum_reproduction.sh serve MODEL --dtype DTYPE --kv-cache-dtype DTYPE
+       continuum_reproduction.sh serve|serve-oracle-length MODEL --dtype DTYPE --kv-cache-dtype DTYPE
 
 Adds the cost-model/empirical-CDF TTL estimator from Continuum v6 to an
 independent checkout of the authors' official public fork. Installation is an
@@ -210,7 +210,8 @@ main() {
     verify) verify ;;
     install) install ;;
     manifest) python3 "$here/continuum_reproduction.py" manifest ;;
-    serve) shift; serve "$@" ;;
+    serve) unset CONTINUUM_ORACLE_OUTPUT_LENGTH; shift; serve "$@" ;;
+    serve-oracle-length) export CONTINUUM_ORACLE_OUTPUT_LENGTH=1; shift; serve "$@" ;;
     -h|--help|help) usage ;;
     *) usage >&2; exit 2 ;;
   esac

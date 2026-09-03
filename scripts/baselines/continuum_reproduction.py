@@ -40,6 +40,51 @@ INFERRED_MEMORYFULNESS_SAMPLES = "completed programs, k=1..N"
 logger = logging.getLogger(__name__)
 
 
+def select_oracle_length_request(
+    requests: Any,
+    pinned_job_ids: set[str],
+    job_first_entry_time: dict[str, float],
+) -> Any:
+    """Keep Continuum's pinned tier, then prefer less remaining decode work."""
+    eligible = [request for request in requests if request.job_id in pinned_job_ids]
+    if not eligible:
+        eligible = list(requests)
+
+    baseline = min(
+        eligible,
+        key=lambda request: job_first_entry_time.get(
+            request.job_id, request.arrival_time
+        ),
+    )
+
+    def remaining_tokens(request: Any) -> int:
+        remaining = request.max_tokens - len(request.output_token_ids)
+        if remaining < 0:
+            raise ValueError("request output exceeds max_tokens")
+        return remaining
+
+    selected = min(
+        eligible,
+        key=lambda request: (
+            remaining_tokens(request),
+            job_first_entry_time.get(request.job_id, request.arrival_time),
+            request.arrival_time,
+            request.request_id,
+        ),
+    )
+    if selected is not baseline:
+        logger.info(
+            "Continuum oracle-length changed selection from %s (%d tokens) "
+            "to %s (%d tokens) among %d requests",
+            baseline.request_id,
+            remaining_tokens(baseline),
+            selected.request_id,
+            remaining_tokens(selected),
+            len(eligible),
+        )
+    return selected
+
+
 @dataclass(frozen=True)
 class RuntimeBinding:
     """Exact serving configuration for which a measured profile is valid."""
@@ -826,6 +871,22 @@ def _trace_adapter_text(path: Path, relative: str, variant: str) -> str:
 
 """
         return _replace_once(text, anchor, addition + anchor, path=path)
+    if relative == "v1/core/sched/request_queue.py" and variant == "reproduction":
+        text = _replace_once(text, "import heapq\n", "import heapq\nimport os\n", path=path)
+        anchor = (
+            "        pinned_request_job_id_set = "
+            "{req.job_id for req, _ in pinned_requests}\n"
+        )
+        addition = anchor + """
+        if os.environ.get("CONTINUUM_ORACLE_OUTPUT_LENGTH") == "1":
+            from vllm.v1.core.continuum_reproduction import (
+                select_oracle_length_request,
+            )
+            return select_oracle_length_request(
+                self, pinned_request_job_id_set,
+                self.job_id_first_entry_time)
+"""
+        return _replace_once(text, anchor, addition, path=path)
     if relative == "v1/core/estimate_with_func.py" and variant == "public":
         text = _replace_once(
             text,
@@ -859,6 +920,8 @@ def _trace_adapter_expected(source_vllm: Path, variant: str) -> dict[str, str]:
     relatives = list(_TRACE_ADAPTER_COMMON_FILES)
     if variant == "public":
         relatives.append("v1/core/estimate_with_func.py")
+    else:
+        relatives.append("v1/core/sched/request_queue.py")
     return {
         relative: _trace_adapter_text(source_vllm / relative, relative, variant)
         for relative in relatives

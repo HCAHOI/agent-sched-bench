@@ -96,7 +96,7 @@ PY
   [[ -z "$vllm_cpuset" ]] || command -v taskset >/dev/null || fail "taskset is required"
   local cell
   for cell in "${cells[@]}"; do
-    [[ "$cell" =~ ^(fcfs|thunderagent|agentix|continuum-public|continuum-reproduction|native-priority|native-priority-aging|cachewise-disabled|cachewise|cachewise-oracle-length|saga)-r[1-9][0-9]*$ ]] || fail "unsupported cell: $cell"
+    [[ "$cell" =~ ^(fcfs|thunderagent|agentix|continuum-public|continuum-reproduction|continuum-reproduction-oracle-length|native-priority|native-priority-aging|cachewise-disabled|cachewise|cachewise-oracle-length|saga)-r[1-9][0-9]*$ ]] || fail "unsupported cell: $cell"
   done
   command -v docker >/dev/null || fail "docker is required"
   command -v nvidia-smi >/dev/null || fail "nvidia-smi is required"
@@ -131,7 +131,7 @@ PY
   if has_method continuum-public; then
     "$repo/scripts/baselines/continuum_public.sh" verify >/dev/null
   fi
-  if has_method continuum-reproduction; then
+  if has_method continuum-reproduction || has_method continuum-reproduction-oracle-length; then
     [[ -f "$continuum_profile" ]] || fail "missing Continuum reproduction profile"
     "$repo/scripts/baselines/continuum_reproduction.sh" verify >/dev/null
   fi
@@ -245,7 +245,7 @@ run_cell() (
   local server_env=(VLLM_NO_USAGE_STATS=1 CUDA_VISIBLE_DEVICES=0)
   if [[ "$serving_metrics" == on ]]; then
     local cupti_pythonpath=$cupti_overlay
-    if [[ "$method" == continuum-public || "$method" == continuum-reproduction ]]; then
+    if [[ "$method" == continuum-public || "$method" == continuum-reproduction || "$method" == continuum-reproduction-oracle-length ]]; then
       cupti_pythonpath="$cupti_overlay/cuda-bindings:$cupti_pythonpath"
     fi
     server_env+=(
@@ -268,6 +268,10 @@ run_cell() (
       ;;
     continuum-reproduction)
       server=("$repo/scripts/baselines/continuum_reproduction.sh" serve "$model" --dtype bfloat16 --kv-cache-dtype auto "${observability_args[@]}")
+      server_env+=(CONTINUUM_REPRODUCTION_PROFILE="$continuum_profile" CONTINUUM_REPRODUCTION_MODE=prefill RUN_OUTPUT_DIR="$cell/continuum" GPU_MEMORY_UTILIZATION="$gpu_memory_utilization")
+      ;;
+    continuum-reproduction-oracle-length)
+      server=("$repo/scripts/baselines/continuum_reproduction.sh" serve-oracle-length "$model" --dtype bfloat16 --kv-cache-dtype auto "${observability_args[@]}")
       server_env+=(CONTINUUM_REPRODUCTION_PROFILE="$continuum_profile" CONTINUUM_REPRODUCTION_MODE=prefill RUN_OUTPUT_DIR="$cell/continuum" GPU_MEMORY_UTILIZATION="$gpu_memory_utilization")
       ;;
     native-priority-aging)
@@ -368,7 +372,7 @@ run_cell() (
       --event-log "$cell/agentix-events.jsonl" >"$cell/proxy.log" 2>&1 &
     proxy_pid=$!
     wait_http http://127.0.0.1:9000/programs/state "$proxy_pid" "$cell/proxy.log"
-  elif [[ "$method" == continuum-public || "$method" == continuum-reproduction ]]; then
+  elif [[ "$method" == continuum-public || "$method" == continuum-reproduction || "$method" == continuum-reproduction-oracle-length ]]; then
     shadow_mode=continuum-public
   elif [[ "$method" == native-priority || "$method" == native-priority-aging ]]; then
     shadow_mode=native-priority
@@ -557,6 +561,7 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
   },
   "comparison": "paper baselines on one fixed agent-trajectory replay workload",
   "continuum_reproduction_profile": os.environ["CONTINUUM_PROFILE"] or None,
+  "continuum_reproduction_oracle_length": "Continuum pinned-first; exact remaining output tokens within the eligible tier",
   "saga_profile": os.environ["SAGA_PROFILE"] or None,
   "agentix_queue_upper_bounds_s": [0.25, 1, 4, 16],
   "native_priority": {

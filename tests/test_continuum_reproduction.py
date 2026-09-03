@@ -21,6 +21,7 @@ from scripts.baselines.continuum_reproduction import (
     inference_manifest,
     install_trace_adapter,
     memoryfulness,
+    select_oracle_length_request,
     validate_runtime_binding,
     verify_checkout,
     verify_trace_adapter,
@@ -279,14 +280,38 @@ def test_inferred_choices_are_machine_readable() -> None:
     }
 
 
+def test_oracle_length_preserves_pins_then_uses_remaining_output() -> None:
+    def request(
+        request_id: str, job_id: str, max_tokens: int, produced: int, arrival: float
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            request_id=request_id,
+            job_id=job_id,
+            max_tokens=max_tokens,
+            output_token_ids=[0] * produced,
+            arrival_time=arrival,
+        )
+
+    older_long = request("older-long", "older", 20, 0, 1.0)
+    newer_short = request("newer-short", "newer", 10, 8, 2.0)
+    unpinned_shortest = request("unpinned", "other", 1, 0, 3.0)
+    selected = select_oracle_length_request(
+        [older_long, newer_short, unpinned_shortest],
+        {"older", "newer"},
+        {"older": 1.0, "newer": 2.0, "other": 3.0},
+    )
+
+    assert selected is newer_short
+
+
 def test_wheel_overlay_scripts_are_isolated_and_non_editable(tmp_path: Path) -> None:
     public = (SCRIPT_DIR / "continuum_public.sh").read_text()
     reproduction = (SCRIPT_DIR / "continuum_reproduction.sh").read_text()
     assert "--editable" not in public + reproduction
     assert "vllm-continuum-public-" in public
-    assert "vllm-continuum-reproduction-v2-" in reproduction
+    assert "vllm-continuum-reproduction-v3-" in reproduction
     assert "venvs/continuum-public-" in public
-    assert "venvs/continuum-reproduction-v2-" in reproduction
+    assert "venvs/continuum-reproduction-v3-" in reproduction
     assert 'continuum_python="${CONTINUUM_PYTHON:-$repo/.venv/bin/python}"' in public
     shared = tmp_path / "shared"
     rejected = subprocess.run(
@@ -470,6 +495,35 @@ def test_trace_replay_adapter_applies_exactly_to_public_overlay(tmp_path: Path) 
     scheduler.write_text(scheduler.read_text() + "\n# pollution\n")
     with pytest.raises(ValueError, match="differs from expected"):
         verify_trace_adapter(source, package, "public")
+
+
+@pytest.mark.slow
+def test_trace_replay_adapter_adds_reproduction_oracle(tmp_path: Path) -> None:
+    source = (
+        Path.home()
+        / ".cache/agent-sched-bench"
+        / f"vllm-continuum-reproduction-v2-{CONTINUUM_COMMIT}"
+        / "vllm"
+    )
+    if not source.is_dir():
+        pytest.skip("pinned Continuum reproduction checkout is not cached")
+    package = tmp_path / "vllm"
+    for relative in (
+        "entrypoints/openai/api_server.py",
+        "v1/core/sched/scheduler.py",
+        "v1/core/sched/request_queue.py",
+        "v1/engine/core.py",
+    ):
+        target = package / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / relative, target)
+
+    install_trace_adapter(source, package, "reproduction")
+    verify_trace_adapter(source, package, "reproduction")
+
+    request_queue = (package / "v1/core/sched/request_queue.py").read_text()
+    assert 'os.environ.get("CONTINUUM_ORACLE_OUTPUT_LENGTH") == "1"' in request_queue
+    assert "select_oracle_length_request" in request_queue
 
 
 @pytest.mark.slow

@@ -156,7 +156,8 @@ continuum_verify_overlay() {
   for relative in "${OVERLAY_FILES[@]}"; do
     if test "$relative" = entrypoints/openai/api_server.py || \
        test "$relative" = v1/core/sched/scheduler.py || \
-       { test "$variant" = public && test "$relative" = v1/core/estimate_with_func.py; }; then
+       { test "$variant" = public && test "$relative" = v1/core/estimate_with_func.py; } || \
+       { test "$variant" = reproduction && test "$relative" = v1/core/sched/request_queue.py; }; then
       continue
     fi
     cmp -s "$source/vllm/$relative" "$package_dir/$relative" || {
