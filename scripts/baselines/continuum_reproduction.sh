@@ -7,14 +7,14 @@ source "$here/continuum_public.sh"
 
 public_checkout="$checkout"
 public_venv="$venv"
-checkout="${CONTINUUM_REPRODUCTION_CHECKOUT:-$cache_root/agent-sched-bench/vllm-continuum-reproduction-v5-$COMMIT}"
-venv="${CONTINUUM_REPRODUCTION_VENV:-$cache_root/agent-sched-bench/venvs/continuum-reproduction-v5-$COMMIT}"
+checkout="${CONTINUUM_REPRODUCTION_CHECKOUT:-$cache_root/agent-sched-bench/vllm-continuum-reproduction-v6-$COMMIT}"
+venv="${CONTINUUM_REPRODUCTION_VENV:-$cache_root/agent-sched-bench/venvs/continuum-reproduction-v6-$COMMIT}"
 validated_observability_args=()
 
 usage() {
   cat <<'EOF'
 Usage: continuum_reproduction.sh apply|verify|install|manifest
-       continuum_reproduction.sh serve|serve-oracle-length-aging MODEL --dtype DTYPE --kv-cache-dtype DTYPE
+       continuum_reproduction.sh serve|serve-oracle-deadline MODEL --dtype DTYPE --kv-cache-dtype DTYPE
 
 Adds the cost-model/empirical-CDF TTL estimator from Continuum v6 to an
 independent checkout of the authors' official public fork. Installation is an
@@ -210,9 +210,10 @@ main() {
     verify) verify ;;
     install) install ;;
     manifest) python3 "$here/continuum_reproduction.py" manifest ;;
-    serve) unset CONTINUUM_ORACLE_LENGTH_AGING; shift; serve "$@" ;;
-    serve-oracle-length-aging)
-      export CONTINUUM_ORACLE_LENGTH_AGING=1
+    serve) unset CONTINUUM_ORACLE_DEADLINE; shift; serve "$@" ;;
+    serve-oracle-deadline)
+      : "${CONTINUUM_ORACLE_DECODE_MS_PER_TOKEN:?Continuum Oracle decode coefficient is required}"
+      export CONTINUUM_ORACLE_DEADLINE=1
       shift
       serve "$@"
       ;;

@@ -11,6 +11,7 @@ import pytest
 
 from scripts.baselines.continuum_reproduction import (
     CONTINUUM_COMMIT,
+    ORACLE_TTFT_DEADLINE_SECONDS,
     PAPER_HISTORY_THRESHOLD,
     CacheMissProfile,
     RuntimeBinding,
@@ -21,7 +22,7 @@ from scripts.baselines.continuum_reproduction import (
     inference_manifest,
     install_trace_adapter,
     memoryfulness,
-    select_oracle_length_aging_request,
+    select_oracle_deadline_request,
     validate_runtime_binding,
     verify_checkout,
     verify_trace_adapter,
@@ -280,38 +281,217 @@ def test_inferred_choices_are_machine_readable() -> None:
     }
 
 
-def test_oracle_length_preserves_pins_until_oldest_request_ages() -> None:
-    def request(
-        request_id: str, job_id: str, max_tokens: int, produced: int, arrival: float
-    ) -> SimpleNamespace:
-        return SimpleNamespace(
-            request_id=request_id,
-            job_id=job_id,
-            max_tokens=max_tokens,
-            output_token_ids=[0] * produced,
-            arrival_time=arrival,
-        )
-
-    older_long = request("older-long", "older", 20, 0, 1.0)
-    newer_short = request("newer-short", "newer", 10, 8, 2.0)
-    unpinned_shortest = request("unpinned", "other", 1, 0, 3.0)
-    selected = select_oracle_length_aging_request(
-        [older_long, newer_short, unpinned_shortest],
-        {"older", "newer"},
-        {"older": 1.0, "newer": 2.0, "other": 3.0},
-        now=300.0,
+def _oracle_request(
+    request_id: str,
+    *,
+    arrival: float,
+    prompt: int,
+    max_tokens: int,
+    produced: int = 0,
+    computed: int = 0,
+    job_id: str | None = None,
+) -> SimpleNamespace:
+    item = SimpleNamespace(
+        request_id=request_id,
+        job_id=job_id or request_id,
+        max_tokens=max_tokens,
+        output_token_ids=[0] * produced,
+        arrival_time=arrival,
+        num_prompt_tokens=prompt,
+        num_computed_tokens=computed,
+        num_tokens=prompt + produced,
     )
-    assert selected is newer_short
+    item.block_hashes = item
+    return item
+
+
+def _oracle_manager(cached: dict[str, int]) -> SimpleNamespace:
+    return SimpleNamespace(
+        coordinator=SimpleNamespace(
+            find_longest_cache_hit=lambda request, _limit: (
+                None,
+                cached.get(request.request_id, 0),
+            )
+        )
+    )
+
+
+def _oracle_profile() -> CacheMissProfile:
+    return CacheMissProfile(
+        mode="prefill",
+        model="model",
+        max_context_tokens=500,
+        quadratic_seconds=(0.0, 1.0, 0.0),
+    )
+
+
+def test_oracle_deadline_allows_only_predicted_safe_shortest() -> None:
+    oldest = _oracle_request("oldest", arrival=1000.0, prompt=10, max_tokens=100)
+    shortest = _oracle_request(
+        "unpinned-shortest", arrival=1001.0, prompt=1, max_tokens=1
+    )
+    manager = _oracle_manager({})
 
     assert (
-        select_oracle_length_aging_request(
-            [older_long, newer_short, unpinned_shortest],
-            {"newer"},
-            {"older": 1.0, "newer": 2.0, "other": 3.0},
-            now=301.0,
+        select_oracle_deadline_request(
+            [oldest, shortest],
+            {oldest.job_id: 1000.0, shortest.job_id: 1001.0},
+            manager,
+            [],
+            1,
+            _oracle_profile(),
+            1.0,
+            now=1100.0,
         )
-        is older_long
+        is shortest
     )
+
+    boundary_now = oldest.arrival_time + ORACLE_TTFT_DEADLINE_SECONDS - 13.0
+    assert (
+        select_oracle_deadline_request(
+            [oldest, shortest],
+            {oldest.job_id: 1000.0, shortest.job_id: 1001.0},
+            manager,
+            [],
+            1,
+            _oracle_profile(),
+            1.0,
+            now=boundary_now,
+        )
+        is oldest
+    )
+    assert (
+        select_oracle_deadline_request(
+            [oldest, shortest],
+            {oldest.job_id: 1000.0, shortest.job_id: 1001.0},
+            manager,
+            [],
+            1,
+            _oracle_profile(),
+            1.0,
+            now=oldest.arrival_time + ORACLE_TTFT_DEADLINE_SECONDS + 1.0,
+        )
+        is oldest
+    )
+
+    running = _oracle_request(
+        "running", arrival=999.0, prompt=1, max_tokens=1, computed=1
+    )
+    assert (
+        select_oracle_deadline_request(
+            [oldest, shortest],
+            {oldest.job_id: 1000.0, shortest.job_id: 1001.0},
+            manager,
+            [running],
+            3,
+            _oracle_profile(),
+            1.0,
+            now=1299.0,
+        )
+        is shortest
+    )
+
+
+def test_oracle_deadline_uses_earliest_running_release() -> None:
+    oldest = _oracle_request("oldest", arrival=1000.0, prompt=10, max_tokens=200)
+    shortest = _oracle_request("shortest", arrival=1001.0, prompt=1, max_tokens=99)
+    running = _oracle_request(
+        "running", arrival=999.0, prompt=1, max_tokens=1, computed=1
+    )
+    manager = _oracle_manager({})
+
+    assert (
+        select_oracle_deadline_request(
+            [oldest, shortest],
+            {oldest.job_id: 1000.0, shortest.job_id: 1001.0},
+            manager,
+            [running],
+            2,
+            _oracle_profile(),
+            1.0,
+            now=1280.0,
+        )
+        is shortest
+    )
+    assert (
+        select_oracle_deadline_request(
+            [oldest, shortest],
+            {oldest.job_id: 1000.0, shortest.job_id: 1001.0},
+            manager,
+            [],
+            1,
+            _oracle_profile(),
+            1.0,
+            now=1280.0,
+        )
+        is oldest
+    )
+
+
+def test_oracle_deadline_uses_remaining_output_and_stable_ties() -> None:
+    progress = _oracle_request(
+        "progress", arrival=3.0, prompt=10, max_tokens=10, produced=9
+    )
+    more_left = _oracle_request(
+        "more-left", arrival=2.0, prompt=10, max_tokens=3, produced=1
+    )
+    tied_earlier_job = _oracle_request(
+        "tied", arrival=4.0, prompt=10, max_tokens=4, produced=3
+    )
+    manager = _oracle_manager({"progress": 9, "more-left": 1, "tied": 3})
+
+    assert (
+        select_oracle_deadline_request(
+            [progress, more_left],
+            {progress.job_id: 1.0, more_left.job_id: 0.0},
+            manager,
+            [],
+            1,
+            _oracle_profile(),
+            1.0,
+            now=5.0,
+        )
+        is progress
+    )
+    assert (
+        select_oracle_deadline_request(
+            [progress, tied_earlier_job],
+            {progress.job_id: 2.0, tied_earlier_job.job_id: 1.0},
+            manager,
+            [],
+            1,
+            _oracle_profile(),
+            1.0,
+            now=5.0,
+        )
+        is tied_earlier_job
+    )
+
+    invalid = _oracle_request(
+        "invalid", arrival=5.0, prompt=10, max_tokens=1, produced=2
+    )
+    with pytest.raises(ValueError, match="output exceeds max_tokens"):
+        select_oracle_deadline_request(
+            [invalid],
+            {invalid.job_id: 5.0},
+            _oracle_manager({}),
+            [],
+            1,
+            _oracle_profile(),
+            1.0,
+            now=5.0,
+        )
+    with pytest.raises(ValueError, match="output exceeds max_tokens"):
+        select_oracle_deadline_request(
+            [progress],
+            {progress.job_id: 5.0},
+            manager,
+            [invalid],
+            2,
+            _oracle_profile(),
+            1.0,
+            now=5.0,
+        )
 
 
 def test_wheel_overlay_scripts_are_isolated_and_non_editable(tmp_path: Path) -> None:
@@ -319,9 +499,9 @@ def test_wheel_overlay_scripts_are_isolated_and_non_editable(tmp_path: Path) -> 
     reproduction = (SCRIPT_DIR / "continuum_reproduction.sh").read_text()
     assert "--editable" not in public + reproduction
     assert "vllm-continuum-public-" in public
-    assert "vllm-continuum-reproduction-v5-" in reproduction
+    assert "vllm-continuum-reproduction-v6-" in reproduction
     assert "venvs/continuum-public-" in public
-    assert "venvs/continuum-reproduction-v5-" in reproduction
+    assert "venvs/continuum-reproduction-v6-" in reproduction
     assert 'continuum_python="${CONTINUUM_PYTHON:-$repo/.venv/bin/python}"' in public
     shared = tmp_path / "shared"
     rejected = subprocess.run(
@@ -463,6 +643,9 @@ def test_patch_applies_to_clean_pinned_checkout(tmp_path: Path) -> None:
         "continuum_reproduction"
         in (checkout / "vllm/v1/core/sched/scheduler.py").read_text()
     )
+    scheduler = (checkout / "vllm/v1/core/sched/scheduler.py").read_text()
+    assert "self.connector, self.running," in scheduler
+    assert scheduler.count("self.waiting.remove_request(request)") >= 4
 
 
 @pytest.mark.slow
@@ -508,13 +691,13 @@ def test_trace_replay_adapter_applies_exactly_to_public_overlay(tmp_path: Path) 
 
 
 @pytest.mark.slow
-def test_trace_replay_adapter_adds_reproduction_oracle_length_aging(
+def test_trace_replay_adapter_adds_reproduction_oracle_deadline(
     tmp_path: Path,
 ) -> None:
     source = (
         Path.home()
         / ".cache/agent-sched-bench"
-        / f"vllm-continuum-reproduction-v2-{CONTINUUM_COMMIT}"
+        / f"vllm-continuum-{CONTINUUM_COMMIT}"
         / "vllm"
     )
     if not source.is_dir():
@@ -534,8 +717,10 @@ def test_trace_replay_adapter_adds_reproduction_oracle_length_aging(
     verify_trace_adapter(source, package, "reproduction")
 
     request_queue = (package / "v1/core/sched/request_queue.py").read_text()
-    assert 'os.environ.get("CONTINUUM_ORACLE_LENGTH_AGING") == "1"' in request_queue
-    assert "select_oracle_length_aging_request" in request_queue
+    assert 'os.environ.get("CONTINUUM_ORACLE_DEADLINE") == "1"' in request_queue
+    assert "select_oracle_deadline_request" in request_queue
+    assert "running_requests: list[Request]" in request_queue
+    assert "max_num_running_reqs: int" in request_queue
 
 
 @pytest.mark.slow

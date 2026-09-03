@@ -9,6 +9,7 @@ commit without copying their repository.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import logging
 import math
@@ -25,7 +26,7 @@ from typing import Any, Callable
 
 CONTINUUM_COMMIT = "316a58794a6ff86b216e579b74fd56ed0c5a911f"
 PAPER_HISTORY_THRESHOLD = 100  # Continuum v6 section 4.2.
-ORACLE_AGING_SECONDS = 300.0
+ORACLE_TTFT_DEADLINE_SECONDS = 300.0
 
 # The paper calls T a sliding-window average but does not publish its length.
 # This value is inferred from the only published history threshold (K=100),
@@ -39,67 +40,6 @@ INFERRED_TTL_TIE_BREAK = "smallest"
 INFERRED_MEMORYFULNESS_SAMPLES = "completed programs, k=1..N"
 
 logger = logging.getLogger(__name__)
-
-
-def select_oracle_length_aging_request(
-    requests: Any,
-    pinned_job_ids: set[str],
-    job_first_entry_time: dict[str, float],
-    *,
-    now: float | None = None,
-) -> Any:
-    """Prefer short pinned requests unless the oldest request waited five minutes."""
-    requests = list(requests)
-    oldest = min(
-        requests, key=lambda request: (request.arrival_time, request.request_id)
-    )
-    now = time.time() if now is None else now
-    if now - oldest.arrival_time >= ORACLE_AGING_SECONDS:
-        logger.info(
-            "Continuum oracle-length aging promoted %s after %.3fs among %d requests",
-            oldest.request_id,
-            now - oldest.arrival_time,
-            len(requests),
-        )
-        return oldest
-
-    eligible = [request for request in requests if request.job_id in pinned_job_ids]
-    if not eligible:
-        eligible = requests
-
-    baseline = min(
-        eligible,
-        key=lambda request: job_first_entry_time.get(
-            request.job_id, request.arrival_time
-        ),
-    )
-
-    def remaining_tokens(request: Any) -> int:
-        remaining = request.max_tokens - len(request.output_token_ids)
-        if remaining < 0:
-            raise ValueError("request output exceeds max_tokens")
-        return remaining
-
-    selected = min(
-        eligible,
-        key=lambda request: (
-            remaining_tokens(request),
-            job_first_entry_time.get(request.job_id, request.arrival_time),
-            request.arrival_time,
-            request.request_id,
-        ),
-    )
-    if selected is not baseline:
-        logger.info(
-            "Continuum oracle-length changed selection from %s (%d tokens) "
-            "to %s (%d tokens) among %d requests",
-            baseline.request_id,
-            remaining_tokens(baseline),
-            selected.request_id,
-            remaining_tokens(selected),
-            len(eligible),
-        )
-    return selected
 
 
 @dataclass(frozen=True)
@@ -297,6 +237,138 @@ class CacheMissProfile:
         assert self.bytes_per_token is not None
         assert self.reload_bytes_per_second is not None
         return context_tokens * self.bytes_per_token / self.reload_bytes_per_second
+
+
+@functools.cache
+def _oracle_service_config() -> tuple[CacheMissProfile, float]:
+    profile = CacheMissProfile.from_json(
+        os.environ["CONTINUUM_REPRODUCTION_PROFILE"],
+        os.environ["CONTINUUM_REPRODUCTION_MODE"],
+    )
+    try:
+        decode_seconds = (
+            float(os.environ["CONTINUUM_ORACLE_DECODE_MS_PER_TOKEN"]) / 1000
+        )
+    except (KeyError, ValueError) as error:
+        raise RuntimeError("Continuum Oracle decode coefficient is required") from error
+    if not math.isfinite(decode_seconds) or decode_seconds <= 0:
+        raise RuntimeError("Continuum Oracle decode coefficient must be positive")
+    return profile, decode_seconds
+
+
+def select_oracle_deadline_request(
+    requests: Any,
+    job_first_entry_time: dict[str, float],
+    kv_cache_manager: Any,
+    running_requests: Any,
+    max_num_running_reqs: int,
+    profile: CacheMissProfile,
+    decode_seconds_per_token: float,
+    *,
+    now: float | None = None,
+) -> Any:
+    """Pick shortest service only while the oldest pending TTFT stays feasible."""
+    requests = list(requests)
+    running_requests = list(running_requests)
+
+    def remaining_output(request: Any) -> int:
+        remaining = request.max_tokens - len(request.output_token_ids)
+        if remaining < 0:
+            raise ValueError("request output exceeds max_tokens")
+        return remaining
+
+    def prefill_seconds(total: int, cached: int) -> float:
+        full = profile.estimate_seconds(total)
+        hit = profile.estimate_seconds(cached) if cached else 0.0
+        return max(0.0, full - hit)
+
+    for request in running_requests:
+        remaining_output(request)
+
+    scored = []
+    for request in requests:
+        remaining = remaining_output(request)
+        _, cached = kv_cache_manager.coordinator.find_longest_cache_hit(
+            request.block_hashes, request.num_tokens - 1
+        )
+        prefill = prefill_seconds(request.num_tokens, cached)
+        service = prefill + remaining * decode_seconds_per_token
+        scored.append(
+            (
+                service,
+                job_first_entry_time.get(request.job_id, request.arrival_time),
+                request.arrival_time,
+                request.request_id,
+                request,
+                cached,
+                remaining,
+                prefill,
+            )
+        )
+    shortest_row = min(scored, key=lambda row: row[:4])
+    shortest = shortest_row[4]
+    pending_ttft = [request for request in requests if not request.output_token_ids]
+    if not pending_ttft:
+        return shortest
+    deadline_request = min(
+        pending_ttft,
+        key=lambda request: (request.arrival_time, request.request_id),
+    )
+    if shortest is deadline_request:
+        return shortest
+
+    deadline_row = next(row for row in scored if row[4] is deadline_request)
+    free_slots = max_num_running_reqs - len(running_requests)
+    if free_slots <= 0:
+        raise ValueError("oracle selector called without a free running slot")
+
+    earliest_running_release = None
+    if running_requests:
+        running_service = []
+        for request in running_requests:
+            computed_prompt = min(
+                request.num_computed_tokens, request.num_prompt_tokens
+            )
+            running_service.append(
+                prefill_seconds(request.num_prompt_tokens, computed_prompt)
+                + remaining_output(request) * decode_seconds_per_token
+            )
+        earliest_running_release = min(running_service)
+
+    now = time.time() if now is None else now
+    deadline_remaining = (
+        deadline_request.arrival_time + ORACLE_TTFT_DEADLINE_SECONDS - now
+    )
+    first_token_cost = deadline_row[7] + decode_seconds_per_token
+    next_release = min(
+        shortest_row[0],
+        earliest_running_release if earliest_running_release is not None else math.inf,
+    )
+    safe_shortest = free_slots >= 2 or (
+        next_release + first_token_cost < deadline_remaining
+    )
+    selected = shortest if safe_shortest else deadline_request
+    logger.info(
+        "Continuum oracle-deadline decision reason=%s selected=%s shortest=%s "
+        "deadline=%s shortest_service_s=%.6f earliest_running_release_s=%s "
+        "deadline_remaining_s=%.6f first_token_cost_s=%.6f free_slots=%d "
+        "waiting_count=%d",
+        "safe_shortest" if safe_shortest else "deadline_guard",
+        selected.request_id,
+        shortest.request_id,
+        deadline_request.request_id,
+        shortest_row[0],
+        (
+            f"{earliest_running_release:.6f}"
+            if earliest_running_release is not None
+            else "none"
+        ),
+        deadline_remaining,
+        first_token_cost,
+        free_slots,
+        len(requests),
+    )
+    return selected
 
 
 _DTYPE_ALIASES = {
@@ -680,6 +752,13 @@ _SCHEDULER_REPLACEMENTS = (
         "        )",
     ),
     (
+        "                    request = self.waiting.peek_request(self.pinned_requests, self.kv_cache_manager, self.connector)",
+        "                    request = self.waiting.peek_request(\n"
+        "                        self.pinned_requests, self.kv_cache_manager,\n"
+        "                        self.connector, self.running,\n"
+        "                        self.max_num_running_reqs)",
+    ),
+    (
         "                        logger.debug(\n"
         '                            "%s is still in WAITING_FOR_REMOTE_KVS state.",\n'
         "                            request.request_id)",
@@ -687,6 +766,21 @@ _SCHEDULER_REPLACEMENTS = (
         '                            "%s is still in WAITING_FOR_REMOTE_KVS state.",\n'
         "                            request.request_id)\n"
         "                        self.tool_call_estimator.request_queue_paused(request)",
+    ),
+    (
+        "                        self.tool_call_estimator.request_queue_paused(request)\n"
+        "                        if self.policy == SchedulingPolicy.CONTINUUM: \n"
+        "                            self.waiting.pop_request(self.pinned_requests, self.kv_cache_manager, self.connector)\n"
+        "                        else:\n"
+        "                            self.waiting.pop_request()\n"
+        "                        skipped_waiting_requests.prepend_request(request)\n"
+        "                        continue\n\n"
+        "                # Skip request if the structured output request is still waiting",
+        "                        self.tool_call_estimator.request_queue_paused(request)\n"
+        "                        self.waiting.remove_request(request)\n"
+        "                        skipped_waiting_requests.prepend_request(request)\n"
+        "                        continue\n\n"
+        "                # Skip request if the structured output request is still waiting",
     ),
     (
         "                    else:\n"
@@ -699,10 +793,7 @@ _SCHEDULER_REPLACEMENTS = (
         "                # Check that adding the request still respects the max_loras",
         "                    else:\n"
         "                        self.tool_call_estimator.request_queue_paused(request)\n"
-        "                        if self.policy == SchedulingPolicy.CONTINUUM: \n"
-        "                            self.waiting.pop_request(self.pinned_requests, self.kv_cache_manager, self.connector)\n"
-        "                        else:\n"
-        "                            self.waiting.pop_request()\n"
+        "                        self.waiting.remove_request(request)\n"
         "                        skipped_waiting_requests.prepend_request(request)\n"
         "                        continue\n\n"
         "                # Check that adding the request still respects the max_loras",
@@ -712,7 +803,7 @@ _SCHEDULER_REPLACEMENTS = (
         "                    self.waiting.pop_request()",
         "                    # Scheduling would exceed max_loras, skip.\n"
         "                    self.tool_call_estimator.request_queue_paused(request)\n"
-        "                    self.waiting.pop_request()",
+        "                    self.waiting.remove_request(request)",
     ),
     (
         "                    skipped_waiting_requests.prepend_request(request)\n"
@@ -728,7 +819,15 @@ _SCHEDULER_REPLACEMENTS = (
         "                            self.waiting.pop_request()",
         "                            # the number of matched tokens.\n"
         "                            self.tool_call_estimator.request_queue_paused(request)\n"
-        "                            self.waiting.pop_request()",
+        "                            self.waiting.remove_request(request)",
+    ),
+    (
+        "                    if not self.scheduler_config.chunked_prefill_enabled and \\\n"
+        "                        num_new_tokens > token_budget:\n"
+        "                        self.waiting.pop_request()",
+        "                    if not self.scheduler_config.chunked_prefill_enabled and \\\n"
+        "                        num_new_tokens > token_budget:\n"
+        "                        self.waiting.remove_request(request)",
     ),
     (
         "                # KVTransfer: the connector uses this info to determine\n"
@@ -892,6 +991,38 @@ def _trace_adapter_text(path: Path, relative: str, variant: str) -> str:
         text = _replace_once(
             text, "import heapq\n", "import heapq\nimport os\n", path=path
         )
+        text = _replace_once(
+            text,
+            "    def pop_request(self, pinned_requests: list[Tuple[Request, float]], kv_cache_manager: KVCacheManager, connector: KVConnectorBase_V1) -> Request:\n",
+            "    def pop_request(\n"
+            "        self, pinned_requests: list[Tuple[Request, float]],\n"
+            "        kv_cache_manager: KVCacheManager,\n"
+            "        connector: KVConnectorBase_V1,\n"
+            "        running_requests: list[Request],\n"
+            "        max_num_running_reqs: int,\n"
+            "    ) -> Request:\n",
+            path=path,
+        )
+        text = _replace_once(
+            text,
+            "        request = self.peek_request(pinned_requests, kv_cache_manager, connector)\n",
+            "        request = self.peek_request(\n"
+            "            pinned_requests, kv_cache_manager, connector,\n"
+            "            running_requests, max_num_running_reqs)\n",
+            path=path,
+        )
+        text = _replace_once(
+            text,
+            "    def peek_request(self, pinned_requests: list[Tuple[Request, float]], kv_cache_manager: KVCacheManager, connector: KVConnectorBase_V1) -> Request:\n",
+            "    def peek_request(\n"
+            "        self, pinned_requests: list[Tuple[Request, float]],\n"
+            "        kv_cache_manager: KVCacheManager,\n"
+            "        connector: KVConnectorBase_V1,\n"
+            "        running_requests: list[Request],\n"
+            "        max_num_running_reqs: int,\n"
+            "    ) -> Request:\n",
+            path=path,
+        )
         anchor = (
             "        pinned_request_job_id_set = "
             "{req.job_id for req, _ in pinned_requests}\n"
@@ -899,13 +1030,15 @@ def _trace_adapter_text(path: Path, relative: str, variant: str) -> str:
         addition = (
             anchor
             + """
-        if os.environ.get("CONTINUUM_ORACLE_LENGTH_AGING") == "1":
+        if os.environ.get("CONTINUUM_ORACLE_DEADLINE") == "1":
             from vllm.v1.core.continuum_reproduction import (
-                select_oracle_length_aging_request,
+                _oracle_service_config,
+                select_oracle_deadline_request,
             )
-            return select_oracle_length_aging_request(
-                self, pinned_request_job_id_set,
-                self.job_id_first_entry_time)
+            return select_oracle_deadline_request(
+                self, self.job_id_first_entry_time, kv_cache_manager,
+                running_requests, max_num_running_reqs,
+                *_oracle_service_config())
 """
         )
         return _replace_once(text, anchor, addition, path=path)

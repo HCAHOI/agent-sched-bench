@@ -266,10 +266,10 @@ def test_paper_baseline_runner_has_required_policy_checks() -> None:
         in runner_text
     )
     assert (
-        'continuum_reproduction.sh" serve-oracle-length-aging "$model" '
+        'continuum_reproduction.sh" serve-oracle-deadline "$model" '
         "--dtype bfloat16 --kv-cache-dtype auto" in runner_text
     )
-    assert "continuum_reproduction_oracle_length_aging" in runner_text
+    assert "CONTINUUM_ORACLE_DECODE_MS_PER_TOKEN" in runner_text
     assert 'GPU_MEMORY_UTILIZATION="$gpu_memory_utilization"' in runner_text
     assert "--shadow-llm-cachewise-predictor-checkout" in runner_text
     assert "cachewise-oracle-length" in runner_text
