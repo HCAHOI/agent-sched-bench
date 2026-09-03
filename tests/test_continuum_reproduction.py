@@ -21,7 +21,7 @@ from scripts.baselines.continuum_reproduction import (
     inference_manifest,
     install_trace_adapter,
     memoryfulness,
-    select_oracle_service_request,
+    select_oracle_length_aging_request,
     validate_runtime_binding,
     verify_checkout,
     verify_trace_adapter,
@@ -280,48 +280,38 @@ def test_inferred_choices_are_machine_readable() -> None:
     }
 
 
-def test_oracle_service_combines_cache_miss_and_remaining_output() -> None:
+def test_oracle_length_preserves_pins_until_oldest_request_ages() -> None:
     def request(
         request_id: str, job_id: str, max_tokens: int, produced: int, arrival: float
     ) -> SimpleNamespace:
-        item = SimpleNamespace(
+        return SimpleNamespace(
             request_id=request_id,
             job_id=job_id,
             max_tokens=max_tokens,
             output_token_ids=[0] * produced,
             arrival_time=arrival,
-            num_tokens=100,
         )
-        item.block_hashes = item
-        return item
 
     older_long = request("older-long", "older", 20, 0, 1.0)
     newer_short = request("newer-short", "newer", 10, 8, 2.0)
     unpinned_shortest = request("unpinned", "other", 1, 0, 3.0)
-    cached = {"older-long": 90, "newer-short": 0, "unpinned": 0}
-    manager = SimpleNamespace(
-        coordinator=SimpleNamespace(
-            find_longest_cache_hit=lambda request, _limit: (
-                None,
-                cached[request.request_id],
-            )
-        )
-    )
-    selected = select_oracle_service_request(
+    selected = select_oracle_length_aging_request(
         [older_long, newer_short, unpinned_shortest],
         {"older", "newer"},
         {"older": 1.0, "newer": 2.0, "other": 3.0},
-        manager,
-        CacheMissProfile(
-            mode="prefill",
-            model="model",
-            max_context_tokens=100,
-            quadratic_seconds=(0.0, 0.001, 0.0),
-        ),
-        0.01,
+        now=300.0,
     )
+    assert selected is newer_short
 
-    assert selected is unpinned_shortest
+    assert (
+        select_oracle_length_aging_request(
+            [older_long, newer_short, unpinned_shortest],
+            {"newer"},
+            {"older": 1.0, "newer": 2.0, "other": 3.0},
+            now=301.0,
+        )
+        is older_long
+    )
 
 
 def test_wheel_overlay_scripts_are_isolated_and_non_editable(tmp_path: Path) -> None:
@@ -329,9 +319,9 @@ def test_wheel_overlay_scripts_are_isolated_and_non_editable(tmp_path: Path) -> 
     reproduction = (SCRIPT_DIR / "continuum_reproduction.sh").read_text()
     assert "--editable" not in public + reproduction
     assert "vllm-continuum-public-" in public
-    assert "vllm-continuum-reproduction-v4-" in reproduction
+    assert "vllm-continuum-reproduction-v5-" in reproduction
     assert "venvs/continuum-public-" in public
-    assert "venvs/continuum-reproduction-v4-" in reproduction
+    assert "venvs/continuum-reproduction-v5-" in reproduction
     assert 'continuum_python="${CONTINUUM_PYTHON:-$repo/.venv/bin/python}"' in public
     shared = tmp_path / "shared"
     rejected = subprocess.run(
@@ -518,7 +508,9 @@ def test_trace_replay_adapter_applies_exactly_to_public_overlay(tmp_path: Path) 
 
 
 @pytest.mark.slow
-def test_trace_replay_adapter_adds_reproduction_oracle_service(tmp_path: Path) -> None:
+def test_trace_replay_adapter_adds_reproduction_oracle_length_aging(
+    tmp_path: Path,
+) -> None:
     source = (
         Path.home()
         / ".cache/agent-sched-bench"
@@ -542,8 +534,8 @@ def test_trace_replay_adapter_adds_reproduction_oracle_service(tmp_path: Path) -
     verify_trace_adapter(source, package, "reproduction")
 
     request_queue = (package / "v1/core/sched/request_queue.py").read_text()
-    assert 'os.environ.get("CONTINUUM_ORACLE_SERVICE") == "1"' in request_queue
-    assert "select_oracle_service_request" in request_queue
+    assert 'os.environ.get("CONTINUUM_ORACLE_LENGTH_AGING") == "1"' in request_queue
+    assert "select_oracle_length_aging_request" in request_queue
 
 
 @pytest.mark.slow

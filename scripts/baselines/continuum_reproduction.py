@@ -9,7 +9,6 @@ commit without copying their repository.
 from __future__ import annotations
 
 import argparse
-import functools
 import json
 import logging
 import math
@@ -26,6 +25,7 @@ from typing import Any, Callable
 
 CONTINUUM_COMMIT = "316a58794a6ff86b216e579b74fd56ed0c5a911f"
 PAPER_HISTORY_THRESHOLD = 100  # Continuum v6 section 4.2.
+ORACLE_AGING_SECONDS = 300.0
 
 # The paper calls T a sliding-window average but does not publish its length.
 # This value is inferred from the only published history threshold (K=100),
@@ -39,6 +39,67 @@ INFERRED_TTL_TIE_BREAK = "smallest"
 INFERRED_MEMORYFULNESS_SAMPLES = "completed programs, k=1..N"
 
 logger = logging.getLogger(__name__)
+
+
+def select_oracle_length_aging_request(
+    requests: Any,
+    pinned_job_ids: set[str],
+    job_first_entry_time: dict[str, float],
+    *,
+    now: float | None = None,
+) -> Any:
+    """Prefer short pinned requests unless the oldest request waited five minutes."""
+    requests = list(requests)
+    oldest = min(
+        requests, key=lambda request: (request.arrival_time, request.request_id)
+    )
+    now = time.time() if now is None else now
+    if now - oldest.arrival_time >= ORACLE_AGING_SECONDS:
+        logger.info(
+            "Continuum oracle-length aging promoted %s after %.3fs among %d requests",
+            oldest.request_id,
+            now - oldest.arrival_time,
+            len(requests),
+        )
+        return oldest
+
+    eligible = [request for request in requests if request.job_id in pinned_job_ids]
+    if not eligible:
+        eligible = requests
+
+    baseline = min(
+        eligible,
+        key=lambda request: job_first_entry_time.get(
+            request.job_id, request.arrival_time
+        ),
+    )
+
+    def remaining_tokens(request: Any) -> int:
+        remaining = request.max_tokens - len(request.output_token_ids)
+        if remaining < 0:
+            raise ValueError("request output exceeds max_tokens")
+        return remaining
+
+    selected = min(
+        eligible,
+        key=lambda request: (
+            remaining_tokens(request),
+            job_first_entry_time.get(request.job_id, request.arrival_time),
+            request.arrival_time,
+            request.request_id,
+        ),
+    )
+    if selected is not baseline:
+        logger.info(
+            "Continuum oracle-length changed selection from %s (%d tokens) "
+            "to %s (%d tokens) among %d requests",
+            baseline.request_id,
+            remaining_tokens(baseline),
+            selected.request_id,
+            remaining_tokens(selected),
+            len(eligible),
+        )
+    return selected
 
 
 @dataclass(frozen=True)
@@ -236,80 +297,6 @@ class CacheMissProfile:
         assert self.bytes_per_token is not None
         assert self.reload_bytes_per_second is not None
         return context_tokens * self.bytes_per_token / self.reload_bytes_per_second
-
-
-@functools.cache
-def _oracle_service_config() -> tuple[CacheMissProfile, float]:
-    profile = CacheMissProfile.from_json(
-        os.environ["CONTINUUM_REPRODUCTION_PROFILE"],
-        os.environ["CONTINUUM_REPRODUCTION_MODE"],
-    )
-    try:
-        decode_seconds = (
-            float(os.environ["CONTINUUM_ORACLE_DECODE_MS_PER_TOKEN"]) / 1000
-        )
-    except (KeyError, ValueError) as error:
-        raise RuntimeError("Continuum Oracle decode coefficient is required") from error
-    if not math.isfinite(decode_seconds) or decode_seconds <= 0:
-        raise RuntimeError("Continuum Oracle decode coefficient must be positive")
-    return profile, decode_seconds
-
-
-def select_oracle_service_request(
-    requests: Any,
-    pinned_job_ids: set[str],
-    job_first_entry_time: dict[str, float],
-    kv_cache_manager: Any,
-    profile: CacheMissProfile,
-    decode_seconds_per_token: float,
-) -> Any:
-    """Pick the globally shortest estimated cache-aware request service."""
-    requests = list(requests)
-    pinned = [request for request in requests if request.job_id in pinned_job_ids]
-    baseline = min(
-        pinned or requests,
-        key=lambda request: job_first_entry_time.get(
-            request.job_id, request.arrival_time
-        ),
-    )
-    scored = []
-    for request in requests:
-        remaining = request.max_tokens - len(request.output_token_ids)
-        if remaining < 0:
-            raise ValueError("request output exceeds max_tokens")
-        _, cached = kv_cache_manager.coordinator.find_longest_cache_hit(
-            request.block_hashes, request.num_tokens - 1
-        )
-        full_prefill = profile.estimate_seconds(request.num_tokens)
-        cached_prefill = profile.estimate_seconds(cached) if cached else 0.0
-        service = max(0.0, full_prefill - cached_prefill) + (
-            remaining * decode_seconds_per_token
-        )
-        scored.append(
-            (
-                service,
-                job_first_entry_time.get(request.job_id, request.arrival_time),
-                request.arrival_time,
-                request.request_id,
-                request,
-                cached,
-                remaining,
-            )
-        )
-    selected = min(scored, key=lambda row: row[:4])[4]
-    if selected is not baseline:
-        selected_row = next(row for row in scored if row[4] is selected)
-        logger.info(
-            "Continuum oracle-service changed selection from %s to %s "
-            "(service=%.6fs cached=%d remaining=%d) among %d requests",
-            baseline.request_id,
-            selected.request_id,
-            selected_row[0],
-            selected_row[5],
-            selected_row[6],
-            len(requests),
-        )
-    return selected
 
 
 _DTYPE_ALIASES = {
@@ -912,15 +899,13 @@ def _trace_adapter_text(path: Path, relative: str, variant: str) -> str:
         addition = (
             anchor
             + """
-        if os.environ.get("CONTINUUM_ORACLE_SERVICE") == "1":
+        if os.environ.get("CONTINUUM_ORACLE_LENGTH_AGING") == "1":
             from vllm.v1.core.continuum_reproduction import (
-                _oracle_service_config,
-                select_oracle_service_request,
+                select_oracle_length_aging_request,
             )
-            return select_oracle_service_request(
+            return select_oracle_length_aging_request(
                 self, pinned_request_job_id_set,
-                self.job_id_first_entry_time, kv_cache_manager,
-                *_oracle_service_config())
+                self.job_id_first_entry_time)
 """
         )
         return _replace_once(text, anchor, addition, path=path)
