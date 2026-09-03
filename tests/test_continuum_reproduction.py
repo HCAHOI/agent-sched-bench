@@ -13,6 +13,7 @@ from scripts.baselines.continuum_reproduction import (
     CONTINUUM_COMMIT,
     PAPER_HISTORY_THRESHOLD,
     CacheMissProfile,
+    PreemptionTracker,
     RuntimeBinding,
     ToolCallEstimator,
     apply_to_checkout,
@@ -24,6 +25,7 @@ from scripts.baselines.continuum_reproduction import (
     validate_runtime_binding,
     verify_checkout,
     verify_trace_adapter,
+    write_request_telemetry,
 )
 
 
@@ -50,6 +52,45 @@ def _runtime_binding_payload(model: str = "m") -> dict[str, object]:
             "bytes_per_token_per_gpu": 131072,
         },
     }
+
+
+def test_records_per_request_preemption_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tracker = PreemptionTracker()
+    tracker.scheduled(1.0)
+    tracker.preempted(2.0)
+    tracker.scheduled(5.0)
+    tracker.preempted(7.0)
+    tracker.scheduled(8.5)
+    assert (tracker.count, tracker.total_wait_s, tracker.max_wait_s) == (2, 4.5, 3.0)
+
+    path = tmp_path / "requests.jsonl"
+    monkeypatch.setenv("VLLM_REQUEST_TELEMETRY_PATH", str(path))
+    write_request_telemetry(
+        "request-1", "length", 100, 8, 2.0, 1.0, 1.0, 3.0, 4.0, 5.5, tracker
+    )
+    assert json.loads(path.read_text()) == {
+        "schema_version": 1,
+        "request_id": "request-1",
+        "finish_reason": "length",
+        "prompt_tokens": 100,
+        "generation_tokens": 8,
+        "ttft_s": 2.0,
+        "queue_s": 1.0,
+        "prefill_s": 1.0,
+        "decode_s": 3.0,
+        "inference_s": 4.0,
+        "e2e_s": 5.5,
+        "preemption_count": 2,
+        "preempted_wait_s": 4.5,
+        "max_preempted_wait_s": 3.0,
+        "preemption_timing_complete": True,
+    }
+
+    tracker.preempted(10.0)
+    tracker.scheduled(9.0)
+    assert tracker.timing_complete is False
 
 
 class _Clock:
@@ -284,9 +325,9 @@ def test_wheel_overlay_scripts_are_isolated_and_non_editable(tmp_path: Path) -> 
     reproduction = (SCRIPT_DIR / "continuum_reproduction.sh").read_text()
     assert "--editable" not in public + reproduction
     assert "vllm-continuum-public-" in public
-    assert "vllm-continuum-reproduction-v2-" in reproduction
+    assert "vllm-continuum-reproduction-v7-" in reproduction
     assert "venvs/continuum-public-" in public
-    assert "venvs/continuum-reproduction-v2-" in reproduction
+    assert "venvs/continuum-reproduction-v7-" in reproduction
     assert 'continuum_python="${CONTINUUM_PYTHON:-$repo/.venv/bin/python}"' in public
     shared = tmp_path / "shared"
     rejected = subprocess.run(
@@ -470,6 +511,37 @@ def test_trace_replay_adapter_applies_exactly_to_public_overlay(tmp_path: Path) 
     scheduler.write_text(scheduler.read_text() + "\n# pollution\n")
     with pytest.raises(ValueError, match="differs from expected"):
         verify_trace_adapter(source, package, "public")
+
+
+@pytest.mark.slow
+def test_trace_replay_adapter_adds_request_telemetry(tmp_path: Path) -> None:
+    source = (
+        Path.home()
+        / ".cache/agent-sched-bench"
+        / f"vllm-continuum-{CONTINUUM_COMMIT}"
+        / "vllm"
+    )
+    if not source.is_dir():
+        pytest.skip("pinned Continuum checkout is not cached")
+    package = tmp_path / "vllm"
+    for relative in (
+        "entrypoints/openai/api_server.py",
+        "v1/core/sched/scheduler.py",
+        "v1/engine/core.py",
+        "v1/metrics/stats.py",
+        "v1/engine/output_processor.py",
+    ):
+        target = package / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / relative, target)
+
+    install_trace_adapter(source, package, "reproduction")
+    verify_trace_adapter(source, package, "reproduction")
+    stats = (package / "v1/metrics/stats.py").read_text()
+    output_processor = (package / "v1/engine/output_processor.py").read_text()
+    assert "req_stats.preemption.preempted(event.timestamp)" in stats
+    assert "write_request_telemetry(" in stats
+    assert "request_id=req_state.request_id" in output_processor
 
 
 @pytest.mark.slow

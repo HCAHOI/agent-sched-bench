@@ -268,7 +268,7 @@ run_cell() (
       ;;
     continuum-reproduction)
       server=("$repo/scripts/baselines/continuum_reproduction.sh" serve "$model" --dtype bfloat16 --kv-cache-dtype auto "${observability_args[@]}")
-      server_env+=(CONTINUUM_REPRODUCTION_PROFILE="$continuum_profile" CONTINUUM_REPRODUCTION_MODE=prefill RUN_OUTPUT_DIR="$cell/continuum" GPU_MEMORY_UTILIZATION="$gpu_memory_utilization")
+      server_env+=(CONTINUUM_REPRODUCTION_PROFILE="$continuum_profile" CONTINUUM_REPRODUCTION_MODE=prefill VLLM_REQUEST_TELEMETRY_PATH="$cell/vllm-request-telemetry.jsonl" RUN_OUTPUT_DIR="$cell/continuum" GPU_MEMORY_UTILIZATION="$gpu_memory_utilization")
       ;;
     native-priority-aging)
       server=("$repo/scripts/baselines/native_priority_aging.sh" serve "$model" "${common_args[@]}")
@@ -595,7 +595,7 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
     "minimum_ratio_to_fcfs": 1.20
   },
   "serving_observability": {
-    "request_metrics": "cached prompt tokens, TTFT, TPOT, and decode throughput",
+    "request_metrics": "cached prompt tokens, client TTFT/TPOT, and Continuum server queue/prefill/decode/e2e/preemption spans",
     "prefix_cache": "whole-run request cached-token fraction plus secondary cumulative vLLM lookup counters",
     "kv_cache": "all BlockStored and BlockRemoved events plus preemption count and defined recomputation total",
     "gpu_memory": (

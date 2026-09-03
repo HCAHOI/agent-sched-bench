@@ -7,8 +7,8 @@ source "$here/continuum_public.sh"
 
 public_checkout="$checkout"
 public_venv="$venv"
-checkout="${CONTINUUM_REPRODUCTION_CHECKOUT:-$cache_root/agent-sched-bench/vllm-continuum-reproduction-v2-$COMMIT}"
-venv="${CONTINUUM_REPRODUCTION_VENV:-$cache_root/agent-sched-bench/venvs/continuum-reproduction-v2-$COMMIT}"
+checkout="${CONTINUUM_REPRODUCTION_CHECKOUT:-$cache_root/agent-sched-bench/vllm-continuum-reproduction-v7-$COMMIT}"
+venv="${CONTINUUM_REPRODUCTION_VENV:-$cache_root/agent-sched-bench/venvs/continuum-reproduction-v7-$COMMIT}"
 validated_observability_args=()
 
 usage() {
