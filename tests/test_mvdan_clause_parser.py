@@ -337,7 +337,6 @@ def test_malformed_input_uses_shell_segment_fallback() -> None:
 
 
 def test_vendored_shell_split_matches_documented_sequential_units() -> None:
-    # _shell_split is a vendored copy of the tokenizer tool_time also keeps.
     # These cases pin the split contract the degraded fallback relies on.
     assert shell_command_segments("a && b ; c || d") == [["a"], ["b"], ["c"], ["d"]]
     # Pipelines and background parts run concurrently: one unit, separators kept.

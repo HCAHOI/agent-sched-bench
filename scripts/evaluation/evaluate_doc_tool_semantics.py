@@ -67,6 +67,7 @@ from scripts.evaluation.evaluate_offline_agent_extractor import (  # noqa: E402
 )
 from scripts.evaluation.classify_full_test_states import _is_tool_free_event  # noqa: E402
 from tool_resource.clause_parser import parse_command_clauses  # noqa: E402
+from tool_resource._shell_split import shell_command_prefix_tokens  # noqa: E402
 from tool_resource.pip_semantics import parse_pip_install  # noqa: E402
 from tool_resource.pytest_semantics import is_pytest_invocation  # noqa: E402
 from tool_resource.runtime_kb import (  # noqa: E402
@@ -81,9 +82,6 @@ from tool_resource.tool_spec import (  # noqa: E402
     tool_spec_schema,
     validate_tool_spec,
 )
-from tool_time.command import command_prefix_keys  # noqa: E402
-
-
 SCHEMA = "offline-tool-semantics-splits-v1"
 REPOSITORIES = {
     "sqlglot": "tobymao/sqlglot",
@@ -119,6 +117,14 @@ _GENERATION_OUTPUT = _REPO_ROOT / "analysis/results/offline-tool-semantics-sqlgl
 _SPLIT_MANIFEST = _REPO_ROOT / "analysis/development/offline-tool-semantics-splits.json"
 _MAX_GENERATION_INPUT_TOKENS = 64_000
 _MAX_GENERATION_RESPONSE_BYTES = 65_536
+
+
+def _raw_prefix_keys(command: str) -> tuple[str, ...]:
+    tokens = shell_command_prefix_tokens(command)
+    return tuple(
+        f"exec:{' '.join(tokens[:length])}"
+        for length in range(1, min(len(tokens), _RAW_PREFIX_DEPTH) + 1)
+    )
 
 
 def traced_task_ids(trace_root: Path, known_ids: set[str]) -> set[str]:
@@ -926,7 +932,7 @@ def evaluate_doc_semantics(
 
     def absorb_prefix(rows: Sequence[CommandRow]) -> None:
         for row in rows:
-            keys = command_prefix_keys("exec", row.command, max_depth=_RAW_PREFIX_DEPTH)
+            keys = _raw_prefix_keys(row.command)
             labels = _labels(row)
             for target, label in labels.items():
                 if label is None:
@@ -1047,7 +1053,7 @@ def evaluate_doc_semantics(
                     for target in _TARGETS
                 }
 
-            keys = command_prefix_keys("exec", row.command, max_depth=_RAW_PREFIX_DEPTH)
+            keys = _raw_prefix_keys(row.command)
             public_latency = public_kb.predict_command_latency_bucket(
                 row.repo,
                 row.command,

@@ -8,8 +8,6 @@
 | `mcp/` | MCP server definitions passed to trace collection. |
 | `simulate/` | Replay manifest examples and replay documentation. |
 | `trace_collect/` | Legacy collection examples; not the source of benchmark defaults. |
-| `experiments/` | Current development experiment configuration. |
-| `serving/` | GPU serving experiment configuration. |
 
 ## Frozen Corpus Definitions
 
@@ -29,16 +27,3 @@ visible.
 paths on the machine that will run the evaluation. Simulation manifests may
 also intentionally contain absolute paths because task sources and trace roots
 are host-local.
-
-## Serving Configuration
-
-`serving/w5_multitenant.yaml` is the current W5 matrix definition. It owns the
-policies, load levels, task-list inputs, model settings, transfer settings, and
-restore-cost fraction. Its task lists live in
-`analysis/serving/w5-multitenant/inputs/`.
-
-The config is not proof of a completed run and is not launch-ready in this
-checkout: `analysis/serving/w5-multitenant/prefill_result_llama31_8b.json` is
-absent. Generate that hardware-specific input and resolve the documented
-trigger-table/runtime-cost mismatch before launch; do not substitute another
-profile or task set silently.

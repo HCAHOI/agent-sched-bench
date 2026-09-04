@@ -1,9 +1,8 @@
-"""Measure the context-dependent prefill cost used by the W5 scheduler.
+"""Measure context-dependent prefill cost for serving calibration.
 
-Runs prefix-cache-free vLLM requests over a context-length grid and writes the
-quadratic fit consumed by ``spike.multitenant.load_prefill_cost_profile``.
-Heavy GPU dependencies are imported lazily so ``--help`` and
-``--model-config-only`` work on non-GPU hosts.
+Runs prefix-cache-free vLLM requests over a context-length grid and writes
+linear and quadratic fits. Heavy GPU dependencies are imported lazily so
+``--help`` and ``--model-config-only`` work on non-GPU hosts.
 """
 
 from __future__ import annotations

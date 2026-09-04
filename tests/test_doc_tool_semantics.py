@@ -9,6 +9,7 @@ from scripts.evaluation.evaluate_doc_tool_semantics import (
     _generation_status,
     _generated_specs,
     _history_row,
+    _raw_prefix_keys,
     _render_generation_prompt,
     _validated_response_text,
     build_split_manifest,
@@ -18,6 +19,16 @@ from scripts.evaluation.evaluate_doc_tool_semantics import (
 )
 from scripts.evaluation.evaluate_clause_resource_classes import CommandRow, Row
 from tool_resource.tool_spec import validate_tool_spec
+
+
+def test_raw_prefix_keys_reuse_canonical_shell_tokens() -> None:
+    assert _raw_prefix_keys("FOO=1 /usr/bin/python -m pytest -q > out") == (
+        "exec:python",
+        "exec:python -m",
+        "exec:python -m pytest",
+        "exec:python -m pytest -q",
+    )
+    assert _raw_prefix_keys("echo '") == ()
 
 
 def test_history_row_fills_unavailable_resource_targets() -> None:

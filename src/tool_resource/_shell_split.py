@@ -1,13 +1,8 @@
-"""Sequential shell-unit splitting for the degraded clause-parse fallback.
+"""Shell token normalization and degraded clause-parse fallback splitting.
 
-Used only when the mvdan adapter cannot parse a command. Vendored so
-``tool_resource`` stays a self-contained directory with no repository imports.
-
-ponytail: the token normalizer is duplicated from ``tool_time/command.py``,
-which keeps its own copy for the latency-prior prefix keys. Both are pure
-functions over a command string with no shared state; if they ever need to
-agree on a change, change both. ``shell_command_segments`` itself lives only
-here — ``tool_time`` no longer defines it.
+Vendored so ``tool_resource`` stays a self-contained directory with no
+repository imports. The normalized token stream is also reused by the
+historical raw-prefix evaluation baseline.
 """
 
 from __future__ import annotations

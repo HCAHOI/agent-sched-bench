@@ -36,6 +36,31 @@ prefill and KV cost. Neither is yet a supported system claim; see
 | PennyLane joint/physical phase actions | Hindsight ceilings, causal failures, physical feedback, revocable lease, and parking screens | [`development/tool-resource-canonical-objective.md`](development/tool-resource-canonical-objective.md#result-ledger) |
 | Historical KV stopping lane | Forced-eviction accounting and settled duration-prediction limits | [`CLAIMS.md`](CLAIMS.md#retained-kv-stopping-findings) |
 
+## Historical material
+
+The receipts below are retained for provenance, but their targets or selection
+criteria have been superseded. They are not inputs to current 5/3/3/3 model
+selection and must not be rewritten to match the current contract.
+
+### Superseded tool-resource contracts
+
+| Historical contract | Preserved receipts | Status |
+|---|---|---|
+| Per-call targets, q90 pinball, and balanced accuracy | [`results/tool-resource-20260723/`](results/tool-resource-20260723/) | Superseded historical contract |
+| Old nine-bucket latency | [`results/tool-resource-canonical-signature-v1-20260727/`](results/tool-resource-canonical-signature-v1-20260727/), [`results/tool-resource-canonical-signature-v2-20260727/`](results/tool-resource-canonical-signature-v2-20260727/), [`results/tool-resource-fit-size-20260727/`](results/tool-resource-fit-size-20260727/), [`results/tool-resource-latency-p1-20260727/`](results/tool-resource-latency-p1-20260727/), [`results/tool-resource-representation-20260727/`](results/tool-resource-representation-20260727/) | Superseded historical contract |
+| Old binary resource classes | [`results/tool-resource-heavy-light-20260728/`](results/tool-resource-heavy-light-20260728/) | Superseded historical contract |
+| Failed shared-runtime replacements | [`results/tool-resource-local-vs-public-20260727/`](results/tool-resource-local-vs-public-20260727/), [`results/tool-resource-nighttime-3bucket-20260728/`](results/tool-resource-nighttime-3bucket-20260728/) | Superseded historical contract |
+
+### Archived branches and presentations
+
+| Material | Status |
+|---|---|
+| [`archive/tb-dev100-audit-20260724/`](archive/tb-dev100-audit-20260724/) | Historical Terminal-Bench audit |
+| [`archive/tool-time-duration-research-202607/`](archive/tool-time-duration-research-202607/) | Historical duration-policy configuration and analysis |
+| [`archive/vllm-selective-offload-w5-202607/`](archive/vllm-selective-offload-w5-202607/) | Historical W5 code/input snapshot; it is not a supported runnable package after relocation, so restore its original Git revision for reproduction from the original paths |
+| [`slides/research-journey-20260819/`](slides/research-journey-20260819/) | Historical presentation, not a current progress report |
+| [`slides/cachewise-reproduction-20260731/`](slides/cachewise-reproduction-20260731/) | Historical presentation predating the official/exact-fork baseline work |
+
 Baseline provenance labels are not interchangeable:
 
 - **Official**: an author-released policy core, possibly wrapped only for replay.
@@ -59,6 +84,8 @@ and [`../scripts/baselines/README.md`](../scripts/baselines/README.md).
 - `serving/` contains hardware measurements and historical serving inputs; it
   does not imply a live result exists.
 - `offline/` is related-work and background analysis, not status authority.
+- `archive/` contains retired audits, inputs, and prototypes; nothing there is
+  an active implementation or launch definition.
 
 Large raw runs may live outside Git. Treat an absolute run path as provenance,
 not a portable artifact; a result is locally recoverable only when its receipt
