@@ -233,6 +233,7 @@ serve() {
   continuum_verify_overlay "$checkout" "$venv" public
   local model="$1"
   shift
+  export PYTHONPATH="$repo${PYTHONPATH:+:$PYTHONPATH}"
   export RUN_OUTPUT_DIR="${RUN_OUTPUT_DIR:-./continuum_exp}"
   export VLLM_SERVER_DEV_MODE=1
   mkdir -p "$RUN_OUTPUT_DIR"

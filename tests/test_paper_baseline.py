@@ -430,6 +430,7 @@ fi
     )
     manifest = repo / "manifest.yaml"
     manifest.write_text("tasks: []\n")
+    (repo / "uv.lock").write_text("test lock\n")
     base_env = {
         **os.environ,
         "PATH": f"{fake_bin}:/usr/bin:/bin",
@@ -638,3 +639,27 @@ exit 2
     assert protocol["workload"]["serving_metrics"] is False
     assert protocol["workload"]["replacement_load"]["delay_mean_s"] == 50.0
     assert protocol["workload"]["replacement_load"]["seed"] == 7
+
+    continuum = repo / "scripts/baselines/continuum_public.sh"
+    executable(
+        continuum,
+        """[[ $1 == verify ]] && exit 0
+[[ $1 == serve-fcfs ]] && exec "$(dirname "$0")/../../.venv/bin/vllm"
+exit 2
+""",
+    )
+    fcfs_root = tmp_path / "continuum-fcfs"
+    control = subprocess.run(
+        ["bash", runner, "--run"],
+        env={**base_env, "RUN_ROOT": str(fcfs_root), "CELLS": "continuum-fcfs-r1"},
+        text=True,
+        capture_output=True,
+        timeout=20,
+    )
+    assert control.returncode == 0, control.stderr
+    argv = (fcfs_root / "continuum-fcfs-r1/vllm.argv").read_text()
+    assert "serve-fcfs" in argv
+    assert "--max-num-seqs 8" in argv
+    assert "--max-num-batched-tokens 2048" in argv
+    simulate = (fcfs_root / "continuum-fcfs-r1/simulate.argv").read_text()
+    assert "--shadow-llm-mode continuum-public" in simulate

@@ -104,9 +104,11 @@ def test_worker_records_valid_samples_and_cleans_up(
     worker = module.CuptiDramWorker()
     worker.init_device()
     collector = collectors.instances[0]
+    worker._decode_dram_samples()  # An empty decode does not consume the first sample.
     collector.decodes.append(
         _CounterData(
             [
+                _Sample(18_446_743_720_566_908_506, 2_000_000_000, [0.0, 0.0]),
                 _Sample(1_000_000_000, 3_000_000_000, [3.0, 4.0]),
                 _Sample(3_000_000_000, 4_000_000_000, [3.0, 4.0]),
             ]
@@ -154,6 +156,13 @@ def test_worker_records_valid_samples_and_cleans_up(
 @pytest.mark.parametrize(
     ("decodes", "message"),
     [
+        (
+            [
+                _CounterData([_Sample(1_000_000_000, 2_000_000_000, [1.0, 2.0])]),
+                _CounterData([_Sample(4_000_000_000, 3_000_000_000, [1.0, 2.0])]),
+            ],
+            "positive and ordered",
+        ),
         (
             [
                 _CounterData([_Sample(1_000_000_000, 2_000_000_000, [1.0, 2.0])]),
