@@ -417,15 +417,13 @@ def test_weights_dram_bandwidth_by_sample_duration(tmp_path: Path) -> None:
     paths = _artifact(tmp_path)
     bandwidth = paths["dram_bandwidth_csv_path"]
     rows = [
-        "start_timestamp_ns,end_timestamp_ns,gpu_id,"
-        "read_bytes_per_s,write_bytes_per_s"
+        "start_timestamp_ns,end_timestamp_ns,gpu_id,read_bytes_per_s,write_bytes_per_s"
     ]
     for cycle in range(25):
         start_ns = (1000 + 2 * cycle) * 1_000_000_000
         rows.append(f"{start_ns},{start_ns + 500_000_000},0,0,0")
         rows.append(
-            f"{start_ns + 500_000_000},{start_ns + 2_000_000_000},"
-            "0,10000000000,0"
+            f"{start_ns + 500_000_000},{start_ns + 2_000_000_000},0,10000000000,0"
         )
     bandwidth.write_text("\n".join(rows) + "\n")
 
@@ -501,3 +499,46 @@ def test_rejects_incomplete_kv_tail_replay(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="tail replay did not complete"):
         summarize(**paths)
+
+
+def test_server_phases_join_exact_ids_and_separate_background(tmp_path: Path) -> None:
+    from scripts.evaluation.summarize_serving_metrics import _attach_server_phases
+
+    fields = (
+        "queue_s",
+        "prefill_s",
+        "decode_s",
+        "inference_s",
+        "e2e_s",
+        "ttft_s",
+        "preempted_wait_s",
+        "max_preempted_wait_s",
+    )
+    requests = [
+        {
+            "request_id": name,
+            "prompt_tokens": 10,
+            "generation_tokens": 2,
+            "measurement_task": name == "measured",
+        }
+        for name in ("background", "measured")
+    ]
+    rows = [
+        {
+            **r,
+            **dict.fromkeys(fields, 1.0),
+            "preemption_count": 0,
+            "preemption_timing_complete": True,
+        }
+        for r in reversed(requests)
+    ]
+    rows[0]["queue_s"] = 3.0
+    path = tmp_path / "server.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    summary = _attach_server_phases(requests, path)
+    assert summary["cohorts"]["measured"]["spans"]["queue_s"]["sum_s"] == 3.0
+    assert summary["cohorts"]["background_recorded"]["spans"]["queue_s"]["sum_s"] == 1.0
+    assert summary["unmatched_server_terminal_count"] == 0
+    path.write_text(json.dumps(rows[0]) + "\n")
+    with pytest.raises(KeyError):
+        _attach_server_phases(requests, path)

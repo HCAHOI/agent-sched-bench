@@ -570,8 +570,7 @@ def _dram_bandwidth_summary(
 
         return {
             "mean_gb_per_s": sum(
-                value * duration
-                for value, duration in zip(gb_per_s, durations_s)
+                value * duration for value, duration in zip(gb_per_s, durations_s)
             )
             / total_duration_s,
             "p50_gb_per_s": weighted_percentile(0.50),
@@ -653,6 +652,66 @@ def _kv_summary(path: Path) -> dict[str, Any]:
     return result
 
 
+def _attach_server_phases(requests: list[dict[str, Any]], path: Path) -> dict[str, Any]:
+    """Join server spans by exact request ID; never infer cohort attribution."""
+    rows: dict[str, dict[str, Any]] = {}
+    for line in path.read_text().splitlines():
+        row = _object(json.loads(line), "server request telemetry")
+        request_id = row.get("request_id")
+        if not isinstance(request_id, str) or not request_id or request_id in rows:
+            raise ValueError("invalid or duplicate server request ID")
+        rows[request_id] = row
+    fields = (
+        "queue_s",
+        "prefill_s",
+        "decode_s",
+        "inference_s",
+        "e2e_s",
+        "ttft_s",
+        "preempted_wait_s",
+        "max_preempted_wait_s",
+    )
+    for request in requests:
+        row = rows[request["request_id"]]
+        if any(
+            row[key] != request[key] for key in ("prompt_tokens", "generation_tokens")
+        ):
+            raise ValueError("server/client token totals differ")
+        if row.get("preemption_timing_complete") is not True:
+            raise ValueError("incomplete server preemption timing")
+        phases = {key: _finite(row.get(key), key, nonnegative=True) for key in fields}
+        phases["preemption_count"] = _nonnegative_int(
+            row.get("preemption_count"), "preemption_count"
+        )
+        request["server_phases"] = phases
+    cohorts = {
+        "measured": [r for r in requests if r.get("measurement_task", True)],
+        "background_recorded": [
+            r for r in requests if not r.get("measurement_task", True)
+        ],
+    }
+    return {
+        "server_terminal_count": len(rows),
+        "unmatched_server_terminal_count": len(
+            rows.keys() - {r["request_id"] for r in requests}
+        ),
+        "definition": "request wall-time spans; overlapping requests are not GPU execution time",
+        "cohorts": {
+            name: {
+                "request_count": len(cohort),
+                "spans": {
+                    key: {
+                        **_distribution([r["server_phases"][key] for r in cohort]),
+                        "sum_s": sum(r["server_phases"][key] for r in cohort),
+                    }
+                    for key in fields
+                },
+            }
+            for name, cohort in cohorts.items()
+        },
+    }
+
+
 def summarize(
     *,
     throughput_summary_path: Path,
@@ -663,6 +722,7 @@ def summarize(
     kv_events_summary_path: Path,
     output_path: Path,
     requests_output_path: Path,
+    server_request_telemetry_path: Path | None = None,
 ) -> dict[str, Any]:
     if output_path == requests_output_path:
         raise ValueError("summary and request output paths must differ")
@@ -671,7 +731,9 @@ def summarize(
         raise ValueError("throughput summary cannot contain both load configurations")
     replacement_load = throughput.get("replacement_load")
     background_load = throughput.get("background_load")
-    load_config = background_load if "background_load" in throughput else replacement_load
+    load_config = (
+        background_load if "background_load" in throughput else replacement_load
+    )
     background_enabled = (
         isinstance(load_config, dict) and load_config.get("enabled") is True
     )
@@ -851,6 +913,10 @@ def summarize(
             for task_id in sorted(tasks)
         },
     }
+    if server_request_telemetry_path is not None:
+        summary["server_request_phases"] = _attach_server_phases(
+            requests, server_request_telemetry_path
+        )
     output_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     requests_output_path.write_text(
         "".join(json.dumps(request, sort_keys=True) + "\n" for request in requests)
@@ -868,6 +934,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--kv-events-summary", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--requests-output", type=Path, required=True)
+    parser.add_argument("--server-request-telemetry", type=Path)
     return parser.parse_args()
 
 
@@ -882,6 +949,7 @@ def main() -> None:
         kv_events_summary_path=args.kv_events_summary,
         output_path=args.output,
         requests_output_path=args.requests_output,
+        server_request_telemetry_path=args.server_request_telemetry,
     )
 
 

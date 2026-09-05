@@ -503,6 +503,74 @@ def _positive_number(value: Any) -> bool:
     return _finite_number(value) and float(value) > 0
 
 
+@dataclass
+class PreemptionTracker:
+    count: int = 0
+    total_wait_s: float = 0.0
+    max_wait_s: float = 0.0
+    timing_complete: bool = True
+    _started_s: float | None = None
+
+    def preempted(self, timestamp: float) -> None:
+        if self._started_s is not None:
+            self.timing_complete = False
+        self.count += 1
+        self._started_s = timestamp
+
+    def scheduled(self, timestamp: float) -> None:
+        if self._started_s is None:
+            return
+        duration = timestamp - self._started_s
+        if duration < 0:
+            self.timing_complete = False
+        else:
+            self.total_wait_s += duration
+            self.max_wait_s = max(self.max_wait_s, duration)
+        self._started_s = None
+
+
+def write_request_telemetry(
+    request_id: str,
+    finish_reason: str,
+    prompt_tokens: int,
+    generation_tokens: int,
+    ttft_s: float,
+    queue_s: float,
+    prefill_s: float,
+    decode_s: float,
+    inference_s: float,
+    e2e_s: float,
+    preemption: PreemptionTracker,
+) -> None:
+    path = os.environ.get("VLLM_REQUEST_TELEMETRY_PATH")
+    if not path:
+        return
+    row = {
+        "schema_version": 1,
+        "request_id": request_id,
+        "finish_reason": finish_reason,
+        "prompt_tokens": prompt_tokens,
+        "generation_tokens": generation_tokens,
+        "ttft_s": ttft_s,
+        "queue_s": queue_s,
+        "prefill_s": prefill_s,
+        "decode_s": decode_s,
+        "inference_s": inference_s,
+        "e2e_s": e2e_s,
+        "preemption_count": preemption.count,
+        "preempted_wait_s": preemption.total_wait_s,
+        "max_preempted_wait_s": preemption.max_wait_s,
+        "preemption_timing_complete": (
+            preemption.timing_complete and preemption._started_s is None
+        ),
+    }
+    try:
+        with Path(path).open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, separators=(",", ":")) + "\n")
+    except OSError:
+        logger.exception("failed to write request telemetry to %s", path)
+
+
 def empirical_ttl_seconds(
     durations: list[float] | tuple[float, ...], benefit_seconds: float
 ) -> float:
@@ -978,7 +1046,8 @@ def _trace_adapter_text(path: Path, relative: str, variant: str) -> str:
                 self.unpin_request(request, end_time)
                 known = True
         self.running_job_id_first_entry_time.pop(job_id, None)
-        self.waiting.job_id_first_entry_time.pop(job_id, None)
+        if self.policy == SchedulingPolicy.CONTINUUM:
+            self.waiting.job_id_first_entry_time.pop(job_id, None)
         program_finished = getattr(
             self.tool_call_estimator, "program_finished", None)
         if program_finished is not None:
@@ -1042,6 +1111,76 @@ def _trace_adapter_text(path: Path, relative: str, variant: str) -> str:
 """
         )
         return _replace_once(text, anchor, addition, path=path)
+    if relative == "v1/metrics/stats.py" and variant == "public":
+        text = _replace_once(
+            text,
+            "from vllm.v1.spec_decode.metrics import SpecDecodingStats\n",
+            "from scripts.baselines.continuum_reproduction import (\n"
+            "    PreemptionTracker, write_request_telemetry)\n"
+            "from vllm.v1.spec_decode.metrics import SpecDecodingStats\n",
+            path=path,
+        )
+        text = _replace_once(
+            text,
+            "    first_token_latency: float = 0.0\n",
+            "    first_token_latency: float = 0.0\n"
+            "    preemption: PreemptionTracker = field(\n"
+            "        default_factory=PreemptionTracker)\n",
+            path=path,
+        )
+        text = _replace_once(
+            text,
+            "            elif event.type == EngineCoreEventType.SCHEDULED:\n"
+            "                if req_stats.scheduled_ts == 0.0:  # ignore preemptions\n",
+            "            elif event.type == EngineCoreEventType.SCHEDULED:\n"
+            "                req_stats.preemption.scheduled(event.timestamp)\n"
+            "                if req_stats.scheduled_ts == 0.0:  # ignore preemptions\n",
+            path=path,
+        )
+        text = _replace_once(
+            text,
+            "            elif event.type == EngineCoreEventType.PREEMPTED:\n"
+            "                self.num_preempted_reqs += 1\n",
+            "            elif event.type == EngineCoreEventType.PREEMPTED:\n"
+            "                req_stats.preemption.preempted(event.timestamp)\n"
+            "                self.num_preempted_reqs += 1\n",
+            path=path,
+        )
+        text = _replace_once(
+            text,
+            '    def update_from_finished_request(self, finish_reason: "FinishReason",\n',
+            "    def update_from_finished_request(self, request_id: str,\n"
+            '                                     finish_reason: "FinishReason",\n',
+            path=path,
+        )
+        return _replace_once(
+            text,
+            "        self.finished_requests.append(finished_req)\n",
+            "        self.finished_requests.append(finished_req)\n"
+            "        write_request_telemetry(\n"
+            "            request_id=request_id,\n"
+            "            finish_reason=str(finish_reason),\n"
+            "            prompt_tokens=num_prompt_tokens,\n"
+            "            generation_tokens=req_stats.num_generation_tokens,\n"
+            "            ttft_s=req_stats.first_token_latency,\n"
+            "            queue_s=queued_time,\n"
+            "            prefill_s=prefill_time,\n"
+            "            decode_s=decode_time,\n"
+            "            inference_s=inference_time,\n"
+            "            e2e_s=e2e_latency,\n"
+            "            preemption=req_stats.preemption)\n",
+            path=path,
+        )
+    if relative == "v1/engine/output_processor.py" and variant == "public":
+        return _replace_once(
+            text,
+            "        iteration_stats.update_from_finished_request(\n"
+            "            finish_reason=finish_reason,\n",
+            "        iteration_stats.update_from_finished_request(\n"
+            "            request_id=req_state.request_id,\n"
+            "            finish_reason=finish_reason,\n",
+            path=path,
+        )
     if relative == "v1/core/estimate_with_func.py" and variant == "public":
         text = _replace_once(
             text,
@@ -1074,7 +1213,13 @@ def _trace_adapter_expected(source_vllm: Path, variant: str) -> dict[str, str]:
         raise ValueError(f"unsupported Continuum variant: {variant}")
     relatives = list(_TRACE_ADAPTER_COMMON_FILES)
     if variant == "public":
-        relatives.append("v1/core/estimate_with_func.py")
+        relatives.extend(
+            (
+                "v1/core/estimate_with_func.py",
+                "v1/metrics/stats.py",
+                "v1/engine/output_processor.py",
+            )
+        )
     else:
         relatives.append("v1/core/sched/request_queue.py")
     return {
