@@ -1,0 +1,36 @@
+"""Shared remote LLM configuration and client helpers.
+
+This package is the only supported entrypoint for provider/model resolution
+and OpenAI-compatible client construction across the repository.
+"""
+
+from llm_call.config import (
+    ResolvedLLMConfig,
+    add_llm_config_arguments,
+    provider_choices,
+    resolve_llm_config,
+)
+from llm_call.openclaw import UnifiedProvider
+from llm_call.providers import create_provider
+from llm_call.openai_compat import create_async_openai_client, uses_openrouter
+from llm_call.provider_base import (
+    GenerationSettings,
+    LLMProvider,
+    LLMResponse,
+    ToolCallRequest,
+)
+
+__all__ = [
+    "GenerationSettings",
+    "LLMProvider",
+    "LLMResponse",
+    "ResolvedLLMConfig",
+    "ToolCallRequest",
+    "UnifiedProvider",
+    "add_llm_config_arguments",
+    "create_async_openai_client",
+    "create_provider",
+    "provider_choices",
+    "resolve_llm_config",
+    "uses_openrouter",
+]

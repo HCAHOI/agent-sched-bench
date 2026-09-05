@@ -1,0 +1,1317 @@
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from tool_resource.runtime_kb import (
+    CANONICAL_LATENCY_BUCKET_EDGES_MS,
+    GENERIC_ARGV_CANONICALIZER_VERSION,
+    POSTERIOR_SHRINKAGE_ARBITRATION,
+    SHRINKAGE_ALPHA_GRID,
+    STRUCTURED_ARGV_REPRESENTATION,
+    ClauseObservation,
+    ClauseResourceKB,
+    LatencyBuckets,
+    empirical_latency_pmf_while_alive,
+    generic_argv_keys,
+)
+
+
+def _obs(
+    repo: str,
+    bin_: str,
+    argv: tuple[str, ...],
+    start: float,
+    end: float,
+    *,
+    latency_ms: float | None = 100.0,
+    cpu: float | None = None,
+    rss: float | None = None,
+    disk: float | None = None,
+    impute_short_null: bool = False,
+) -> ClauseObservation:
+    return ClauseObservation(
+        repo=repo,
+        bin=bin_,
+        argv=argv,
+        ts_start=start,
+        ts_end=end,
+        latency_ms=latency_ms,
+        peak_cpu_cores=cpu,
+        sampled_peak_rss_mb=rss,
+        disk_read_write_bytes_total=disk,
+        impute_short_null_resources_as_light=impute_short_null,
+    )
+
+
+def _fit(*observations: ClauseObservation) -> ClauseResourceKB:
+    return ClauseResourceKB.fit_public(observations)
+
+
+def _clauses(*specs: tuple[str, list[str]]) -> list[dict]:
+    return [{"bin": bin_, "argv": argv} for bin_, argv in specs]
+
+
+def _generic_exact(bin_: str, argv: tuple[str, ...]) -> str:
+    return generic_argv_keys(bin_, argv)[0][1]
+
+
+def test_generic_argv_collapses_opaque_values_and_has_explicit_version() -> None:
+    first = _generic_exact(
+        "runner",
+        (
+            "/usr/bin/runner",
+            "deploy",
+            "--path=/tmp/build-1",
+            "https://example.test/jobs/1",
+            "123e4567-e89b-12d3-a456-426614174000",
+            "deadbeef1234",
+            "1500",
+        ),
+    )
+    second = _generic_exact(
+        "runner",
+        (
+            "runner",
+            "publish",
+            "--path=./build-2",
+            "s3://other/jobs/2",
+            "987e6543-e21b-12d3-a456-426614174999",
+            "cafebabe5678",
+            "9000",
+        ),
+    )
+
+    assert GENERIC_ARGV_CANONICALIZER_VERSION == "generic-argv-v3-role"
+    assert first == second
+    assert first.split("\x00") == [
+        "bin:runner",
+        "subcommand:<ARG>",
+        "option:--path=<PATH>",
+        "positionals:",
+        "<URL>",
+        "<ID>",
+        "<ID>",
+        "<NUM:+E3>",
+    ]
+
+
+def test_generic_argv_preserves_option_shape_without_plaintext_values() -> None:
+    keys = {
+        _generic_exact("tool", ("tool", subcommand, first, second))
+        for subcommand, first, second in (
+            ("fetch", "--mode=fast", "target"),
+            ("push", "--other=fast", "target"),
+            ("fetch", "target", "--mode=fast"),
+        )
+    }
+    redacted = _generic_exact(
+        "tool",
+        (
+            "tool",
+            "HOME=/private/work",
+            "--password=hunter2",
+            "--api-key",
+            "split-secret",
+            "--mode=stable",
+            "-phunter2",
+            "-H",
+            "Authorization: Bearer private-token",
+        ),
+    )
+
+    # Option order is normalized, while option identity remains distinct.
+    assert len(keys) == 2
+    assert redacted.split("\x00") == [
+        "bin:tool",
+        "subcommand:<NONE>",
+        "option:--api-key=<ARG>",
+        "option:--mode=<ARG>",
+        "option:--password=<ARG>",
+        "option:-H=<ARG>",
+        "option:-p=<ARG>",
+        "option:env:HOME=<PATH>",
+        "positionals:",
+    ]
+    for secret in ("private", "hunter2", "split-secret", "private-token"):
+        assert secret not in redacted
+
+
+def test_generic_argv_keeps_numeric_order_of_magnitude() -> None:
+    small = _generic_exact("tool", ("tool", "-j2", "5"))
+    large = _generic_exact("tool", ("tool", "-j64", "600"))
+    nearby = _generic_exact("tool", ("tool", "-j70", "900"))
+
+    assert small != large
+    assert large == nearby
+    assert large.split("\x00") == [
+        "bin:tool",
+        "subcommand:<NUM:+E2>",
+        "option:-j=<NUM:+E1>",
+        "positionals:",
+    ]
+    assert _generic_exact("tool", ("tool", "1e1000000000000000000")).endswith(
+        "subcommand:<NUM:EXTREME>\x00positionals:"
+    )
+
+
+def test_structured_argv_uses_only_fit_approved_subcommands_and_keeps_multiplicity() -> None:
+    fit = [
+        _obs(
+            f"owner__repo-{index}",
+            "runner",
+            ("runner", "deploy", "--mode=fast", f"/tmp/build-{index}"),
+            float(index),
+            float(index) + 0.5,
+        )
+        for index in range(3)
+    ]
+    fit.extend(
+        [
+            _obs("owner__one", "runner", ("runner", "publish"), 4.0, 4.5),
+            _obs("owner__two", "runner", ("runner", "publish"), 5.0, 5.5),
+        ]
+    )
+    kb = ClauseResourceKB.fit_public(
+        fit,
+        representation=STRUCTURED_ARGV_REPRESENTATION,
+    )
+
+    snapshot = kb.to_json_obj()
+    assert snapshot["canonicalizer_version"] == GENERIC_ARGV_CANONICALIZER_VERSION
+    assert snapshot["stable_subcommands"] == [["runner", "deploy"]]
+    deploy = generic_argv_keys(
+        "runner",
+        ("runner", "deploy", "--mode=slow", "/private/opaque"),
+        stable_subcommands=frozenset({("runner", "deploy")}),
+    )[0][1]
+    publish = generic_argv_keys(
+        "runner",
+        ("runner", "publish", "--mode=slow", "/private/opaque"),
+        stable_subcommands=frozenset({("runner", "deploy")}),
+    )[0][1]
+    reordered = generic_argv_keys(
+        "runner",
+        ("runner", "deploy", "--quiet", "--mode=slow"),
+        stable_subcommands=frozenset({("runner", "deploy")}),
+    )[0][1]
+    same_reordered = generic_argv_keys(
+        "runner",
+        ("runner", "deploy", "--mode=slow", "--quiet"),
+        stable_subcommands=frozenset({("runner", "deploy")}),
+    )[0][1]
+    repeated = generic_argv_keys(
+        "runner",
+        ("runner", "deploy", "--quiet", "--quiet", "--mode=slow"),
+        stable_subcommands=frozenset({("runner", "deploy")}),
+    )[0][1]
+
+    assert "subcommand:deploy" in deploy
+    assert "publish" not in publish
+    assert reordered == same_reordered
+    assert repeated != reordered
+    assert "private" not in deploy and "opaque" not in deploy
+
+
+def test_structured_argv_keeps_explicit_operand_boundary_and_positional_order() -> None:
+    stable = frozenset({("runner", "deploy")})
+    first = generic_argv_keys(
+        "runner",
+        ("runner", "deploy", "--", "5", "/tmp/a"),
+        stable_subcommands=stable,
+    )[0][1]
+    second = generic_argv_keys(
+        "runner",
+        ("runner", "deploy", "--", "/tmp/b", "5"),
+        stable_subcommands=stable,
+    )[0][1]
+
+    assert first != second
+    assert "boundary:--" in first.split("\x00")
+
+
+def test_structured_standalone_option_values_are_consumed_and_order_invariant() -> None:
+    stable = frozenset({("tool", "deploy")})
+    first = generic_argv_keys(
+        "tool",
+        ("tool", "deploy", "--count", "10", "--file", "opaque-a"),
+        stable_subcommands=stable,
+    )[0][1]
+    reordered = generic_argv_keys(
+        "tool",
+        ("tool", "deploy", "--file", "opaque-b", "--count", "10"),
+        stable_subcommands=stable,
+    )[0][1]
+    fit = [
+        _obs(
+            f"repo-{index}",
+            "tool",
+            ("tool", "--token", "production"),
+            float(index),
+            float(index) + 0.5,
+        )
+        for index in range(3)
+    ]
+    kb = ClauseResourceKB.fit_public(
+        fit,
+        representation=STRUCTURED_ARGV_REPRESENTATION,
+    )
+
+    assert first == reordered
+    assert "production" not in first
+    assert kb.to_json_obj()["stable_subcommands"] == []
+    assert all(
+        "production" not in key
+        for _, key, _ in kb.to_json_obj()["public"]["latency_ms"]
+    )
+
+
+def test_latency_buckets_match_strict_threshold_decisions() -> None:
+    buckets = LatencyBuckets((100.0, 1000.0))
+
+    assert [buckets.bucket_id(value) for value in (0.0, 99.999, 100.0)] == [
+        0,
+        0,
+        0,
+    ]
+    assert buckets.bucket_id(999.999) == 1
+    assert buckets.bucket_id(1000.0) == 1
+    assert buckets.bucket_id(1e12) == 2
+    assert CANONICAL_LATENCY_BUCKET_EDGES_MS == (
+        500.0,
+        2000.0,
+        8000.0,
+        30_000.0,
+    )
+
+
+def test_live_empirical_latency_recomputes_pmf_and_can_skip_buckets() -> None:
+    buckets = LatencyBuckets((500.0, 2000.0))
+
+    assert empirical_latency_pmf_while_alive(
+        (400.0, 800.0, 1800.0, 5000.0), 1000.0, buckets
+    ) == pytest.approx((0.0, 0.5, 0.5))
+    assert empirical_latency_pmf_while_alive(
+        (5000.0, 6000.0, 9000.0), 600.0, buckets
+    ) == pytest.approx((0.0, 0.0, 1.0))
+    assert empirical_latency_pmf_while_alive((500.0,), 500.0, buckets) is None
+    assert empirical_latency_pmf_while_alive(None, 500.0, buckets) is None
+    with pytest.raises(ValueError, match="elapsed_ms"):
+        empirical_latency_pmf_while_alive((1000.0,), float("nan"), buckets)
+    with pytest.raises(ValueError, match="latency_ms"):
+        empirical_latency_pmf_while_alive((float("inf"),), 0.0, buckets)
+
+
+@pytest.mark.parametrize(
+    "edges",
+    [
+        (),
+        (0.0,),
+        (-1.0,),
+        (100.0, 100.0),
+        (100.0, 50.0),
+        (float("inf"),),
+        (True,),
+        ("100",),
+    ],
+)
+def test_latency_buckets_reject_invalid_edges(edges: tuple[object, ...]) -> None:
+    with pytest.raises(ValueError):
+        LatencyBuckets(edges)
+
+
+@pytest.mark.parametrize("latency", [-1.0, float("inf"), float("nan")])
+def test_latency_buckets_reject_invalid_values(latency: float) -> None:
+    with pytest.raises(ValueError):
+        LatencyBuckets((100.0,)).bucket_id(latency)
+
+
+@pytest.mark.parametrize("latency", [-1.0, float("inf"), float("-inf"), float("nan")])
+@pytest.mark.parametrize("position", [0, 1, 2])
+def test_invalid_latency_fails_closed_at_any_position(
+    latency: float, position: int
+) -> None:
+    """An unusable latency must be refused wherever it sits in the node.
+
+    Nodes are held sorted so predictions can bisect them, and NaN compares
+    false against everything, so it can land anywhere in that order. Checking
+    only the ends of a node would let a NaN in the middle through and yield a
+    PMF that silently counts it as the lowest bucket.
+
+    Refusal happens as the value enters the node. That is deliberately earlier
+    than the original per-value check, which lived in the bucket histogram and
+    so only fired when the affected node was predicted from; a corpus carrying
+    an unusable latency now fails at fit rather than at the first query that
+    happens to reach it. Both fail closed; this one fails sooner and names the
+    corpus rather than the query.
+    """
+
+    values = [10.0, 20.0, 30.0]
+    values[position] = latency
+    observations = [
+        ClauseObservation(
+            repo="owner__repo",
+            bin="tool",
+            argv=("tool",),
+            ts_start=float(index),
+            ts_end=float(index) + 1.0,
+            latency_ms=value,
+        )
+        for index, value in enumerate(values)
+    ]
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        ClauseResourceKB.fit_public(observations)
+
+    kb = _fit(
+        ClauseObservation(
+            repo="other__repo",
+            bin="tool",
+            argv=("tool",),
+            ts_start=0.0,
+            ts_end=1.0,
+            latency_ms=10.0,
+        )
+    )
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        for observation in observations:
+            kb.observe_completed_clause(observation)
+
+
+def test_refusing_a_latency_does_not_consume_the_observation() -> None:
+    """Refusal must not destroy the evidence it refuses.
+
+    Validating while draining the pending buffer popped the observation before
+    checking it, so the first query raised and every later query then succeeded
+    over a corpus quietly missing that clause -- closed once, open thereafter.
+    """
+
+    kb = _fit(
+        ClauseObservation(
+            repo="other__repo",
+            bin="tool",
+            argv=("tool",),
+            ts_start=0.0,
+            ts_end=1.0,
+            latency_ms=10.0,
+        )
+    )
+    good = [
+        ClauseObservation(
+            repo="owner__repo",
+            bin="tool",
+            argv=("tool",),
+            ts_start=float(index),
+            ts_end=float(index) + 0.5,
+            latency_ms=value,
+        )
+        for index, value in ((0, 10.0), (2, 20.0))
+    ]
+    kb.observe_completed_clause(good[0])
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        kb.observe_completed_clause(
+            ClauseObservation(
+                repo="owner__repo",
+                bin="tool",
+                argv=("tool",),
+                ts_start=1.0,
+                ts_end=1.5,
+                latency_ms=float("nan"),
+            )
+        )
+    kb.observe_completed_clause(good[1])
+
+    buckets = LatencyBuckets(CANONICAL_LATENCY_BUCKET_EDGES_MS)
+    first = kb.predict_clause_latency_bucket(
+        "owner__repo", "tool", ("tool",), buckets, ts_start=100.0
+    )
+    second = kb.predict_clause_latency_bucket(
+        "owner__repo", "tool", ("tool",), buckets, ts_start=100.0
+    )
+    assert first == second
+    assert first.evidence_count == 2
+
+
+def test_an_unusable_latency_does_not_abort_unrelated_predictions() -> None:
+    """Draining runs inside every query, so a bad latency must not reach one."""
+
+    kb = _fit(
+        ClauseObservation(
+            repo="other__repo",
+            bin="tool",
+            argv=("tool",),
+            ts_start=0.0,
+            ts_end=1.0,
+            latency_ms=10.0,
+            peak_cpu_cores=1.0,
+        )
+    )
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        kb.observe_completed_clause(
+            ClauseObservation(
+                repo="owner__repo",
+                bin="tool",
+                argv=("tool",),
+                ts_start=0.0,
+                ts_end=1.0,
+                latency_ms=float("inf"),
+            )
+        )
+    assert (
+        kb.predict_clause_heavy_light(
+            "unrelated__repo",
+            "zzz",
+            ("zzz",),
+            "peak_cpu_cores",
+            ts_start=50.0,
+        )
+        is not None
+    )
+
+
+def test_a_non_finite_resource_does_not_disorder_valid_values() -> None:
+    """Heavy/Light still admits NaN, because it always did.
+
+    NaN has no position under ``<``, so letting it into the sorted region left
+    genuinely ordered values out of order and the Heavy/Light bisect miscounted
+    values that were themselves fine. The answer must equal the total it
+    replaced: NaN counts as light and still counts toward the denominator.
+    """
+
+    values = [1.0, 3.0, float("nan"), 4.0, 2.0]
+    kb = _fit(
+        ClauseObservation(
+            repo="other__repo",
+            bin="tool",
+            argv=("tool",),
+            ts_start=0.0,
+            ts_end=1.0,
+            latency_ms=10.0,
+            peak_cpu_cores=1.0,
+        )
+    )
+    for index, value in enumerate(values):
+        kb.observe_completed_clause(
+            ClauseObservation(
+                repo="owner__repo",
+                bin="tool",
+                argv=("tool",),
+                ts_start=float(index),
+                ts_end=float(index) + 0.5,
+                latency_ms=100.0,
+                peak_cpu_cores=value,
+            )
+        )
+    prediction = kb.predict_clause_heavy_light(
+        "owner__repo",
+        "tool",
+        ("tool",),
+        "peak_cpu_cores",
+        ts_start=100.0,
+    )
+    assert prediction is not None
+    threshold = prediction.threshold
+    expected = sum(1 for value in values if value > threshold) / len(values)
+    assert prediction.probability_heavy == pytest.approx(expected)
+    assert prediction.evidence_count == len(values)
+
+
+def test_cold_clause_uses_public_bin_and_modal_bucket() -> None:
+    kb = _fit(
+        _obs("pub", "pytest", ("pytest", "-q"), 0.0, 1.0, latency_ms=50.0),
+        _obs("pub", "pytest", ("pytest", "-k"), 1.0, 2.0, latency_ms=150.0),
+        _obs("pub", "pytest", ("pytest", "-x"), 2.0, 3.0, latency_ms=200.0),
+    )
+
+    prediction = kb.predict_clause_latency_bucket(
+        "r1", "pytest", ("pytest", "tests/x.py"), LatencyBuckets((100.0,))
+    )
+
+    assert prediction.probability_by_bucket == pytest.approx((1 / 3, 2 / 3))
+    assert prediction.scope == "public"
+    assert prediction.key_kind == "bin"
+
+
+def test_empirical_pmf_preserves_tied_bucket_mass() -> None:
+    kb = _fit(
+        _obs("pub", "pytest", ("pytest", "-q"), 0.0, 1.0, latency_ms=50.0),
+        _obs("pub", "pytest", ("pytest", "-x"), 1.0, 2.0, latency_ms=150.0),
+    )
+
+    prediction = kb.predict_clause_latency_bucket(
+        "r1", "pytest", ("pytest",), LatencyBuckets((100.0,))
+    )
+
+    assert prediction.probability_by_bucket == (0.5, 0.5)
+
+
+def test_causal_exact_clause_becomes_available_strictly_after_end() -> None:
+    buckets = LatencyBuckets((1000.0, 5000.0))
+    kb = _fit(_obs("pub", "pytest", ("pytest", "-q"), 0.0, 1.0, latency_ms=100.0))
+    kb.observe_completed_clause(
+        _obs("r1", "pytest", ("pytest", "-q"), 10.0, 12.0, latency_ms=6000.0)
+    )
+
+    same_end = kb.predict_command_latency_bucket(
+        "r1", "pytest -q", 12.0, buckets
+    ).prediction
+    after_end = kb.predict_command_latency_bucket(
+        "r1", "pytest -q", 12.1, buckets
+    ).prediction
+
+    assert same_end is not None and same_end.scope == "public"
+    assert after_end is not None and after_end.scope == "repo"
+    assert after_end.key_kind == "exact_clause"
+    assert after_end.probability_by_bucket == (0.0, 0.0, 1.0)
+    candidates = kb.diagnostic_clause_latency_candidates(
+        "r1",
+        "pytest",
+        ("pytest", "-q"),
+        buckets,
+        ts_start=12.1,
+    )
+    assert candidates[0] == after_end
+    assert [(item.scope, item.key_kind) for item in candidates] == [
+        ("repo", "exact_clause"),
+        ("repo", "argv_prefix_depth_2"),
+        ("repo", "bin"),
+        ("public", "bin"),
+        ("public", "global"),
+    ]
+
+
+def test_repo_prefix_backoff_and_isolation() -> None:
+    buckets = LatencyBuckets((1000.0,))
+    kb = _fit(_obs("pub", "make", ("make", "-j2", "all"), 0.0, 1.0, latency_ms=100.0))
+    kb.observe_completed_clause(
+        _obs("r1", "make", ("make", "-j2", "all"), 10.0, 12.0, latency_ms=2000.0)
+    )
+
+    prefix = kb.predict_command_latency_bucket(
+        "r1", "make -j2 clean", 13.0, buckets
+    ).prediction
+    other = kb.predict_command_latency_bucket(
+        "r2", "make -j2 clean", 14.0, buckets
+    ).prediction
+
+    assert prefix is not None and prefix.scope == "repo"
+    assert prefix.key_kind == "argv_prefix_depth_2"
+    assert prefix.probability_by_bucket == (0.0, 1.0)
+    assert other is not None and other.scope == "public"
+    assert other.probability_by_bucket == (1.0, 0.0)
+
+
+def test_compound_command_composes_sequential_and_pipeline_stages() -> None:
+    buckets = LatencyBuckets((1000.0,))
+    mib = 1024 * 1024
+    kb = _fit(
+        _obs(
+            "pub",
+            "a",
+            ("a",),
+            0.0,
+            1.0,
+            latency_ms=600.0,
+            cpu=1.5,
+            rss=300.0,
+            disk=60 * mib,
+        )
+    )
+
+    sequential = kb.predict_command_latency_bucket("r1", "a; a", 10.0, buckets)
+    pipeline = kb.predict_command_latency_bucket("r1", "a | a", 11.0, buckets)
+    substitution = kb.predict_command_latency_bucket("r1", "x=$(a)", 11.0, buckets)
+    sequential_resources = kb.predict_command_resource_classes(
+        "r1", "a; a", 12.0
+    )
+    pipeline_resources = kb.predict_command_resource_classes("r1", "a | a", 13.0)
+    sequential_buckets = kb.predict_command_resource_buckets("r1", "a; a", 14.0)
+    pipeline_buckets = kb.predict_command_resource_buckets("r1", "a | a", 15.0)
+
+    assert sequential.prediction is not None
+    assert sequential.prediction.probability_by_bucket == (0.0, 1.0)
+    assert pipeline.prediction is not None
+    assert pipeline.prediction.probability_by_bucket == (1.0, 0.0)
+    assert substitution.unavailable_reason == "compound_composition_unavailable"
+    assert sequential.prediction.arbitration == "empirical-shell-graph-v1"
+    assert {
+        resource: prediction.label
+        for resource, prediction in sequential_resources.classifications.items()
+    } == {
+        "peak_cpu_cores": "light",
+        "sampled_peak_rss_mb": "light",
+        "disk_read_write_bytes_total": "heavy",
+    }
+    assert all(
+        prediction.label == "heavy"
+        for prediction in pipeline_resources.classifications.values()
+    )
+    assert {
+        resource: prediction.label
+        for resource, prediction in sequential_buckets.classifications.items()
+    } == {
+        "peak_cpu_cores": "low",
+        "sampled_peak_rss_mb": "low",
+        "disk_read_write_bytes_total": "high",
+    }
+    assert {
+        resource: prediction.label
+        for resource, prediction in pipeline_buckets.classifications.items()
+    } == {
+        "peak_cpu_cores": "medium",
+        "sampled_peak_rss_mb": "medium",
+        "disk_read_write_bytes_total": "high",
+    }
+
+
+def test_resource_bucket_pmf_uses_lower_bucket_on_boundaries_and_ties() -> None:
+    kb = _fit(
+        _obs("pub", "x", ("x", "low"), 0.0, 1.0, latency_ms=10.0, cpu=2.0),
+        _obs("pub", "x", ("x", "mid"), 1.0, 2.0, latency_ms=10.0, cpu=4.0),
+        _obs("pub", "x", ("x", "high"), 2.0, 3.0, latency_ms=10.0, cpu=5.0),
+    )
+
+    prediction = kb.predict_clause_resource_bucket(
+        "repo", "x", ("x", "new"), "peak_cpu_cores"
+    )
+
+    assert prediction is not None
+    assert prediction.bucket_edges == (2.0, 4.0)
+    assert prediction.probability_by_bucket == pytest.approx((1 / 3, 1 / 3, 1 / 3))
+    assert prediction.bucket_id == 0
+    assert prediction.label == "low"
+
+
+def test_external_clauses_advance_state_and_backdated_queries_fail() -> None:
+    buckets = LatencyBuckets((1000.0,))
+    kb = _fit(_obs("pub", "x", ("x",), 0.0, 1.0, latency_ms=100.0))
+    kb.observe_completed_clause(_obs("r1", "x", ("x",), 10.0, 12.0, latency_ms=2000.0))
+
+    warm = kb.predict_command_latency_bucket_from_clauses(
+        "r1", _clauses(("x", ["x"])), 13.0, buckets
+    ).prediction
+    assert warm is not None and warm.probability_by_bucket == (0.0, 1.0)
+    with pytest.raises(ValueError, match="backdated query"):
+        kb.predict_command_latency_bucket_from_clauses(
+            "r1", _clauses(("x", ["x"])), 5.0, buckets
+        )
+
+
+def test_cpu_and_rss_measurements_are_preserved_but_not_in_latency_output() -> None:
+    kb = _fit(
+        _obs(
+            "pub",
+            "runner",
+            ("runner",),
+            0.0,
+            1.0,
+            latency_ms=100.0,
+            cpu=3.0,
+            rss=700.0,
+        )
+    )
+
+    prediction = kb.predict_clause_latency_bucket(
+        "r1", "runner", ("runner",), LatencyBuckets((1000.0,))
+    )
+
+    assert prediction.probability_by_bucket == (1.0, 0.0)
+    assert kb._public["peak_cpu_cores"][("bin", "runner")] == (3.0,)
+    assert kb._public["sampled_peak_rss_mb"][("bin", "runner")] == (700.0,)
+
+
+def test_resource_classes_reuse_backoff_and_impute_only_strictly_short_nulls() -> None:
+    mib = 1024 * 1024
+    kb = _fit(
+        _obs(
+            "pub",
+            "runner",
+            ("runner", "heavy-a"),
+            0.0,
+            1.0,
+            latency_ms=1000.0,
+            cpu=3.0,
+            rss=700.0,
+            disk=200 * mib,
+        ),
+        _obs(
+            "pub",
+            "runner",
+            ("runner", "heavy-b"),
+            1.0,
+            2.0,
+            latency_ms=1000.0,
+            cpu=4.0,
+            rss=800.0,
+            disk=300 * mib,
+        ),
+        _obs(
+            "pub",
+            "runner",
+            ("runner", "short-null"),
+            2.0,
+            2.499,
+            latency_ms=499.0,
+            impute_short_null=True,
+        ),
+        _obs(
+            "pub",
+            "runner",
+            ("runner", "boundary-null"),
+            3.0,
+            3.5,
+            latency_ms=500.0,
+            impute_short_null=True,
+        ),
+    )
+
+    public = kb.predict_clause_resource_classes(
+        "repo", "runner", ("runner", "new"), ts_start=10.0
+    )
+    assert set(public) == {
+        "peak_cpu_cores",
+        "sampled_peak_rss_mb",
+        "disk_read_write_bytes_total",
+    }
+    for prediction in public.values():
+        assert prediction is not None
+        assert prediction.label == "heavy"
+        assert prediction.probability_heavy == pytest.approx(2 / 3)
+        assert prediction.evidence_count == 3
+
+    kb.observe_completed_clause(
+        _obs(
+            "repo",
+            "runner",
+            ("runner", "new"),
+            11.0,
+            12.0,
+            latency_ms=100.0,
+            impute_short_null=True,
+        )
+    )
+    at_end = kb.predict_clause_heavy_light(
+        "repo", "runner", ("runner", "new"), "peak_cpu_cores", ts_start=12.0
+    )
+    after_end = kb.predict_clause_heavy_light(
+        "repo", "runner", ("runner", "new"), "peak_cpu_cores", ts_start=12.1
+    )
+    assert at_end is not None and at_end.scope == "public"
+    assert after_end is not None and after_end.scope == "repo"
+    assert after_end.label == "light" and after_end.evidence_count == 1
+
+
+def test_serialization_round_trip_preserves_latency_predictions_and_pending() -> None:
+    buckets = LatencyBuckets((1000.0,))
+    kb = _fit(_obs("pub", "pytest", ("pytest", "-q"), 0.0, 1.0))
+    kb.observe_completed_clause(
+        _obs("r1", "pytest", ("pytest", "-q"), 10.0, 12.0, latency_ms=2000.0)
+    )
+    kb.predict_command_latency_bucket("r1", "pytest -q", 13.0, buckets)
+    kb.observe_completed_clause(
+        _obs("r1", "pytest", ("pytest", "-q"), 20.0, 30.0, latency_ms=2000.0)
+    )
+
+    restored = ClauseResourceKB.from_json_obj(json.loads(json.dumps(kb.to_json_obj())))
+
+    assert restored.predict_clause_latency_bucket(
+        "r1", "pytest", ("pytest", "-q"), buckets
+    ) == kb.predict_clause_latency_bucket("r1", "pytest", ("pytest", "-q"), buckets)
+    late = restored.predict_command_latency_bucket(
+        "r1", "pytest -q", 31.0, buckets
+    ).prediction
+    assert late is not None and late.evidence_count == 2
+
+
+def test_structured_snapshot_restores_vocabulary_state_and_provenance() -> None:
+    fit = [
+        _obs(
+            f"fit-{index}",
+            "runner",
+            ("runner", "deploy", f"--path=/tmp/{index}"),
+            float(index),
+            float(index) + 0.5,
+        )
+        for index in range(3)
+    ]
+    kb = ClauseResourceKB.fit_public(
+        fit,
+        representation=STRUCTURED_ARGV_REPRESENTATION,
+    )
+    kb.observe_completed_clause(
+        _obs(
+            "repo",
+            "runner",
+            ("runner", "deploy", "--path=/tmp/local"),
+            10.0,
+            12.0,
+            latency_ms=3000.0,
+        )
+    )
+    expected = kb.predict_clause_latency_bucket(
+        "repo",
+        "runner",
+        ("runner", "deploy", "--path=/another/value"),
+        LatencyBuckets((2000.0, 8000.0)),
+        ts_start=13.0,
+    )
+
+    snapshot = json.loads(json.dumps(kb.to_json_obj()))
+    restored = ClauseResourceKB.from_json_obj(snapshot)
+    actual = restored.predict_clause_latency_bucket(
+        "repo",
+        "runner",
+        ("runner", "deploy", "--path=/another/value"),
+        LatencyBuckets((2000.0, 8000.0)),
+        ts_start=13.0,
+    )
+
+    assert restored.representation == STRUCTURED_ARGV_REPRESENTATION
+    assert actual == expected
+    assert actual.scope == "repo"
+    assert actual.key_kind == "structured_argv"
+    assert actual.canonicalizer_version == GENERIC_ARGV_CANONICALIZER_VERSION
+
+
+def test_posterior_shrinkage_uses_one_local_and_one_public_node_causally() -> None:
+    fit = [
+        _obs(
+            f"fit-{index}",
+            "runner",
+            ("runner", "deploy", f"--path=/tmp/{index}"),
+            float(index),
+            float(index) + 0.5,
+            latency_ms=100.0,
+            cpu=1.0,
+        )
+        for index in range(3)
+    ]
+    local = [
+        _obs(
+            "repo",
+            "runner",
+            ("runner", "deploy", "--path=/tmp/local"),
+            10.0 + index,
+            12.0,
+            latency_ms=3000.0,
+            cpu=3.0,
+        )
+        for index in range(2)
+    ]
+    kb = ClauseResourceKB.fit_public(
+        fit,
+        representation=STRUCTURED_ARGV_REPRESENTATION,
+        shrinkage_alpha=4.0,
+    )
+    diagnostic = ClauseResourceKB.fit_public(
+        fit,
+        representation=STRUCTURED_ARGV_REPRESENTATION,
+    )
+    for observation in local:
+        kb.observe_completed_clause(observation)
+        diagnostic.observe_completed_clause(observation)
+
+    at_boundary = kb.predict_clause_latency_bucket(
+        "repo",
+        "runner",
+        ("runner", "deploy", "--path=/tmp/local"),
+        LatencyBuckets((2000.0, 8000.0)),
+        ts_start=12.0,
+    )
+    after = kb.predict_clause_latency_bucket(
+        "repo",
+        "runner",
+        ("runner", "deploy", "--path=/tmp/local"),
+        LatencyBuckets((2000.0, 8000.0)),
+        ts_start=12.1,
+    )
+    alpha_predictions = diagnostic.diagnostic_clause_latency_shrinkage_predictions(
+        "repo",
+        "runner",
+        ("runner", "deploy", "--path=/tmp/local"),
+        LatencyBuckets((2000.0, 8000.0)),
+        SHRINKAGE_ALPHA_GRID,
+        ts_start=12.1,
+    )
+    cpu = kb.predict_clause_heavy_light(
+        "repo",
+        "runner",
+        ("runner", "deploy", "--path=/tmp/local"),
+        "peak_cpu_cores",
+        ts_start=12.1,
+    )
+
+    assert at_boundary.probability_by_bucket == (1.0, 0.0, 0.0)
+    assert at_boundary.local_evidence_count == 0
+    assert after.probability_by_bucket == pytest.approx((4 / 6, 2 / 6, 0.0))
+    assert after.scope == "repo+public"
+    assert after.local_key_kind == "exact_clause"
+    assert after.local_evidence_count == 2
+    assert after.public_key_kind == "structured_argv"
+    assert after.public_evidence_count == 3
+    assert after.arbitration == POSTERIOR_SHRINKAGE_ARBITRATION
+    assert after.shrinkage_alpha == 4.0
+    assert alpha_predictions[0].probability_by_bucket == pytest.approx(
+        (1 / 3, 2 / 3, 0.0)
+    )
+    assert cpu is not None
+    assert cpu.probability_heavy == pytest.approx(2 / 6)
+    assert cpu.label == "light"
+
+    restored = ClauseResourceKB.from_json_obj(
+        json.loads(json.dumps(kb.to_json_obj()))
+    )
+    assert restored.arbitration == POSTERIOR_SHRINKAGE_ARBITRATION
+    assert restored.shrinkage_alpha == 4.0
+    assert restored.predict_clause_latency_bucket(
+        "repo",
+        "runner",
+        ("runner", "deploy", "--path=/tmp/local"),
+        LatencyBuckets((2000.0, 8000.0)),
+        ts_start=12.1,
+    ) == after
+
+
+def test_v5_snapshot_requires_refit_for_resource_labels() -> None:
+    with pytest.raises(ValueError, match="refit the snapshot"):
+        ClauseResourceKB.from_json_obj({"schema": "runtime_clause_resource_kb_v5"})
+
+
+def test_v6_snapshot_migrates_only_unambiguous_raw_hard_backoff() -> None:
+    raw = _fit(_obs("public", "runner", ("runner",), 0.0, 1.0))
+    legacy = raw.to_json_obj()
+    legacy["schema"] = "runtime_clause_resource_kb_v6"
+    for field in (
+        "representation",
+        "canonicalizer_version",
+        "arbitration",
+        "shrinkage_alpha",
+        "stable_subcommands",
+    ):
+        legacy.pop(field)
+    restored = ClauseResourceKB.from_json_obj(legacy)
+    assert restored.representation == "raw-argv-prefix-v1"
+    assert restored.arbitration == "hard-first-nonempty-v1"
+
+    structured = ClauseResourceKB.fit_public(
+        [
+            _obs(
+                f"fit-{index}",
+                "runner",
+                ("runner", "deploy"),
+                float(index),
+                float(index) + 0.5,
+            )
+            for index in range(3)
+        ],
+        representation=STRUCTURED_ARGV_REPRESENTATION,
+    ).to_json_obj()
+    structured["schema"] = "runtime_clause_resource_kb_v6"
+    with pytest.raises(ValueError, match="refit the snapshot"):
+        ClauseResourceKB.from_json_obj(structured)
+
+
+def test_parse_failure_is_explicitly_unavailable() -> None:
+    kb = _fit(_obs("pub", "echo", ("echo",), 0.0, 1.0))
+
+    prediction = kb.predict_command_latency_bucket(
+        "r1", "echo 'unterminated", 10.0, LatencyBuckets((100.0,))
+    )
+
+    assert prediction.parse_failed
+    assert prediction.prediction is None
+    assert prediction.unavailable_reason == "parse_failed"
+
+
+def test_invalid_observation_and_unfit_public_fail_fast() -> None:
+    with pytest.raises(ValueError):
+        ClauseObservation(repo="r", bin="x", argv=(), ts_start=0.0, ts_end=1.0)
+    with pytest.raises(ValueError):
+        ClauseObservation(repo="r", bin="x", argv=("x",), ts_start=1.0, ts_end=0.0)
+    with pytest.raises(ValueError):
+        ClauseResourceKB.fit_public(
+            [_obs("pub", "x", ("x",), 0.0, 1.0, latency_ms=None)]
+        )
+
+
+@pytest.mark.parametrize("ts_start", [float("inf"), float("nan")])
+def test_nonfinite_query_time_fails_before_absorbing_pending(ts_start: float) -> None:
+    kb = _fit(_obs("pub", "x", ("x",), 0.0, 1.0, latency_ms=100.0))
+    kb.observe_completed_clause(_obs("r1", "x", ("x",), 10.0, 12.0, latency_ms=2000.0))
+
+    with pytest.raises(ValueError, match="finite"):
+        kb.predict_command_latency_bucket(
+            "r1", "x", ts_start, LatencyBuckets((1000.0,))
+        )
+
+    prediction = kb.predict_command_latency_bucket(
+        "r1", "x", 11.0, LatencyBuckets((1000.0,))
+    ).prediction
+    assert prediction is not None and prediction.scope == "public"
+
+
+def _cpu_kb(heavy: int, light: int, *, threshold: float) -> ClauseResourceKB:
+    """Repo-local node holding `heavy` Heavy and `light` Light CPU observations."""
+
+    kb = ClauseResourceKB.fit_public(
+        [_obs("other__repo", "tool", ("tool",), 0.0, 1.0, cpu=1.0)],
+        heavy_decision_threshold=threshold,
+    )
+    for index in range(heavy + light):
+        kb.observe_completed_clause(
+            _obs(
+                "owner__repo",
+                "tool",
+                ("tool",),
+                float(index),
+                float(index) + 0.5,
+                cpu=8.0 if index < heavy else 0.1,
+            )
+        )
+    return kb
+
+
+def _cpu_prediction(kb: ClauseResourceKB):
+    prediction = kb.predict_clause_heavy_light(
+        "owner__repo", "tool", ("tool",), "peak_cpu_cores", ts_start=100.0
+    )
+    assert prediction is not None
+    return prediction
+
+
+def test_heavy_decision_threshold_defaults_to_one_half() -> None:
+    # 2 of 5 Heavy: below 0.5, so the shipped default must still say light.
+    prediction = _cpu_prediction(_cpu_kb(2, 3, threshold=0.5))
+    assert prediction.probability_heavy == pytest.approx(0.4)
+    assert prediction.heavy_decision_threshold == 0.5
+    assert prediction.label == "light"
+
+
+def test_declared_threshold_fires_below_one_half() -> None:
+    """A cost-asymmetric caller acts on evidence the symmetric cut discards."""
+
+    prediction = _cpu_prediction(_cpu_kb(2, 3, threshold=1.0 / 6.0))
+    assert prediction.probability_heavy == pytest.approx(0.4)
+    assert prediction.label == "heavy"
+
+
+def test_threshold_does_not_alter_reported_probability_or_evidence() -> None:
+    """The reported evidence is identical whatever cut is declared.
+
+    Both cuts label this node light -- the point is that probability_heavy and
+    evidence_count report the raw node, not something rescaled by the cut.
+    """
+
+    low = _cpu_prediction(_cpu_kb(1, 9, threshold=1.0 / 6.0))
+    default = _cpu_prediction(_cpu_kb(1, 9, threshold=0.5))
+    assert low.probability_heavy == default.probability_heavy == pytest.approx(0.1)
+    assert low.evidence_count == default.evidence_count == 10
+    assert low.label == default.label == "light"
+
+
+def test_single_light_observation_never_fires_at_a_low_threshold() -> None:
+    """Regression: a smoothed decision probability would fire here, and must not.
+
+    One Light observation is evidence against Heavy. A Beta(1/2,1/2) posterior
+    mean returns 0.25 for this node and would cross a 1/6 threshold, so the
+    decision reads the raw ratio and thin nodes stay silent.
+    """
+
+    prediction = _cpu_prediction(_cpu_kb(0, 1, threshold=1.0 / 6.0))
+    assert prediction.evidence_count == 1
+    assert prediction.probability_heavy == 0.0
+    assert prediction.label == "light"
+
+
+def test_threshold_survives_snapshot_round_trip() -> None:
+    kb = _cpu_kb(2, 3, threshold=1.0 / 6.0)
+    restored = ClauseResourceKB.from_json_obj(json.loads(json.dumps(kb.to_json_obj())))
+    assert _cpu_prediction(restored).label == "heavy"
+    assert _cpu_prediction(restored).heavy_decision_threshold == pytest.approx(1.0 / 6.0)
+
+
+def test_threshold_outside_the_open_unit_interval_is_rejected() -> None:
+    for bad in (0.0, 1.0, -0.1, 1.5, float("nan")):
+        with pytest.raises(ValueError, match="heavy_decision_threshold"):
+            ClauseResourceKB(heavy_decision_threshold=bad)
+
+
+def test_snapshot_written_before_the_threshold_existed_restores_at_one_half() -> None:
+    """A pre-change snapshot has no threshold key and must decide as it used to."""
+
+    obj = json.loads(json.dumps(_cpu_kb(2, 3, threshold=1.0 / 6.0).to_json_obj()))
+    del obj["heavy_decision_threshold"]
+    restored = ClauseResourceKB.from_json_obj(obj)
+    assert restored.heavy_decision_threshold == 0.5
+    assert _cpu_prediction(restored).label == "light"
+
+
+def test_probability_exactly_equal_to_the_threshold_decides_light() -> None:
+    """Ties are reachable: 1 Heavy of 6 is bit-equal to a declared 1/6 cut."""
+
+    prediction = _cpu_prediction(_cpu_kb(1, 5, threshold=1.0 / 6.0))
+    assert prediction.probability_heavy == 1.0 / 6.0
+    assert prediction.label == "light"
+
+
+def _two_level_repo_kb(*, repo_binary_first: bool) -> ClauseResourceKB:
+    """Sparse all-Light exact node over a binary node that carries the Heavy mass.
+
+    This is the shape the runtime provenance showed: the deepest repository node
+    exists but holds no Heavy observation, so deepest-non-empty stops there.
+    """
+
+    kb = ClauseResourceKB.fit_public(
+        [_obs("other__repo", "tool", ("tool",), 0.0, 1.0, cpu=1.0)],
+        repo_binary_first=repo_binary_first,
+    )
+    # exact clause ("tool","probe"): one Light observation
+    kb.observe_completed_clause(
+        _obs("owner__repo", "tool", ("tool", "probe"), 0.0, 0.5, cpu=0.1)
+    )
+    # Same binary, different clauses: three of four are CPU-Heavy, and all four
+    # are long, so the binary node differs from the exact node on BOTH targets.
+    for index, cores in enumerate((8.0, 8.0, 8.0, 0.1)):
+        kb.observe_completed_clause(
+            _obs(
+                "owner__repo",
+                "tool",
+                ("tool", f"other{index}"),
+                float(index + 1),
+                float(index + 1) + 0.5,
+                latency_ms=20_000.0,
+                cpu=cores,
+            )
+        )
+    return kb
+
+
+def _probe(kb: ClauseResourceKB):
+    prediction = kb.predict_clause_heavy_light(
+        "owner__repo", "tool", ("tool", "probe"), "peak_cpu_cores", ts_start=100.0
+    )
+    assert prediction is not None
+    return prediction
+
+
+def test_default_arbitration_stops_at_the_sparse_exact_node() -> None:
+    prediction = _probe(_two_level_repo_kb(repo_binary_first=False))
+    assert prediction.key_kind == "exact_clause"
+    assert prediction.evidence_count == 1
+    assert prediction.probability_heavy == 0.0
+
+
+def test_repo_binary_first_selects_the_binary_node_instead() -> None:
+    prediction = _probe(_two_level_repo_kb(repo_binary_first=True))
+    assert prediction.key_kind == "bin"
+    assert prediction.scope == "repo"
+    assert prediction.evidence_count == 5
+    assert prediction.probability_heavy == pytest.approx(3 / 5)
+    # The binary node is consulted first, so it is the whole traversal.
+    assert prediction.fallback_path == ("repo:bin",)
+    # A prediction must name the arbitration that produced it, not the default.
+    assert prediction.arbitration == "repo-binary-first-v1"
+
+
+def test_default_arbitration_still_reports_hard_backoff() -> None:
+    assert _probe(_two_level_repo_kb(repo_binary_first=False)).arbitration == (
+        "hard-first-nonempty-v1"
+    )
+
+
+def test_repo_binary_first_keeps_select_as_the_first_diagnostic_candidate() -> None:
+    """The latency evaluator asserts this invariant and aborts if it breaks."""
+
+    buckets = LatencyBuckets(CANONICAL_LATENCY_BUCKET_EDGES_MS)
+    for flag in (False, True):
+        kb = _two_level_repo_kb(repo_binary_first=flag)
+        runtime = kb.predict_clause_latency_bucket(
+            "owner__repo", "tool", ("tool", "probe"), buckets, ts_start=100.0
+        )
+        candidates = kb.diagnostic_clause_latency_candidates(
+            "owner__repo", "tool", ("tool", "probe"), buckets, ts_start=100.0
+        )
+        assert candidates[0].probability_by_bucket == runtime.probability_by_bucket
+        assert candidates[0].fallback_path == runtime.fallback_path
+
+
+def test_repo_binary_first_also_moves_the_latency_prediction() -> None:
+    """Arbitration is shared, so latency changes too. Stated, not incidental."""
+
+    buckets = LatencyBuckets(CANONICAL_LATENCY_BUCKET_EDGES_MS)
+    default = _two_level_repo_kb(repo_binary_first=False).predict_clause_latency_bucket(
+        "owner__repo", "tool", ("tool", "probe"), buckets, ts_start=100.0
+    )
+    reordered = _two_level_repo_kb(repo_binary_first=True).predict_clause_latency_bucket(
+        "owner__repo", "tool", ("tool", "probe"), buckets, ts_start=100.0
+    )
+    assert default.evidence_count == 1
+    assert reordered.evidence_count == 5
+    assert default.probability_by_bucket == (1.0, 0.0, 0.0, 0.0, 0.0)
+    assert reordered.probability_by_bucket == pytest.approx(
+        (1 / 5, 0.0, 0.0, 4 / 5, 0.0)
+    )
+
+
+def test_repo_binary_first_falls_back_when_the_binary_node_is_absent() -> None:
+    """An unseen binary must still reach public evidence, not become unavailable."""
+
+    kb = ClauseResourceKB.fit_public(
+        [_obs("other__repo", "fresh", ("fresh",), 0.0, 1.0, cpu=8.0)],
+        repo_binary_first=True,
+    )
+    prediction = kb.predict_clause_heavy_light(
+        "owner__repo", "fresh", ("fresh",), "peak_cpu_cores", ts_start=100.0
+    )
+    assert prediction is not None
+    assert prediction.scope == "public"
+
+
+def test_repo_binary_first_reports_and_restores_its_arbitration() -> None:
+    kb = _two_level_repo_kb(repo_binary_first=True)
+    assert kb.arbitration == "repo-binary-first-v1"
+    restored = ClauseResourceKB.from_json_obj(json.loads(json.dumps(kb.to_json_obj())))
+    assert restored.arbitration == "repo-binary-first-v1"
+    assert _probe(restored).probability_heavy == pytest.approx(3 / 5)
+
+
+def test_repo_binary_first_and_shrinkage_are_exclusive() -> None:
+    with pytest.raises(ValueError, match="exclusive arbitrations"):
+        ClauseResourceKB(
+            representation=STRUCTURED_ARGV_REPRESENTATION,
+            shrinkage_alpha=4.0,
+            repo_binary_first=True,
+        )
+
+
+def test_repo_binary_first_preserves_causal_visibility() -> None:
+    """Reordering arbitration must not let an unfinished observation be seen."""
+
+    kb = _two_level_repo_kb(repo_binary_first=True)
+    kb.observe_completed_clause(
+        _obs("owner__repo", "tool", ("tool", "late"), 200.0, 300.0, cpu=8.0)
+    )
+    before = kb.predict_clause_heavy_light(
+        "owner__repo", "tool", ("tool", "probe"), "peak_cpu_cores", ts_start=250.0
+    )
+    assert before is not None
+    assert before.evidence_count == 5  # the 300.0-end observation is not yet visible
+
+
+def test_repo_binary_first_ignores_an_empty_binary_node() -> None:
+    """A restored snapshot can hold an empty node; it must not veto the backoff."""
+
+    kb = _two_level_repo_kb(repo_binary_first=True)
+    _probe(kb)  # advance the clock so pending observations are absorbed into nodes
+    obj = json.loads(json.dumps(kb.to_json_obj()))
+    for source, rows in obj["repo"]["owner__repo"].items():
+        if source != "peak_cpu_cores":
+            continue
+        for row in rows:
+            if row[0] == "bin":
+                row[2] = []  # empty, not absent
+    restored = ClauseResourceKB.from_json_obj(obj)
+    prediction = _probe(restored)
+    # Falls through to the deeper repository node rather than returning nothing.
+    assert prediction.key_kind == "exact_clause"
+    assert prediction.evidence_count == 1

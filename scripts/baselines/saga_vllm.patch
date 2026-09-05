@@ -1,0 +1,207 @@
+diff --git a/vllm/entrypoints/openai/api_server.py b/vllm/entrypoints/openai/api_server.py
+index 3cf66fc..7c3801c 100644
+--- a/vllm/entrypoints/openai/api_server.py
++++ b/vllm/entrypoints/openai/api_server.py
+@@ -1073,6 +1073,21 @@ if envs.VLLM_SERVER_DEV_MODE:
+         await engine_client(raw_request).reset_prefix_cache()
+         return Response(status_code=200)
+
++    @router.post("/saga/sessions/update")
++    async def update_saga_session(raw_request: Request):
++        policy = await raw_request.json()
++        result = await engine_client(raw_request).engine_core.call_utility_async(
++            "update_saga_session", policy
++        )
++        return JSONResponse(content=result)
++
++    @router.get("/saga/state")
++    async def saga_state(raw_request: Request):
++        result = await engine_client(raw_request).engine_core.call_utility_async(
++            "saga_state"
++        )
++        return JSONResponse(content=result)
++
+     @router.post("/reset_mm_cache")
+     async def reset_mm_cache(raw_request: Request):
+         """
+diff --git a/vllm/v1/core/block_pool.py b/vllm/v1/core/block_pool.py
+index 55710ad..a78a201 100644
+--- a/vllm/v1/core/block_pool.py
++++ b/vllm/v1/core/block_pool.py
+@@ -22,6 +22,7 @@ from vllm.v1.core.kv_cache_utils import (
+     maybe_convert_block_hash,
+ )
+ from vllm.v1.request import Request
++from scripts.baselines.saga_reproduction import SagaKVIndex
+
+ logger = init_logger(__name__)
+
+@@ -165,6 +166,10 @@ class BlockPool:
+
+         self.enable_kv_cache_events = enable_kv_cache_events
+         self.kv_event_queue: list[KVCacheEvent] = []
++        self.saga_index = SagaKVIndex(
++            (block.block_id for block in self.free_block_queue.get_all_free_blocks()),
++            total_blocks=num_gpu_blocks - 1,
++        )
+
+     def get_cached_block(
+         self, block_hash: BlockHash, kv_cache_group_ids: list[int]
+@@ -238,6 +243,7 @@ class BlockPool:
+             )
+             blk.block_hash = block_hash_with_group_id
+             self.cached_block_hash_to_block.insert(block_hash_with_group_id, blk)
++            self.saga_index.attach(blk.block_id, request.saga_session_id)
+             if new_hashes is not None:
+                 new_hashes.append(maybe_convert_block_hash(block_hash))
+
+@@ -280,7 +286,14 @@ class BlockPool:
+         if num_blocks > self.get_num_free_blocks():
+             raise ValueError(f"Cannot get {num_blocks} free blocks from the pool")
+
+-        ret: list[KVCacheBlock] = self.free_block_queue.popleft_n(num_blocks)
++        if self.saga_index.enabled and self.enable_caching:
++            ret = [self.blocks[block_id] for block_id in self.saga_index.take(num_blocks)]
++            for block in ret:
++                self.free_block_queue.remove(block)
++        else:
++            ret = self.free_block_queue.popleft_n(num_blocks)
++            for block in ret:
++                self.saga_index.untrack_free(block.block_id)
+
+         # In order to only iterate the list once, we duplicated code a bit
+         if self.enable_caching:
+@@ -315,6 +328,7 @@ class BlockPool:
+             # eviction is not needed
+             return False
+
++        self.saga_index.evict(block.block_id)
+         block.reset_hash()
+
+         if self.enable_kv_cache_events:
+@@ -330,7 +344,11 @@ class BlockPool:
+             )
+         return True
+
+-    def touch(self, blocks: tuple[Sequence[KVCacheBlock], ...]) -> None:
++    def touch(
++        self,
++        blocks: tuple[Sequence[KVCacheBlock], ...],
++        saga_session_id: str | None = None,
++    ) -> None:
+         """Touch a block increases its reference count by 1, and may remove
+         the block from the free queue. This is used when a block is hit by
+         another request with the same prefix.
+@@ -342,8 +360,12 @@ class BlockPool:
+             for block in blocks_per_group:
+                 # ref_cnt=0 means this block is in the free list (i.e. eviction
+                 # candidate), so remove it.
+-                if block.ref_cnt == 0 and not block.is_null:
++                was_free = block.ref_cnt == 0 and not block.is_null
++                if was_free:
+                     self.free_block_queue.remove(block)
++                self.saga_index.touch(
++                    block.block_id, saga_session_id, was_free=was_free
++                )
+                 block.ref_cnt += 1
+
+     def free_blocks(self, ordered_blocks: Iterable[KVCacheBlock]) -> None:
+@@ -358,9 +380,14 @@ class BlockPool:
+         blocks_list = list(ordered_blocks)
+         for block in blocks_list:
+             block.ref_cnt -= 1
+-        self.free_block_queue.append_n(
+-            [block for block in blocks_list if block.ref_cnt == 0 and not block.is_null]
+-        )
++        newly_free = [
++            block for block in blocks_list if block.ref_cnt == 0 and not block.is_null
++        ]
++        self.free_block_queue.append_n(newly_free)
++        for block in newly_free:
++            self.saga_index.track_free(
++                block.block_id, cached=block.block_hash is not None
++            )
+
+     def reset_prefix_cache(self) -> bool:
+         """Reset prefix cache. This function may be used in RLHF
+@@ -387,6 +414,10 @@ class BlockPool:
+         for block in self.blocks:
+             block.reset_hash()
+
++        self.saga_index.reset(
++            block.block_id for block in self.free_block_queue.get_all_free_blocks()
++        )
++
+         logger.info("Successfully reset prefix cache")
+
+         if self.enable_kv_cache_events:
+diff --git a/vllm/v1/core/kv_cache_manager.py b/vllm/v1/core/kv_cache_manager.py
+index 7f405fc..e772ac4 100644
+--- a/vllm/v1/core/kv_cache_manager.py
++++ b/vllm/v1/core/kv_cache_manager.py
+@@ -299,7 +299,7 @@ class KVCacheManager:
+
+         # Touch the computed blocks to make sure they won't be evicted.
+         if self.enable_caching:
+-            self.block_pool.touch(new_computed_block_list)
++            self.block_pool.touch(new_computed_block_list, request.saga_session_id)
+         else:
+             assert not any(new_computed_block_list), (
+                 "Computed blocks should be empty when prefix caching is disabled"
+diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
+index 4323141..c10cfa2 100644
+--- a/vllm/v1/core/sched/scheduler.py
++++ b/vllm/v1/core/sched/scheduler.py
+@@ -1317,6 +1317,12 @@ class Scheduler(SchedulerInterface):
+     def reset_prefix_cache(self) -> bool:
+         return self.kv_cache_manager.reset_prefix_cache()
+
++    def update_saga_session(self, policy: dict[str, Any]) -> dict[str, Any]:
++        return self.kv_cache_manager.block_pool.saga_index.update(policy)
++
++    def saga_state(self) -> dict[str, Any]:
++        return self.kv_cache_manager.block_pool.saga_index.state()
++
+     def make_stats(
+         self,
+         spec_decoding_stats: SpecDecodingStats | None = None,
+diff --git a/vllm/v1/engine/core.py b/vllm/v1/engine/core.py
+index d49eb75..098a6cd 100644
+--- a/vllm/v1/engine/core.py
++++ b/vllm/v1/engine/core.py
+@@ -482,6 +482,12 @@ class EngineCore:
+     def reset_prefix_cache(self):
+         self.scheduler.reset_prefix_cache()
+
++    def update_saga_session(self, policy: dict[str, Any]) -> dict[str, Any]:
++        return self.scheduler.update_saga_session(policy)
++
++    def saga_state(self) -> dict[str, Any]:
++        return self.scheduler.saga_state()
++
+     def sleep(self, level: int = 1):
+         self.model_executor.sleep(level)
+
+diff --git a/vllm/v1/request.py b/vllm/v1/request.py
+index 3d92906..b427584 100644
+--- a/vllm/v1/request.py
++++ b/vllm/v1/request.py
+@@ -64,6 +64,7 @@ class Request:
+
+         # P/D: Connector-specific KV transfer parameters.
+         self.kv_transfer_params: dict[str, Any] | None = None
++        self.saga_session_id: str | None = None
+
+         if pooling_params is not None:
+             # Pooling models.
+@@ -79,5 +80,10 @@ class Request:
+                 self.kv_transfer_params = sampling_params.extra_args.get(
+                     "kv_transfer_params"
+                 )
++                saga_session_id = sampling_params.extra_args.get("saga_session_id")
++                if saga_session_id is not None:
++                    if not isinstance(saga_session_id, str) or not saga_session_id:
++                        raise ValueError("saga_session_id must be a non-empty string")
++                    self.saga_session_id = saga_session_id
+         else:
+             raise ValueError("sampling_params and pooling_params can't both be unset")

@@ -1,0 +1,968 @@
+"""Orchestrator for one attempt_<N> collection run."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import re
+import shlex
+import subprocess
+import shutil
+import threading
+import time
+import urllib.parse
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Awaitable, Callable
+
+from harness.container_image_prep import ensure_fixed_image
+from harness.container_runtime import container_run_user_args
+from harness.container_stats_sampler import (
+    ContainerStatsSampler,
+    summarize_samples,
+)
+from harness.process_stats_sampler import ProcessStatsSampler
+from harness.disk_preflight import DiskSpaceError, preflight_disk
+from trace_collect import attempt_layout
+
+logger = logging.getLogger(__name__)
+
+_ERROR_EXIT_STATUSES = frozenset(
+    {
+        "error",
+        "tool_error",
+        "empty_final_response",
+        "timeout",
+        "failed",
+    }
+)
+
+_TASK_CONTAINER_ENV_PASSTHROUGH = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+    "PIP_INDEX_URL",
+    "TASK_CONTAINER_PIP_INDEX_URL",
+    "TASK_CONTAINER_PIP_EXTRA_INDEX_URL",
+    "TASK_CONTAINER_PIP_TRUSTED_HOST",
+    "TASK_CONTAINER_PIP_CERT",
+    "TASK_CONTAINER_SSL_CERT_FILE",
+    "TASK_CONTAINER_HTTP_PROXY",
+    "TASK_CONTAINER_HTTPS_PROXY",
+    "TASK_CONTAINER_ALL_PROXY",
+    "TASK_CONTAINER_NO_PROXY",
+    "TASK_CONTAINER_APT_MIRROR",
+    "TASK_CONTAINER_APT_SECURITY_MIRROR",
+    "NANOBOT_MAX_CONCURRENT_REQUESTS",
+    # LLM client timeouts: slow provider streams trip the 90s idle/SDK default.
+    "NANOBOT_STREAM_IDLE_TIMEOUT_S",
+    "OPENCLAW_LLM_TIMEOUT_S",
+)
+
+
+def _is_missing_container_inspect_error(
+    result: subprocess.CompletedProcess[str],
+) -> bool:
+    if result.returncode == 0:
+        return False
+    message = ((result.stderr or "") + "\n" + (result.stdout or "")).lower()
+    return (
+        "no such object" in message
+        or "no such container" in message
+        or "does not exist" in message
+    )
+
+
+def _is_container_removal_in_progress(message: str) -> bool:
+    normalized = message.lower()
+    return (
+        "removal of container" in normalized and "is already in progress" in normalized
+    )
+
+
+def _inspect_container_exists(
+    container_id: str, *, executable: str
+) -> tuple[bool, str | None]:
+    try:
+        inspect = subprocess.run(
+            [executable, "inspect", container_id],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return True, f"{executable} inspect {container_id} timed out after 30s"
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"container executable not found: {executable}") from exc
+    if inspect.returncode == 0:
+        return True, None
+    if _is_missing_container_inspect_error(inspect):
+        return False, None
+    message = (inspect.stderr or inspect.stdout or "").strip()
+    detail = (
+        f"{executable} inspect {container_id} failed with exit {inspect.returncode}"
+        + (f": {message}" if message else "")
+    )
+    return True, detail
+
+
+_ATTEMPT_DIR_RE = re.compile(r"^attempt_(\d+)$")
+
+
+def next_attempt_number_in(instance_dir: Path) -> int:
+    """Return the next attempt_<N> index for a pre-joined instance dir."""
+    if not instance_dir.exists():
+        return 1
+    max_attempt = 0
+    for child in instance_dir.iterdir():
+        if not child.is_dir():
+            continue
+        match = _ATTEMPT_DIR_RE.fullmatch(child.name)
+        if match is None:
+            continue
+        max_attempt = max(max_attempt, int(match.group(1)))
+    return max_attempt + 1
+
+
+def sanitize_path_segment(value: str) -> str:
+    """Replace path-hostile chars (/ and :) with '-' for one path segment."""
+    return value.replace("/", "-").replace(":", "-")
+
+
+def mcp_config_label(mcp_config: str | None) -> str | None:
+    """Map ``--mcp-config`` to the value stored in trace metadata."""
+    if mcp_config is None:
+        return None
+    if mcp_config == "none":
+        return "none"
+    return Path(mcp_config).name
+
+
+@dataclass
+class AttemptContext:
+    """Shared per-task state between ``run_attempt`` and scaffold code."""
+
+    run_dir: Path
+    instance_id: str
+    attempt: int
+    task: dict[str, Any]
+    model: str
+    scaffold: str
+    source_image: str | None
+    prompt_template: str = "default"
+    agent_runtime_mode: str = "host_controller"
+    execution_environment: str = "container"
+    fixed_image: str | None = None
+    replay_source_image: str | None = None
+    replay_fixed_image: str | None = None
+    replay_task_payload: dict[str, Any] | None = None
+    container_id: str | None = None
+    attempt_dir: Path = field(init=False)
+    start_time: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    end_time: datetime | None = None
+    container_stdout: str = ""
+    permission_fix_time_s: float = 0.0
+    # Timing markers for wall-clock breakdown.
+    image_ready_time: datetime | None = None
+    agent_start_time: datetime | None = None
+    agent_end_time: datetime | None = None
+
+    def __post_init__(self) -> None:
+        self.attempt_dir = self.run_dir / self.instance_id / f"attempt_{self.attempt}"
+
+    def mark_container_ready(self, container_id: str) -> None:
+        """Publish the task container id so sampling can start."""
+        self.container_id = container_id
+
+    @property
+    def attempt_label(self) -> str:
+        """Stable string like ``attempt_1`` (matches the manifest field)."""
+        return f"attempt_{self.attempt}"
+
+    def _delta_s(self, start: datetime | None, end: datetime | None) -> float:
+        """Seconds between two optional datetimes; 0.0 if either is None."""
+        if start is None or end is None:
+            return 0.0
+        return (end - start).total_seconds()
+
+    def elapsed_seconds(self) -> float:
+        """Total wall clock between ``start_time`` and ``end_time`` (or now)."""
+        end = self.end_time or datetime.now(tz=timezone.utc)
+        return (end - self.start_time).total_seconds()
+
+    def setup_seconds(self) -> float:
+        """Wall clock from ``start_time`` to agent start (excl. agent execution).
+
+        Falls back to ``image_ready_time`` when ``agent_start_time`` was not
+        recorded (e.g. ``inner`` never started)."""
+        ref = self.agent_start_time or self.image_ready_time
+        return self._delta_s(self.start_time, ref)
+
+    def agent_seconds(self) -> float:
+        """Wall clock from ``agent_start_time`` to ``agent_end_time``."""
+        return self._delta_s(self.agent_start_time, self.agent_end_time)
+
+    def teardown_seconds(self) -> float:
+        """Wall clock from ``agent_end_time`` to ``end_time``."""
+        return self._delta_s(self.agent_end_time, self.end_time)
+
+    def start_time_iso(self) -> str:
+        return self.start_time.isoformat().replace("+00:00", "")
+
+    def end_time_iso(self) -> str:
+        end = self.end_time or datetime.now(tz=timezone.utc)
+        return end.isoformat().replace("+00:00", "")
+
+
+def start_task_container(
+    fixed_image: str,
+    *,
+    executable: str,
+    extra_args: list[str] | None = None,
+    network_mode: str = "host",
+    run_as_host_user: bool = True,
+    mount_host_home: bool = True,
+    container_home: str | None = None,
+    bootstrap_userbase_bin: str | None = None,
+) -> str:
+    """Launch the task container and return its id.
+
+    The container PATH is intentionally restricted to container-only
+    directories (``/usr/local/bin:/usr/bin:/bin``).  Host ``~/.local/bin``
+    is never leaked in: doing so would expose host-installed tools (python,
+    pip, …) into the container on native arches while being absent under
+    cross-architecture (QEMU) runs, producing host-dependent behaviour.
+
+    When *bootstrap_userbase_bin* is supplied, it is prepended so that the
+    pip installed by ``bootstrap_task_container_python`` (and any other
+    userbase tools) are resolvable inside the container.
+    """
+    home_dir = container_home or os.environ.get("HOME", "/root")
+    container_path = "/usr/local/bin:/usr/bin:/bin"
+    bootstrap_userbase: str | None = None
+    if bootstrap_userbase_bin:
+        container_path = f"{bootstrap_userbase_bin}:{container_path}"
+        bootstrap_userbase = str(Path(bootstrap_userbase_bin).parent)
+    cmd = [
+        executable,
+        "run",
+        "-d",
+        "--rm",
+        f"--network={network_mode}",
+        "-w",
+        "/testbed",
+    ]
+    if mount_host_home:
+        cmd.extend(
+            [
+                "-v",
+                f"{home_dir}:{home_dir}",
+            ]
+        )
+    cmd.extend(
+        [
+            "-e",
+            f"HOME={home_dir}",
+            "-e",
+            f"PATH={container_path}",
+        ]
+    )
+    if bootstrap_userbase is not None:
+        cmd.extend(
+            [
+                "-e",
+                f"PYTHONUSERBASE={bootstrap_userbase}",
+                "-e",
+                "PIP_BREAK_SYSTEM_PACKAGES=1",
+            ]
+        )
+    for env_name in _TASK_CONTAINER_ENV_PASSTHROUGH:
+        value = os.environ.get(env_name)
+        if value:
+            cmd.extend(["-e", f"{env_name}={value}"])
+    if run_as_host_user:
+        cmd.extend(container_run_user_args(executable))
+    if extra_args:
+        cmd.extend(extra_args)
+    cmd.extend([fixed_image, "sleep", "infinity"])
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Failed to start task container for {fixed_image}: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+    return result.stdout.strip()
+
+
+def _validate_apt_mirror_url(value: str, *, env_name: str) -> str:
+    normalized = value.rstrip("/")
+    parsed = urllib.parse.urlparse(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"{env_name} must be an absolute http(s) URL")
+    if any(ch.isspace() for ch in normalized):
+        raise ValueError(f"{env_name} must not contain whitespace")
+    return normalized
+
+
+def configure_task_container_apt_mirror(
+    container_id: str,
+    *,
+    executable: str,
+) -> dict[str, str] | None:
+    """Configure Debian/Ubuntu apt mirrors inside a running task container.
+
+    This is opt-in via TASK_CONTAINER_APT_MIRROR. It is an infrastructure
+    mirror, not benchmark-specific behavior; trace commands still execute as
+    recorded, but apt resolves packages from the configured mirror.
+    """
+    main_mirror = os.environ.get("TASK_CONTAINER_APT_MIRROR")
+    if not main_mirror:
+        return None
+    main_mirror = _validate_apt_mirror_url(
+        main_mirror,
+        env_name="TASK_CONTAINER_APT_MIRROR",
+    )
+    security_mirror_env = os.environ.get("TASK_CONTAINER_APT_SECURITY_MIRROR")
+    if security_mirror_env:
+        security_mirror_env = _validate_apt_mirror_url(
+            security_mirror_env,
+            env_name="TASK_CONTAINER_APT_SECURITY_MIRROR",
+        )
+    script = f"""
+set -eu
+main_mirror={shlex.quote(main_mirror)}
+security_mirror_env={shlex.quote(security_mirror_env or "")}
+. /etc/os-release
+case "${{ID:-}}" in
+  debian)
+    components="main"
+    signed_by="/usr/share/keyrings/debian-archive-keyring.gpg"
+    ;;
+  ubuntu)
+    components="main restricted universe multiverse"
+    signed_by="/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+    ;;
+  *)
+    echo "apt mirror skipped: unsupported distro: ${{ID:-unknown}}"
+    exit 0
+    ;;
+esac
+codename="${{VERSION_CODENAME:-}}"
+if [ -z "$codename" ]; then
+  echo "apt mirror unsupported ${{ID:-unknown}} image without VERSION_CODENAME" >&2
+  exit 1
+fi
+if [ -n "$security_mirror_env" ]; then
+  security_mirror="$security_mirror_env"
+else
+  case "${{ID:-}}" in
+    debian)
+      case "$main_mirror" in
+        */debian) security_mirror="${{main_mirror%/debian}}/debian-security" ;;
+        *) security_mirror="$main_mirror" ;;
+      esac
+      ;;
+    ubuntu)
+      security_mirror="$main_mirror"
+      ;;
+  esac
+fi
+mkdir -p /etc/apt/sources.list.d
+for source_file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+  [ -e "$source_file" ] || continue
+  case "$source_file" in
+    */agent-sched-bench-mirror.*|*.agent-sched-bench-disabled) continue ;;
+  esac
+  mv "$source_file" "$source_file.agent-sched-bench-disabled"
+done
+cat > /etc/apt/sources.list.d/agent-sched-bench-mirror.sources <<EOF
+Types: deb
+URIs: $main_mirror
+Suites: $codename $codename-updates
+Components: $components
+Signed-By: $signed_by
+
+Types: deb
+URIs: $security_mirror
+Suites: $codename-security
+Components: $components
+Signed-By: $signed_by
+EOF
+echo "apt mirror configured: distro=${{ID:-unknown}} main=$main_mirror security=$security_mirror"
+"""
+    result = subprocess.run(
+        [executable, "exec", "-i", "--user", "0:0", container_id, "/bin/sh", "-s"],
+        input=script,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "failed to configure task-container apt mirror: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+    stdout = result.stdout.strip()
+    security_match = re.search(r"\bsecurity=([^\s]+)", stdout)
+    return {
+        "configured": "false" if stdout.startswith("apt mirror skipped:") else "true",
+        "main_mirror": main_mirror,
+        "security_mirror": security_match.group(1) if security_match else "",
+        "stdout": stdout,
+    }
+
+
+def stop_task_container(container_id: str, *, executable: str) -> str:
+    """Capture container logs then stop and remove it. Returns log text."""
+    logs_text = ""
+    try:
+        logs = subprocess.run(
+            [executable, "logs", container_id],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        logs_text = (logs.stdout or "") + (logs.stderr or "")
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    errors: list[str] = []
+    removal_in_progress = False
+    for cmd, timeout in (
+        ([executable, "stop", container_id], 30),
+        ([executable, "rm", "-f", container_id], 60),
+    ):
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            errors.append(f"{' '.join(cmd)} timed out after {timeout}s")
+            continue
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"container executable not found: {executable}") from exc
+        if result.returncode != 0:
+            message = (result.stderr or result.stdout or "").strip()
+            if cmd[:3] == [
+                executable,
+                "rm",
+                "-f",
+            ] and _is_container_removal_in_progress(message):
+                removal_in_progress = True
+                continue
+            errors.append(
+                f"{' '.join(cmd)} failed with exit {result.returncode}"
+                + (f": {message}" if message else "")
+            )
+
+    inspect_exists, inspect_error = _inspect_container_exists(
+        container_id,
+        executable=executable,
+    )
+    if inspect_error:
+        errors.append(inspect_error)
+
+    if inspect_exists and removal_in_progress:
+        deadline = time.monotonic() + 60.0
+        while time.monotonic() < deadline:
+            time.sleep(0.5)
+            inspect_exists, inspect_error = _inspect_container_exists(
+                container_id,
+                executable=executable,
+            )
+            if inspect_error:
+                errors.append(inspect_error)
+                break
+            if not inspect_exists:
+                break
+        if inspect_exists:
+            errors.append(
+                f"{executable} rm -f {container_id} reported removal in progress, "
+                "but the container still exists after 60s"
+            )
+
+    if inspect_exists:
+        detail = "; ".join(errors) if errors else "container still exists after cleanup"
+        raise RuntimeError(f"Failed to remove task container {container_id}: {detail}")
+    return logs_text
+
+
+@dataclass(frozen=True)
+class AttemptArtifact:
+    """Extra artifact produced by a benchmark runner.
+
+    ``name`` is the stable key recorded in manifest/results artifact maps.
+    External files/directories are copied under ``attempt_dir/artifacts``;
+    paths already under ``attempt_dir`` are recorded by relative path.
+    """
+
+    name: str
+    path: Path
+    required: bool = True
+
+
+@dataclass
+class AttemptResult:
+    """Result returned by the scaffold ``inner`` coroutine."""
+
+    success: bool
+    exit_status: str | None
+    trace_path: Path
+    model_patch: str = ""
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    summary: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
+    n_iterations: int | None = None
+    total_llm_ms: float | None = None
+    total_tool_ms: float | None = None
+    total_tokens: int | None = None
+    runtime_proof: dict[str, Any] = field(default_factory=dict)
+    artifacts: list[AttemptArtifact] = field(default_factory=list)
+
+_RESERVED_ARTIFACT_NAMES = frozenset(
+    {*attempt_layout.DEFAULT_ARTIFACT_NAMES, "openclaw_tool_results_dir"}
+)
+
+
+
+def _artifact_storage_segment(name: str) -> str:
+    """Return a path-safe segment for storing an artifact by logical name."""
+    segment = re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip(".-")
+    return segment or "artifact"
+
+
+def _relative_to_attempt(path: Path, attempt_dir: Path) -> Path | None:
+    """Return *path* relative to *attempt_dir*, or None when it is external."""
+    try:
+        return path.resolve().relative_to(attempt_dir.resolve())
+    except ValueError:
+        return None
+
+
+def _record_attempt_artifacts(
+    attempt_dir: Path,
+    artifacts: list[AttemptArtifact],
+) -> dict[str, str]:
+    """Preserve runner-provided artifacts and return manifest-ready paths."""
+    recorded: dict[str, str] = {}
+    storage_root = attempt_dir / "artifacts"
+    planned: list[tuple[AttemptArtifact, Path, Path | None, str | None]] = []
+    used_storage_segments: dict[str, str] = {}
+
+    for artifact in artifacts:
+        if artifact.name in _RESERVED_ARTIFACT_NAMES:
+            raise RuntimeError(f"artifact name is reserved: {artifact.name}")
+        if artifact.name in recorded:
+            raise RuntimeError(f"duplicate artifact name: {artifact.name}")
+        recorded[artifact.name] = ""
+        source = artifact.path
+        if not source.exists():
+            if artifact.required:
+                raise FileNotFoundError(
+                    f"required artifact missing: {artifact.name} at {source}"
+                )
+            continue
+
+        relative_source = _relative_to_attempt(source, attempt_dir)
+        storage_segment: str | None = None
+        if relative_source is None:
+            storage_segment = _artifact_storage_segment(artifact.name)
+        elif (
+            len(relative_source.parts) >= 2
+            and relative_source.parts[0] == "artifacts"
+        ):
+            storage_segment = relative_source.parts[1]
+
+        if storage_segment is not None:
+            prior_name = used_storage_segments.get(storage_segment)
+            if prior_name is not None:
+                raise RuntimeError(
+                    "artifact storage path collision: "
+                    f"{artifact.name!r} and {prior_name!r} both map to {storage_segment!r}"
+                )
+            used_storage_segments[storage_segment] = artifact.name
+
+        planned.append((artifact, source, relative_source, storage_segment))
+
+    recorded.clear()
+    for artifact, source, relative_source, storage_segment in planned:
+        if relative_source is not None:
+            recorded[artifact.name] = relative_source.as_posix()
+            continue
+
+        assert storage_segment is not None
+        target_base = storage_root / storage_segment
+        if source.is_dir():
+            target = target_base
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(source, target)
+        elif source.is_file():
+            target = target_base / source.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                target.unlink()
+            shutil.copy2(source, target)
+        else:
+            raise RuntimeError(
+                f"artifact path is neither file nor directory: {artifact.name} at {source}"
+            )
+        recorded[artifact.name] = target.relative_to(attempt_dir).as_posix()
+    return recorded
+
+
+
+async def _watch_for_container_ready(
+    ctx: AttemptContext,
+    stop_event: threading.Event,
+    *,
+    container_executable: str,
+) -> ContainerStatsSampler | None:
+    """Wait for ``ctx.container_id`` and start sampling once it appears."""
+    while not stop_event.is_set():
+        if ctx.container_id:
+            if _container_is_inspectable(
+                ctx.container_id,
+                container_executable=container_executable,
+            ):
+                sampler = ContainerStatsSampler(
+                    container_id=ctx.container_id,
+                    interval_s=1.0,
+                    executable=container_executable,
+                )
+                sampler.start()
+                return sampler
+        try:
+            await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            return None
+    return None
+
+
+def _container_is_inspectable(
+    container_id: str,
+    *,
+    container_executable: str,
+) -> bool:
+    try:
+        result = subprocess.run(
+            [
+                container_executable,
+                "inspect",
+                "--format",
+                "{{.Id}}",
+                container_id,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (FileNotFoundError, PermissionError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+async def run_attempt(
+    ctx: AttemptContext,
+    *,
+    inner: Callable[[AttemptContext], Awaitable[AttemptResult]],
+    min_free_disk_gb: float = 30.0,
+    container_executable: str | None,
+    disable_resource_monitoring: bool = False,
+    monitoring_policy: dict[str, object] | None = None,
+) -> AttemptResult:
+    """Execute one scaffold attempt and write its artifacts."""
+    try:
+        free_gb = preflight_disk(ctx.run_dir, min_free_disk_gb)
+        logger.info("disk preflight ok: %.2f GB free at %s", free_gb, ctx.run_dir)
+    except DiskSpaceError as exc:
+        logger.error("disk preflight failed: %s", exc)
+        raise
+
+    attempt_layout.ensure_attempt_dir(ctx.attempt_dir)
+
+    if ctx.source_image:
+        if container_executable is None:
+            raise ValueError("container_executable is required for container tasks")
+        fixed_name, fix_elapsed = ensure_fixed_image(
+            ctx.source_image,
+            container_executable=container_executable,
+        )
+        ctx.fixed_image = fixed_name
+        ctx.permission_fix_time_s = fix_elapsed
+        ctx.image_ready_time = datetime.now(tz=timezone.utc)
+        logger.info(
+            "image prep: source=%s fixed=%s elapsed=%.2fs",
+            ctx.source_image,
+            fixed_name,
+            fix_elapsed,
+        )
+    else:
+        ctx.fixed_image = None
+        ctx.permission_fix_time_s = 0.0
+        ctx.image_ready_time = datetime.now(tz=timezone.utc)
+
+    resource_monitoring_enabled = not disable_resource_monitoring and (
+        container_executable is not None or ctx.execution_environment == "host"
+    )
+    resolved_monitoring_policy = dict(monitoring_policy or {})
+
+    stop_watcher = threading.Event()
+    watcher_task: asyncio.Task[ContainerStatsSampler | None] | None = None
+    if container_executable is not None and not disable_resource_monitoring:
+        watcher_task = asyncio.create_task(
+            _watch_for_container_ready(
+                ctx,
+                stop_watcher,
+                container_executable=container_executable,
+            )
+        )
+
+    process_sampler: ProcessStatsSampler | None = None
+    if ctx.execution_environment == "host" and not disable_resource_monitoring:
+        process_sampler = ProcessStatsSampler(pid=os.getpid(), interval_s=1.0)
+        process_sampler.start()
+
+    sampler: ContainerStatsSampler | ProcessStatsSampler | None = None
+    samples: list[dict[str, Any]] = []
+    result: AttemptResult | None = None
+    inner_error: BaseException | None = None
+
+    fallback_agent_start_time = datetime.now(tz=timezone.utc)
+    try:
+        result = await inner(ctx)
+        if ctx.agent_start_time is None:
+            ctx.agent_start_time = fallback_agent_start_time
+        if ctx.agent_end_time is None:
+            ctx.agent_end_time = datetime.now(tz=timezone.utc)
+    except BaseException as exc:
+        fallback_agent_end_time = datetime.now(tz=timezone.utc)
+        if ctx.agent_start_time is None:
+            # If the scaffold failed before reaching the actual agent, count
+            # the failed setup as setup time rather than agent execution.
+            ctx.agent_start_time = fallback_agent_end_time
+        if ctx.agent_end_time is None:
+            ctx.agent_end_time = fallback_agent_end_time
+        inner_error = exc
+        logger.exception("scaffold inner raised: %s", exc)
+    finally:
+        stop_watcher.set()
+        if watcher_task is not None:
+            try:
+                sampler = await asyncio.wait_for(watcher_task, timeout=2.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                watcher_task.cancel()
+                sampler = None
+        if sampler is not None:
+            samples = sampler.stop()
+        if process_sampler is not None:
+            process_samples = process_sampler.stop()
+            if not samples:
+                samples = process_samples
+        ctx.end_time = datetime.now(tz=timezone.utc)
+
+    status = "completed"
+    if inner_error is not None:
+        status = "error"
+    elif result is not None and result.exit_status == "max_iterations":
+        status = "exhausted"
+    elif (
+        result is not None
+        and result.exit_status is not None
+        and result.exit_status in _ERROR_EXIT_STATUSES
+    ):
+        status = "error"
+    success = bool(result.success) if result is not None else False
+    replay_source_image = ctx.replay_source_image or ctx.source_image
+    replay_fixed_image = ctx.replay_fixed_image or ctx.fixed_image
+    task_payload: dict[str, Any] = {
+        "instance_id": ctx.instance_id,
+        "repo": ctx.task.get("repo"),
+        "docker_image": replay_source_image,
+    }
+    if ctx.replay_task_payload is not None:
+        task_payload.update(ctx.replay_task_payload)
+        task_payload["instance_id"] = ctx.instance_id
+        task_payload["docker_image"] = replay_source_image
+    for key in ("task_source_kind", "task_source_id", "task_source_path"):
+        if key in ctx.task:
+            task_payload[key] = ctx.task.get(key)
+
+    manifest = {
+        "status": status,
+        "task": task_payload,
+        "attempt": ctx.attempt_label,
+        "model": {"name": ctx.model},
+        "runtime": {
+            "home": None,
+            "wrapper_enabled": False,
+            "memory_limit": None,
+            "cpu_limit": None,
+            "start_time": ctx.start_time_iso(),
+            "end_time": ctx.end_time_iso(),
+            "min_free_disk_gb": min_free_disk_gb,
+            "agent_runtime_mode": ctx.agent_runtime_mode,
+            "runtime_proof": result.runtime_proof if result is not None else {},
+        },
+        "replay": {
+            "replay_ready": bool(replay_fixed_image),
+            "source_image": replay_source_image,
+            "fixed_image_name": replay_fixed_image,
+        },
+        "result_summary": {
+            "exit_code": 0 if success else 1,
+            "exit_status": result.exit_status if result is not None else None,
+            "error": str(inner_error)
+            if inner_error is not None
+            else (result.error if result is not None else None),
+            "total_time": ctx.elapsed_seconds(),
+            "active_time": (result.total_llm_ms or 0.0) / 1000.0 if result else 0.0,
+            "tool_time": (result.total_tool_ms or 0.0) / 1000.0 if result else 0.0,
+        },
+        "timing": {
+            "wall_total_s": ctx.elapsed_seconds(),
+            "setup_s": ctx.setup_seconds(),
+            "agent_exec_s": ctx.agent_seconds(),
+            "teardown_s": ctx.teardown_seconds(),
+            "permission_fix_s": ctx.permission_fix_time_s,
+        },
+        "scaffold": ctx.scaffold,
+        "prompt_template": ctx.prompt_template,
+        "agent_runtime_mode": ctx.agent_runtime_mode,
+        "execution_environment": ctx.execution_environment,
+    }
+
+    results_payload: dict[str, Any] = {
+        "image": replay_source_image,
+        "start_time": ctx.start_time_iso(),
+        "end_time": ctx.end_time_iso(),
+        "memory_limit": None,
+        "cpu_limit": None,
+        "model": ctx.model,
+        "output_dir": str(ctx.attempt_dir),
+        "permission_fix_time": ctx.permission_fix_time_s,
+        "total_time": ctx.elapsed_seconds(),
+        "active_time": manifest["result_summary"]["active_time"],
+        "tool_time": manifest["result_summary"]["tool_time"],
+        "timing": {
+            "wall_total_s": ctx.elapsed_seconds(),
+            "setup_s": ctx.setup_seconds(),
+            "agent_exec_s": ctx.agent_seconds(),
+            "teardown_s": ctx.teardown_seconds(),
+            "permission_fix_s": ctx.permission_fix_time_s,
+        },
+        "replay_ready": bool(replay_fixed_image),
+        "instance_id": ctx.instance_id,
+        "repo": ctx.task.get("repo"),
+        "docker_image": replay_source_image,
+        "success": success,
+        "model_patch": result.model_patch if result is not None else "",
+        "scaffold": ctx.scaffold,
+        "prompt_template": ctx.prompt_template,
+        "agent_runtime_mode": ctx.agent_runtime_mode,
+    }
+    for key in (
+        "task_source_kind",
+        "task_source_id",
+        "task_source_path",
+        "tb_version",
+        "tb_dataset",
+        "tb_registry_source",
+        "adapter_kind",
+        "agent_import_path",
+    ):
+        if key in ctx.task:
+            results_payload[key] = ctx.task.get(key)
+        elif result is not None and key in result.summary:
+            results_payload[key] = result.summary.get(key)
+    if result is not None and result.runtime_proof:
+        results_payload["runtime_proof"] = result.runtime_proof
+    if result is not None:
+        results_payload["n_iterations"] = result.n_iterations
+        results_payload["total_tokens"] = result.total_tokens
+        if result.summary:
+            results_payload["scaffold_summary"] = result.summary
+
+    resources_summary = summarize_samples(samples)
+    if samples:
+        monitoring_status = "collected"
+    elif resource_monitoring_enabled:
+        monitoring_status = "enabled_no_samples"
+    else:
+        monitoring_status = "disabled"
+    resources_summary["monitoring_disabled"] = not resource_monitoring_enabled
+    resources_summary["monitoring"] = {
+        **resolved_monitoring_policy,
+        "status": monitoring_status,
+    }
+
+    artifact_error: BaseException | None = None
+    artifact_paths: dict[str, str] = {}
+    try:
+        if result is not None and result.trace_path.exists():
+            attempt_layout.copy_trace_jsonl(
+                ctx.attempt_dir,
+                result.trace_path,
+            )
+        if result is not None and result.artifacts:
+            artifact_paths.update(
+                _record_attempt_artifacts(ctx.attempt_dir, result.artifacts)
+            )
+    except BaseException as exc:
+        artifact_error = exc
+        status = "error"
+        success = False
+        manifest["status"] = status
+        manifest["result_summary"]["exit_code"] = 1
+        manifest["result_summary"]["error"] = str(exc)
+        results_payload["success"] = False
+
+    trace_file = ctx.attempt_dir / attempt_layout.TRACE_FILENAME
+    if result is not None and result.tool_calls:
+        tool_calls = result.tool_calls
+    elif trace_file.exists():
+        tool_calls = attempt_layout.build_tool_calls_from_trace(trace_file)
+    else:
+        tool_calls = []
+
+    openclaw_tool_results_dir = ctx.attempt_dir / "openclaw-runtime" / "tool-results"
+    if openclaw_tool_results_dir.exists():
+        artifact_paths["openclaw_tool_results_dir"] = str(
+            openclaw_tool_results_dir.relative_to(ctx.attempt_dir)
+        )
+    if artifact_paths:
+        manifest.setdefault("artifacts", {}).update(artifact_paths)
+        results_payload["artifacts"] = artifact_paths
+
+    attempt_layout.write_results_json(ctx.attempt_dir, results_payload)
+    attempt_layout.write_resources_json(
+        ctx.attempt_dir, samples, summary=resources_summary
+    )
+    attempt_layout.write_tool_calls_json(ctx.attempt_dir, tool_calls)
+    attempt_layout.write_container_stdout(ctx.attempt_dir, ctx.container_stdout)
+    attempt_layout.write_run_manifest(ctx.attempt_dir, manifest)
+
+    if artifact_error is not None:
+        raise artifact_error
+    if inner_error is not None:
+        raise inner_error
+    assert result is not None
+    return result
+
+
+__all__ = ["AttemptArtifact", "AttemptContext", "AttemptResult", "run_attempt"]

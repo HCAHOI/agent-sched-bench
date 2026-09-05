@@ -1,0 +1,230 @@
+"""Base classes and configuration for the benchmark plugin architecture.
+
+New code should instantiate benchmarks via::
+
+    from agents.benchmarks import get_benchmark_class
+    cls = get_benchmark_class("swe-bench-verified")
+    plugin = cls(config)
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import random
+import yaml
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, ClassVar
+
+
+@dataclass
+class BenchmarkConfig:
+    """Configuration for a benchmark plugin.
+
+    All path fields are stored as :class:`pathlib.Path` objects.
+    """
+
+    slug: str
+    display_name: str
+    trace_root: Path
+    default_max_iterations: int
+    selection_n: int
+    selection_seed: int
+    harness_dataset: str | None = None
+    harness_split: str | None = None
+    data_root: Path | None = None
+    repos_root: Path | None = None
+    default_prompt_template: str = "default"
+    exclude_lite: bool = False
+    extras: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_yaml(cls, path: Path) -> "BenchmarkConfig":
+        """Load a :class:`BenchmarkConfig` from a YAML file.
+
+        ``data_root``/``repos_root`` are ``None`` when absent or ``null``.
+        """
+        raw: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+        repos_root_raw = raw.get("repos_root")
+        repos_root: Path | None = (
+            Path(repos_root_raw) if repos_root_raw is not None else None
+        )
+        data_root_raw = raw.get("data_root")
+        data_root: Path | None = Path(data_root_raw) if data_root_raw is not None else None
+
+        return cls(
+            slug=raw["slug"],
+            display_name=raw["display_name"],
+            harness_dataset=raw.get("harness_dataset"),
+            harness_split=raw.get("harness_split"),
+            data_root=data_root,
+            repos_root=repos_root,
+            trace_root=Path(raw["trace_root"]),
+            default_max_iterations=int(raw["default_max_iterations"]),
+            selection_n=int(raw["selection_n"]),
+            selection_seed=int(raw["selection_seed"]),
+            default_prompt_template=str(raw.get("default_prompt_template", "default")),
+            exclude_lite=bool(raw.get("exclude_lite", False)),
+            extras=dict(raw.get("extras", {})),
+        )
+
+class Benchmark(ABC):
+    """Abstract base class for all benchmark plugins.
+
+    Subclasses must set :attr:`slug` and implement :meth:`load_tasks`
+    and :meth:`normalize_task`.
+    """
+
+    slug: ClassVar[str]
+
+    def __init__(self, config: BenchmarkConfig) -> None:
+        self.config = config
+        self.validate_config()
+
+    # Abstract interface
+
+    @abstractmethod
+    def load_tasks(self) -> list[dict[str, Any]]:
+        """Load and return all tasks for this benchmark.
+
+        Each task is a plain dict with at minimum an ``instance_id`` key.
+        """
+        ...
+
+    @abstractmethod
+    def normalize_task(self, raw: dict[str, Any]) -> dict[str, Any]:
+        """Normalize a raw task row into the canonical task dict format.
+
+        Args:
+            raw: A single raw row as returned by the upstream dataset.
+
+        Returns:
+            A normalized task dict suitable for use by scaffolds.
+        """
+        ...
+
+    # Concrete defaults
+
+    def validate_config(self) -> None:
+        """Validate benchmark-specific configuration.
+
+        Subclasses can raise :class:`ValueError` for missing or invalid config.
+        """
+        return None
+
+    def load_tasks_from_local_json(
+        self,
+        filename: str = "tasks.json",
+    ) -> list[dict[str, Any]] | None:
+        """Load normalized tasks from ``config.data_root / filename`` if enabled."""
+        if os.environ.get("AGENT_SCHED_BENCH_USE_LOCAL_TASK_CACHE") != "1":
+            return None
+        if self.config.data_root is None:
+            return None
+        path = self.config.data_root / filename
+        if not path.is_file():
+            return None
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, list):
+            raise ValueError(f"local task cache must be a list: {path}")
+        tasks: list[dict[str, Any]] = []
+        for index, row in enumerate(raw):
+            if not isinstance(row, dict):
+                raise ValueError(
+                    f"local task cache row {index} must be an object: {path}"
+                )
+            task = self.normalize_task(row)
+            instance_id = task.get("instance_id")
+            if not instance_id:
+                raise ValueError(
+                    f"local task cache row {index} missing instance_id: {path}"
+                )
+            task["task_source_kind"] = "benchmark_local_json"
+            task["task_source_id"] = str(instance_id)
+            task["task_source_path"] = str(path)
+            tasks.append(task)
+        return tasks
+
+    @property
+    def execution_environment(self) -> str:
+        """Return the required task execution environment."""
+        return "container"
+
+    def validate_scaffold_support(self, scaffold: str) -> None:
+        """Raise when *scaffold* is unsupported for this benchmark."""
+        self.runtime_mode_for(scaffold)
+
+    def derive_test_cmd(self, task: dict[str, Any]) -> str:
+        """Derive a pytest command from ``task["FAIL_TO_PASS"]``.
+
+        Handles both native list (SWE-rebench) and JSON-encoded string
+        (SWE-Bench Verified) forms.
+        """
+        raw = task.get("FAIL_TO_PASS", "[]")
+        if isinstance(raw, str):
+            try:
+                test_ids = json.loads(raw)
+            except json.JSONDecodeError:
+                test_ids = [raw] if raw else []
+        else:
+            test_ids = list(raw)
+        if not test_ids:
+            return "python -m pytest --no-header -q"
+        return f"python -m pytest {' '.join(test_ids)} -x --no-header -q"
+
+    def select_subset(
+        self,
+        tasks: list[dict[str, Any]],
+        n: int | None = None,
+        seed: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return a random sample of ``n`` tasks, reproducible via ``seed``.
+
+        Uses ``random.Random(seed)`` to shuffle a copy of *tasks* and takes the
+        first ``n``. This is a true random sample (not a dictionary-order
+        prefix) while remaining deterministic for a fixed seed — the same
+        seed always yields the same selection, which keeps runs reproducible.
+        When ``seed`` is None it falls back to ``config.selection_seed``.
+        """
+        effective_n = n if n is not None else self.config.selection_n
+        effective_seed = seed if seed is not None else self.config.selection_seed
+        # Shuffle a copy (never mutate the caller's list) and take the prefix.
+        shuffled = list(tasks)
+        random.Random(effective_seed).shuffle(shuffled)
+        return shuffled[:effective_n]
+
+    def select_window(
+        self,
+        tasks: list[dict[str, Any]],
+        *,
+        n: int,
+        seed: int | None,
+        skip: int,
+    ) -> list[dict[str, Any]]:
+        """Select a benchmark-owned subset after skipping source-order tasks."""
+        return self.select_subset(tasks[skip:], n=n, seed=seed)
+
+    def image_name_for(self, task: dict[str, Any]) -> str | None:
+        return task.get("image_name")
+
+    def runtime_mode_for(self, scaffold: str) -> str:
+        """Return the runtime strategy label for the given scaffold."""
+        return "host_controller"
+
+    def build_runner(self, *, scaffold: str, **kwargs: Any) -> Any:
+        """Build and return a scaffold runner for this benchmark.
+
+        The base implementation always raises :exc:`NotImplementedError`.
+        Subclasses that support concrete scaffold integrations **must** override
+        this method.
+
+        Raises:
+            NotImplementedError: Always — subclasses must override.
+        """
+        raise NotImplementedError(
+            f"Benchmark {self.slug!r} does not implement build_runner; "
+            f"subclasses must override this method for scaffold={scaffold!r}"
+        )

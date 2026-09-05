@@ -1,0 +1,932 @@
+"""CLI entry point for trace collection, simulation, and viewer helpers."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import logging
+import os
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager, nullcontext, suppress
+from pathlib import Path
+
+from llm_call import add_llm_config_arguments, resolve_llm_config
+from llm_call.config import (
+    nonnegative_float_arg,
+    nonnegative_int_arg,
+    positive_float_arg,
+    positive_int_arg,
+    top_p_arg,
+)
+from trace_collect.monitoring import MONITORING_CHOICES
+
+
+def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Collect benchmark agent traces using a cloud LLM API.",
+    )
+    add_llm_config_arguments(parser)
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=100,
+        help="Maximum agent iterations per task.",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=nonnegative_float_arg,
+        default=None,
+        help=(
+            "Optional agent sampling temperature. When omitted, the scaffold "
+            "default is used."
+        ),
+    )
+    parser.add_argument(
+        "--top-p",
+        type=top_p_arg,
+        default=None,
+        help="Optional agent nucleus sampling top_p value.",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=positive_int_arg,
+        default=None,
+        help="Optional agent top_k sampling value for compatible providers.",
+    )
+    parser.add_argument(
+        "--repetition-penalty",
+        type=positive_float_arg,
+        default=None,
+        help="Optional agent repetition penalty for compatible providers.",
+    )
+    parser.add_argument(
+        "--service-tier",
+        choices=["fast"],
+        default=None,
+        help="Optional Codex service tier; fast uses Priority processing.",
+    )
+    parser.add_argument(
+        "--benchmark",
+        default="swe-bench-verified",
+        help=(
+            "Benchmark slug (e.g. 'swe-bench-verified', 'swe-rebench'). "
+            "Loads configs/benchmarks/<slug>.yaml and constructs the plugin."
+        ),
+    )
+    parser.add_argument(
+        "--sample",
+        type=nonnegative_int_arg,
+        default=None,
+        help="Select N tasks using benchmark-owned sampling.",
+    )
+    parser.add_argument(
+        "--selection-seed",
+        type=int,
+        default=None,
+        help="Seed for --sample task selection; defaults to benchmark YAML.",
+    )
+    parser.add_argument(
+        "--skip",
+        type=nonnegative_int_arg,
+        default=0,
+        help=(
+            "Selection offset interpreted by the benchmark plugin; with "
+            "--instance-ids, skip within the explicit ID order."
+        ),
+    )
+    parser.add_argument(
+        "--instance-ids",
+        default=None,
+        help="Comma-separated list of instance IDs to run (e.g., 'django__django-12345,sympy__sympy-67890').",
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=positive_int_arg,
+        default=1,
+        help="Maximum concurrent collect tasks.",
+    )
+    parser.add_argument(
+        "--scaffold",
+        choices=["openclaw"],
+        default="openclaw",
+        help="Agent scaffold to use.",
+    )
+    parser.add_argument(
+        "--container",
+        choices=["docker", "podman"],
+        default=None,
+        help="Container CLI executable for benchmark collection runtime.",
+    )
+    parser.add_argument(
+        "--mcp-config",
+        default=None,
+        help=(
+            "MCP server configuration. Required when --scaffold=openclaw. "
+            "Accepts a YAML path (e.g. configs/mcp/context7.yaml) OR the "
+            "literal string 'none' for an affirmative MCP-less run. The "
+            "trace header records the chosen value under "
+            "metadata.run_config.mcp_config so analysis can distinguish "
+            "explicit 'none' from a legacy MCP-less default."
+        ),
+    )
+    parser.add_argument(
+        "--max-context-tokens",
+        type=int,
+        default=256_000,
+        help="Sliding window token budget for context management.",
+    )
+    parser.add_argument(
+        "--prompt-template",
+        default=None,
+        help=(
+            "Optional prompt template override; resolved as "
+            "configs/prompts/<benchmark_slug>/<name>.md (hyphens converted to underscores). "
+            "When omitted, uses the benchmark config default "
+            "(e.g. swe-rebench -> cc_aligned, terminal-bench -> default)."
+        ),
+    )
+    parser.add_argument(
+        "--min-free-disk-gb",
+        type=float,
+        default=30.0,
+        help="Abort per-task run if free disk falls below this threshold (GB).",
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Resume an interrupted run by passing its existing run directory path.",
+    )
+    resource_group = parser.add_mutually_exclusive_group()
+    resource_group.add_argument(
+        "--tool-resource-profile",
+        default=None,
+        help=(
+            "Canonical tool-resource profile. Omit to disable the resource "
+            "service for collection."
+        ),
+    )
+    resource_group.add_argument(
+        "--tool-resource-telemetry",
+        choices=["off", "clause"],
+        default="off",
+        help=(
+            "Collector-managed eBPF clause telemetry. This observes only; it "
+            "does not query, update, or persist the resource KB."
+        ),
+    )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Enable verbose logging.",
+    )
+    return parser.parse_args(argv)
+
+
+def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Replay cloud-model traces using source-trace timing.",
+    )
+    parser.add_argument(
+        "--manifest",
+        required=True,
+        help=(
+            "YAML simulate manifest. It may be a list of absolute trace paths "
+            "or an object with defaults.task_source and traces entries."
+        ),
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["cloud_model"],
+        default="cloud_model",
+        help="Replay mode. Only cloud_model is supported on this branch.",
+    )
+    parser.add_argument(
+        "--concurrency",
+        default="1",
+        help=(
+            "Maximum active traces. Use a comma-separated list such as 1,2,4,8 "
+            "to run a throughput sweep."
+        ),
+    )
+    parser.add_argument(
+        "--workers",
+        type=positive_int_arg,
+        default=1,
+        help=(
+            "Number of OS worker processes for cloud_model replay. Each worker "
+            "runs an independent asyncio event loop to reduce sleep wake-up "
+            "drift at high concurrency. Default 1 preserves the legacy path."
+        ),
+    )
+    parser.add_argument(
+        "--prep-concurrency",
+        type=nonnegative_int_arg,
+        default=0,
+        help=(
+            "System-wide concurrent container preparation limit shared across "
+            "simulate workers. 0 preserves the default limit of 20."
+        ),
+    )
+    parser.add_argument(
+        "--stage-all-before-replay",
+        action="store_true",
+        help=(
+            "Prepare every task before one common ready time, then admit "
+            "replays FIFO up to --concurrency. Requires --workers 1 and no "
+            "task dependencies."
+        ),
+    )
+    parser.add_argument(
+        "--replacement-delay-mean-s",
+        type=positive_float_arg,
+        default=None,
+        help=(
+            "After an original task completes, keep its slot loaded by replaying "
+            "the same trace in a fresh container after an exponential delay with "
+            "this mean. Only original manifest tasks enter throughput metrics."
+        ),
+    )
+    parser.add_argument(
+        "--replacement-seed",
+        type=int,
+        default=42,
+        help="Seed for per-task replacement delays (default: 42).",
+    )
+    parser.add_argument(
+        "--resource-monitoring",
+        choices=MONITORING_CHOICES,
+        default="auto",
+        help="Built-in simulate resource monitoring policy (default: auto).",
+    )
+    parser.add_argument(
+        "--pmu-monitoring",
+        choices=MONITORING_CHOICES,
+        default="auto",
+        help=(
+            "PMU/cgroup memory-access monitoring policy. Auto enables it only "
+            "for non-concurrent container replay."
+        ),
+    )
+    parser.add_argument(
+        "--memory-bandwidth-monitoring",
+        choices=MONITORING_CHOICES,
+        default="auto",
+        help=(
+            "Host memory-bandwidth monitoring policy. Auto enables it only for "
+            "non-concurrent container replay."
+        ),
+    )
+    parser.add_argument(
+        "--task-source",
+        default=None,
+        help=(
+            "Default tasks JSON file for manifest entries that do not specify "
+            "task_source. Required only when the manifest lacks "
+            "defaults.task_source and per-entry task_source values."
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="traces/simulate",
+        help="Output directory for the simulate trace.",
+    )
+    parser.add_argument(
+        "--container",
+        default=None,
+        choices=["docker", "podman"],
+        help="Container executable for container-mode trace replay.",
+    )
+    parser.add_argument(
+        "--container-cpus",
+        type=positive_float_arg,
+        default=None,
+        help="CPU cap passed to each replay task container.",
+    )
+    parser.add_argument(
+        "--container-cpuset-cpus",
+        default=None,
+        help=(
+            "CPU set shared by every replay task container (for example, 4-15). "
+            "This does not impose a per-container CPU quota."
+        ),
+    )
+    parser.add_argument(
+        "--network-mode",
+        default="host",
+        help="Container network mode (default: host). Use 'none' for isolated replay.",
+    )
+    parser.add_argument(
+        "--command-timeout",
+        type=float,
+        default=600.0,
+        help=(
+            "Fallback timeout in seconds for replayed shell commands when the "
+            "source trace does not carry a tool-specific timeout."
+        ),
+    )
+    parser.add_argument(
+        "--warmup-skip-iterations",
+        type=int,
+        default=0,
+        help=(
+            "Tag the first N replay iterations with sim_metrics.warmup=true "
+            "for analysis-time exclusion. Iterations are still replayed."
+        ),
+    )
+    parser.add_argument(
+        "--replay-speed",
+        type=positive_float_arg,
+        default=1.0,
+        help=(
+            "Acceleration factor for source inter-action gaps and LLM sleeps. "
+            "It never scales command execution, timeouts, or telemetry clocks. "
+            "Fixed TTFT/TPOT LLM timing requires --replay-speed 1.0."
+        ),
+    )
+    parser.add_argument(
+        "--shadow-llm-api-base",
+        default=None,
+        help="Loopback vLLM API base for fixed-trajectory shadow generation.",
+    )
+    parser.add_argument(
+        "--shadow-llm-model",
+        default=None,
+        help="Local vLLM model for fixed-trajectory shadow generation.",
+    )
+    parser.add_argument(
+        "--shadow-llm-timeout-s",
+        type=positive_float_arg,
+        default=120.0,
+        help="Per-request shadow LLM timeout in seconds (default: 120).",
+    )
+    parser.add_argument(
+        "--shadow-llm-seed",
+        type=int,
+        default=0,
+        help="Seed sent to the shadow LLM server (default: 0).",
+    )
+    parser.add_argument(
+        "--shadow-llm-max-concurrency",
+        type=positive_int_arg,
+        default=None,
+        help=(
+            "Maximum concurrent fixed-trajectory shadow LLM requests. "
+            "Omit to leave request admission unconstrained."
+        ),
+    )
+    parser.add_argument(
+        "--shadow-llm-mode",
+        choices=[
+            "vllm",
+            "thunderagent",
+            "continuum-public",
+            "agentix",
+            "cachewise",
+            "saga",
+            "native-priority",
+        ],
+        default="vllm",
+        help=(
+            "Shadow serving policy. continuum-public uses the trace's declared "
+            "max_iterations as the official client's known step limit, never "
+            "the observed trace length (default: vllm)."
+        ),
+    )
+    parser.add_argument(
+        "--shadow-llm-cachewise-predictor-checkout",
+        default=None,
+        help="Pinned official predictor checkout used only by CacheWise mode.",
+    )
+    parser.add_argument(
+        "--shadow-llm-cachewise-models-dir",
+        default=None,
+        help="Official trained predictor models used only by CacheWise mode.",
+    )
+    parser.add_argument(
+        "--shadow-llm-oracle-output-priority",
+        action="store_true",
+        help="Use trace completion tokens as CacheWise request priority.",
+    )
+    parser.add_argument(
+        "--shadow-llm-saga-profile",
+        default=None,
+        help="Frozen causal tool profile used only by the SAGA KV subset.",
+    )
+    parser.add_argument(
+        "--tool-gap-loan-arm",
+        choices=["fixed", "feedback", "predictor"],
+        default=None,
+        help="Enable the registered staged tool-gap loan experiment arm.",
+    )
+    parser.add_argument(
+        "--tool-gap-borrower-priority",
+        type=positive_int_arg,
+        default=None,
+        help="vLLM priority for requests from tool-gap borrowers.",
+    )
+    parser.add_argument(
+        "--tool-gap-predictions",
+        default=None,
+        help="Strict label-free prediction JSON used only by the predictor arm.",
+    )
+    parser.add_argument(
+        "--llm-timing",
+        choices=["source-scaled", "ttft-tpot"],
+        default="source-scaled",
+        help=(
+            "LLM replay duration model. source-scaled sleeps for source LLM "
+            "duration divided by --replay-speed. ttft-tpot sleeps for "
+            "--llm-ttft-ms + (completion_tokens - 1) * --llm-tpot-ms and "
+            "requires --replay-speed 1.0."
+        ),
+    )
+    parser.add_argument(
+        "--llm-ttft-ms",
+        type=nonnegative_float_arg,
+        default=None,
+        help="Simulated TTFT in milliseconds when --llm-timing ttft-tpot.",
+    )
+    parser.add_argument(
+        "--llm-tpot-ms",
+        type=nonnegative_float_arg,
+        default=None,
+        help="Simulated TPOT in milliseconds when --llm-timing ttft-tpot.",
+    )
+    parser.add_argument(
+        "--tool-resource-profile",
+        default=None,
+        help=(
+            "Canonical tool-resource profile. Omit to disable the resource "
+            "service for this replay."
+        ),
+    )
+    parser.add_argument(
+        "--cleanup-images",
+        action="store_true",
+        help=(
+            "Remove each task's source container image once no pending replay "
+            "session references it, and skip the up-front global image prefetch. "
+            "Off by default (shared-image corpora reuse a small set of images); "
+            "turn on for per-task-unique-image corpora where prefetching every "
+            "image would exceed disk."
+        ),
+    )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Enable verbose logging.",
+    )
+    return parser.parse_args(argv)
+
+
+def main() -> None:
+    sub = sys.argv[1] if len(sys.argv) > 1 else None
+    if sub == "simulate":
+        _run_simulate(parse_simulate_args(sys.argv[2:]))
+    elif sub == "gantt-serve":
+        from demo.gantt_viewer.backend.dev import main as run_gantt_server
+
+        run_gantt_server(sys.argv[2:])
+    elif sub == "gantt-export":
+        from demo.gantt_viewer.backend.static_export import (
+            build_parser as build_gantt_export_parser,
+            export_from_args,
+        )
+
+        result = export_from_args(build_gantt_export_parser().parse_args(sys.argv[2:]))
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        _run_collect(parse_collect_args())
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _wait_for_socket(path: Path, process: subprocess.Popen[bytes]) -> None:
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        if path.is_socket():
+            return
+        if process.poll() is not None:
+            raise RuntimeError(
+                f"service exited {process.returncode} before creating {path}"
+            )
+        time.sleep(0.05)
+    raise RuntimeError(f"timed out waiting for service socket {path}")
+
+
+def _stop_service(
+    process: subprocess.Popen[bytes] | None,
+    *,
+    privileged: bool = False,
+) -> None:
+    if process is None or process.poll() is not None:
+        return
+    if privileged:
+        subprocess.run(
+            ["sudo", "-n", "/bin/kill", "-TERM", "--", f"-{process.pid}"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    else:
+        os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        if privileged:
+            subprocess.run(
+                ["sudo", "-n", "/bin/kill", "-KILL", "--", f"-{process.pid}"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=10)
+
+
+@contextmanager
+def _managed_clause_telemetry(
+    run_dir: Path,
+    *,
+    container_runtime: str,
+    verbose: bool,
+) -> Iterator[Path]:
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def exit_on_sigterm(signum, _frame) -> None:
+        raise SystemExit(128 + signum)
+
+    runtime = run_dir / "_tool_resource_runtime" / f"collector-{os.getpid()}"
+    runtime.mkdir(parents=True, exist_ok=False)
+    socket_dir = Path(tempfile.mkdtemp(prefix="asb-resource-", dir="/tmp"))
+    telemetry_socket = socket_dir / "telemetry.sock"
+    resource_socket = socket_dir / "resource.sock"
+    profile_path = runtime / "resource.yaml"
+    profile_path.write_text(
+        "\n".join(
+            [
+                "tool_resource:",
+                f"  endpoint: unix://{resource_socket}",
+                "  behavior: observe",
+                "  update_policy: frozen",
+                "  snapshot: latest_at_run_start",
+                "  telemetry_requirement: required_for_valid_evidence",
+                "  latency_bucket_edges_ms: [500, 2000, 8000, 30000]",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    pythonpath = f"{REPO_ROOT / 'src'}:{REPO_ROOT}:/usr/lib/python3/dist-packages"
+    telemetry_command = [
+        "sudo", "-n", "env", f"PYTHONPATH={pythonpath}", sys.executable,
+        "-m", "tool_resource.telemetryd",
+        "--socket", str(telemetry_socket),
+        "--allowed-uid", str(os.getuid()),
+        "--socket-gid", str(os.getgid()),
+        "--container-runtime", Path(container_runtime).name,
+        "--state-dir", str(runtime / "telemetry-state"),
+    ]
+    resource_command = [
+        sys.executable, "-m", "tool_resource.resource_agentd",
+        "--socket", str(resource_socket),
+        "--database", str(runtime / "observations.sqlite3"),
+        "--telemetry-socket", str(telemetry_socket),
+    ]
+    if verbose:
+        telemetry_command.append("--verbose")
+        resource_command.append("--verbose")
+    telemetry_process: subprocess.Popen[bytes] | None = None
+    resource_process: subprocess.Popen[bytes] | None = None
+    signal.signal(signal.SIGTERM, exit_on_sigterm)
+    try:
+        with (runtime / "telemetryd.log").open("wb") as output:
+            telemetry_process = subprocess.Popen(
+                telemetry_command,
+                cwd=REPO_ROOT,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        _wait_for_socket(telemetry_socket, telemetry_process)
+        with (runtime / "resource-agentd.log").open("wb") as output:
+            resource_process = subprocess.Popen(
+                resource_command,
+                cwd=REPO_ROOT,
+                env={**os.environ, "PYTHONPATH": f"{REPO_ROOT / 'src'}:{REPO_ROOT}"},
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        _wait_for_socket(resource_socket, resource_process)
+        yield profile_path
+    finally:
+        _stop_service(resource_process)
+        _stop_service(telemetry_process, privileged=True)
+        signal.signal(signal.SIGTERM, previous_sigterm)
+        with suppress(OSError):
+            socket_dir.rmdir()
+
+
+def _run_collect(args: argparse.Namespace) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+    # --mcp-config is MANDATORY for openclaw runs: a forgotten flag would
+    # silently produce an MCP-less trace. Opt-out is the literal "none".
+    if args.mcp_config is None:
+        print(
+            "ERROR: MCP config is required for openclaw; pass "
+            "--mcp-config configs/mcp/context7.yaml or --mcp-config none "
+            "to acknowledge running without MCP",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    try:
+        provider_config = resolve_llm_config(
+            provider=args.provider,
+            api_base=args.api_base,
+            api_key=args.api_key,
+            model=args.model,
+            environ=os.environ,
+        )
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
+    if provider_config.name == "codex":
+        try:
+            from llm_call.codex import load_codex_credentials
+
+            load_codex_credentials(provider_config.api_key)
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+    elif args.service_tier is not None:
+        print("ERROR: --service-tier is supported only by codex.", file=sys.stderr)
+        sys.exit(2)
+    elif not provider_config.api_key:
+        print(
+            f"ERROR: Set {provider_config.env_key} or pass --api-key.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    from agents.benchmarks import get_benchmark_class
+    from agents.benchmarks.base import BenchmarkConfig
+    from trace_collect.collector import build_run_dir, collect_traces
+
+    benchmark_yaml = REPO_ROOT / "configs" / "benchmarks" / f"{args.benchmark}.yaml"
+    if not benchmark_yaml.exists():
+        print(f"ERROR: No benchmark config at {benchmark_yaml}", file=sys.stderr)
+        sys.exit(1)
+    config = BenchmarkConfig.from_yaml(benchmark_yaml)
+    plugin_cls = get_benchmark_class(config.slug)
+    benchmark = plugin_cls(config)
+
+    managed_run_dir = None
+    resource_context = nullcontext(
+        Path(args.tool_resource_profile) if args.tool_resource_profile else None
+    )
+    if args.tool_resource_telemetry == "clause":
+        if args.container is None:
+            print(
+                "ERROR: --tool-resource-telemetry clause requires --container.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        managed_run_dir = (
+            Path(args.run_id)
+            if args.run_id
+            else build_run_dir(benchmark, provider_config.model)
+        )
+        resource_context = _managed_clause_telemetry(
+            managed_run_dir,
+            container_runtime=args.container,
+            verbose=args.verbose,
+        )
+
+    with resource_context as resource_profile:
+        run_dir = asyncio.run(
+            collect_traces(
+                scaffold=args.scaffold,
+                container_executable=args.container,
+                provider_name=provider_config.name,
+                env_key=provider_config.env_key,
+                api_base=provider_config.api_base,
+                api_key=provider_config.api_key,
+                model=provider_config.model,
+                benchmark=benchmark,
+                max_iterations=args.max_iterations,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                repetition_penalty=args.repetition_penalty,
+                service_tier=args.service_tier,
+                sample=args.sample,
+                selection_seed=args.selection_seed,
+                skip=args.skip,
+                concurrency=args.concurrency,
+                instance_ids=(
+                    args.instance_ids.split(",") if args.instance_ids else None
+                ),
+                run_id=str(managed_run_dir) if managed_run_dir else args.run_id,
+                max_context_tokens=args.max_context_tokens,
+                mcp_config=args.mcp_config,
+                prompt_template=args.prompt_template,
+                min_free_disk_gb=args.min_free_disk_gb,
+                tool_resource_profile=resource_profile,
+            )
+        )
+    print(f"Traces written to: {run_dir}/")
+    results_path = run_dir / "results.jsonl"
+    if results_path.exists():
+        print(f"Results written to: {results_path}")
+    if resource_profile and _resource_run_manifests_invalid(
+        run_dir / "tool_resource_runs"
+    ):
+        print(
+            "ERROR: formal resource collection invalid after all workloads completed: "
+            f"{run_dir}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+def _parse_concurrency_values(value: str) -> list[int]:
+    parts = [part.strip() for part in value.split(",")]
+    if not parts or any(not part for part in parts):
+        raise ValueError(
+            "--concurrency must be a positive integer or comma-separated list"
+        )
+    values: list[int] = []
+    for part in parts:
+        try:
+            concurrency = int(part)
+        except ValueError as exc:
+            raise ValueError(f"invalid --concurrency value: {part!r}") from exc
+        if concurrency < 1:
+            raise ValueError("--concurrency values must be >= 1")
+        values.append(concurrency)
+    return values
+
+
+def _append_throughput_sweep_record(sweep_path: Path, trace_file: Path) -> None:
+    summary_path = trace_file.with_name(f"{trace_file.stem}.throughput_summary.json")
+    payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    sweep_path.parent.mkdir(parents=True, exist_ok=True)
+    with sweep_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _resource_collection_invalid(trace_file: Path) -> bool:
+    manifest_dir = trace_file.parent / "tool_resource_runs" / trace_file.stem
+    if manifest_dir.exists():
+        return _resource_run_manifests_invalid(manifest_dir)
+    try:
+        records = [
+            json.loads(line)
+            for line in trace_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    except (OSError, json.JSONDecodeError):
+        return True
+    states = [
+        record.get("collection_validity")
+        for record in records
+        if record.get("type") == "summary" and "collection_validity" in record
+    ]
+    return not states or any(state != "valid" for state in states)
+
+
+def _resource_run_manifests_invalid(manifest_dir: Path) -> bool:
+    run_manifests = sorted(manifest_dir.glob("*.json"))
+    if not run_manifests:
+        return True
+    try:
+        evidence = [
+            json.loads(path.read_text(encoding="utf-8")).get("evidence_valid")
+            for path in run_manifests
+        ]
+    except (OSError, json.JSONDecodeError):
+        return True
+    return any(value is not True for value in evidence)
+
+
+def _run_simulate(args: argparse.Namespace) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+    from trace_collect.simulator import SimulateError, simulate
+
+    try:
+        concurrency_values = _parse_concurrency_values(args.concurrency)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
+    container_start_extra_args: list[str] = []
+    if args.container_cpus is not None:
+        container_start_extra_args.extend(("--cpus", format(args.container_cpus, "g")))
+    if args.container_cpuset_cpus is not None:
+        container_start_extra_args.extend(("--cpuset-cpus", args.container_cpuset_cpus))
+
+    simulate_kwargs = {
+        "manifest": Path(args.manifest),
+        "task_source": Path(args.task_source) if args.task_source else None,
+        "output_dir": Path(args.output_dir),
+        "mode": args.mode,
+        "container_executable": args.container,
+        "network_mode": args.network_mode,
+        "container_start_extra_args": tuple(container_start_extra_args),
+        "workers": args.workers,
+        "prep_concurrency": args.prep_concurrency,
+        "stage_all_before_replay": args.stage_all_before_replay,
+        "replacement_delay_mean_s": args.replacement_delay_mean_s,
+        "replacement_seed": args.replacement_seed,
+        "resource_monitoring": args.resource_monitoring,
+        "pmu_monitoring": args.pmu_monitoring,
+        "memory_bandwidth_monitoring": args.memory_bandwidth_monitoring,
+        "command_timeout_s": args.command_timeout,
+        "warmup_skip_iterations": args.warmup_skip_iterations,
+        "replay_speed": args.replay_speed,
+        "shadow_llm_api_base": args.shadow_llm_api_base,
+        "shadow_llm_model": args.shadow_llm_model,
+        "shadow_llm_timeout_s": args.shadow_llm_timeout_s,
+        "shadow_llm_seed": args.shadow_llm_seed,
+        "shadow_llm_max_concurrency": args.shadow_llm_max_concurrency,
+        "shadow_llm_mode": args.shadow_llm_mode.replace("-", "_"),
+        "shadow_llm_cachewise_predictor_checkout": (
+            Path(args.shadow_llm_cachewise_predictor_checkout)
+            if args.shadow_llm_cachewise_predictor_checkout
+            else None
+        ),
+        "shadow_llm_cachewise_models_dir": (
+            Path(args.shadow_llm_cachewise_models_dir)
+            if args.shadow_llm_cachewise_models_dir
+            else None
+        ),
+        "shadow_llm_oracle_output_priority": (
+            args.shadow_llm_oracle_output_priority
+        ),
+        "shadow_llm_saga_profile": (
+            Path(args.shadow_llm_saga_profile) if args.shadow_llm_saga_profile else None
+        ),
+        "tool_gap_loan_arm": args.tool_gap_loan_arm,
+        "tool_gap_borrower_priority": args.tool_gap_borrower_priority,
+        "tool_gap_predictions": (
+            Path(args.tool_gap_predictions) if args.tool_gap_predictions else None
+        ),
+        "llm_timing_mode": args.llm_timing.replace("-", "_"),
+        "llm_ttft_ms": args.llm_ttft_ms,
+        "llm_tpot_ms": args.llm_tpot_ms,
+        "structured_output": args.output_dir == "traces/simulate",
+        "tool_resource_profile": (
+            Path(args.tool_resource_profile) if args.tool_resource_profile else None
+        ),
+        "cleanup_images": args.cleanup_images,
+    }
+
+    sweep_path = Path(args.output_dir) / "throughput_sweep.jsonl"
+    if len(concurrency_values) > 1 and sweep_path.exists():
+        sweep_path.unlink()
+    invalid_resource_runs: list[Path] = []
+    for concurrency in concurrency_values:
+        try:
+            trace_file = asyncio.run(
+                simulate(**simulate_kwargs, concurrency=concurrency)
+            )
+        except (SimulateError, ValueError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Simulate trace written to: {trace_file}")
+        if args.tool_resource_profile and _resource_collection_invalid(trace_file):
+            invalid_resource_runs.append(trace_file)
+        if len(concurrency_values) > 1:
+            _append_throughput_sweep_record(sweep_path, trace_file)
+    if len(concurrency_values) > 1:
+        print(f"Throughput sweep written to: {sweep_path}")
+    if invalid_resource_runs:
+        print(
+            "ERROR: formal resource collection invalid after all workloads completed: "
+            + ", ".join(str(path) for path in invalid_resource_runs),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

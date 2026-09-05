@@ -1,0 +1,92 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-sched-bench"
+version = "0.1.0"
+description = "Benchmark environment for agent scheduling research"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "hydra-core>=1.3,<2.0",
+  "httpx>=0.27,<1.0",
+  "openai>=2.0,<3.0",
+  "PyYAML>=6.0,<7.0",
+  "trafilatura>=2.0,<3.0",
+  "tqdm>=4.66,<5.0",
+  "datasets>=3.0,<4.0",
+  "loguru>=0.7,<1.0",
+  "pydantic>=2.0,<3.0",
+  "json-repair>=0.30,<1.0",
+  "tiktoken>=0.7,<1.0",
+  "terminal-bench>=0.2.18; python_version >= '3.12'",
+  "torch>=2.9.0",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0"]
+# GPU-only extra for scripts/serving/measure_kv_swap_cost.py (KV-swap cost measurement).
+# vllm pulls torch + CUDA; install on the H100 box only.
+gpu = ["vllm>=0.6"]
+# GPU-only serving extra. vLLM is pinned for the serving baselines;
+# scikit-learn is the released CacheWise predictor's inference dependency.
+serving-spike = [
+  "vllm==0.11.2",  # exact pin: 0.11.2 changed the connector ctor ABI vs 0.11.0; 0.11.0 needs nvcc at runtime
+  "scikit-learn>=1.4.0",  # CacheWise's released duration predictor
+]
+dev = [
+  "pytest>=8.3,<9.0",
+  "pytest-asyncio>=0.26,<1.0",
+  "ruff>=0.11,<1.0",
+  "fastapi>=0.115,<0.120",
+  "uvicorn[standard]>=0.30,<0.40",
+  "python-multipart>=0.0.9,<0.1",
+  "anyio>=4.0,<5.0",
+]
+figures = [
+    "matplotlib>=3.8,<4.0",
+]
+gantt-viewer = [
+  "fastapi>=0.115,<0.120",
+  "uvicorn[standard]>=0.30,<0.40",
+  "python-multipart>=0.0.9,<0.1",
+  "anyio>=4.0,<5.0",
+]
+# Optional HTML-parsing deps retained for Gantt viewer tests and fixtures.
+gantt-test = [
+  "beautifulsoup4>=4.12",
+  "lxml>=5.0",
+]
+[project.scripts]
+openclaw = "agents.openclaw._cli:main"
+resource-agentd = "tool_resource.resource_agentd:main"
+resource-telemetryd = "tool_resource.telemetryd:main"
+
+[tool.setuptools]
+package-dir = {"" = "src", "demo" = "demo"}
+
+[tool.setuptools.packages.find]
+where = ["src", "."]
+include = [
+  "llm_call*",
+  "trace_collect*",
+  "tool_resource*",
+  "agents*",
+  "harness*",
+  "demo*",
+]
+
+[tool.setuptools.package-data]
+tool_resource = ["_mvdan_adapter/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests", "demo/gantt_viewer/tests"]
+markers = [
+  "slow: marks tests that hit real on-disk fixtures and may be skipped in fast CI runs",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"

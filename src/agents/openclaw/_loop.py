@@ -1,0 +1,882 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import time
+from contextlib import AsyncExitStack, nullcontext
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
+
+from loguru import logger
+
+from agents.openclaw._context import ContextBuilder
+from agents.openclaw._hook import AgentHook, AgentHookContext, CompositeHook
+from agents.openclaw._memory import MemoryConsolidator
+from agents.openclaw._runner import AgentRunSpec, AgentRunner
+from agents.openclaw._subagent import SubagentManager
+from agents.openclaw._skills import BUILTIN_SKILLS_DIR
+from agents.openclaw.tools.filesystem import (
+    EditFileTool,
+    ListDirTool,
+    ReadFileTool,
+    WriteFileTool,
+)
+from agents.openclaw.tools.message import MessageTool
+from agents.openclaw.tools.registry import ToolRegistry
+from agents.openclaw.tools.session import SessionsYieldTool
+from agents.openclaw.tools.shell import ExecTool
+from agents.openclaw.tools.spawn import SpawnTool
+from agents.openclaw.tools.web import WebFetchTool, WebSearchTool
+from agents.openclaw.bus.events import InboundMessage, OutboundMessage
+from agents.openclaw.bus.queue import MessageBus
+from agents.openclaw.config.schema import AgentDefaults
+from llm_call.provider_base import LLMProvider
+from agents.openclaw.session.manager import Session, SessionManager
+from agents.openclaw.utils.helpers import image_placeholder_text, truncate_text
+from agents.openclaw.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
+
+if TYPE_CHECKING:
+    from agents.openclaw.config.schema import ExecToolConfig, WebSearchConfig
+
+
+try:
+    _BaseExceptionGroup = BaseExceptionGroup
+except NameError:  # Python 3.10 uses the exceptiongroup backport.
+    try:
+        from exceptiongroup import BaseExceptionGroup as _BaseExceptionGroup
+    except ImportError:
+        _BaseExceptionGroup = RuntimeError
+
+
+class _LoopHook(AgentHook):
+    def __init__(
+        self,
+        agent_loop: AgentLoop,
+        on_progress: Callable[..., Awaitable[None]] | None = None,
+        on_stream: Callable[[str], Awaitable[None]] | None = None,
+        on_stream_end: Callable[..., Awaitable[None]] | None = None,
+        *,
+        channel: str = "cli",
+        chat_id: str = "direct",
+        message_id: str | None = None,
+    ) -> None:
+        self._loop = agent_loop
+        self._on_progress = on_progress
+        self._on_stream = on_stream
+        self._on_stream_end = on_stream_end
+        self._channel = channel
+        self._chat_id = chat_id
+        self._message_id = message_id
+        self._stream_buf = ""
+
+    def wants_streaming(self) -> bool:
+        return self._on_stream is not None
+
+    async def on_stream(self, context: AgentHookContext, delta: str) -> None:
+        from agents.openclaw.utils.helpers import strip_think
+
+        prev_clean = strip_think(self._stream_buf)
+        self._stream_buf += delta
+        new_clean = strip_think(self._stream_buf)
+        incremental = new_clean[len(prev_clean) :]
+        if incremental and self._on_stream:
+            await self._on_stream(incremental)
+
+    async def on_stream_end(self, context: AgentHookContext, *, resuming: bool) -> None:
+        if self._on_stream_end:
+            await self._on_stream_end(resuming=resuming)
+        self._stream_buf = ""
+
+    async def before_execute_tools(self, context: AgentHookContext) -> None:
+        if self._on_progress:
+            if not self._on_stream:
+                thought = self._loop._strip_think(
+                    context.response.content if context.response else None
+                )
+                if thought:
+                    await self._on_progress(thought)
+            tool_hint = self._loop._strip_think(
+                self._loop._tool_hint(context.tool_calls)
+            )
+            await self._on_progress(tool_hint, tool_hint=True)
+        for tc in context.tool_calls:
+            args_str = json.dumps(tc.arguments, ensure_ascii=False)
+            logger.info("Tool call: {}({})", tc.name, args_str[:200])
+        self._loop._set_tool_context(self._channel, self._chat_id, self._message_id)
+
+    async def after_iteration(self, context: AgentHookContext) -> None:
+        u = context.usage or {}
+        logger.debug(
+            "LLM usage: prompt={} completion={} cached={}",
+            u.get("prompt_tokens", 0),
+            u.get("completion_tokens", 0),
+            u.get("cached_tokens", 0),
+        )
+
+    def finalize_content(
+        self, context: AgentHookContext, content: str | None
+    ) -> str | None:
+        return self._loop._strip_think(content)
+
+
+class _LoopHookChain(AgentHook):
+    __slots__ = ("_primary", "_extras")
+
+    def __init__(self, primary: AgentHook, extra_hooks: list[AgentHook]) -> None:
+        self._primary = primary
+        self._extras = CompositeHook(extra_hooks)
+
+    def wants_streaming(self) -> bool:
+        return self._primary.wants_streaming() or self._extras.wants_streaming()
+
+    async def before_iteration(self, context: AgentHookContext) -> None:
+        await self._primary.before_iteration(context)
+        await self._extras.before_iteration(context)
+
+    async def on_stream(self, context: AgentHookContext, delta: str) -> None:
+        await self._primary.on_stream(context, delta)
+        await self._extras.on_stream(context, delta)
+
+    async def on_stream_end(self, context: AgentHookContext, *, resuming: bool) -> None:
+        await self._primary.on_stream_end(context, resuming=resuming)
+        await self._extras.on_stream_end(context, resuming=resuming)
+
+    async def before_execute_tools(self, context: AgentHookContext) -> None:
+        await self._primary.before_execute_tools(context)
+        await self._extras.before_execute_tools(context)
+
+    async def after_iteration(self, context: AgentHookContext) -> None:
+        await self._primary.after_iteration(context)
+        await self._extras.after_iteration(context)
+
+    def finalize_content(
+        self, context: AgentHookContext, content: str | None
+    ) -> str | None:
+        content = self._primary.finalize_content(context, content)
+        return self._extras.finalize_content(context, content)
+
+
+class AgentLoop:
+    """Coordinate session state, model calls, and tool execution."""
+
+    def __init__(
+        self,
+        bus: MessageBus,
+        provider: LLMProvider,
+        workspace: Path,
+        tool_workspace: Path | None = None,
+        project_workspace: Path | None = None,
+        model: str | None = None,
+        max_iterations: int | None = None,
+        context_window_tokens: int | None = None,
+        context_block_limit: int | None = None,
+        max_tool_result_chars: int | None = None,
+        provider_retry_mode: str = "standard",
+        malformed_retry_budget: int | None = None,
+        web_search_config: WebSearchConfig | None = None,
+        web_proxy: str | None = None,
+        exec_config: ExecToolConfig | None = None,
+        restrict_to_workspace: bool = False,
+        session_manager: SessionManager | None = None,
+        session_dir: Path | None = None,
+        memory_dir: Path | None = None,
+        skills_dir: Path | None = None,
+        tool_results_dir: Path | None = None,
+        mcp_servers: dict | None = None,
+        timezone: str | None = None,
+        runtime_label: str | None = None,
+        hooks: list[AgentHook] | None = None,
+        tool_overrides: list[Any] | None = None,
+    ):
+        from agents.openclaw.config.schema import ExecToolConfig, WebSearchConfig
+
+        defaults = AgentDefaults()
+        self.bus = bus
+        self.provider = provider
+        self.workspace = workspace
+        self.tool_workspace = tool_workspace or workspace
+        self.project_workspace = project_workspace or self.tool_workspace
+        self.model = model or provider.get_default_model()
+        self.max_iterations = (
+            max_iterations
+            if max_iterations is not None
+            else defaults.max_tool_iterations
+        )
+        self.context_window_tokens = (
+            context_window_tokens
+            if context_window_tokens is not None
+            else defaults.context_window_tokens
+        )
+        self.context_block_limit = context_block_limit
+        self.max_tool_result_chars = (
+            max_tool_result_chars
+            if max_tool_result_chars is not None
+            else defaults.max_tool_result_chars
+        )
+        self.provider_retry_mode = provider_retry_mode
+        self.malformed_retry_budget = (
+            malformed_retry_budget
+            if malformed_retry_budget is not None
+            else defaults.malformed_retry_budget
+        )
+        self.web_search_config = web_search_config or WebSearchConfig()
+        self.web_proxy = web_proxy
+        self.exec_config = exec_config or ExecToolConfig()
+        self.restrict_to_workspace = restrict_to_workspace
+        self._start_time = time.time()
+        self._last_usage: dict[str, int] = {}
+        self._last_run_outcomes: dict[str, dict[str, str | None]] = {}
+        self._extra_hooks: list[AgentHook] = hooks or []
+        self._tool_overrides = list(tool_overrides or [])
+        self._event_callback = None
+
+        self.context = ContextBuilder(
+            workspace,
+            timezone=timezone,
+            project_workspace=self.project_workspace,
+            memory_dir=memory_dir,
+            skills_dir=skills_dir,
+            runtime_label=runtime_label,
+        )
+        self.sessions = session_manager or SessionManager(
+            workspace, storage_dir=session_dir
+        )
+        self.tool_results_dir = tool_results_dir
+        self.skills_dir = skills_dir
+        self.tools = ToolRegistry()
+        self.runner = AgentRunner(provider)
+        self.subagents = SubagentManager(
+            provider=provider,
+            workspace=self.tool_workspace,
+            bus=bus,
+            model=self.model,
+            max_tool_result_chars=self.max_tool_result_chars,
+            web_search_config=self.web_search_config,
+            web_proxy=web_proxy,
+            exec_config=self.exec_config,
+            restrict_to_workspace=restrict_to_workspace,
+            malformed_retry_budget=self.malformed_retry_budget,
+            skills_dir=skills_dir,
+            hooks=self._extra_hooks,
+            tool_overrides=self._tool_overrides,
+        )
+
+        self._running = False
+        self._mcp_servers = mcp_servers or {}
+        self._mcp_stack: AsyncExitStack | None = None
+        self._mcp_connected = False
+        self._mcp_connecting = False
+        self._active_tasks: dict[str, list[asyncio.Task]] = {}
+        self._background_tasks: list[asyncio.Task] = []
+        self._session_locks: dict[str, asyncio.Lock] = {}
+        _max = int(os.environ.get("NANOBOT_MAX_CONCURRENT_REQUESTS", "3"))
+        self._concurrency_gate: asyncio.Semaphore | None = (
+            asyncio.Semaphore(_max) if _max > 0 else None
+        )
+        self.memory_consolidator = MemoryConsolidator(
+            workspace=workspace,
+            provider=provider,
+            model=self.model,
+            sessions=self.sessions,
+            context_window_tokens=context_window_tokens,
+            build_messages=self.context.build_messages,
+            get_tool_definitions=self.tools.get_definitions,
+            max_completion_tokens=provider.generation.max_tokens,
+            memory_dir=memory_dir,
+        )
+        self._register_default_tools()
+
+    def _register_default_tools(self) -> None:
+        """Register the default set of tools."""
+        tool_allowed_dir = self.tool_workspace if self.restrict_to_workspace else None
+        extra_read = [BUILTIN_SKILLS_DIR] if tool_allowed_dir else None
+        self.tools.register(
+            ReadFileTool(
+                workspace=self.tool_workspace,
+                allowed_dir=tool_allowed_dir,
+                extra_allowed_dirs=extra_read,
+            )
+        )
+        for cls in (WriteFileTool, EditFileTool, ListDirTool):
+            self.tools.register(
+                cls(workspace=self.tool_workspace, allowed_dir=tool_allowed_dir)
+            )
+        if self.exec_config.enable:
+            self.tools.register(
+                ExecTool(
+                    working_dir=str(self.tool_workspace),
+                    timeout=self.exec_config.timeout,
+                    restrict_to_workspace=self.restrict_to_workspace,
+                    path_append=self.exec_config.path_append,
+                )
+            )
+        self.tools.register(
+            WebSearchTool(config=self.web_search_config, proxy=self.web_proxy)
+        )
+        self.tools.register(WebFetchTool(proxy=self.web_proxy))
+        self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
+        self.tools.register(SpawnTool(manager=self.subagents))
+        self.tools.register(SessionsYieldTool(manager=self.subagents))
+        for tool in self._tool_overrides:
+            self.tools.register(tool)
+
+    async def _connect_mcp(self) -> None:
+        """Connect to configured MCP servers (one-time, lazy)."""
+        if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
+            return
+        self._mcp_connecting = True
+        from agents.openclaw.tools.mcp import connect_mcp_servers
+
+        try:
+            self._mcp_stack = AsyncExitStack()
+            await self._mcp_stack.__aenter__()
+            await connect_mcp_servers(self._mcp_servers, self.tools, self._mcp_stack)
+            self._mcp_connected = True
+        except BaseException as e:
+            logger.error(
+                "Failed to connect MCP servers (will retry next message): {}", e
+            )
+            if self._mcp_stack:
+                try:
+                    await self._mcp_stack.aclose()
+                except Exception as aclose_err:
+                    logger.warning("MCP stack aclose failed during degrade: {}", aclose_err)
+                self._mcp_stack = None
+        finally:
+            self._mcp_connecting = False
+
+    def _set_tool_context(
+        self, channel: str, chat_id: str, message_id: str | None = None
+    ) -> None:
+        """Update context for all tools that need routing info."""
+        for name in ("message", "spawn", "sessions_yield"):
+            if tool := self.tools.get(name):
+                tool.set_context(
+                    channel, chat_id, *([message_id] if name == "message" else [])
+                )
+
+    @staticmethod
+    def _strip_think(text: str | None) -> str | None:
+        """Remove <think>…</think> blocks that some models embed in content."""
+        if not text:
+            return None
+        from agents.openclaw.utils.helpers import strip_think
+
+        return strip_think(text) or None
+
+    @staticmethod
+    def _tool_hint(tool_calls: list) -> str:
+        """Format tool calls as concise hint, e.g. 'web_search("query")'."""
+
+        def _fmt(tc):
+            args = (
+                tc.arguments[0] if isinstance(tc.arguments, list) else tc.arguments
+            ) or {}
+            val = next(iter(args.values()), None) if isinstance(args, dict) else None
+            if not isinstance(val, str):
+                return tc.name
+            return (
+                f'{tc.name}("{val[:40]}…")' if len(val) > 40 else f'{tc.name}("{val}")'
+            )
+
+        return ", ".join(_fmt(tc) for tc in tool_calls)
+
+    async def _run_agent_loop(
+        self,
+        initial_messages: list[dict],
+        on_progress: Callable[..., Awaitable[None]] | None = None,
+        on_stream: Callable[[str], Awaitable[None]] | None = None,
+        on_stream_end: Callable[..., Awaitable[None]] | None = None,
+        *,
+        session: Session | None = None,
+        channel: str = "cli",
+        chat_id: str = "direct",
+        message_id: str | None = None,
+    ) -> tuple[str | None, list[str], list[dict]]:
+        """Run the agent iteration loop."""
+        loop_hook = _LoopHook(
+            self,
+            on_progress=on_progress,
+            on_stream=on_stream,
+            on_stream_end=on_stream_end,
+            channel=channel,
+            chat_id=chat_id,
+            message_id=message_id,
+        )
+        hook: AgentHook = (
+            _LoopHookChain(loop_hook, self._extra_hooks)
+            if self._extra_hooks
+            else loop_hook
+        )
+
+        result = await self.runner.run(
+            AgentRunSpec(
+                initial_messages=initial_messages,
+                tools=self.tools,
+                model=self.model,
+                max_iterations=self.max_iterations,
+                max_tool_result_chars=self.max_tool_result_chars,
+                hook=hook,
+                error_message="Sorry, I encountered an error calling the AI model.",
+                concurrent_tools=True,
+                workspace=self.workspace,
+                tool_results_dir=self.tool_results_dir,
+                session_key=session.key if session else None,
+                context_window_tokens=self.context_window_tokens,
+                context_block_limit=self.context_block_limit,
+                provider_retry_mode=self.provider_retry_mode,
+                malformed_retry_budget=self.malformed_retry_budget,
+                progress_callback=on_progress,
+            )
+        )
+        self._last_usage = result.usage
+        if session is not None:
+            self._last_run_outcomes[session.key] = {
+                "stop_reason": result.stop_reason,
+                "error": result.error,
+            }
+        if result.stop_reason == "max_iterations":
+            logger.warning("Max iterations ({}) reached", self.max_iterations)
+        elif result.stop_reason == "error":
+            logger.error("LLM returned error: {}", (result.final_content or "")[:200])
+        return result.final_content, result.tools_used, result.messages
+
+    def _emit_event(self, category: str, event: str, data: dict | None = None) -> None:
+        if self._event_callback:
+            self._event_callback(category, event, data or {})
+
+    async def run(self) -> None:
+        """Run the agent loop."""
+        self._running = True
+        await self._connect_mcp()
+        logger.info("Agent loop started")
+
+        while self._running:
+            try:
+                msg = await asyncio.wait_for(self.bus.consume_inbound(), timeout=1.0)
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                if not self._running or asyncio.current_task().cancelling():
+                    raise
+                continue
+
+            task = asyncio.create_task(self._dispatch(msg))
+            self._active_tasks.setdefault(msg.session_key, []).append(task)
+            task.add_done_callback(
+                lambda t, k=msg.session_key: (
+                    self._active_tasks.get(k, []) and self._active_tasks[k].remove(t)
+                    if t in self._active_tasks.get(k, [])
+                    else None
+                )
+            )
+
+    async def _dispatch(self, msg: InboundMessage) -> None:
+        """Process one message."""
+        dispatch_t0 = time.monotonic()
+        self._emit_event(
+            "SCHEDULING",
+            "message_dispatch",
+            {
+                "session_key": msg.session_key,
+                "channel": msg.channel,
+                "sender_id": msg.sender_id,
+            },
+        )
+        lock = self._session_locks.setdefault(msg.session_key, asyncio.Lock())
+        gate = self._concurrency_gate or nullcontext()
+        lock_t0 = time.monotonic()
+        async with lock, gate:
+            lock_wait_ms = (time.monotonic() - lock_t0) * 1000
+            self._emit_event(
+                "SCHEDULING",
+                "session_lock_acquire",
+                {
+                    "session_key": msg.session_key,
+                    "wait_ms": round(lock_wait_ms, 1),
+                },
+            )
+            try:
+                on_stream = on_stream_end = None
+                if msg.metadata.get("_wants_stream"):
+                    stream_base_id = f"{msg.session_key}:{time.time_ns()}"
+                    stream_segment = 0
+
+                    def _current_stream_id() -> str:
+                        return f"{stream_base_id}:{stream_segment}"
+
+                    async def on_stream(delta: str) -> None:
+                        meta = dict(msg.metadata or {})
+                        meta["_stream_delta"] = True
+                        meta["_stream_id"] = _current_stream_id()
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                channel=msg.channel,
+                                chat_id=msg.chat_id,
+                                content=delta,
+                                metadata=meta,
+                            )
+                        )
+
+                    async def on_stream_end(*, resuming: bool = False) -> None:
+                        nonlocal stream_segment
+                        meta = dict(msg.metadata or {})
+                        meta["_stream_end"] = True
+                        meta["_resuming"] = resuming
+                        meta["_stream_id"] = _current_stream_id()
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                channel=msg.channel,
+                                chat_id=msg.chat_id,
+                                content="",
+                                metadata=meta,
+                            )
+                        )
+                        stream_segment += 1
+
+                response = await self._process_message(
+                    msg,
+                    on_stream=on_stream,
+                    on_stream_end=on_stream_end,
+                )
+                if response is not None:
+                    await self.bus.publish_outbound(response)
+                elif (
+                    msg.channel == "cli"
+                    and self._last_run_outcomes.get(msg.session_key, {}).get(
+                        "stop_reason"
+                    )
+                    != "yielded"
+                ):
+                    await self.bus.publish_outbound(
+                        OutboundMessage(
+                            channel=msg.channel,
+                            chat_id=msg.chat_id,
+                            content="",
+                            metadata=msg.metadata or {},
+                        )
+                    )
+                dispatch_ms = (time.monotonic() - dispatch_t0) * 1000
+                self._emit_event(
+                    "SCHEDULING",
+                    "task_complete",
+                    {
+                        "session_key": msg.session_key,
+                        "has_response": response is not None,
+                        "dispatch_duration_ms": round(dispatch_ms, 1),
+                    },
+                )
+            except asyncio.CancelledError:
+                logger.info("Task cancelled for session {}", msg.session_key)
+                raise
+            except Exception:
+                logger.exception(
+                    "Error processing message for session {}", msg.session_key
+                )
+                self._last_run_outcomes[msg.session_key] = {
+                    "stop_reason": "error",
+                    "error": "Sorry, I encountered an error.",
+                }
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content="Sorry, I encountered an error.",
+                    )
+                )
+
+    def _schedule_background(self, coro) -> None:
+        """Schedule a tracked background task."""
+        task = asyncio.create_task(coro)
+        self._background_tasks.append(task)
+        task.add_done_callback(self._background_tasks.remove)
+
+    def has_active_session_tasks(self, session_key: str) -> bool:
+        return any(not task.done() for task in self._active_tasks.get(session_key, []))
+
+    async def wait_for_session_idle(self, session_key: str) -> None:
+        """Wait for queued dispatch work for one session to finish."""
+
+        while True:
+            await asyncio.sleep(0)
+            tasks = [
+                task
+                for task in self._active_tasks.get(session_key, [])
+                if not task.done()
+            ]
+            if not tasks:
+                return
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def stop(self) -> None:
+        """Stop the agent loop."""
+        self._running = False
+        logger.info("Agent loop stopping")
+
+    async def _process_message(
+        self,
+        msg: InboundMessage,
+        session_key: str | None = None,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
+        on_stream: Callable[[str], Awaitable[None]] | None = None,
+        on_stream_end: Callable[..., Awaitable[None]] | None = None,
+    ) -> OutboundMessage | None:
+        """Process one inbound message and return the response."""
+        if msg.channel == "system":
+            channel, chat_id = (
+                msg.chat_id.split(":", 1)
+                if ":" in msg.chat_id
+                else ("cli", msg.chat_id)
+            )
+            logger.info("Processing system message from {}", msg.sender_id)
+            key = f"{channel}:{chat_id}"
+            self._emit_event(
+                "SESSION",
+                "session_load",
+                {
+                    "session_key": key,
+                },
+            )
+            session = self.sessions.get_or_create(key)
+            await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+            self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
+            history = session.get_history(max_messages=0)
+            current_role = "assistant" if msg.sender_id == "subagent" else "user"
+            self._emit_event(
+                "CONTEXT",
+                "message_list_build",
+                {
+                    "session_key": key,
+                    "history_messages": len(history),
+                },
+            )
+            messages = self.context.build_messages(
+                history=history,
+                current_message=msg.content,
+                channel=channel,
+                chat_id=chat_id,
+                current_role=current_role,
+            )
+            final_content, _, all_msgs = await self._run_agent_loop(
+                messages,
+                session=session,
+                channel=channel,
+                chat_id=chat_id,
+                message_id=msg.metadata.get("message_id"),
+            )
+            yielded = (
+                self._last_run_outcomes.get(session.key, {}).get("stop_reason")
+                == "yielded"
+            )
+            self._save_turn(session, all_msgs, 1 + len(history))
+            self.sessions.save(session)
+            self._emit_event(
+                "SESSION",
+                "session_turn_save",
+                {
+                    "session_key": key,
+                    "total_messages": len(session.messages),
+                },
+            )
+            self._schedule_background(
+                self.memory_consolidator.maybe_consolidate_by_tokens(session)
+            )
+            if yielded:
+                return None
+            return OutboundMessage(
+                channel=channel,
+                chat_id=chat_id,
+                content=final_content or "Background task completed.",
+            )
+
+        preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
+        logger.info(
+            "Processing message from {}:{}: {}", msg.channel, msg.sender_id, preview
+        )
+
+        key = session_key or msg.session_key
+        self._emit_event(
+            "SESSION",
+            "session_load",
+            {
+                "session_key": key,
+            },
+        )
+        session = self.sessions.get_or_create(key)
+
+        await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+
+        self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"))
+        if message_tool := self.tools.get("message"):
+            if isinstance(message_tool, MessageTool):
+                message_tool.start_turn()
+
+        history = session.get_history(max_messages=0)
+        self._emit_event(
+            "CONTEXT",
+            "message_list_build",
+            {
+                "session_key": key,
+                "history_messages": len(history),
+            },
+        )
+        initial_messages = self.context.build_messages(
+            history=history,
+            current_message=msg.content,
+            media=msg.media if msg.media else None,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+        )
+
+        async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
+            meta = dict(msg.metadata or {})
+            meta["_progress"] = True
+            meta["_tool_hint"] = tool_hint
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=content,
+                    metadata=meta,
+                )
+            )
+
+        final_content, _, all_msgs = await self._run_agent_loop(
+            initial_messages,
+            on_progress=on_progress or _bus_progress,
+            on_stream=on_stream,
+            on_stream_end=on_stream_end,
+            session=session,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            message_id=msg.metadata.get("message_id"),
+        )
+
+        yielded = (
+            self._last_run_outcomes.get(session.key, {}).get("stop_reason") == "yielded"
+        )
+        if final_content is None or not final_content.strip():
+            final_content = EMPTY_FINAL_RESPONSE_MESSAGE
+
+        self._save_turn(session, all_msgs, 1 + len(history))
+        self.sessions.save(session)
+        self._emit_event(
+            "SESSION",
+            "session_turn_save",
+            {
+                "session_key": key,
+                "total_messages": len(session.messages),
+            },
+        )
+        self._schedule_background(
+            self.memory_consolidator.maybe_consolidate_by_tokens(session)
+        )
+        if yielded:
+            return None
+
+        if (
+            (mt := self.tools.get("message"))
+            and isinstance(mt, MessageTool)
+            and mt._sent_in_turn
+        ):
+            return None
+
+        preview = (
+            final_content[:120] + "..." if len(final_content) > 120 else final_content
+        )
+        logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
+
+        meta = dict(msg.metadata or {})
+        if on_stream is not None:
+            meta["_streamed"] = True
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content=final_content,
+            metadata=meta,
+        )
+
+    def _sanitize_persisted_blocks(
+        self,
+        content: list[dict[str, Any]],
+        *,
+        truncate_text: bool = False,
+        drop_runtime: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Strip volatile multimodal payloads before writing session history."""
+        filtered: list[dict[str, Any]] = []
+        for block in content:
+            if not isinstance(block, dict):
+                filtered.append(block)
+                continue
+
+            if (
+                drop_runtime
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+                and block["text"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG)
+            ):
+                continue
+
+            if block.get("type") == "image_url" and block.get("image_url", {}).get(
+                "url", ""
+            ).startswith("data:image/"):
+                path = (block.get("_meta") or {}).get("path", "")
+                filtered.append({"type": "text", "text": image_placeholder_text(path)})
+                continue
+
+            if block.get("type") == "text" and isinstance(block.get("text"), str):
+                text = block["text"]
+                if truncate_text and len(text) > self.max_tool_result_chars:
+                    text = truncate_text(text, self.max_tool_result_chars)
+                filtered.append({**block, "text": text})
+                continue
+
+            filtered.append(block)
+
+        return filtered
+
+    def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:
+        """Save new-turn messages into session, truncating large tool results."""
+        from datetime import datetime
+
+        for m in messages[skip:]:
+            entry = dict(m)
+            role, content = entry.get("role"), entry.get("content")
+            if role == "assistant" and not content and not entry.get("tool_calls"):
+                continue  # skip empty assistant messages — they poison session context
+            if role == "tool":
+                if (
+                    isinstance(content, str)
+                    and len(content) > self.max_tool_result_chars
+                ):
+                    entry["content"] = truncate_text(
+                        content, self.max_tool_result_chars
+                    )
+                elif isinstance(content, list):
+                    filtered = self._sanitize_persisted_blocks(
+                        content, truncate_text=True
+                    )
+                    if not filtered:
+                        continue
+                    entry["content"] = filtered
+            elif role == "user":
+                if isinstance(content, str) and content.startswith(
+                    ContextBuilder._RUNTIME_CONTEXT_TAG
+                ):
+                    parts = content.split("\n\n", 1)
+                    if len(parts) > 1 and parts[1].strip():
+                        entry["content"] = parts[1]
+                    else:
+                        continue
+                if isinstance(content, list):
+                    filtered = self._sanitize_persisted_blocks(
+                        content, drop_runtime=True
+                    )
+                    if not filtered:
+                        continue
+                    entry["content"] = filtered
+            entry.setdefault("timestamp", datetime.now().isoformat())
+            session.messages.append(entry)
+        session.updated_at = datetime.now()
