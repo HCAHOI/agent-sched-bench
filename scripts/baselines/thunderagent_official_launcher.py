@@ -13,7 +13,7 @@ async def _disable_backend_keepalive(router: Any) -> None:
     """Avoid reusing proxy-to-vLLM connections under high concurrency."""
     old_client = router.client
     router.client = httpx.AsyncClient(
-        timeout=900.0,
+        timeout=float(os.environ.get("SHADOW_LLM_TIMEOUT_S", "900")),
         limits=httpx.Limits(
             max_connections=None,
             max_keepalive_connections=0,
