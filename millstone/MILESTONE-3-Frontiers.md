@@ -125,9 +125,34 @@ fractions by 10-minute window, `scripts/evaluation/gpu_balance_summary.py`)
 and the checklist. Go/no-go for the frontier: a one-busy-other-idle fraction
 that is no longer negligible in some density range and a paired JCT
 difference in favour of balancing there; if sticky still wins, load balance
-is closed at this scale. Early reading from the sticky run's first 28 min:
-one-idle 20% below 10 active tasks, an 18-point utilization gap at mid
-density, both vanish near the cap.
+is closed at this scale.
+
+**Run 1, FCFS task-sticky (`results/mixed56p60-vast-fcfs-sticky-20260910-r1`).**
+56/56 tasks, 2,470 requests; JCT measured from each task's arrival: mean
+17.32 min, P95 59.25, max 111.86 (a PennyLane-6049 replica arriving at
+minute 52), makespan 164.8 min; engine TPOT 62.1 ms; cached share 72%.
+Placement put 28 original tasks on each engine. GPU balance over the whole
+window: both busy 88.8%, one busy while the other idle 2.54% (249 s, longest
+7.7 s), utilization gap over 20 points 19.1% (longest 39 s). By phase:
+
+| Window | Util GPU0 / GPU1 | Both busy | One busy, other idle | Longest one-idle |
+|---|---:|---:|---:|---:|
+| 0–10 min | 52 / 47% | 41% | 20.1% | 4.6 s |
+| 10–20 | 79 / 86% | 88% | 0.2% | 1.2 s |
+| 20–30 | 83 / 67% | 74% | 2.8% | 4.8 s |
+| 30–40 | 73 / 68% | 67% | 6.0% | 3.8 s |
+| 40–50 | 76 / 59% | 64% | 9.5% | 7.7 s |
+| 50–60 | 76 / 83% | 82% | 3.0% | 1.8 s |
+| 60–165 | 97 / 97% | ≥99.8% | ≤0.03% | 0.2 s |
+
+Observation: imbalance exists only while the active set is being built
+(the 52-minute arrival ramp), reaching a 17-point utilization gap and 9.5%
+one-idle time at mid density; once arrivals stop and replacement tasks fill
+freed slots, both engines saturate exactly as under mixed56. Under the
+mixed56 protocol the ramp phase is 0 s long, which is why Milestone 2 saw
+no imbalance. Whether balancing pays in the ramp is run 2's question. The
+routing-telemetry checker does not apply to this proxy's log (dispatch and
+finish only, 5,277 each, balanced).
 
 ## 3. Frontier C — PD/PPD routing
 
