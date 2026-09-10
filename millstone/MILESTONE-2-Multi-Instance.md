@@ -31,16 +31,20 @@ Milestone 1 is in Chinese and remains the single-instance record.
    local-vs-PD decision is conditional on cache residency and history length,
    not on appended-token count.
 
-The comparison is a single physical run per policy on one workload; the
-paired bootstrap over 28 source trajectories gives the uncertainty for the
-headline JCT differences (§4). Two independent repeats of Continuum and
-DualMap on different hosts differ by 2–3 min in mean JCT, which bounds
-run-to-run spread for this workload.
+The comparison is a single physical run per policy on one workload, except
+DualMap, which was repeated on a third host on 2026-09-10; the paired
+bootstrap over 28 source trajectories gives the uncertainty for the headline
+JCT differences (§4). The DualMap repeat reproduces the original within noise
+(mean JCT 33.24 vs 32.85 min, paired +23 s with interval [-68, 135],
+cached share 75.7% vs 76.0%), so a candidate on that host must move mean JCT
+by more than about 2 min to be separable from a repeat.
 
 ## 2. Setup
 
-- **Hardware:** Vast.ai instance 50152322, 2× NVIDIA L40S. One serving engine
-  per GPU, tensor parallel 1. Instance is stopped, not deleted.
+- **Hardware:** 2× NVIDIA L40S on Vast.ai, one serving engine per GPU,
+  tensor parallel 1. The 2026-09-09 comparisons ran on instance 50152322
+  (gone); the 2026-09-10 DualMap repeat and all later runs use container
+  C.50481401 (`millstone/NEXT-SESSION.md` has the endpoint).
 - **Model:** Qwen/Qwen3-4B-Instruct-2507-FP8, revision `8591804019c8…`.
 - **Engine:** vLLM 0.10.2 with the public Continuum serving overlay for FCFS,
   Continuum, ThunderAgent and DualMap. PD/PPD used vLLM 0.28.0 with NIXL
@@ -88,10 +92,11 @@ concurrency 32 is the result.
 
 ## 4. Stage B: mixed56 main comparison
 
-All completed-run numbers below are from the same host and engine build.
-Original ThunderAgent and the FCFS/Continuum 2026-09-06 repeats ran on a
-different host with CUPTI enabled; their JCT is comparable, their TPOT carries
-a configuration offset.
+All completed-run numbers below are from the same host and engine build,
+except the DualMap repeat row (2026-09-10 host, same engine build). Original
+ThunderAgent and the FCFS/Continuum 2026-09-06 repeats ran on a different host
+with CUPTI enabled; their JCT is comparable, their TPOT carries a
+configuration offset.
 
 | Method | Completed | Mean JCT, min | P95 | Max | Engine TPOT, ms | Cached prompt |
 |---|---:|---:|---:|---:|---:|---:|
@@ -101,6 +106,7 @@ a configuration offset.
 | ThunderAgent, fix 1 | 56/56 | 44.90 | 104.60 | 118.38 | 104.83 | 39.1% |
 | ThunderAgent, fix 2 | 56/56 | 46.13 | 103.49 | 113.86 | 110.58 | 34.7% |
 | **DualMap, original** | **56/56** | **32.85** | **71.08** | **74.68** | **85.89** | **76.0%** |
+| DualMap, original, repeat (2026-09-10 host) | 56/56 | 33.24 | 70.59 | 75.31 | 87.53 | 75.7% |
 | DualMap + agent-progress | 56/56 | 38.69 | 78.12 | 91.03 | 93.79 | 62.2% |
 | Fixed PD | 56/56 | 71.47 | 143.51 | 177.06 | ≈42 | — |
 | PPD, original | 56/56 | 109.24 | 211.63 | 265.43 | ≈126 | ≈1.7% |
@@ -112,6 +118,7 @@ Throughput over the common 74.68-minute window (original plus background):
 | Continuum | 45.73 | 137.33 |
 | ThunderAgent, fix 2 | 37.78 | 113.75 |
 | **DualMap, original** | **49.60** | **149.98** |
+| DualMap, original, repeat (2026-09-10 host) | 47.97 | 144.59 |
 | DualMap + agent-progress | 41.18 | 125.16 |
 
 Paired mean-JCT differences over 28 source trajectories (2,000 bootstrap
@@ -121,10 +128,12 @@ draws, seed 42):
 |---|---:|---|
 | DualMap + agent-progress vs DualMap | +350 | [222, 476] |
 | DualMap + agent-progress vs Continuum | +205 | [60, 350] |
+| DualMap repeat (2026-09-10 host) vs DualMap | +23 | [-68, 135] |
 
-Worst tasks are the same under every policy: both replicas of PennyLane-4161,
--5857 and -6049. The policies differ in how long those tasks are held, not in
-which tasks are hard.
+Worst tasks are the same under every policy: both replicas of PennyLane-4161
+and -5857 always take the top four places, with -6049 and -5831 filling the
+next two. The policies differ in how long those tasks are held, not in which
+tasks are hard.
 
 ## 5. ThunderAgent: starvation is the price of its TPOT
 
@@ -175,8 +184,15 @@ dispatched. The change moved the unfairness and, by reordering dispatch away
 from cache-resident requests, cut the cached share from 76% to 62% and
 throughput by 17%.
 
-Any future priority term in this family must be bounded and repaid, and must
-not outrank cache residency at dispatch.
+Any future priority term in this family must be bounded and repaid. The
+repeat run's router log shows where DualMap's remaining tail sits: of 255
+router waits over 60 s, 238 belong to requests with a small but nonzero cache
+estimate (under 4K tokens, worth under 0.2 s of prefill) that the public
+residency-first heap holds behind high-residency requests; only 14 have zero
+estimate and long waits rarely compete with other requests of equal estimate.
+A credit that only reorders equal-residency requests therefore cannot reach
+this tail; a bounded credit has to be priced in the same seconds as the
+cache term.
 
 ## 7. Load balancing: both GPUs are already busy
 
@@ -267,8 +283,12 @@ Settled by this milestone:
 Open for the next stage:
 
 1. A DualMap-side mechanism must improve mean and tail JCT without lowering
-   cached share, TPOT or throughput. Bounded, repaid wait credit that never
-   outranks cache residency is the only candidate the evidence supports.
+   cached share, TPOT or throughput. The candidate the evidence supports is
+   the seconds-based dispatch order of §6 with the carried credit capped at
+   the DualMap TTFT SLO (5 s) and repaid on every dispatch, so only a task's
+   most recent router wait carries forward
+   (`dualmap_official_proxy.py --wait-credit-cap-s`). Its reference is the
+   2026-09-10 DualMap repeat on the same host.
 2. A PPD policy that routes on expected uncached prefill and D-side load,
    derived from the profiling matrix, validated on mixed56 against DualMap
    and Continuum on the same engine build.
@@ -281,6 +301,10 @@ Result directories live under `results/` in this repository; provenance branches
 
 - Four-way comparison and DualMap modification:
   `../results/mixed56-vast-dualmap-agent-progress-20260909-r1/` (`comparison.json`, `protocol.json`)
+- DualMap repeat on the 2026-09-10 host: `../results/mixed56-vast-dualmap-20260910-r1/`
+  (`comparison.json` against the 2026-09-09 DualMap and Continuum runs, produced by
+  `scripts/evaluation/compare_two_instance_runs.py`, which reproduces the checklist
+  values of the 2026-09-09 `comparison.json` from run directories alone)
 - ThunderAgent 60 s, fix 1, fix 2:
   `../results/mixed56-vast-thunderagent-wait60-{,pending-release-,capacity-consistent-}20260909-r1/`
 - Original ThunderAgent: `../results/mixed56-2l40s-thunderagent-20260906-r2.tar.gz`

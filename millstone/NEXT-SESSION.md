@@ -59,8 +59,13 @@ GPU host, as of 2026-09-10:
 - Verified on this host on 2026-09-10: FCFS least-requests `--smoke`
   (`results/fcfs-least-requests-smoke-20260910-r2`) and DualMap `--calibrate`
   (`results/dualmap-calibration-20260910-r1`), which measured
-  `DUALMAP_PREFILL_TPOT=5.543863341017641e-05` (old host: 5.44e-05). Pass that
-  value with `--env` for DualMap runs on this host; recalibrate on a new one.
+  `DUALMAP_PREFILL_TPOT=5.543863341017641e-05` (old host: 5.44e-05); pass
+  `--calibration-run dualmap-calibration-20260910-r1` for DualMap runs on this
+  host and recalibrate on a new one. The DualMap baseline was repeated here
+  (`results/mixed56-vast-dualmap-20260910-r1`, mean JCT 33.24 min, 76% cached)
+  and is the reference for candidates run on this host. The DualMap venv on
+  the host also has pytest, so `tests/test_dualmap_official_proxy.py` runs
+  there with `PYTHONPATH=<DualMap checkout>:/workspace/agent-sched-bench`.
 - The host source is a snapshot of the local HEAD. After committing code the
   host executes, re-ship it (README commands) before launching.
 - The PPD upstream exists only on the host, so `tests/test_ppd_*.py` fail
@@ -74,8 +79,10 @@ Caveats you must not lose:
   across these; TPOT carries a configuration offset.
 - One physical run per policy. The paired bootstrap over 28 source
   trajectories in `comparison.json` is the uncertainty estimate.
-- The script that produced `comparison.json` was never committed; its
-  outputs are in the run directories. Re-implement from those if needed.
+- `scripts/evaluation/compare_two_instance_runs.py --candidate results/X
+  --reference results/Y [--reference ...] --out results/X/comparison.json`
+  produces the checklist below from run directories; it reproduces the
+  2026-09-09 `comparison.json` values.
 
 Whenever a run is compared to a baseline, check and report all of these,
 whichever direction each moved:
