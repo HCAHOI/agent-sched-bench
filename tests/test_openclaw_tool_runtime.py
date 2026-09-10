@@ -953,8 +953,8 @@ def test_commands_nonzero_returncode_is_preserved_across_later_success(
 
 def test_unsupported_tool_returns_error() -> None:
     agent = FakeAgent()
-    result, success, _ = asyncio.run(
-        execute_trace_tool(
+    result, success, _, metadata = asyncio.run(
+        execute_trace_tool_detailed(
             agent=agent,
             tool_name="nope_tool",
             tool_args_json="{}",
@@ -963,6 +963,7 @@ def test_unsupported_tool_returns_error() -> None:
     )
     assert success is False
     assert "Unsupported replay tool" in result
+    assert metadata["replay_infrastructure_error"] == "unsupported_tool"
 
 
 def test_commands_sends_list() -> None:

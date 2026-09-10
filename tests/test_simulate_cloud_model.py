@@ -1549,8 +1549,8 @@ def test_simulate_forced_syncs_from_checkpoint_after_on_mismatch(
     assert tool_record["data"]["forced_sync_overhead_excluded"] is True
     assert tool_record["data"]["forced_sync_verified"] is True
     assert tool_record["data"]["forced_sync_verification"]["cas_manifest_match"] is True
-    assert summary["success"] is False
-    assert summary["failed_actions"] == 1
+    assert summary["success"] is True
+    assert summary["failed_actions"] == 0
     assert summary["forced_sync_actions"] == 1
     assert summary["forced_sync_attempts"] == 1
     assert summary["forced_sync_successes"] == 1
@@ -2183,7 +2183,8 @@ def test_simulate_forced_sync_fallback_to_prior_checkpoint(
         fallback_record["data"]["forced_sync_fallback_from_action_id"]
         == "task-a-tool-0"
     )
-    assert summary["success"] is False
+    assert summary["success"] is True
+    assert summary["failed_actions"] == 0
     assert summary["forced_sync_actions"] == 1
     assert summary["forced_sync_attempts"] == 1
     assert summary["forced_sync_successes"] == 1
@@ -2583,7 +2584,8 @@ def test_mismatch_without_checkpoint_is_unresolved_mismatch(
     assert tool_record["data"]["forced_sync_error"] == (
         "no checkpoint available (searched entire trace history)"
     )
-    assert summary["success"] is False
+    assert summary["success"] is True
+    assert summary["failed_actions"] == 0
     assert summary["outcome_mismatches"] == 1
     assert summary["unresolved_mismatches"] == 1
     assert summary["forced_sync_attempts"] == 1
@@ -2963,7 +2965,7 @@ def test_cloud_model_ttft_tpot_requires_parameters(tmp_path: Path) -> None:
         )
 
 
-def test_cloud_model_tool_success_false_marks_trace_failed(
+def test_cloud_model_in_band_infrastructure_error_marks_trace_failed(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -2975,7 +2977,12 @@ def test_cloud_model_tool_success_false_marks_trace_failed(
     _patch_simulator_runtime(monkeypatch, tmp_path)
 
     async def fake_exec_tool(*_args, **_kwargs):
-        return "Error: Unsupported replay tool 'bad_tool'", 1.0, False
+        return (
+            "Error: Unsupported replay tool 'bad_tool'",
+            1.0,
+            False,
+            {"replay_infrastructure_error": "unsupported_tool"},
+        )
 
     monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
 
@@ -3000,12 +3007,54 @@ def test_cloud_model_tool_success_false_marks_trace_failed(
     throughput = json.loads((output_dir / "throughput_summary.json").read_text())
 
     assert tool_record["data"]["success"] is False
+    assert tool_record["data"]["replay_infrastructure_error"] == "unsupported_tool"
     assert summary["success"] is False
     assert summary["failed_actions"] == 1
+    assert summary["fatal_replay_errors"] == 1
     assert throughput["completed_traces"] == 0
     assert throughput["failed_traces"] == 1
     assert throughput["tasks"][0]["success"] is False
     assert throughput["tasks"][0]["failed_action_count"] == 1
+
+
+def test_cloud_model_replay_action_exception_marks_trace_failed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    output_dir = tmp_path / "out"
+    _write_trace(trace_path, agent_id="task-a")
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        raise RuntimeError("transport down")
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=output_dir,
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    summary = next(
+        record for record in _read_jsonl(trace_file) if record.get("type") == "summary"
+    )
+    throughput = json.loads((output_dir / "throughput_summary.json").read_text())
+
+    assert summary["success"] is False
+    assert summary["failed_actions"] == 1
+    assert summary["replay_action_errors"] == 1
+    assert summary["fatal_replay_errors"] == 0
+    assert throughput["completed_traces"] == 0
+    assert throughput["failed_traces"] == 1
 
 
 def test_cloud_model_source_failed_tool_match_does_not_fail_trace(
@@ -3426,14 +3475,14 @@ def test_cloud_model_source_failed_replay_success_marks_mismatch(
     assert tool_record["data"]["source_success"] is False
     assert tool_record["data"]["replay_outcome_match"] is False
     assert tool_record["data"]["mismatch_reason"] == "timeout_mismatch"
-    assert summary["success"] is False
-    assert summary["failed_actions"] == 1
+    assert summary["success"] is True
+    assert summary["failed_actions"] == 0
     assert summary["source_failed_actions"] == 1
     assert summary["replay_failed_actions"] == 0
     assert summary["matched_failed_actions"] == 0
     assert summary["outcome_mismatches"] == 1
-    assert throughput["completed_traces"] == 0
-    assert throughput["failed_traces"] == 1
+    assert throughput["completed_traces"] == 1
+    assert throughput["failed_traces"] == 0
 
 
 def test_source_exec_timeout_detects_source_timeout_failure() -> None:

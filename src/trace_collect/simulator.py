@@ -4887,6 +4887,11 @@ async def _replay_cloud_model_session(
                             if mapped_artifact_path is not None
                             else "executed_in_container"
                         )
+            if (
+                replay_source == "source_artifact_unavailable"
+                or tool_exec_metadata.get("replay_infrastructure_error") is not None
+            ):
+                fatal_replay_errors += 1
             if not tool_success:
                 replay_failed_actions += 1
             source_returncode = data.get("returncode")
@@ -5429,8 +5434,6 @@ async def _replay_cloud_model_session(
                         tool_success,
                         forced_sync_fields.get("forced_sync_status"),
                     )
-                if replay_source == "source_artifact_unavailable":
-                    fatal_replay_errors += 1
         except Exception as exc:
             logger.error(
                 "Replay action failed for %s action=%s: %s",
@@ -5441,8 +5444,9 @@ async def _replay_cloud_model_session(
             replay_action_errors += 1
 
     wall_end = time.time()
-    failed_actions = outcome_mismatches + replay_action_errors
-    success = failed_actions == 0 and fatal_replay_errors == 0
+    # Outcome mismatches are a diagnostic probe, not a replay validity gate.
+    failed_actions = replay_action_errors + fatal_replay_errors
+    success = failed_actions == 0
     trace_logger.log_summary(
         loaded.agent_id,
         _make_trace_summary(

@@ -4,7 +4,7 @@
     "block_comparison": "Within each block compare Elastic/Fixed and Free/Fixed using wall_time_s, successful_traces_per_s, observed_cpu_core_seconds, and observed_memory_gib_seconds. Compare Elastic/Fixed additionally on total_reserved_cpu_core_seconds and total_reserved_memory_gb_seconds.",
     "contention_diagnostics": "Report admission timeout counts, CPU and memory resize rejection counts, applied CPU grow and shrink counts by reason, and host oom_kill and swap deltas separately from performance outcomes.",
     "metric_source": "Use scripts/plot_ear_replay.py so all three arms share the same fail-closed provenance, replay-configuration, and sampler-coverage gates.",
-    "normalized_match_pattern": "Compare normalized_output_match after keying and sorting tool actions by source_agent_id and source_action_id; concurrent JSONL write order is not semantic.",
+    "mismatch_probe": "Record replay and normalized-output mismatch fields as diagnostics only; do not use them to accept or reject a trace, arm, or block because environment-dependent output is not stable across hosts.",
     "paired_task_diagnostic": "Report all 32 task elapsed_s values by arm and the within-block Elastic/Fixed and Free/Fixed task ratios as an explicitly development-only diagnostic; do not summarize heterogeneous task ratios as a population estimate."
   },
   "arm_command_templates": {
@@ -328,7 +328,6 @@
     ],
     "after_each_arm_before_next_arm": [
       "The scheduled command exits zero and throughput reports attempted=completed=32, failed=0, action_count=966, llm_call_count=499, and tool_exec_count=467.",
-      "The arm has 467/467 replay tool outcomes matched and zero mismatches.",
       "The arm has exactly one monitored container per completed trace, at least two samples and positive sample-window duration per container, no sampler errors or drops, and stop_complete=true.",
       "Fixed and Elastic have valid matching EAR lifecycle provenance, zero OOM kills, zero admission timeout rejects, zero CPU or memory resize rejections, no runtime errors, and the locked mode and policy SHA.",
       "Free has no EAR runtime metadata, controller_summary.json, or lease_events.jsonl.",
@@ -338,7 +337,6 @@
     "after_each_block_before_next_block": [
       "Expand and run plot_command_template with the block's three exact arm directories; its role, source-entry, replay-config, policy-provenance, and sampler gates pass.",
       "The three throughput summaries have identical source trace entries, 966 actions, 499 LLM calls, and 467 tool executions.",
-      "The three arms have 467/467 matched outcomes, zero mismatches, and the same identity-keyed normalized-output match pattern.",
       "The block output contains ear_timeline.png, ear_fixed_elastic_free.png, and ear_comparison.json."
     ]
   }

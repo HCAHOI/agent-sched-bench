@@ -877,7 +877,11 @@ class ContainerAgent:
                 if attempt == 0:
                     await self._restart()
                 else:
-                    return {"ok": False, "result": "Error: agent process dead"}
+                    return {
+                        "ok": False,
+                        "result": "Error: agent process dead",
+                        "replay_infrastructure_error": "agent_dead",
+                    }
 
             proc = self._process
             assert (
@@ -896,14 +900,23 @@ class ContainerAgent:
                 await self._restart()
                 if tool_name in _IDEMPOTENT_TOOLS:
                     continue
-                return {"ok": False, "result": "[timeout]", "returncode": 124}
+                return {
+                    "ok": False,
+                    "result": "[timeout]",
+                    "returncode": 124,
+                    "replay_infrastructure_error": "agent_timeout",
+                }
 
             if not raw:
                 # EOF — agent crashed
                 await self._restart()
                 if tool_name in _IDEMPOTENT_TOOLS:
                     continue
-                return {"ok": False, "result": "Error: agent process crashed"}
+                return {
+                    "ok": False,
+                    "result": "Error: agent process crashed",
+                    "replay_infrastructure_error": "agent_crashed",
+                }
 
             # Skip stray non-JSON lines (e.g. Python warnings, sitecustomize output)
             decoded = raw.decode(errors="replace").strip()
@@ -915,9 +928,18 @@ class ContainerAgent:
                     raw = await _readline_with_timeout(proc.stdout, timeout_s)
                     decoded = raw.decode(errors="replace").strip()
                 except (asyncio.TimeoutError, BrokenPipeError):
-                    return {"ok": False, "result": "[timeout]", "returncode": 124}
+                    return {
+                        "ok": False,
+                        "result": "[timeout]",
+                        "returncode": 124,
+                        "replay_infrastructure_error": "agent_timeout",
+                    }
             else:
-                return {"ok": False, "result": "Error: agent emitted no JSON response"}
+                return {
+                    "ok": False,
+                    "result": "Error: agent emitted no JSON response",
+                    "replay_infrastructure_error": "agent_no_json_response",
+                }
 
             try:
                 return json.loads(decoded)
@@ -925,9 +947,14 @@ class ContainerAgent:
                 return {
                     "ok": False,
                     "result": f"Error: invalid agent response: {decoded[:200]}",
+                    "replay_infrastructure_error": "agent_invalid_response",
                 }
 
-        return {"ok": False, "result": "Error: agent restart failed"}
+        return {
+            "ok": False,
+            "result": "Error: agent restart failed",
+            "replay_infrastructure_error": "agent_restart_failed",
+        }
 
 
 def _resource_timed_exec_request(
@@ -1089,6 +1116,7 @@ def _trace_tool_response_metadata(resp: dict[str, Any]) -> dict[str, Any]:
         "resource_timeout_policy",
         "resource_virtual_time_s",
         "resource_stall_s",
+        "replay_infrastructure_error",
     ):
         if key in resp:
             metadata[key] = resp[key]
@@ -1177,7 +1205,12 @@ async def execute_trace_tool_detailed(
         )
 
     if request is None:
-        return f"Error: Unsupported replay tool {resolved_name!r}", False, None, {}
+        return (
+            f"Error: Unsupported replay tool {resolved_name!r}",
+            False,
+            None,
+            {"replay_infrastructure_error": "unsupported_tool"},
+        )
 
     resp = await request_executor(request, request_timeout_s)
     result = resp.get("result", "")
@@ -1189,6 +1222,10 @@ async def execute_trace_tool_detailed(
     if request["tool"] in ("exec", "commands"):
         rc = resp.get("returncode")
         if not isinstance(rc, int) or isinstance(rc, bool):
+            metadata.setdefault(
+                "replay_infrastructure_error",
+                "agent_missing_returncode",
+            )
             if _final_exit_code(result) is None:
                 result = f"{result}\n\nExit code: <missing>".strip()
             return result, False, inner_duration_ms, metadata
