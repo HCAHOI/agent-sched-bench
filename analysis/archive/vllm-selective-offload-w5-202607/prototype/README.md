@@ -76,7 +76,7 @@ only approximates the full certified union.
 ## W5 multi-tenant harness
 
 The single matrix definition is
-[`../configs/serving/w5_multitenant.yaml`](../configs/serving/w5_multitenant.yaml).
+[`../w5/w5_multitenant.yaml`](../w5/w5_multitenant.yaml).
 Task selections are self-owned under
 `../analysis/serving/w5-multitenant/inputs/`.
 
