@@ -56,3 +56,41 @@ The dated one-off PennyLane suite driver was removed after its final state and
 result receipt were retained in Git (`3b2ea8d` and `454bd13`). Recover it from
 those revisions only to inspect the historical protocol, not as a current
 entry point.
+
+## Two-instance GPU host (2× L40S on Vast)
+
+The two-instance runs split work across two machines. The GPU host runs the
+engines, proxy and collectors through `scripts/evaluation/run_two_instance_fcfs.sh`;
+this machine replays the agent workload in Docker task containers against the
+host proxy over an SSH tunnel. Vast regenerates the home directory on every
+container start, so everything on the host lives under `/workspace`:
+
+| Path on host | Content |
+|---|---|
+| `/workspace/agent-sched-bench` | repo snapshot (`git archive HEAD`) |
+| `/workspace/.cache/agent-sched-bench/` | upstream checkouts and their venvs, via `XDG_CACHE_HOME=/workspace/.cache` |
+| `/workspace/.hf_home` | model cache (`HF_HOME`) |
+| `/workspace/manifests/<run>.yaml`, `/workspace/<run>-launch.log` | per-run manifest copy and supervisor log |
+| `/workspace/agent-sched-bench/results/<run>` | host-side run directory, pulled back into `results/<run>/server/` |
+
+Build a fresh host once:
+
+```bash
+git archive HEAD | ssh -p $PORT root@$HOST 'mkdir -p /workspace/agent-sched-bench && tar x -C /workspace/agent-sched-bench'
+scp -P $PORT uv.lock root@$HOST:/workspace/agent-sched-bench/   # gitignored here, but the host launcher records it
+ssh -p $PORT root@$HOST 'cd /workspace/agent-sched-bench && nohup bash scripts/setup/vast_two_instance_host.sh > /workspace/bootstrap.log 2>&1 &'
+```
+
+Then launch runs from here with `scripts/evaluation/vast_two_instance.py`
+(`--smoke` and `--calibrate` are host-only; anything else replays mixed56):
+
+```bash
+.venv/bin/python scripts/evaluation/vast_two_instance.py --host $HOST --port $PORT \
+  --name mixed56-vast-dualmap-$(date +%Y%m%d)-r1 --router-policy dualmap \
+  --env DUALMAP_PREFILL_TPOT=<from a --calibrate run> --env DUALMAP_CPU_CACHE_GIB=48
+```
+
+Every run records its supervisor conf, the exact replay argv and environment,
+start and end times, and exit codes under `results/<run>/`. Refresh the host
+snapshot after committing code the host executes (`git archive` again; the
+launcher stamps `SOURCE_BASE_REV` with the local HEAD).
