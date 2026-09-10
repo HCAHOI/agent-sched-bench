@@ -1,0 +1,28 @@
+{
+  "method": "ssjf-reg",
+  "upstream_commit": "4b866866a32626677a1841a3b92875b93b1f03ab",
+  "dataset_dir": "/workspace/results/output-length-qwen3-4b-crossbench-5point-seed42-20260904/dataset",
+  "labels_path": "/workspace/results/output-length-qwen3-4b-crossbench-5point-seed42-20260904/dataset/source_labels.jsonl",
+  "label_reduction": "recorded_trace_completion_tokens",
+  "input": "canonical_json_of_full_messages_then_left_truncate_to_512_tokens",
+  "prediction_postprocess": "clamp_to_at_least_one_token",
+  "encoder": "bert-base-uncased",
+  "epochs": 6,
+  "batch_size": 16,
+  "learning_rate": 1e-05,
+  "seed": 42,
+  "device": "cuda:0",
+  "train_loss": [
+    220285.57481892905,
+    219197.22474161783,
+    218076.2117919922,
+    216904.43567911783,
+    216126.166015625,
+    215728.66791788736
+  ],
+  "counts": {
+    "train": 3066,
+    "validation": 436,
+    "test": 869
+  }
+}

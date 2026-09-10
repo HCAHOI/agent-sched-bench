@@ -1,0 +1,27 @@
+{
+  "method": "egtp-static",
+  "upstream_commit": "170a47893e1351ecc062186aafc686ab3f8be3d1",
+  "upstream_dir": "/workspace/upstreams/l_p_bench",
+  "upstream_python": "/venv/main/bin/python3.12",
+  "dataset_dir": "/workspace/results/output-length-qwen3-4b-crossbench-5point-seed42-20260904/dataset",
+  "labels_path": "/workspace/results/output-length-qwen3-4b-crossbench-5point-seed42-20260904/dataset/source_labels.jsonl",
+  "label_reduction": "recorded_trace_completion_tokens",
+  "target_relation": "cross_model_proxy",
+  "input": "full_messages_rendered_by_target_tokenizer_chat_template; official extractor keeps only the first 4 target-model tokens",
+  "unused_split": "validation",
+  "model_id": "/workspace/.hf_home/hub/models--Qwen--Qwen3-4B-Instruct-2507-FP8/snapshots/8591804019c8b22094c3b5b4454e0edc05dffc98",
+  "prompt_prefix_k": 4,
+  "num_bins": 20,
+  "lambda_val": 0.95,
+  "epochs": 200,
+  "batch_size": 256,
+  "learning_rate": 2e-05,
+  "extractor_batch_size": 64,
+  "torch_dtype": "bfloat16",
+  "seed": 42,
+  "counts": {
+    "train": 3066,
+    "validation": 436,
+    "test": 869
+  }
+}

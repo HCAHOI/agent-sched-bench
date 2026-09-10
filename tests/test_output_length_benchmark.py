@@ -547,7 +547,7 @@ def test_ssjf_reg_emits_common_prediction_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     dataset = _export_two_sessions(tmp_path)
-    labels_path = _write_natural_labels(dataset, tmp_path / "ssjf-labels")
+    labels_path = dataset / "source_labels.jsonl"
 
     class FakeTokenizer:
         truncation_side = "right"
@@ -603,6 +603,7 @@ def test_ssjf_reg_emits_common_prediction_contract(
         for line in (output / "predictions.jsonl").read_text().splitlines()
     ]
     assert protocol["method"] == "ssjf-reg"
+    assert protocol["label_reduction"] == "recorded_trace_completion_tokens"
     assert protocol["input"].endswith("left_truncate_to_512_tokens")
     assert protocol["prediction_postprocess"] == "clamp_to_at_least_one_token"
     assert len(protocol["train_loss"]) == 4
@@ -628,11 +629,31 @@ def test_ssjf_reg_emits_common_prediction_contract(
     assert (args.epochs, args.batch_size, args.learning_rate) == (6, 16, 1e-5)
 
 
+def test_ssjf_rejects_extra_recorded_trace_label(tmp_path: Path) -> None:
+    dataset = _export_two_sessions(tmp_path)
+    labels_path = dataset / "source_labels.jsonl"
+    with labels_path.open("a") as labels:
+        labels.write(
+            json.dumps(
+                {
+                    "sample_id": "not-in-dataset",
+                    "draw_id": 0,
+                    "actual_tokens": 10,
+                    "finish_reason": "stop",
+                    "label_source": "recorded_trace",
+                }
+            )
+            + "\n"
+        )
+    with pytest.raises(ValueError, match="coverage"):
+        _point_examples(dataset, labels_path, allow_recorded_trace=True)
+
+
 def test_egtp_static_adapts_official_predictor_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     dataset = _export_two_sessions(tmp_path)
-    labels_path = _write_natural_labels(dataset, tmp_path / "egtp-labels")
+    labels_path = dataset / "source_labels.jsonl"
     invoked: list[dict[str, object]] = []
 
     class FakeChatTokenizer:
@@ -695,6 +716,8 @@ def test_egtp_static_adapts_official_predictor_output(
         for line in (output / "predictions.jsonl").read_text().splitlines()
     ]
     assert protocol["method"] == "egtp-static"
+    assert protocol["label_reduction"] == "recorded_trace_completion_tokens"
+    assert protocol["target_relation"] == "cross_model_proxy"
     assert protocol["input"].startswith("full_messages_rendered_by_target_tokenizer")
     assert "first 4 target-model tokens" in protocol["input"]
     assert protocol["unused_split"] == "validation"
