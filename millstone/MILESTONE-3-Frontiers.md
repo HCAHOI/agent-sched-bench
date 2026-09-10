@@ -111,18 +111,23 @@ change: disabling replacement or changing tool speed
 (`scripts/evaluation/vast_two_instance.py` hardcodes both), and pinning
 placement per task (proxy `completion()`).
 
-**Next run (not started).** mixed56's 56 tasks with Poisson arrivals at one
-task per minute (seed 42, cumulative exponential gaps, first arrival at 0),
-concurrency 32 and replacement left as is. Little's law puts steady-state
-active tasks near the concurrency cap (arrival rate × ~33 min mean JCT), so
-nominal load matches mixed56 while the active set now fluctuates and is
-built up gradually. Primary comparison: FCFS task-sticky vs FCFS
-least-requests on the same manifest, with the GPU timeline
-(both-busy / one-idle fractions, longest one-idle interval) and the
-checklist. Go/no-go for the frontier: a one-busy-other-idle fraction that
-is no longer negligible and a paired JCT difference in favour of balancing;
-if sticky still wins with both GPUs saturated, load balance is closed at
-this scale. Cost: two runs of about 80 min each.
+**Runs (2026-09-10 night chain).** mixed56's 56 tasks with Poisson
+arrivals at one task per minute (`analysis/development/mixed56-poisson60-2l40s-concurrency32-v1`,
+seed 42, cumulative exponential gaps, first arrival at 0, last at 52.3 min),
+concurrency 32, replacement left as is. Little's law puts steady-state active
+tasks near the concurrency cap (arrival rate × ~33 min mean JCT), so nominal
+load matches mixed56 while the active set is built up gradually and
+fluctuates; one run therefore sweeps density from 1 to about 30 active
+tasks. Four policies on that manifest: FCFS task-sticky, FCFS
+least-requests, DualMap, Continuum task-sticky. Primary comparison:
+least-requests vs sticky, with the GPU timeline (both-busy / one-idle
+fractions by 10-minute window, `scripts/evaluation/gpu_balance_summary.py`)
+and the checklist. Go/no-go for the frontier: a one-busy-other-idle fraction
+that is no longer negligible in some density range and a paired JCT
+difference in favour of balancing there; if sticky still wins, load balance
+is closed at this scale. Early reading from the sticky run's first 28 min:
+one-idle 20% below 10 active tasks, an 18-point utilization gap at mid
+density, both vanish near the cap.
 
 ## 3. Frontier C — PD/PPD routing
 
@@ -179,16 +184,30 @@ expected uncached prefill work on each side under each side's current
 load. Both sides can be snapshotted the way the decode side already is
 (`ppd_policy.cache_snapshot`: cached tokens, running, waiting, KV usage).
 
-**Next run (not started).** Two-sided expected-cost routing: query the
-cache snapshot on both engines per request and choose the side with the
-lower estimated time to first token, cost = engine queue estimate (waiting
-× mean prefill in flight) + per-token prefill cost × uncached tokens on
-that side (+ transfer for the PD path), using the constants above. One
-mixed56 run on the vLLM 0.28.0 build, compared with the existing fixed-PD
-and all-local runs as the two endpoints, with the checklist plus per-request
-TTFT split by history bucket. Cost: PD-family runs took 3–4.5 h each. If the
-two-sided rule cannot beat fixed PD on JCT, prefill/decode disaggregation is
-closed for this workload at 2 GPUs.
+**Runs (2026-09-10 night chain), in order.**
+
+1. *Controlled-load profiling* (`analysis/development/ppd-load-profile-v1/plan.md`,
+   harness stage `load`): for the three most frequent long-history cells of
+   mixed56 (P17 23K, P29 40K, P35 76K history), build N histories first, wait
+   until nothing is outstanding, then release N turn-2 requests together,
+   N ∈ {8, 16, 32}, both paths, seed 42, 18 groups. This measures each path
+   under a known decode-side burst with an idle prefill worker and fills the
+   coverage table's empty cells; cache state follows from N × history and is
+   read from the records. Output: the (uncached tokens, D load) region where
+   PD wins, and the fraction of mixed56 and Poisson-mixed56 requests inside it.
+2. *Two-sided expected-cost routing* (`ppd_official_proxy.py --two-sided`,
+   `PPD_TWO_SIDED=1`): snapshot both engines per request and route to the
+   lower estimated time to first token, local = D queue + 0.184 ms ×
+   uncached on D; PD = P queue + 0.295 ms × uncached on P + 0.0102 ms ×
+   prompt tokens + 0.4 s handoff; queue = waiting requests × one 2,048-token
+   batch at that side's per-token cost. No length threshold, no lookup table.
+   Constants are pre-declared from the matrix; any change from step 1 is
+   recorded as an amendment before the run. One mixed56 run on the 0.28.0
+   build after a smoke, compared with the existing fixed-PD and all-local
+   runs as endpoints and with the DualMap repeat for the frontier verdict.
+   If it cannot beat fixed PD on JCT, prefill/decode disaggregation is closed
+   for this workload at 2 GPUs. If step 1 predicts a win only at moderate
+   density, the same rule runs on the Poisson manifest next.
 
 ## 4. Evidence
 
@@ -197,5 +216,8 @@ closed for this workload at 2 GPUs.
 - Profiling matrix: `../results/serving-length-profile-vast-20260908-complete/`
   (`paired.csv`, `requests.csv`, `plan.md`); PD/PPD runs
   `../results/mixed56-vast-pd-pcie-20260907-r3/`, `../results/mixed56-vast-ppd-pcie-20260907-r1/`
-- Workload manifests with Poisson arrivals to copy the construction from:
-  `analysis/development/mixed128-poisson-v1/manifest.yaml`
+- Poisson-arrival runs: `../results/mixed56p60-vast-*-2026091{0,1}-r1/`
+  (`comparison.json`, `gpu-balance-summary.json`); controlled-load profiling
+  `../results/ppd-load-profile-20260910-r1/`; two-sided PPD
+  `../results/mixed56-vast-ppd-two-sided-20260911-r1/`
+- Chain script and log: `../results/night-chain-20260910.{sh,log}`
