@@ -13,6 +13,8 @@ from scripts.baselines.continuum_reproduction import (
     CONTINUUM_COMMIT,
     ORACLE_TTFT_DEADLINE_SECONDS,
     PAPER_HISTORY_THRESHOLD,
+    PreemptionTracker,
+    write_request_telemetry,
     CacheMissProfile,
     RuntimeBinding,
     ToolCallEstimator,
@@ -598,7 +600,9 @@ def test_reproduction_serve_rejects_config_overrides() -> None:
 def test_overlay_manifest_is_exact_official_fork_python_delta() -> None:
     upstream = Path("/tmp/vllm-upstream-v0.10.2")
     fork = (
-        Path.home() / ".cache/agent-sched-bench" / f"vllm-continuum-{CONTINUUM_COMMIT}"
+        Path.home()
+        / ".cache/agent-sched-bench"
+        / f"vllm-continuum-public-{CONTINUUM_COMMIT}"
     )
     if not upstream.is_dir() or not fork.is_dir():
         pytest.skip("upstream and pinned fork checkouts are not cached")
@@ -619,7 +623,9 @@ def test_overlay_manifest_is_exact_official_fork_python_delta() -> None:
 @pytest.mark.slow
 def test_patch_applies_to_clean_pinned_checkout(tmp_path: Path) -> None:
     source = (
-        Path.home() / ".cache/agent-sched-bench" / f"vllm-continuum-{CONTINUUM_COMMIT}"
+        Path.home()
+        / ".cache/agent-sched-bench"
+        / f"vllm-continuum-public-{CONTINUUM_COMMIT}"
     )
     if not source.is_dir():
         pytest.skip("pinned Continuum checkout is not cached")
@@ -653,7 +659,7 @@ def test_trace_replay_adapter_applies_exactly_to_public_overlay(tmp_path: Path) 
     source = (
         Path.home()
         / ".cache/agent-sched-bench"
-        / f"vllm-continuum-{CONTINUUM_COMMIT}"
+        / f"vllm-continuum-public-{CONTINUUM_COMMIT}"
         / "vllm"
     )
     if not source.is_dir():
@@ -664,6 +670,8 @@ def test_trace_replay_adapter_applies_exactly_to_public_overlay(tmp_path: Path) 
         "v1/core/sched/scheduler.py",
         "v1/engine/core.py",
         "v1/core/estimate_with_func.py",
+        "v1/metrics/stats.py",
+        "v1/engine/output_processor.py",
     ):
         target = package / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -697,7 +705,7 @@ def test_trace_replay_adapter_adds_reproduction_oracle_deadline(
     source = (
         Path.home()
         / ".cache/agent-sched-bench"
-        / f"vllm-continuum-{CONTINUUM_COMMIT}"
+        / f"vllm-continuum-public-{CONTINUUM_COMMIT}"
         / "vllm"
     )
     if not source.is_dir():
@@ -726,7 +734,9 @@ def test_trace_replay_adapter_adds_reproduction_oracle_deadline(
 @pytest.mark.slow
 def test_patch_rejects_polluted_or_staged_checkout(tmp_path: Path) -> None:
     source = (
-        Path.home() / ".cache/agent-sched-bench" / f"vllm-continuum-{CONTINUUM_COMMIT}"
+        Path.home()
+        / ".cache/agent-sched-bench"
+        / f"vllm-continuum-public-{CONTINUUM_COMMIT}"
     )
     if not source.is_dir():
         pytest.skip("pinned Continuum checkout is not cached")
@@ -756,3 +766,42 @@ def test_patch_rejects_polluted_or_staged_checkout(tmp_path: Path) -> None:
     (clean / "extra.txt").write_text("unexpected")
     with pytest.raises(ValueError, match=r"expected only scheduler\+sidecar"):
         verify_checkout(clean)
+
+
+def test_records_per_request_preemption_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tracker = PreemptionTracker()
+    tracker.scheduled(1.0)
+    tracker.preempted(2.0)
+    tracker.scheduled(5.0)
+    tracker.preempted(7.0)
+    tracker.scheduled(8.5)
+    assert (tracker.count, tracker.total_wait_s, tracker.max_wait_s) == (2, 4.5, 3.0)
+
+    path = tmp_path / "requests.jsonl"
+    monkeypatch.setenv("VLLM_REQUEST_TELEMETRY_PATH", str(path))
+    write_request_telemetry(
+        "request-1", "length", 100, 8, 2.0, 1.0, 1.0, 3.0, 4.0, 5.5, tracker
+    )
+    assert json.loads(path.read_text()) == {
+        "schema_version": 1,
+        "request_id": "request-1",
+        "finish_reason": "length",
+        "prompt_tokens": 100,
+        "generation_tokens": 8,
+        "ttft_s": 2.0,
+        "queue_s": 1.0,
+        "prefill_s": 1.0,
+        "decode_s": 3.0,
+        "inference_s": 4.0,
+        "e2e_s": 5.5,
+        "preemption_count": 2,
+        "preempted_wait_s": 4.5,
+        "max_preempted_wait_s": 3.0,
+        "preemption_timing_complete": True,
+    }
+
+    tracker.preempted(10.0)
+    tracker.scheduled(9.0)
+    assert tracker.timing_complete is False

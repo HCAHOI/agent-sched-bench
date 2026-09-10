@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import math
 import os
 import threading
@@ -45,6 +46,7 @@ class CuptiDramWorker(Worker):
         self._dram_stop = threading.Event()
         self._dram_error: BaseException | None = None
         self._dram_last_end_ns: int | None = None
+        self._dram_first_sample = True
         self._dram_collector: Any = None
         self._dram_started = False
         self._dram_thread: threading.Thread | None = None
@@ -113,8 +115,23 @@ class CuptiDramWorker(Worker):
         for sample in counter_data:
             start_ns = int(sample.start_timestamp)
             end_ns = int(sample.end_timestamp)
+            # NVIDIA recommends discarding the first PM sample, which can be an
+            # outlier, including an invalid timestamp on an idle CUDA context.
+            # https://docs.nvidia.com/cupti/main/main.html#cupti-pm-sampling-api
+            if self._dram_first_sample:
+                self._dram_first_sample = False
+                logging.getLogger(__name__).info(
+                    "Discarding initial CUPTI PM sample: start=%d, end=%d",
+                    start_ns,
+                    end_ns,
+                )
+                continue
             if start_ns <= 0 or end_ns <= start_ns:
-                raise ValueError("CUPTI sample timestamps must be positive and ordered")
+                raise ValueError(
+                    "CUPTI sample timestamps must be positive and ordered: "
+                    f"start={start_ns}, end={end_ns}, "
+                    f"previous_end={self._dram_last_end_ns}"
+                )
             if self._dram_last_end_ns is not None and start_ns < self._dram_last_end_ns:
                 continue
 

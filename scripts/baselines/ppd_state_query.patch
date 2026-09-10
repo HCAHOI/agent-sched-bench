@@ -1,0 +1,39 @@
+--- a/v1/engine/core.py
++++ b/v1/engine/core.py
+@@ -416,6 +416,10 @@
+             supported_pooling_tasks,
+         )
+ 
++    def ppd_cache_state(self, prompt_token_ids: list[int]) -> dict:
++        from scripts.baselines.ppd_policy import cache_snapshot
++        return cache_snapshot(self, prompt_token_ids)
++
+     def get_kv_cache_group_metadata(self) -> list[dict[str, int | str | None]]:
+         """Return msgspec-serializable metadata for scheduler KV cache groups."""
+         kv_cache_config = getattr(self.scheduler, "kv_cache_config", None)
+--- a/entrypoints/serve/dev/cache/api_router.py
++++ b/entrypoints/serve/dev/cache/api_router.py
+@@ -15,6 +15,23 @@
+ 
+ def engine_client(request: Request) -> EngineClient:
+     return request.app.state.engine_client
++
++
++@router.post("/ppd/cache_state")
++async def ppd_cache_state(raw_request: Request):
++    from fastapi import HTTPException
++
++    payload = await raw_request.json()
++    if not isinstance(payload, dict) or set(payload) != {"prompt_token_ids"}:
++        raise HTTPException(400, "Expected prompt_token_ids")
++    tokens = payload["prompt_token_ids"]
++    client = engine_client(raw_request)
++    if (not isinstance(tokens, list) or not tokens
++            or len(tokens) > client.model_config.max_model_len
++            or any(type(token) is not int or token < 0 for token in tokens)):
++        raise HTTPException(400, "Invalid prompt token IDs")
++    result = await client.engine_core.call_utility_async("ppd_cache_state", tokens)
++    return JSONResponse(content=result)
+ 
+ 
+ @router.post("/reset_prefix_cache")

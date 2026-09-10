@@ -97,7 +97,7 @@ PY
   [[ -z "$vllm_cpuset" ]] || command -v taskset >/dev/null || fail "taskset is required"
   local cell
   for cell in "${cells[@]}"; do
-    [[ "$cell" =~ ^(fcfs|thunderagent|agentix|continuum-public|continuum-reproduction|continuum-reproduction-oracle-deadline|native-priority|native-priority-aging|cachewise-disabled|cachewise|cachewise-oracle-length|saga)-r[1-9][0-9]*$ ]] || fail "unsupported cell: $cell"
+    [[ "$cell" =~ ^(fcfs|thunderagent|agentix|continuum-fcfs|continuum-public|continuum-reproduction|continuum-reproduction-oracle-deadline|native-priority|native-priority-aging|cachewise-disabled|cachewise|cachewise-oracle-length|saga)-r[1-9][0-9]*$ ]] || fail "unsupported cell: $cell"
   done
   command -v docker >/dev/null || fail "docker is required"
   command -v nvidia-smi >/dev/null || fail "nvidia-smi is required"
@@ -129,7 +129,7 @@ PY
   if has_method agentix; then
     "$repo/scripts/baselines/agentix_reproduction.sh" verify >/dev/null
   fi
-  if has_method continuum-public; then
+  if has_method continuum-public || has_method continuum-fcfs; then
     "$repo/scripts/baselines/continuum_public.sh" verify >/dev/null
   fi
   if has_method continuum-reproduction || has_method continuum-reproduction-oracle-deadline; then
@@ -211,7 +211,7 @@ wait_http() {
 run_cell() (
   set -euo pipefail
   local name=$1 method=${1%-r[0-9]*} cell="$run_root/$1"
-  local vpid= proxy_pid= monitor_pid= kv_metrics_pid= rc=0
+  local vpid= proxy_pid= monitor_pid= kv_metrics_pid= prom_metrics_pid= rc=0
   mkdir "$cell"
   cleanup() {
     local status=$?
@@ -219,6 +219,7 @@ run_cell() (
     (( rc != 0 )) || rc=$status
     [[ -z "$proxy_pid" ]] || stop_group "$proxy_pid"
     [[ -z "$kv_metrics_pid" ]] || { kill -TERM "$kv_metrics_pid" 2>/dev/null; wait "$kv_metrics_pid" 2>/dev/null; }
+    [[ -z "$prom_metrics_pid" ]] || { kill -TERM "$prom_metrics_pid" 2>/dev/null; wait "$prom_metrics_pid" 2>/dev/null; }
     stop_group "$vpid"
     [[ -z "$monitor_pid" ]] || { kill "$monitor_pid" 2>/dev/null; wait "$monitor_pid" 2>/dev/null; }
     date -u +%FT%TZ >"$cell/end-utc.txt"
@@ -259,7 +260,7 @@ run_cell() (
   local server_env=(VLLM_NO_USAGE_STATS=1 CUDA_VISIBLE_DEVICES=0)
   if [[ "$serving_metrics" == on ]]; then
     local cupti_pythonpath=$cupti_overlay
-    if [[ "$method" == continuum-public || "$method" == continuum-reproduction || "$method" == continuum-reproduction-oracle-deadline ]]; then
+    if [[ "$method" == continuum-public || "$method" == continuum-fcfs || "$method" == continuum-reproduction || "$method" == continuum-reproduction-oracle-deadline ]]; then
       cupti_pythonpath="$cupti_overlay/cuda-bindings:$cupti_pythonpath"
     fi
     server_env+=(
@@ -276,9 +277,13 @@ run_cell() (
       server=("$repo/scripts/baselines/agentix_reproduction.sh" serve-backend "$model" "${common_args[@]}")
       server_env+=(AGENTIX_SERVICE_LOG="$cell/agentix-service.jsonl")
       ;;
+    continuum-fcfs)
+      server=("$repo/scripts/baselines/continuum_public.sh" serve-fcfs "$model" "${common_args[@]}" --enable-chunked-prefill --max-num-batched-tokens 2048)
+      server_env+=(RUN_OUTPUT_DIR="$cell/continuum" VLLM_REQUEST_TELEMETRY_PATH="$cell/vllm-request-telemetry.jsonl")
+      ;;
     continuum-public)
       server=("$repo/scripts/baselines/continuum_public.sh" serve "$model" "${common_args[@]}")
-      server_env+=(RUN_OUTPUT_DIR="$cell/continuum")
+      server_env+=(RUN_OUTPUT_DIR="$cell/continuum" VLLM_REQUEST_TELEMETRY_PATH="$cell/vllm-request-telemetry.jsonl")
       ;;
     continuum-reproduction)
       server=("$repo/scripts/baselines/continuum_reproduction.sh" serve "$model" --dtype bfloat16 --kv-cache-dtype auto "${observability_args[@]}")
@@ -343,6 +348,14 @@ run_cell() (
       grep -Fq "$metric" "$cell/vllm-metrics-start.prom" || \
         fail "vLLM does not expose required metric: $metric"
     done
+    (
+      while true; do
+        printf '# sampled_at_s %s\n' "$(date +%s.%N)"
+        curl --max-time 5 -fsS http://127.0.0.1:8000/metrics || exit 1
+        sleep 10
+      done
+    ) >"$cell/vllm-metrics-series.prom" 2>"$cell/vllm-metrics-series.err" &
+    prom_metrics_pid=$!
     "$python" "$repo/scripts/evaluation/collect_vllm_kv_events.py" \
       --endpoint tcp://127.0.0.1:5557 \
       --replay-endpoint tcp://127.0.0.1:5558 \
@@ -386,7 +399,7 @@ run_cell() (
       --event-log "$cell/agentix-events.jsonl" >"$cell/proxy.log" 2>&1 &
     proxy_pid=$!
     wait_http http://127.0.0.1:9000/programs/state "$proxy_pid" "$cell/proxy.log"
-  elif [[ "$method" == continuum-public || "$method" == continuum-reproduction || "$method" == continuum-reproduction-oracle-deadline ]]; then
+  elif [[ "$method" == continuum-public || "$method" == continuum-fcfs || "$method" == continuum-reproduction || "$method" == continuum-reproduction-oracle-deadline ]]; then
     shadow_mode=continuum-public
   elif [[ "$method" == native-priority || "$method" == native-priority-aging ]]; then
     shadow_mode=native-priority
@@ -459,6 +472,11 @@ PY
     kill -TERM "$kv_metrics_pid"
     wait "$kv_metrics_pid" || fail "KV event collector failed"
     kv_metrics_pid=
+    kill -0 "$prom_metrics_pid" || fail "Prometheus collector stopped early"
+    [[ ! -s "$cell/vllm-metrics-series.err" ]] || fail "Prometheus collector reported an error"
+    kill -TERM "$prom_metrics_pid"
+    wait "$prom_metrics_pid" || true
+    prom_metrics_pid=
     stop_group "$vpid"
     vpid=
     [[ -s "$cell/dram-bandwidth.csv" ]] || fail "CUPTI DRAM telemetry is missing"
@@ -493,6 +511,10 @@ for row in rows[1:]:
         raise SystemExit("GPU telemetry contains a non-finite value")
 PY
   if [[ "$serving_metrics" == on ]]; then
+    local phase_args=()
+    if [[ "$method" == continuum-fcfs || "$method" == continuum-public ]]; then
+      phase_args=(--server-request-telemetry "$cell/vllm-request-telemetry.jsonl")
+    fi
     "$python" "$repo/scripts/evaluation/summarize_serving_metrics.py" \
       --throughput-summary "$cell/output/throughput_summary.json" \
       --gpu-csv "$cell/gpu.csv" \
@@ -501,7 +523,7 @@ PY
       --prometheus-final "$cell/vllm-metrics-final.prom" \
       --kv-events-summary "$cell/kv-events-summary.json" \
       --output "$cell/serving_metrics.json" \
-      --requests-output "$cell/request_metrics.jsonl"
+      --requests-output "$cell/request_metrics.jsonl" "${phase_args[@]}"
   fi
 )
 
@@ -593,6 +615,7 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
     "aging_unit": "waiting-to-running priority-0 admissions",
     "dependency_lock_sha256": os.environ["UV_LOCK_SHA256"]
   },
+  "continuum_fcfs": {"fork": "Continuum Public", "scheduling_policy": "fcfs", "max_num_seqs": 8, "max_num_batched_tokens": 2048, "chunked_prefill": True},
   "cachewise_disabled": "same patched fork/config without CacheWise scheduling flags or policy payloads",
   "cachewise_oracle_length": {
     "description": "CacheWise KV and waiting policy plus exact trace output length in a cache-aware service score",
@@ -622,7 +645,7 @@ Path(os.environ["RUN_ROOT"], "protocol.json").write_text(json.dumps({
     "minimum_ratio_to_fcfs": 1.20
   },
   "serving_observability": {
-    "request_metrics": "cached prompt tokens, TTFT, TPOT, and decode throughput",
+    "request_metrics": "cached prompt tokens, client TTFT/TPOT, public Continuum fork server queue/prefill/decode/e2e/preemption spans",
     "prefix_cache": "whole-run request cached-token fraction plus secondary cumulative vLLM lookup counters",
     "kv_cache": "all BlockStored and BlockRemoved events plus preemption count and defined recomputation total",
     "gpu_memory": (

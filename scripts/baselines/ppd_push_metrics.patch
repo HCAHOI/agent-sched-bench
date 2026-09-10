@@ -1,0 +1,124 @@
+--- a/v1/metrics/stats.py
++++ b/v1/metrics/stats.py
+@@ -7,6 +7,7 @@
+ from typing import TYPE_CHECKING, Any
+ 
+ import vllm.envs as envs
++from scripts.baselines.continuum_reproduction import PreemptionTracker, write_request_telemetry
+ from vllm.compilation.cuda_graph import CUDAGraphStat
+ from vllm.v1.metrics.perf import PerfStats
+ from vllm.v1.spec_decode.metrics import SpecDecodingStats
+@@ -231,6 +232,7 @@
+ 
+     # first token latency
+     first_token_latency: float = 0.0
++    preemption: PreemptionTracker = field(default_factory=PreemptionTracker)
+ 
+     # Track if this request is corrupted (NaNs in logits)
+     is_corrupted: bool = False
+@@ -442,10 +444,12 @@
+                 req_stats.queued_ts = event.timestamp
+                 lora_states.request_waiting(req_id, lora_name)
+             elif event.type == EngineCoreEventType.SCHEDULED:
++                req_stats.preemption.scheduled(event.timestamp)
+                 if req_stats.scheduled_ts == 0.0:  # ignore preemptions
+                     req_stats.scheduled_ts = event.timestamp
+                 lora_states.request_running(req_id, lora_name)
+             elif event.type == EngineCoreEventType.PREEMPTED:
++                req_stats.preemption.preempted(event.timestamp)
+                 self.num_preempted_reqs += 1
+                 lora_states.request_waiting(req_id, lora_name)
+ 
+@@ -498,6 +502,13 @@
+             num_cached_tokens=num_cached_tokens,
+         )
+         self.finished_requests.append(finished_req)
++        write_request_telemetry(
++            request_id=request_id, finish_reason=str(finish_reason),
++            prompt_tokens=num_prompt_tokens, generation_tokens=req_stats.num_generation_tokens,
++            ttft_s=req_stats.first_token_latency, queue_s=queued_time,
++            prefill_s=prefill_time, decode_s=decode_time, inference_s=inference_time,
++            e2e_s=e2e_latency, preemption=req_stats.preemption,
++        )
+ 
+         # Count corrupted requests when they finish (only once per request)
+         if req_stats.is_corrupted:
+--- a/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py
++++ b/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py
+@@ -2,6 +2,7 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ """Base worker-side logic for the NIXL connector."""
+ 
++import json
+ import itertools
+ import logging
+ import os
+@@ -2174,6 +2175,8 @@
+             self._reqs_to_process.remove(req_id)
+             del self._reqs_to_send[req_id]
+             done_sending.add(req_id)
++            logger.info("PPD_KV_RELEASE %s", json.dumps(dict(
++                request_id=req_id, reason="expired", timestamp_s=time.time())))
+ 
+         return done_sending, done_recving
+ 
+@@ -2239,6 +2242,12 @@
+                         # Get telemetry from NIXL
+                         res = self.nixl_wrapper.get_xfer_telemetry(handle)
+                         self.xfer_stats.record_transfer(res)
++                        logger.info("PPD_KV_TRANSFER %s", json.dumps(dict(
++                            request_id=req_id, transferred_bytes=res.totalBytes,
++                            num_layers=len(self._layer_specs), descriptors=res.descCount,
++                            transfer_duration_ms=res.xferDuration / 1000,
++                            post_duration_ms=res.postDuration / 1000,
++                            timestamp_s=time.time(), transport="nixl_push")))
+                         self.nixl_wrapper.release_xfer_handle(handle)
+                     elif xfer_state == "PROC":
+                         in_progress.append(handle)
+--- a/distributed/kv_transfer/kv_connector/v1/nixl/push_worker.py
++++ b/distributed/kv_transfer/kv_connector/v1/nixl/push_worker.py
+@@ -31,6 +31,7 @@
+ ``_pending_d_registrations`` and stops self-polling.
+ """
+ 
++import json
+ import queue
+ import threading
+ import time
+@@ -758,6 +759,8 @@
+                 == consumers_per_producer
+             ):
+                 notified_req_ids.add(req_id)
++                logger.info("PPD_KV_RELEASE %s", json.dumps(dict(
++                    request_id=req_id, reason="consumer_notification", timestamp_s=time.time())))
+                 del self.consumer_notification_counts_by_req[req_id]
+                 self._reqs_to_process.remove(req_id)
+                 self._reqs_to_send.pop(req_id, None)
+@@ -780,6 +783,8 @@
+             self._reqs_to_process.discard(req_id)
+             self.consumer_notification_counts_by_req.pop(req_id, None)
+             done_sending.add(req_id)
++            logger.info("PPD_KV_RELEASE %s", json.dumps(dict(
++                request_id=req_id, reason="write_complete", timestamp_s=time.time())))
+ 
+         # Tell the writer to drop any state it still holds for any
+         # request that just finished (push completed) or expired
+--- a/distributed/kv_transfer/kv_connector/v1/nixl/push_scheduler.py
++++ b/distributed/kv_transfer/kv_connector/v1/nixl/push_scheduler.py
+@@ -24,6 +24,7 @@
+ 
+ from __future__ import annotations
+ 
++import json
+ import time
+ from typing import TYPE_CHECKING, Any
+ 
+@@ -160,6 +161,8 @@
+         if not params.get("do_remote_prefill"):
+             return
+ 
++        logger.info("PPD_KV_ALLOCATION %s", json.dumps(dict(
++            request_id=request.request_id, external_tokens=num_external_tokens)))
+         if num_external_tokens <= 0:
+             # Nothing to receive: full prefix-cache hit on D, no
+             # registration to stage.

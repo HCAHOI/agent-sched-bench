@@ -1,0 +1,467 @@
+{
+  "source_manifest": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed28-l40s-closed-calibration-v1/manifest.yaml",
+  "construction": "Original order, each task followed by its second copy; only completed LLM action messages_in first system content receives copy prefix. All other original fields retained as source data. Exact restoration to source records checked during construction.",
+  "replicas": [
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2450/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-2450__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "tobymao__sqlglot-2450__replica-001",
+      "llm_calls": 29,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2450/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-2450__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "tobymao__sqlglot-2450__replica-002",
+      "llm_calls": 29,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2521/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-2521__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "tobymao__sqlglot-2521__replica-001",
+      "llm_calls": 52,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2521/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-2521__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "tobymao__sqlglot-2521__replica-002",
+      "llm_calls": 52,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4151/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-4151__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "tobymao__sqlglot-4151__replica-001",
+      "llm_calls": 36,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4151/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-4151__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "tobymao__sqlglot-4151__replica-002",
+      "llm_calls": 36,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-6049/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-6049__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "PennyLaneAI__pennylane-6049__replica-001",
+      "llm_calls": 81,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-6049/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-6049__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "PennyLaneAI__pennylane-6049__replica-002",
+      "llm_calls": 81,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4448/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-4448__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "tobymao__sqlglot-4448__replica-001",
+      "llm_calls": 34,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4448/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-4448__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "tobymao__sqlglot-4448__replica-002",
+      "llm_calls": 34,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4545/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-4545__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "tobymao__sqlglot-4545__replica-001",
+      "llm_calls": 44,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4545/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-4545__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "tobymao__sqlglot-4545__replica-002",
+      "llm_calls": 44,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4208/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-4208__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "tobymao__sqlglot-4208__replica-001",
+      "llm_calls": 29,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4208/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-4208__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "tobymao__sqlglot-4208__replica-002",
+      "llm_calls": 29,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2754/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-2754__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "tobymao__sqlglot-2754__replica-001",
+      "llm_calls": 45,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2754/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-2754__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "tobymao__sqlglot-2754__replica-002",
+      "llm_calls": 45,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-3386/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-3386__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "PennyLaneAI__pennylane-3386__replica-001",
+      "llm_calls": 54,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-3386/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-3386__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "PennyLaneAI__pennylane-3386__replica-002",
+      "llm_calls": 54,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3230/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-3230__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "tobymao__sqlglot-3230__replica-001",
+      "llm_calls": 39,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3230/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-3230__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "tobymao__sqlglot-3230__replica-002",
+      "llm_calls": 39,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-1357/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-1357__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "PennyLaneAI__pennylane-1357__replica-001",
+      "llm_calls": 37,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-1357/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-1357__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "PennyLaneAI__pennylane-1357__replica-002",
+      "llm_calls": 37,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-2603/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-2603__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "PennyLaneAI__pennylane-2603__replica-001",
+      "llm_calls": 67,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-2603/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-2603__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "PennyLaneAI__pennylane-2603__replica-002",
+      "llm_calls": 67,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2296/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-2296__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "tobymao__sqlglot-2296__replica-001",
+      "llm_calls": 50,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-2296/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-2296__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "tobymao__sqlglot-2296__replica-002",
+      "llm_calls": 50,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3549/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-3549__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "tobymao__sqlglot-3549__replica-001",
+      "llm_calls": 44,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3549/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-3549__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "tobymao__sqlglot-3549__replica-002",
+      "llm_calls": 44,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3426/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-3426__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "tobymao__sqlglot-3426__replica-001",
+      "llm_calls": 27,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3426/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-3426__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "tobymao__sqlglot-3426__replica-002",
+      "llm_calls": 27,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-5926/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-5926__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "PennyLaneAI__pennylane-5926__replica-001",
+      "llm_calls": 36,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-5926/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-5926__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "PennyLaneAI__pennylane-5926__replica-002",
+      "llm_calls": 36,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4148/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-4148__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "tobymao__sqlglot-4148__replica-001",
+      "llm_calls": 25,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4148/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-4148__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "tobymao__sqlglot-4148__replica-002",
+      "llm_calls": 25,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-5860/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-5860__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "PennyLaneAI__pennylane-5860__replica-001",
+      "llm_calls": 38,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-5860/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-5860__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "PennyLaneAI__pennylane-5860__replica-002",
+      "llm_calls": 38,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-4697/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-4697__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "PennyLaneAI__pennylane-4697__replica-001",
+      "llm_calls": 64,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-4697/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-4697__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "PennyLaneAI__pennylane-4697__replica-002",
+      "llm_calls": 64,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-2601/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-2601__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "PennyLaneAI__pennylane-2601__replica-001",
+      "llm_calls": 41,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-2601/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-2601__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "PennyLaneAI__pennylane-2601__replica-002",
+      "llm_calls": 41,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-4343/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-4343__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "PennyLaneAI__pennylane-4343__replica-001",
+      "llm_calls": 45,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-4343/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-4343__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "PennyLaneAI__pennylane-4343__replica-002",
+      "llm_calls": 45,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3954/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-3954__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "tobymao__sqlglot-3954__replica-001",
+      "llm_calls": 29,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-3954/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-3954__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "tobymao__sqlglot-3954__replica-002",
+      "llm_calls": 29,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-889/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-889__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "PennyLaneAI__pennylane-889__replica-001",
+      "llm_calls": 38,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-889/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-889__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "PennyLaneAI__pennylane-889__replica-002",
+      "llm_calls": 38,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-4161/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-4161__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "PennyLaneAI__pennylane-4161__replica-001",
+      "llm_calls": 82,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-4161/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-4161__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "PennyLaneAI__pennylane-4161__replica-002",
+      "llm_calls": 82,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3734/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-3734__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "tobymao__sqlglot-3734__replica-001",
+      "llm_calls": 34,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-prev100-c2-fast-requested-ebpf-20260804/tobymao__sqlglot-3734/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-3734__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "tobymao__sqlglot-3734__replica-002",
+      "llm_calls": 34,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-5831/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-5831__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "PennyLaneAI__pennylane-5831__replica-001",
+      "llm_calls": 48,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-5831/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-5831__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "PennyLaneAI__pennylane-5831__replica-002",
+      "llm_calls": 48,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-5857/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-5857__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "PennyLaneAI__pennylane-5857__replica-001",
+      "llm_calls": 56,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/pennylane-all76-clean-ebpf-20260816/PennyLaneAI__pennylane-5857/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/PennyLaneAI__pennylane-5857__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "PennyLaneAI__pennylane-5857__replica-002",
+      "llm_calls": 56,
+      "system_prefix": "Replay copy: 02\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4040/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-4040__copy-01.jsonl",
+      "copy": 1,
+      "run_instance_id": "tobymao__sqlglot-4040__replica-001",
+      "llm_calls": 31,
+      "system_prefix": "Replay copy: 01\n\n"
+    },
+    {
+      "source": "/home/Ubuntu/agent-sched-bench/traces/swe-rebench/gpt-5.6-sol/sqlglot-100-c2-fast-requested-ebpf-a0419d9-20260803/tobymao__sqlglot-4040/attempt_1/trace.jsonl",
+      "derived": "/home/Ubuntu/agent-sched-bench/analysis/development/mixed56-2l40s-concurrency32-v1/traces/tobymao__sqlglot-4040__copy-02.jsonl",
+      "copy": 2,
+      "run_instance_id": "tobymao__sqlglot-4040__replica-002",
+      "llm_calls": 31,
+      "system_prefix": "Replay copy: 02\n\n"
+    }
+  ],
+  "expected_measured_tasks": 56,
+  "expected_measured_requests": 2470,
+  "global_concurrency": 32,
+  "primary_comparison": "sticky FCFS vs sticky Continuum",
+  "primary_metric": "mean ready-to-terminal JCT across all 56 measured tasks",
+  "mechanism_metrics": [
+    "queue time",
+    "uncached input tokens",
+    "prefill span",
+    "TPOT excluding first token",
+    "paired per-task JCT and tails"
+  ],
+  "interpretation": "Development load-scaling diagnostic; 28 distinct source trajectories, not 56 independent samples. Markers add prompt tokens. Existing replacement delay, cancellation and routing rules unchanged."
+}

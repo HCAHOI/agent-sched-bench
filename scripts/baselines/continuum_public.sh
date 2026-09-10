@@ -40,7 +40,7 @@ IGNORED_DELETED_PYTHON=(
 
 usage() {
   cat <<'EOF'
-Usage: continuum_public.sh fetch|verify|install|serve MODEL [VLLM_ARGS...]
+Usage: continuum_public.sh fetch|verify|install|serve|serve-fcfs MODEL [VLLM_ARGS...]
 
 Runs the official public Continuum fork pinned at commit 316a587. The public
 fork implements fixed 2-second KV pinning and program-level FCFS, but not the
@@ -233,11 +233,12 @@ serve() {
   continuum_verify_overlay "$checkout" "$venv" public
   local model="$1"
   shift
+  export PYTHONPATH="$repo${PYTHONPATH:+:$PYTHONPATH}"
   export RUN_OUTPUT_DIR="${RUN_OUTPUT_DIR:-./continuum_exp}"
   export VLLM_SERVER_DEV_MODE=1
   mkdir -p "$RUN_OUTPUT_DIR"
   exec "$venv/bin/vllm" serve "$model" \
-    --scheduling-policy continuum \
+    --scheduling-policy "${continuum_scheduling_policy:-continuum}" \
     --tensor-parallel-size "${CONTINUUM_TENSOR_PARALLEL_SIZE:-1}" \
     --port "${CONTINUUM_PORT:-8000}" \
     "$@"
@@ -249,6 +250,7 @@ main() {
     verify) verify ;;
     install) install ;;
     serve) shift; serve "$@" ;;
+    serve-fcfs) shift; continuum_scheduling_policy=fcfs; serve "$@" ;;
     -h|--help|help) usage ;;
     *) usage >&2; exit 2 ;;
   esac

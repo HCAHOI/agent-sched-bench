@@ -75,10 +75,7 @@ def _messages_text(messages: object) -> str:
 
 
 def _point_examples(
-    dataset_dir: Path,
-    labels_path: Path,
-    *,
-    allow_recorded_trace: bool = False,
+    dataset_dir: Path, labels_path: Path
 ) -> dict[str, list[dict[str, Any]]]:
     prefixes = _read_jsonl(dataset_dir / "prefixes.jsonl")
     prefix_by_id = {str(row.get("sample_id")): row for row in prefixes}
@@ -90,24 +87,7 @@ def _point_examples(
         sample_id: set() for sample_id in prefix_by_id
     }
     seen: set[tuple[str, int]] = set()
-    source_labels_path = dataset_dir / "source_labels.jsonl"
-    uses_recorded_trace = (
-        allow_recorded_trace and labels_path.resolve() == source_labels_path.resolve()
-    )
-    if uses_recorded_trace:
-        label_rows = _read_jsonl(labels_path)
-        label_ids = [str(row.get("sample_id")) for row in label_rows]
-        if any(
-            row.get("label_source") != "recorded_trace"
-            or row.get("draw_id") != 0
-            or row.get("finish_reason") not in {"stop", "tool_calls"}
-            for row in label_rows
-        ) or len(label_ids) != len(set(label_ids)):
-            raise ValueError("recorded trace labels do not match the source-label contract")
-        if set(label_ids) != set(prefix_by_id):
-            raise ValueError("recorded trace label coverage does not match the dataset")
-    else:
-        label_rows, _protocol = _read_natural_labels(dataset_dir, labels_path)
+    label_rows, _protocol = _read_natural_labels(dataset_dir, labels_path)
     for row in label_rows:
         sample_id = str(row.get("sample_id"))
         if sample_id not in labels_by_id:
@@ -311,14 +291,7 @@ def run_ssjf_reg(
         raise FileExistsError(f"output directory already exists: {output_dir}")
     if epochs <= 0 or batch_size <= 0 or learning_rate <= 0:
         raise ValueError("epochs, batch_size, and learning_rate must be positive")
-    examples = _point_examples(
-        dataset_dir,
-        labels_path,
-        allow_recorded_trace=True,
-    )
-    uses_recorded_trace = (
-        labels_path.resolve() == (dataset_dir / "source_labels.jsonl").resolve()
-    )
+    examples = _point_examples(dataset_dir, labels_path)
     random.seed(seed)
     torch.manual_seed(seed)
     device = _device(device_name)
@@ -378,11 +351,7 @@ def run_ssjf_reg(
         "upstream_commit": SSJF_UPSTREAM_COMMIT,
         "dataset_dir": str(dataset_dir.resolve()),
         "labels_path": str(labels_path.resolve()),
-        "label_reduction": (
-            "recorded_trace_completion_tokens"
-            if uses_recorded_trace
-            else "arithmetic_mean_over_draws"
-        ),
+        "label_reduction": "arithmetic_mean_over_draws",
         "input": "canonical_json_of_full_messages_then_left_truncate_to_512_tokens",
         "prediction_postprocess": "clamp_to_at_least_one_token",
         "encoder": encoder,
@@ -513,14 +482,7 @@ def run_egtp_static(
         raise ValueError("counts must be positive")
     if not 0 <= lambda_val <= 1 or learning_rate <= 0:
         raise ValueError("lambda_val must be in [0, 1] and learning_rate positive")
-    examples = _point_examples(
-        dataset_dir,
-        labels_path,
-        allow_recorded_trace=True,
-    )
-    uses_recorded_trace = (
-        labels_path.resolve() == (dataset_dir / "source_labels.jsonl").resolve()
-    )
+    examples = _point_examples(dataset_dir, labels_path)
     dataset_protocol = json.loads((dataset_dir / "dataset.json").read_text())
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     tools = (dataset_protocol.get("request_options") or {}).get("tools")
@@ -585,16 +547,7 @@ def run_egtp_static(
         "upstream_python": str(upstream_python.resolve()),
         "dataset_dir": str(dataset_dir.resolve()),
         "labels_path": str(labels_path.resolve()),
-        "label_reduction": (
-            "recorded_trace_completion_tokens"
-            if uses_recorded_trace
-            else "arithmetic_mean_over_draws"
-        ),
-        "target_relation": (
-            "cross_model_proxy"
-            if uses_recorded_trace
-            else "labels_generated_under_declared_label_protocol"
-        ),
+        "label_reduction": "arithmetic_mean_over_draws",
         "input": (
             "full_messages_rendered_by_target_tokenizer_chat_template; official extractor "
             "keeps only "

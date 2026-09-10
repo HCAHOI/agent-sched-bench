@@ -49,3 +49,5 @@ IDEA.md
 
 # model checkpoints from predictor training runs
 analysis/results/**/*.pt
+# replay traces for development workloads (mixed28 precedent: manifest only)
+analysis/development/*/traces/

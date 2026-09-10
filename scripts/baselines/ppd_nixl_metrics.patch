@@ -1,0 +1,50 @@
+--- a/distributed/kv_transfer/kv_connector/v1/nixl_connector.py
++++ b/distributed/kv_transfer/kv_connector/v1/nixl_connector.py
+@@ -3,6 +3,7 @@
+ import contextlib
+ import copy
+ import logging
++import json
+ import math
+ import queue
+ import threading
+@@ -639,6 +640,8 @@
+             if block_ids:
+                 self._reqs_need_save[request.request_id] = (request, block_ids)
+         elif params.get("do_remote_prefill"):
++            logger.info("PPD_KV_ALLOCATION %s", json.dumps(dict(
++                request_id=request.request_id, external_tokens=num_external_tokens)))
+             if params.get("remote_block_ids"):
+                 if all(
+                     p in params
+@@ -1828,6 +1831,8 @@
+             self._reqs_to_process.remove(req_id)
+             del self._reqs_to_send[req_id]
+             done_sending.add(req_id)
++            logger.info("PPD_KV_RELEASE %s", json.dumps(dict(
++                request_id=req_id, reason="expired", timestamp_s=time.time())))
+ 
+         return done_sending, done_recving
+ 
+@@ -1857,6 +1862,8 @@
+                 # Wait all consumers (D) to be done reading before freeing.
+                 if self.consumer_notification_counts_by_req[req_id] == int(tp_ratio):
+                     notified_req_ids.add(req_id)
++                    logger.info("PPD_KV_RELEASE %s", json.dumps(dict(
++                        request_id=req_id, reason="consumer_notification", timestamp_s=time.time())))
+                     del self.consumer_notification_counts_by_req[req_id]
+                     self._reqs_to_process.remove(req_id)
+                     self._reqs_to_send.pop(req_id, None)
+@@ -1880,6 +1887,12 @@
+                         # Get telemetry from NIXL
+                         res = self.nixl_wrapper.get_xfer_telemetry(handle)
+                         self.xfer_stats.record_transfer(res)
++                        logger.info("PPD_KV_TRANSFER %s", json.dumps(dict(
++                            request_id=req_id, received_bytes=res.totalBytes,
++                            num_layers=self.num_layers, descriptors=res.descCount,
++                            transfer_duration_ms=res.xferDuration / 1000,
++                            post_duration_ms=res.postDuration / 1000,
++                            timestamp_s=time.time(), transport="nixl")))
+                         self.nixl_wrapper.release_xfer_handle(handle)
+                     elif xfer_state == "PROC":
+                         in_progress = True
