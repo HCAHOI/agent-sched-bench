@@ -33,16 +33,22 @@ class AgentProgressQueue(GlobalRequestQueue):
 
     Keep the public cache-token heap and accounting intact; select by seconds
     at dispatch and use the same order in migration's queue-delay estimate.
+    With ``credit_cap_s`` the carried wait credit is bounded to that many
+    seconds; the proxy then also repays it, carrying only the task's most
+    recent request wait instead of its lifetime total.
     """
 
-    def __init__(self, num_replicas: int, prefill_tpot: float):
+    def __init__(self, num_replicas: int, prefill_tpot: float, credit_cap_s: float | None = None):
         super().__init__(num_replicas)
         self.prefill_tpot = prefill_tpot
+        self.credit_cap_s = credit_cap_s
 
     def priority(self, item: tuple) -> tuple[float, float, int]:
         negative_cached_tokens, arrived, request = item
-        return (arrived - request.agent_previous_wait_s
-                + negative_cached_tokens * self.prefill_tpot, arrived, request._id)
+        credit = request.agent_previous_wait_s
+        if self.credit_cap_s is not None:
+            credit = min(credit, self.credit_cap_s)
+        return (arrived - credit + negative_cached_tokens * self.prefill_tpot, arrived, request._id)
 
     def peek(self, replica_id: int) -> Any:
         queue = self.queues[replica_id]
@@ -115,19 +121,26 @@ def create_app(args: Any) -> RequestAudit:
 
     class ReplayState(SharedState):
         async def add_posting_request_tasks(self, replica_id: int, request: Any) -> None:
-            if args.agent_progress:
+            if args.wait_credit_cap_s is not None:  # repaid: only this request's wait carries forward
+                agent_wait[request._native_session_id] = time.perf_counter() - request._arrived_at
+            elif args.agent_progress:
                 agent_wait[request._native_session_id] = (request.agent_previous_wait_s
                                                           + time.perf_counter() - request._arrived_at)
             choices[request._id].set_result(replica_id)
 
     state = ReplayState(None, tokenizer, config)
     scheduler = DoubleHashGlobalScheduler(len(backends), 30, "dualmap", state, config)
-    if args.agent_progress:
-        scheduler.double_hash_util.global_request_queue = AgentProgressQueue(len(backends), args.prefill_tpot)
+    bounded = args.wait_credit_cap_s is not None
+    assert not (bounded and args.agent_progress), "--agent-progress (unbounded) and --wait-credit-cap-s are exclusive"
+    if args.agent_progress or bounded:
+        scheduler.double_hash_util.global_request_queue = AgentProgressQueue(
+            len(backends), args.prefill_tpot, args.wait_credit_cap_s)
     (args.output / "agent-progress-config.json").write_text(json.dumps({
-        "enabled": args.agent_progress,
-        "priority": "arrival_s - previous_task_router_wait_s - cached_tokens * calibrated_prefill_s_per_token",
-        "debt_reset": "task release", "tool_duration_used": False,
+        "enabled": args.agent_progress or bounded,
+        "priority": "arrival_s - credit_s - cached_tokens * calibrated_prefill_s_per_token",
+        "credit_s": (f"min({args.wait_credit_cap_s}, router wait of the task's previous request)" if bounded
+                     else "cumulative router wait of the task's previous requests"),
+        "debt_reset": "every dispatch" if bounded else "task release", "tool_duration_used": False,
     }, indent=2))
     queue = scheduler.double_hash_util.global_request_queue
 
@@ -273,6 +286,7 @@ if __name__ == "__main__":
     parser.add_argument("--block-size", type=int, default=16)
     parser.add_argument("--ttft-slo", type=float, default=5)
     parser.add_argument("--timeout-s", type=float, default=1800)
-    parser.add_argument("--agent-progress", action="store_true")
+    parser.add_argument("--agent-progress", action="store_true", help="unbounded, unrepaid wait credit (2026-09-09 variant)")
+    parser.add_argument("--wait-credit-cap-s", type=float, help="bounded, repaid wait credit: cap in seconds")
     args = parser.parse_args()
     uvicorn.run(create_app(args), host="127.0.0.1", port=9000, timeout_graceful_shutdown=2)

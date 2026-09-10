@@ -56,7 +56,7 @@ async def test_prefill_admission_cancellation_and_stream_feedback(monkeypatch, t
     args = SimpleNamespace(model="plumbing-only", backends=["http://engine0", "http://engine1"],
                            output=tmp_path, ttft_slo=5, prefill_tpot=0.05,
                            cpu_cache_gib=0.001, block_size=16, kv_bytes_per_token=16, timeout_s=5,
-                           agent_progress=agent_progress)
+                           agent_progress=agent_progress, wait_credit_cap_s=None)
     audit = proxy.create_app(args)
     async with audit.app.router.lifespan_context(audit.app):
         async with real_client(transport=httpx.ASGITransport(audit), base_url="http://proxy") as client:
@@ -125,3 +125,22 @@ def test_agent_wait_vs_cache_savings_and_migration_accounting():
     assert queue.pop_schedulable(0, 2000, 2) == [cold, recent]
     assert queue.get_global_actual_waiting_tokens_count(0) == 0
     assert queue.get_global_input_waiting_tokens_count(0) == 0
+
+
+def test_bounded_credit_is_capped_and_cache_term_still_applies():
+    queue = proxy.AgentProgressQueue(2, 0.01, credit_cap_s=5.0)
+
+    def request(rid, arrival, credit=0):
+        return SimpleNamespace(_id=rid, _arrived_at=arrival, agent_previous_wait_s=credit,
+                               _num_prefill_tokens=1000, _input_ids=list(range(1000)))
+
+    incumbent = request(0, 110, credit=400)  # Waited 400 s before; only 5 s of it counts.
+    newcomer = request(1, 104)
+    queue.push(0, incumbent, 0)
+    queue.push(0, newcomer, 0)
+    assert queue.peek(0) is newcomer  # 104 < 110 - 5: bounded credit cannot starve a 6 s older arrival.
+    warm = request(2, 106)
+    queue.push(0, warm, 400)  # Saves 4 s: 102 effective beats the newcomer's 104.
+    assert queue.pop(0) is warm
+    assert queue.pop(0) is newcomer
+    assert queue.pop(0) is incumbent

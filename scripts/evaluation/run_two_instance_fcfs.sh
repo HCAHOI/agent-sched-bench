@@ -328,6 +328,7 @@ if [[ "$router_policy" == dualmap ]]; then
     --output "$run" --prefill-tpot "$DUALMAP_PREFILL_TPOT" --kv-bytes-per-token "$kv_bytes_per_token"
     --cpu-cache-gib "$cpu_cache_gib" --timeout-s "$timeout_s")
   [[ "${DUALMAP_AGENT_PROGRESS:-0}" != 1 ]] || proxy+=(--agent-progress)
+  [[ -z "${DUALMAP_WAIT_CREDIT_CAP_S:-}" ]] || proxy+=(--wait-credit-cap-s "$DUALMAP_WAIT_CREDIT_CAP_S")
 fi
 if [[ -n "$ppd_mode" ]]; then
   proxy=(setsid taskset -c "${ROUTER_CPUSET:-15}" env PYTHONPATH="$ppd_checkout:$repo" "$ppd_python" -m scripts.baselines.ppd_official_proxy
