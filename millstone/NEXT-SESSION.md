@@ -57,6 +57,11 @@ GPU host, as of 2026-09-10:
   model under `/workspace/.hf_home`, patched ThunderAgent variants at
   `/workspace/ThunderAgent-{pending-release,capacity-consistent}-7ddc861`
   with venvs under `/workspace/venvs/`.
+- Verified on this host on 2026-09-10: FCFS least-requests `--smoke`
+  (`results/fcfs-least-requests-smoke-20260910-r2`) and DualMap `--calibrate`
+  (`results/dualmap-calibration-20260910-r1`), which measured
+  `DUALMAP_PREFILL_TPOT=5.543863341017641e-05` (old host: 5.44e-05). Pass that
+  value with `--env` for DualMap runs on this host; recalibrate on a new one.
 - The host snapshot is `git archive` of the local HEAD. After committing code
   the host executes, ship it again before launching.
 - The PPD upstream exists only on the host, so `tests/test_ppd_*.py` fail
