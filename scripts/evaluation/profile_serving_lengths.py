@@ -2,6 +2,12 @@
 
 Uses the existing audited chat proxy, real generation, and public PPD prompt and
 Poisson-arrival construction. The plan's numeric table is the input manifest.
+
+Stage ``load`` replaces the arrival process by a two-phase protocol: all N
+histories are built first (turn 1, always via PD), the proxy is polled until
+nothing is outstanding, and then all N turn-2 requests are released together.
+That measures each path under a known decode-side burst with an idle prefill
+worker, the regime the 2026-09-08 matrix could not observe.
 """
 from __future__ import annotations
 
@@ -20,6 +26,7 @@ import aiohttp
 
 
 PRELIMINARY = ("P02", "P43", "P45", "P47", "P54", "P55", "P56")
+LOADS = (8, 16, 32)  # turn-2 burst sizes for stage "load"
 
 
 def read_points(plan: Path) -> dict[str, tuple[int, int, int]]:
@@ -32,6 +39,9 @@ def read_points(plan: Path) -> dict[str, tuple[int, int, int]]:
 
 
 def schedule(points: dict[str, tuple[int, int, int]], stage: str) -> list[tuple[str, float, int, str]]:
+    """Groups as (point, rate-or-load, seed, path); the second field is the burst size in stage load."""
+    if stage == "load":
+        return [(p, load, 42, path) for p in points for load in LOADS for path in ("pd", "local")]
     preliminary = [(p, 0.5, 42, path) for p in PRELIMINARY for path in ("pd", "local")]
     if stage == "preliminary":
         return preliminary
@@ -188,26 +198,38 @@ def verify_group(run: Path, results: list[dict[str, Any]], num_layers: int) -> N
         assert "cached_tokens" in result["usage"]["prompt_tokens_details"]
 
 
+async def wait_idle(client: aiohttp.ClientSession, proxy: str) -> float:
+    began = time.perf_counter()
+    while True:
+        async with client.get(proxy + "/health") as response:
+            response.raise_for_status()
+            if (await response.json())["outstanding"] == 0:
+                return time.perf_counter() - began
+        await asyncio.sleep(0.2)
+
+
 async def run_group(args: Any, tokenizer: Any, point: str, target: tuple[int, int, int],
-                    rate: float, seed: int, path: str, root: Path) -> dict[str, Any]:
+                    rate: float, seed: int, path: str, root: Path, load_stage: bool = False) -> dict[str, Any]:
     from scripts.benchmark.comprehensive_benchmark import generate_prompt
 
-    key = f"{point}-rate{rate:g}-seed{seed}-{path}"
+    count = int(rate) if load_stage else 8
+    key = f"{point}-load{count}-seed{seed}-{path}" if load_stage else f"{point}-rate{rate:g}-seed{seed}-{path}"
     group_started = time.perf_counter()
     h, u, o = target
     prepared = []
-    for i in range(8):
+    for i in range(count):
         prefix = hashlib.sha256(f"{point}:{seed}:{i}".encode()).hexdigest()[:16] + ": "
         t1 = generate_prompt(h, prefix=prefix, seed=f"{point}:{seed}:{i}:1")
         messages, tokens = fit_user(tokenizer, [], h - 32, t1)
         t2 = generate_prompt(u, prefix=prefix, seed=f"{point}:{seed}:{i}:2")
         prepared.append((messages, tokens, t2))
     # Check independent conversations do not share their first cache block.
-    assert len({tuple(p[1][:16]) for p in prepared}) == 8
+    assert len({tuple(p[1][:16]) for p in prepared}) == count
     prepare_s = time.perf_counter() - group_started
-    offsets = arrival_offsets(rate, seed)
-    group = dict(key=key, point=point, target_huo=target, conversation_rate=rate,
-                 seed=seed, path=path, conversation_count=8, planned_arrivals_s=offsets,
+    offsets = [0.0] * count if load_stage else arrival_offsets(rate, seed)
+    group = dict(key=key, point=point, target_huo=target, conversation_rate=None if load_stage else rate,
+                 protocol="two_phase_burst" if load_stage else "poisson_arrivals",
+                 seed=seed, path=path, conversation_count=count, planned_arrivals_s=offsets,
                  cpu_prepare_s=prepare_s, success=False, started_unix_s=time.time())
     raw = (root / (key + "-turns.jsonl")).open("x", buffering=1)
     results = []
@@ -217,12 +239,17 @@ async def run_group(args: Any, tokenizer: Any, point: str, target: tuple[int, in
         group["initial_cleanup_s"] = await clean_group(control, args, key + "-before")
         start = time.perf_counter()
         async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=50)) as client:
+            phase2 = asyncio.Event()  # load stage: released once every history is built and engines are idle
+
             async def conversation(i: int) -> None:
                 job = key + f"-conv{i}"
                 await asyncio.sleep(max(0, start + offsets[i] - time.perf_counter()))
                 messages, tokens, content = prepared[i]
                 try:
                     for turn, output in ((1, 32), (2, o)):
+                        if turn == 2 and load_stage:
+                            built[i] = True
+                            await phase2.wait()
                         construction_started = time.perf_counter()
                         actual_h = 0
                         if turn == 2:
@@ -243,20 +270,30 @@ async def run_group(args: Any, tokenizer: Any, point: str, target: tuple[int, in
                     async with control.post(args.proxy + "/programs/release", json={"program_id": job}) as response:
                         response.raise_for_status()
 
-            tasks = [asyncio.create_task(conversation(i)) for i in range(8)]
+            built = [False] * count
+            tasks = [asyncio.create_task(conversation(i)) for i in range(count)]
             try:
+                if load_stage:
+                    while not all(built):
+                        done = [t for t in tasks if t.done()]
+                        for t in done:
+                            t.result()  # surface a turn-1 failure instead of waiting forever
+                        await asyncio.sleep(0.2)
+                    group["idle_wait_s"] = await wait_idle(control, args.proxy)
+                    group["t2_burst_offset_s"] = time.perf_counter() - start
+                    phase2.set()
                 await asyncio.gather(*tasks)
                 group["workload_s"] = time.perf_counter() - start
                 group["final_cleanup_s"] = await clean_group(control, args, key + "-after")
                 second = [r for r in results if r["turn"] == 2]
-                assert len(second) == 8 and len(results) == 16
+                assert len(second) == count and len(results) == 2 * count
                 verify_group(root.parent, results, args.num_layers)
-                group.update(success=True, t1_count=8, t2_count=8,
+                group.update(success=True, t1_count=count, t2_count=count,
                     t1_mean_e2e_s=statistics.mean(r["e2e_s"] for r in results if r["turn"] == 1),
                     t2_mean_e2e_s=statistics.mean(r["e2e_s"] for r in second),
                     t2_mean_ttft_s=statistics.mean(r["ttft_s"] for r in second),
                     t2_mean_decode_tpot_s=statistics.mean(r["decode_tpot_s"] for r in second),
-                    achieved_llm_requests_per_s=16 / group["workload_s"])
+                    achieved_llm_requests_per_s=2 * count / group["workload_s"])
             except BaseException as exc:
                 group["error"] = repr(exc)
                 for task in tasks:
@@ -312,19 +349,22 @@ async def profile(args: Any) -> None:
     (args.output / "plan.md").write_text(args.plan.read_text())
     (args.output / "config.json").write_text(json.dumps(dict(vars(args), points=points, groups=groups,
         history_tolerance_tokens=8, input_tolerance_tokens=0, skip_special_tokens=False,
-        setup_output_tokens=32, conversations_per_group=8), default=str, indent=2))
+        setup_output_tokens=32, conversations_per_group=list(LOADS) if args.stage == "load" else 8),
+        default=str, indent=2))
     if args.resume_from:
         (args.output / "resumed-groups.json").write_text(json.dumps(completed, indent=2))
         print(f"RESUME: {len(completed)}/{len(groups)} groups validated in {args.resume_from}", flush=True)
     for index, (point, rate, seed, path) in enumerate(groups, 1):
         if index <= len(completed):
             continue
-        print(f"START {index}/{len(groups)} {point} H/U/O={points[point]} rate={rate} seed={seed} {path}", flush=True)
-        group = await run_group(args, tokenizer, point, points[point], rate, seed, path, args.output)
+        print(f"START {index}/{len(groups)} {point} H/U/O={points[point]} "
+              f"{'load' if args.stage == 'load' else 'rate'}={rate} seed={seed} {path}", flush=True)
+        group = await run_group(args, tokenizer, point, points[point], rate, seed, path, args.output,
+                                load_stage=args.stage == "load")
         completed.append(group)
         print(f"DONE {index}/{len(groups)} {group['key']} {group['total_s']:.1f}s; "
               f"T2 TTFT={group['t2_mean_ttft_s']:.3f}s TPOT={group['t2_mean_decode_tpot_s']*1000:.2f}ms", flush=True)
-        if index == 14:
+        if index == 14 and args.stage != "load":
             (args.output / "preliminary-complete.json").write_text(json.dumps(completed, indent=2))
             if args.stage == "full":
                 print("Preliminary complete; waiting for measured duration review in continue-full.json.", flush=True)
@@ -343,7 +383,7 @@ if __name__ == "__main__":
     parser.add_argument("--backends", nargs=2, default=["http://127.0.0.1:8000", "http://127.0.0.1:8001"])
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--stage", choices=["preliminary", "full"], default="preliminary")
+    parser.add_argument("--stage", choices=["preliminary", "full", "load"], default="preliminary")
     parser.add_argument("--timeout-s", type=float, default=1800)
     parser.add_argument("--resume-from", type=Path)
     asyncio.run(profile(parser.parse_args()))
