@@ -27,6 +27,47 @@ def add_huge_context_table(engine: Any, path: Path) -> None:
             engine.performance_data[target] = measured.performance_data[key]
 
 
+# Cost model for two-sided routing, measured on this host (2xL40S, Qwen3-4B FP8,
+# vLLM 0.28.0) from the serving-length profiling matrix in
+# results/serving-length-profile-vast-20260908-complete. Declared before any
+# replay under this mode; never fitted on replay results.
+LOCAL_PREFILL_S_PER_TOKEN = 0.184e-3
+LOCAL_PREFILL_FLOOR_S = 0.027
+P_PREFILL_S_PER_TOKEN = 0.295e-3
+KV_TRANSFER_S_PER_TOKEN = 0.0102e-3
+KV_TRANSFER_FLOOR_S = 0.022
+PD_HANDOFF_S = 0.4
+BATCH_BUDGET_TOKENS = 2048  # --max-num-batched-tokens on both engines.
+
+
+def two_sided_constants() -> dict[str, float]:
+    """The declared cost model, for the run's adapter config."""
+    return {name: value for name, value in globals().items()
+            if name.isupper() and isinstance(value, (int, float))}
+
+
+def two_sided_estimate(prompt_tokens: int, snap_p: dict[str, Any],
+                       snap_d: dict[str, Any]) -> dict[str, Any]:
+    """Expected time to first token on each side; prefill locally iff D is no slower.
+
+    Queueing is a deliberate simplification: each waiting request on a side is
+    charged one full prefill batch budget at that side's per-token cost, because
+    the snapshot reports queue length, not the queued prompts' lengths.
+    """
+    assert prompt_tokens > 0
+    assert 0 <= snap_p["cached_tokens"] < prompt_tokens and snap_p["waiting"] >= 0
+    assert 0 <= snap_d["cached_tokens"] < prompt_tokens and snap_d["waiting"] >= 0
+    uncached_p = prompt_tokens - snap_p["cached_tokens"]
+    uncached_d = prompt_tokens - snap_d["cached_tokens"]
+    local_ttft_s = (snap_d["waiting"] * BATCH_BUDGET_TOKENS * LOCAL_PREFILL_S_PER_TOKEN
+                    + uncached_d * LOCAL_PREFILL_S_PER_TOKEN + LOCAL_PREFILL_FLOOR_S)
+    pd_ttft_s = (snap_p["waiting"] * BATCH_BUDGET_TOKENS * P_PREFILL_S_PER_TOKEN
+                 + uncached_p * P_PREFILL_S_PER_TOKEN
+                 + prompt_tokens * KV_TRANSFER_S_PER_TOKEN + KV_TRANSFER_FLOOR_S + PD_HANDOFF_S)
+    return dict(uncached_p=uncached_p, uncached_d=uncached_d, local_ttft_s=local_ttft_s,
+                pd_ttft_s=pd_ttft_s, use_local=local_ttft_s <= pd_ttft_s)
+
+
 def protect_decode(use_local: bool, prompt_tokens: int, state: dict[str, Any],
                    bypass_threshold: int) -> tuple[bool, str]:
     """Keep public routing unless substantial local prefill meets a full D queue.

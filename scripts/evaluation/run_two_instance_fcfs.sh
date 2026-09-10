@@ -336,7 +336,15 @@ if [[ -n "$ppd_mode" ]]; then
     --transport nixl --output "$run" --timeout-s "$timeout_s")
   [[ "$ppd_mode" != ppd ]] || proxy+=(--benchmark-data "$run/ppd-calibration")
   [[ "${PPD_EXTENDED_CONTEXT:-0}" != 1 ]] || proxy+=(--extended-context)
-  [[ "${PPD_STATE_AWARE:-0}" != 1 ]] || proxy+=(--state-aware)
+  if [[ "${PPD_TWO_SIDED:-0}" == 1 ]]; then
+    # ppd_official.sh installs and verify-installed checks the state-query patch
+    # only under PPD_NATIVE_PUSH=1 PPD_STATE_AWARE=1; two-sided needs that endpoint.
+    [[ "${PPD_STATE_AWARE:-0}${PPD_NATIVE_PUSH:-0}" == 11 ]] || \
+      { echo "PPD_TWO_SIDED=1 requires PPD_NATIVE_PUSH=1 PPD_STATE_AWARE=1" >&2; exit 2; }
+    proxy+=(--two-sided)
+  elif [[ "${PPD_STATE_AWARE:-0}" == 1 ]]; then
+    proxy+=(--state-aware)
+  fi
 fi
 printf '%q ' "${proxy[@]}" > "$run/proxy.argv"
 "${proxy[@]}" > "$run/proxy.log" 2>&1 &
