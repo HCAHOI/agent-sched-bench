@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import msgspec
+import pytest
 import zmq
 
 from scripts.evaluation.collect_vllm_kv_events import EventSummary, decode_batch
@@ -15,6 +16,24 @@ from scripts.evaluation.collect_vllm_kv_events import EventSummary, decode_batch
 SCRIPT = (
     Path(__file__).parents[1] / "scripts/evaluation/collect_vllm_kv_events.py"
 )
+
+
+def test_decodes_vllm_map_events() -> None:
+    events = [
+        {"type": "BlockStored", "block_hashes": [b"secret"], "parent_block_hash": None,
+         "token_ids": [123], "block_size": 16, "lora_id": None, "medium": "GPU", "lora_name": None, "group_idx": 0},
+        {"type": "BlockRemoved", "block_hashes": [b"secret"], "medium": "GPU"},
+        {"type": "AllBlocksCleared"},
+    ]
+    timestamp, decoded = decode_batch(msgspec.msgpack.encode([1.25, events, 0]))
+    assert timestamp == 1.25
+    assert decoded == [
+        {"type": "BlockStored", "block_count": 1, "block_size": 16, "medium": "GPU"},
+        {"type": "BlockRemoved", "block_count": 1, "block_size": None, "medium": "GPU"},
+        {"type": "AllBlocksCleared", "block_count": 0, "block_size": None, "medium": None},
+    ]
+    with pytest.raises(ValueError, match="missing fields"):
+        decode_batch(msgspec.msgpack.encode([1.25, [{k: v for k, v in events[0].items() if k != "lora_name"}]]))
 
 
 def test_decodes_both_vllm_payloads_and_summarizes_without_sensitive_fields() -> None:
@@ -110,7 +129,8 @@ def test_decodes_both_vllm_payloads_and_summarizes_without_sensitive_fields() ->
     assert summary.as_dict()["removed_tokens"] is None
 
 
-def test_sigterm_recovers_unseen_tail_from_replay_endpoint(tmp_path: Path) -> None:
+@pytest.mark.parametrize("topic_frames", [[], [b"kv-events"]])
+def test_sigterm_recovers_unseen_tail_from_replay_endpoint(tmp_path: Path, topic_frames: list[bytes]) -> None:
     ready = tmp_path / "ready"
     events = tmp_path / "events.jsonl"
     summary = tmp_path / "summary.json"
@@ -165,10 +185,10 @@ def test_sigterm_recovers_unseen_tail_from_replay_endpoint(tmp_path: Path) -> No
             requested_starts.append(int.from_bytes(start_seq_bytes, "big"))
             if round_index == 0:
                 router.send_multipart(
-                    [identity, b"", (0).to_bytes(8, "big"), tail_payload]
+                    [identity, b"", *topic_frames, (0).to_bytes(8, "big"), tail_payload]
                 )
             router.send_multipart(
-                [identity, b"", (-1).to_bytes(8, "big", signed=True), b""]
+                [identity, b"", *([b""] if topic_frames else []), (-1).to_bytes(8, "big", signed=True), b""]
             )
 
         assert requested_starts == [0, 1, 1]

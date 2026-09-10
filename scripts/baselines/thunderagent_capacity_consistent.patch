@@ -1,0 +1,189 @@
+diff --git a/ThunderAgent/backend/state.py b/ThunderAgent/backend/state.py
+index 07219fb..83d4527 100644
+--- a/ThunderAgent/backend/state.py
++++ b/ThunderAgent/backend/state.py
+@@ -165,21 +165,24 @@ class BackendState:
+     def capacity_overflow(self, include_future_release: bool = False) -> int:
+         """Return how many tokens we're over capacity (0 if within capacity).
+         
+-        Uses cached shared_tokens (updated during thrashing check).
+-        Formula: active_tokens - shared_tokens + buffer - capacity
+-        where buffer = active_count * BUFFER_PER_PROGRAM
++        Use the same acting-token decay as restoration when enabled.
++        Pending release affects victim selection, never admission capacity.
+         
+         Args:
+-            include_future_release: If True, subtract future_paused_tokens from the calculation.
++            include_future_release: If True, subtract current usage of marked programs.
+                                    Use this when checking if more programs need to be paused.
+         """
+         if not self.cache_config:
+             return 0
+-        buffer = self.active_program_count * BUFFER_PER_PROGRAM
+-        required = self.active_program_tokens - self.shared_tokens + buffer
++        remaining = (self.remaining_capacity_with_decay()
++                     if self.use_acting_token_decay else self.remaining_capacity())
++        overflow = -remaining
+         if include_future_release:
+-            required -= self.future_paused_tokens
+-        overflow = required - self.cache_config.total_tokens_capacity
++            overflow -= sum(
++                p.total_tokens if p.status == ProgramStatus.REASONING
++                else self.tool_coefficient * p.total_tokens
++                for p in self._programs.values() if p.marked_for_pause
++            )
+         return max(0, overflow)
+     
+     def remaining_capacity(self) -> int:
+diff --git a/ThunderAgent/scheduler/router.py b/ThunderAgent/scheduler/router.py
+index 1b5f24e..abf85e3 100644
+--- a/ThunderAgent/scheduler/router.py
++++ b/ThunderAgent/scheduler/router.py
+@@ -353,7 +353,9 @@ class MultiBackendRouter:
+         for backend in self.backends.values():
+             if not backend.healthy:
+                 continue
+-            if backend.remaining_capacity() < required_capacity:
++            remaining = (backend.remaining_capacity_with_decay()
++                         if backend.use_acting_token_decay else backend.remaining_capacity())
++            if remaining < required_capacity:
+                 continue  # Not enough capacity for this program
+             if backend.active_program_tokens < min_tokens:
+                 min_tokens = backend.active_program_tokens
+@@ -765,9 +767,9 @@ class MultiBackendRouter:
+         # Step 2: Resume waiting programs (uses decay-adjusted capacity if enabled)
+         await self._greedy_resume()
+         
+-        # Step 3: Check thrashing and pause if needed (uses original capacity, no decay)
++        # Step 3: Enforce the same decay-adjusted capacity used for restoration.
+         for url, backend in self.backends.items():
+-            if backend.cache_config and backend.remaining_capacity() < 0:
++            if backend.cache_config and backend.capacity_overflow() > 0:
+                 await self._pause_until_safe(backend)
+ 
+     async def _pause_until_safe(self, backend: BackendState):
+@@ -777,7 +779,7 @@ class MultiBackendRouter:
+         """
+         paused_count = 0
+         
+-        while backend.remaining_capacity() < 0:
++        while backend.capacity_overflow(include_future_release=True) > 0:
+             # Priority 1: Pause ACTING programs (smallest first)
+             acting_programs = self._get_acting_programs_sorted(backend.url, ascending=True)
+             if acting_programs:
+@@ -826,7 +828,7 @@ class MultiBackendRouter:
+         from ..backend.state import BUFFER_PER_PROGRAM
+         
+         # --- Collect backend capacities ---
+-        # Use decay-adjusted capacity when enabled (optimistic for resume)
++        # Use the same decay-adjusted capacity as pause and direct admission.
+         backend_caps: list[tuple[BackendState, int]] = []
+         total_capacity = 0
+         for url, backend in self.backends.items():
+diff --git a/tests/check_pending_release.py b/tests/check_pending_release.py
+new file mode 100644
+index 0000000..3ed9c9b
+--- /dev/null
++++ b/tests/check_pending_release.py
+@@ -0,0 +1,101 @@
++"""Run against the patched checkout: python tests/check_pending_release.py."""
++import asyncio
++import time
++
++from ThunderAgent.backend.vllm_metrics import VLLMCacheConfig
++from ThunderAgent.program import ProgramStatus, ProgramState
++from ThunderAgent.scheduler import MultiBackendRouter
++
++
++async def check(final_tokens):
++    router = MultiBackendRouter(["http://127.0.0.1:8000"])
++    try:
++        backend = router.backends["http://127.0.0.1:8000"]
++        backend.metrics_client.cache_config = VLLMCacheConfig(16, 6250)
++        for i in range(3):
++            state = router.get_or_create_program(str(i))
++            state.backend_url = backend.url
++            state.status = ProgramStatus.REASONING
++            state.total_tokens = 35000
++            backend.register_program(state.program_id, state)
++        states = list(backend._programs.values())
++        assert backend.remaining_capacity() == -5300
++        await router._pause_until_safe(backend)
++        assert sum(s.marked_for_pause for s in states) == 1
++        assert not backend.has_capacity()  # Pending release cannot admit new work.
++        await router._pause_until_safe(backend)
++        assert sum(s.marked_for_pause for s in states) == 1
++        first = next(s for s in states if s.marked_for_pause)
++        if final_tokens == 5000:
++            router.update_program_after_request(first.program_id, first, final_tokens)
++        else:
++            router.update_program_tokens_streaming(first, 40000)
++            await router._pause_until_safe(backend)
++            assert sum(s.marked_for_pause for s in states) == 1
++        for state in states:
++            if state is not first:
++                router.update_program_tokens_streaming(state, 20000)
++        await router._pause_until_safe(backend)
++        if final_tokens != 5000:
++            assert sum(s.marked_for_pause for s in states) == 2
++            router.update_program_after_request(first.program_id, first, final_tokens)
++        await router._pause_until_safe(backend)
++        assert sum(s.marked_for_pause for s in states) == 1
++        assert backend.remaining_capacity() < 0
++        assert backend.capacity_overflow(include_future_release=True) == 0
++        for state in states:
++            if state.marked_for_pause:
++                router.update_program_after_request(state.program_id, state, state.total_tokens)
++        assert backend.active_program_count == 1
++        assert backend.remaining_capacity() >= 0
++    finally:
++        await router.stop()
++
++
++for final_tokens in (5000, 75000):
++    asyncio.run(check(final_tokens))
++
++
++async def check_decay() -> None:
++    router = MultiBackendRouter(["http://127.0.0.1:8000"], use_acting_token_decay=True)
++    try:
++        backend = router.get_default_backend()
++        backend.metrics_client.cache_config = VLLMCacheConfig(16, 6250)
++        running = router.get_or_create_program("running")
++        idle = router.get_or_create_program("idle")
++        for state, tokens in [(running, 40000), (idle, 70000)]:
++            state.backend_url = backend.url
++            state.total_tokens = tokens
++            backend.register_program(state.program_id, state)
++        idle.status = ProgramStatus.ACTING
++        idle.acting_since = time.time() - 10
++        assert backend.remaining_capacity() < 0
++        assert router._select_backend_for_new_program(20000) == backend.url
++        waiting = router.get_or_create_program("waiting")
++        waiting.total_tokens = 20000
++        waiting.step_count = 2
++        waiting.state = ProgramState.PAUSED
++        waiting.waiting_event = asyncio.Event()
++        router._add_to_global_waiting_queue_sync(waiting.program_id, waiting)
++        await router._greedy_resume()
++        assert waiting.state == ProgramState.ACTIVE
++        assert backend.capacity_overflow() == 0
++        await router._pause_until_safe(backend)
++        assert idle.state == ProgramState.ACTIVE
++        assert not any(p.marked_for_pause for p in router.programs.values())
++        # Fresh acting tokens still count: true overflow must trigger eviction.
++        idle.acting_since = time.time()
++        assert backend.capacity_overflow() > 0
++        await router._pause_until_safe(backend)
++        assert idle.state == ProgramState.PAUSED
++        assert backend.capacity_overflow() == 0
++        # Pending reasoning release also stops excess marking with decay enabled.
++        router.update_program_tokens_streaming(running, 50000)
++        await router._pause_until_safe(backend)
++        assert waiting.marked_for_pause and not running.marked_for_pause
++        assert backend.capacity_overflow(include_future_release=True) == 0
++    finally:
++        await router.stop()
++
++
++asyncio.run(check_decay())
