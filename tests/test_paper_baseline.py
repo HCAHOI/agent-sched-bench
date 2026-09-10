@@ -143,7 +143,14 @@ def test_thunderagent_release_failure_is_fatal() -> None:
         asyncio.run(provider.aclose())
 
 
-def test_thunderagent_backend_connections_are_not_reused() -> None:
+@pytest.mark.parametrize("timeout", [None, "7200"])
+def test_thunderagent_backend_connections_are_not_reused(
+    monkeypatch: pytest.MonkeyPatch, timeout: str | None
+) -> None:
+    if timeout is None:
+        monkeypatch.delenv("SHADOW_LLM_TIMEOUT_S", raising=False)
+    else:
+        monkeypatch.setenv("SHADOW_LLM_TIMEOUT_S", timeout)
     class Router:
         client = httpx.AsyncClient()
 
@@ -152,6 +159,7 @@ def test_thunderagent_backend_connections_are_not_reused() -> None:
     asyncio.run(_disable_backend_keepalive(router))
 
     assert old_client.is_closed
+    assert router.client.timeout.read == float(timeout or "900")
     assert router.client._transport._pool._max_keepalive_connections == 0
     asyncio.run(router.client.aclose())
 

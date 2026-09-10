@@ -46,3 +46,6 @@ figures/
 analysis/**/*-decisions.json.zst
 .agents/
 IDEA.md
+
+# model checkpoints from predictor training runs
+analysis/results/**/*.pt
