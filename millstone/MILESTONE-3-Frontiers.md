@@ -150,9 +150,37 @@ Observation: imbalance exists only while the active set is being built
 one-idle time at mid density; once arrivals stop and replacement tasks fill
 freed slots, both engines saturate exactly as under mixed56. Under the
 mixed56 protocol the ramp phase is 0 s long, which is why Milestone 2 saw
-no imbalance. Whether balancing pays in the ramp is run 2's question. The
-routing-telemetry checker does not apply to this proxy's log (dispatch and
-finish only, 5,277 each, balanced).
+no imbalance. The routing-telemetry checker does not apply to this proxy's
+log (dispatch and finish only, 5,277 each, balanced).
+
+**Run 2, FCFS least-requests (`results/mixed56p60-vast-fcfs-least-requests-20260910-r1`),
+against run 1.** Per-request balancing removes the ramp imbalance and still
+loses on every JCT and efficiency metric:
+
+| Metric | Least-requests | Sticky |
+|---|---:|---:|
+| Completed | 56/56, 2,470 req | 56/56, 2,470 |
+| Mean JCT, min (from arrival) | 21.15 | 17.32 |
+| P95 / max JCT, min | 64.94 / 110.85 | 59.25 / 111.86 |
+| Engine TPOT, ms | 78.33 | 62.06 |
+| Cached prompt share | 52% | 72% |
+| Steps/min, 110.9 min window | 34.50 | 35.28 |
+| Both busy, whole window | 93.5% | 88.8% |
+| One busy other idle, whole window | 1.34% (130 s) | 2.54% (249 s) |
+| Ramp 20–50 min: both busy / one idle | 90–92% / ≤0.3% | 64–74% / 2.8–9.5% |
+
+Paired mean JCT +230 s, 95% [+164, +310] against sticky. Worst tasks are the
+same replicas (6049-002, 4161-002, 6049-001) under both.
+
+**Verdict.** The GPU-time imbalance that sticky placement creates during the
+ramp is real (up to 9.5% one-idle time) and least-requests does reclaim it
+(both-busy 90% or more throughout the ramp), but the reclaimed GPU time is
+spent on prefix recomputation: cached share drops 20 points and TPOT rises
+26%, and mean JCT ends 22% worse. Locality is worth more than the idle time
+it costs, at every density this workload passes through. Per-request load
+balancing is closed as a lever at 2 GPUs. What remains open is whether a
+locality-preserving router (DualMap, run 3) beats sticky FCFS on this
+gradually built workload as it does on mixed56.
 
 ## 3. Frontier C — PD/PPD routing
 
