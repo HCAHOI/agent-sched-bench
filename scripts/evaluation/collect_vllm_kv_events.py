@@ -24,6 +24,19 @@ _REPLAY_TIMEOUT_MS = 1_000
 
 
 def _event(tagged: Any) -> dict[str, Any]:
+    # vLLM 0.28 keeps array batches but encodes each tagged event as a map.
+    if isinstance(tagged, dict):
+        fields = {
+            "BlockStored": ("block_hashes", "parent_block_hash", "token_ids", "block_size", "lora_id", "medium", "lora_name"),
+            "BlockRemoved": ("block_hashes", "medium"),
+            "AllBlocksCleared": (),
+        }
+        tag = tagged.get("type")
+        if not isinstance(tag, str) or tag not in fields:
+            raise ValueError(f"unknown KV event type: {tag}")
+        if any(key not in tagged for key in fields[tag]):
+            raise ValueError(f"missing fields in {tag} event")
+        tagged = [tag, *(tagged[key] for key in fields[tag])]
     if not isinstance(tagged, list) or not tagged or not isinstance(tagged[0], str):
         raise ValueError("KV event must be a tagged array")
 
@@ -67,7 +80,7 @@ def _event(tagged: Any) -> dict[str, Any]:
 
 
 def decode_batch(payload: bytes) -> tuple[float, list[dict[str, Any]]]:
-    """Decode vLLM 0.10.2 and current CacheWise array-like event batches."""
+    """Decode array-like batches with array or map tagged KV events."""
 
     batch = _DECODER.decode(payload)
     if not isinstance(batch, list) or len(batch) not in (2, 3):
@@ -202,6 +215,9 @@ def _replay_tail(
             if not socket.poll(_REPLAY_TIMEOUT_MS, zmq.POLLIN):
                 raise TimeoutError("timed out waiting for the KV replay endpoint")
             frames = socket.recv_multipart()
+            if len(frames) == 4:
+                # New publishers include the topic after the ROUTER delimiter.
+                frames = [frames[0], *frames[2:]]
             if len(frames) != 3 or frames[0] != b"" or len(frames[1]) != 8:
                 raise ValueError("KV replay message must have delimiter, sequence, payload")
             if frames[1] == _END_SEQ:
@@ -243,9 +259,11 @@ def collect(
     signal.signal(signal.SIGINT, stop)
     context = zmq.Context()
     socket = context.socket(zmq.SUB)
+    socket.setsockopt(zmq.RCVHWM, 1_000_000)
     socket.setsockopt(zmq.SUBSCRIBE, b"")
     socket.setsockopt(zmq.LINGER, 0)
     replay = context.socket(zmq.DEALER)
+    replay.setsockopt(zmq.RCVHWM, 1_000_000)
     replay.setsockopt(zmq.LINGER, 0)
     poller = zmq.Poller()
     poller.register(socket, zmq.POLLIN)
@@ -265,6 +283,8 @@ def collect(
                 if len(frames) != 3:
                     raise ValueError("KV event message must have topic, sequence, payload")
                 _record_batch(frames[1], frames[2], summary, output)
+                if summary.sequence_gaps:
+                    raise RuntimeError(f"KV live sequence gaps: {summary.sequence_gaps}")
             _drain_live_batches(socket, summary, output)
             _replay_tail(replay, summary, output)
     finally:
