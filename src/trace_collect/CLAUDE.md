@@ -1,15 +1,15 @@
-# trace_collect (`dev/cpu-only`)
+# trace_collect
 
-This branch is cloud-provider-only. Active subcommands:
+This module is cloud-provider-only. Active subcommands:
 
 - default: collect traces with a configured cloud/OpenAI-compatible provider
 - `simulate`: replay source traces under bounded concurrency using source timing
 - `gantt-serve` / `gantt-export`: viewer helpers for trace inspection
 
-Removed from this branch: local-HF recording, KV eviction, sparse attention,
+Removed from this module: local-HF recording, KV eviction, sparse attention,
 vLLM serving/metrics, local-model simulation, and GPU profiling. Do not add
 `--record-internals`, `--local-hf`, `--kv-*`, `--sparse-attn*`, `--metrics-url`,
-`--gpu-*`, `--vllm-*`, or `profile-gpu` back to this branch.
+`--gpu-*`, `--vllm-*`, or `profile-gpu` back to this module.
 
 ## Collect contract
 
