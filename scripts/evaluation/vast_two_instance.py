@@ -7,11 +7,10 @@ over an SSH tunnel, then pulls the host-side run directory into
 results/<name>/server/. Every result-affecting flag is passed explicitly and
 recorded in results/<name>/replay-command.json and the supervisor conf.
 
-Host and port come from .vast-host (scripts/setup/vast_host.sh use HOST PORT)
-unless given. Example (DualMap, mixed56):
-  .venv/bin/python scripts/evaluation/vast_two_instance.py --name dualmap-calibration-r1 --router-policy dualmap --calibrate
-  .venv/bin/python scripts/evaluation/vast_two_instance.py --name mixed56-vast-dualmap-r1 --router-policy dualmap \
-    --calibration-run dualmap-calibration-r1 --env DUALMAP_CPU_CACHE_GIB=48
+Example (DualMap, mixed56):
+  L=".venv/bin/python scripts/evaluation/vast_two_instance.py --host H --port P"
+  $L --name dualmap-calibration-r1 --router-policy dualmap --calibrate
+  $L --name mixed56-vast-dualmap-r1 --router-policy dualmap --calibration-run dualmap-calibration-r1 --env DUALMAP_CPU_CACHE_GIB=48
 """
 from __future__ import annotations
 
@@ -37,8 +36,8 @@ def utc() -> str:
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--host", help="default: the host remembered by scripts/setup/vast_host.sh use")
-    p.add_argument("--port", type=int)
+    p.add_argument("--host", required=True)
+    p.add_argument("--port", type=int, required=True)
     p.add_argument("--name", required=True, help="run name; becomes results/<name> here and on the host")
     p.add_argument("--router-policy", required=True, choices=["least-requests", "thunderagent", "dualmap", "pd", "ppd"])
     p.add_argument("--instance-policy", default="fcfs", choices=["fcfs", "continuum"])
@@ -55,12 +54,6 @@ def main() -> int:
     p.add_argument("--tunnel-port", type=int, default=19019)
     p.add_argument("--remote-repo", default="/workspace/agent-sched-bench")
     a = p.parse_args()
-    if not (a.host and a.port):
-        remembered = REPO / ".vast-host"
-        if not remembered.exists():
-            sys.exit("no --host/--port and no .vast-host; run scripts/setup/vast_host.sh use HOST PORT")
-        a.host, port = remembered.read_text().split()
-        a.port = int(port)
     if a.calibration_run:
         calib = json.loads((REPO / "results" / a.calibration_run / "server" / "prefill-calibration.json").read_text())
         a.env.append(f"DUALMAP_PREFILL_TPOT={calib['prefill_tpot']}")

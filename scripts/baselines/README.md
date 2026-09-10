@@ -74,25 +74,25 @@ container start, so everything on the host lives under `/workspace`:
 | `/workspace/manifests/<run>.yaml`, `/workspace/<run>-launch.log`, `/workspace/bootstrap.log` | per-run manifest copy, supervisor log, build log |
 | `/workspace/agent-sched-bench/results/<run>` | host-side run directory, pulled back into `results/<run>/server/` |
 
-New machine, three commands from this repo:
+New machine:
 
 ```bash
-scripts/setup/vast_host.sh use HOST PORT     # remember it in .vast-host (gitignored)
-scripts/setup/vast_host.sh bootstrap         # ship source, build and verify the host (~35 min fresh, idempotent)
-.venv/bin/python scripts/evaluation/vast_two_instance.py --name fcfs-smoke-r1 --router-policy least-requests --smoke
+H=root@HOST; P=PORT
+git archive HEAD src scripts configs tests pyproject.toml | ssh -p $P $H 'mkdir -p /workspace/agent-sched-bench && tar x -C /workspace/agent-sched-bench'
+scp -P $P uv.lock $H:/workspace/agent-sched-bench/          # gitignored here; the host launcher records it
+ssh -p $P $H 'cd /workspace/agent-sched-bench && nohup bash scripts/setup/benchmark_server.sh --serving-host > /workspace/setup.log 2>&1 &'
+ssh -p $P $H 'tail -f /workspace/setup.log'                   # ends with SETUP COMPLETE or SETUP FAILED; rerun skips done steps
 ```
 
-`bootstrap` follows the host log and stops at `BOOTSTRAP COMPLETE` or
-`BOOTSTRAP FAILED`; rerunning skips finished steps. `vast_host.sh status`,
-`verify`, `ship` and `ssh` cover the rest. After committing code the host
-executes, run `ship` again; the launcher stamps `SOURCE_BASE_REV` with the
-local HEAD and refuses nothing, so an unshipped host silently runs old code.
+`--serving-host --verify` re-runs only the checks. Re-ship the source after
+committing code the host executes; the launcher stamps `SOURCE_BASE_REV` with
+the local HEAD, so an unshipped host silently runs old code.
 
 Runs, all from this machine (`--smoke` and `--calibrate` are host-only;
 anything else replays mixed56):
 
 ```bash
-L=".venv/bin/python scripts/evaluation/vast_two_instance.py"
+L=".venv/bin/python scripts/evaluation/vast_two_instance.py --host HOST --port PORT"
 $L --name dualmap-calibration-r1 --router-policy dualmap --calibrate
 $L --name mixed56-vast-dualmap-r1 --router-policy dualmap --calibration-run dualmap-calibration-r1 --env DUALMAP_CPU_CACHE_GIB=48
 $L --name mixed56-vast-continuum-r1 --router-policy least-requests --instance-policy continuum --task-sticky

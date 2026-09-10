@@ -51,6 +51,3 @@ IDEA.md
 analysis/results/**/*.pt
 # replay traces for development workloads (mixed28 precedent: manifest only)
 analysis/development/*/traces/
-
-# remembered GPU host for scripts/setup/vast_host.sh
-.vast-host

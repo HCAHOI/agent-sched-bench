@@ -35,13 +35,10 @@ Repository layout that matters:
   engines, the cross-instance proxy, collectors. `INSTANCE_POLICY`
   (fcfs | continuum), `ROUTER_POLICY` (least-requests | thunderagent | dualmap
   | pd | ppd | profile), `TASK_STICKY`. It refuses unreviewed combinations.
-- `scripts/setup/vast_host.sh` is the host lifecycle from here: `use HOST PORT`
-  remembers the host in `.vast-host`, `bootstrap` ships the local HEAD and
-  builds/verifies the host (idempotent), `status`, `verify`, `ship`, `ssh`.
 - `scripts/evaluation/vast_two_instance.py` runs here and drives one run end
   to end: supervisor program on the host, proxy tunnel, mixed56 replay in
-  Docker task containers, result pull into `results/<run>/server/`. Host and
-  port come from `.vast-host`. `--smoke` and `--calibrate` are host-only;
+  Docker task containers, result pull into `results/<run>/server/`.
+  `--smoke` and `--calibrate` are host-only;
   DualMap runs take `--calibration-run NAME`. Extra host env: `--env K=V`.
   `scripts/baselines/README.md`, section "Two-instance GPU host", has the
   full command set.
@@ -65,7 +62,7 @@ GPU host, as of 2026-09-10:
   `DUALMAP_PREFILL_TPOT=5.543863341017641e-05` (old host: 5.44e-05). Pass that
   value with `--env` for DualMap runs on this host; recalibrate on a new one.
 - The host source is a snapshot of the local HEAD. After committing code the
-  host executes, run `scripts/setup/vast_host.sh ship` before launching.
+  host executes, re-ship it (README commands) before launching.
 - The PPD upstream exists only on the host, so `tests/test_ppd_*.py` fail
   locally on import; that is expected.
 
