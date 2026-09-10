@@ -13,7 +13,10 @@ multi-step coding agents. Read these first, in order, before doing anything:
 2. `millstone/MILESTONE-2-Multi-Instance.md`: the current state of the
    research on 2× L40S: what was tried, what won, what failed and why. Every
    number you need is there; treat it as the record.
-3. `millstone/MILESTONE-1-Single-Instance.md` §3 only, for metric definitions
+3. `millstone/MILESTONE-3-Frontiers.md`: the three open frontiers (DualMap
+   fairness, closed; load balance; PD/PPD), each with what is settled and
+   the single next run.
+4. `millstone/MILESTONE-1-Single-Instance.md` §3 only, for metric definitions
    (JCT, TTFT, TPOT, cached-prompt share, cohort windows). The rest of M1 is
    the closed single-GPU stage.
 

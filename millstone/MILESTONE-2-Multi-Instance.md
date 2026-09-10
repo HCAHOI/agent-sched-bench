@@ -283,12 +283,10 @@ Settled by this milestone:
 Open for the next stage:
 
 1. A DualMap-side mechanism must improve mean and tail JCT without lowering
-   cached share, TPOT or throughput. The candidate the evidence supports is
-   the seconds-based dispatch order of §6 with the carried credit capped at
-   the DualMap TTFT SLO (5 s) and repaid on every dispatch, so only a task's
-   most recent router wait carries forward
-   (`dualmap_official_proxy.py --wait-credit-cap-s`). Its reference is the
-   2026-09-10 DualMap repeat on the same host.
+   cached share, TPOT or throughput. The bounded, repaid credit (cap 5 s)
+   was run on 2026-09-10 and lost on every metric for the same reason
+   ThunderAgent starves large tasks; Milestone 3 §1 records the result and
+   closes this frontier.
 2. A PPD policy that routes on expected uncached prefill and D-side load,
    derived from the profiling matrix, validated on mixed56 against DualMap
    and Continuum on the same engine build.
