@@ -35,14 +35,16 @@ Repository layout that matters:
   engines, the cross-instance proxy, collectors. `INSTANCE_POLICY`
   (fcfs | continuum), `ROUTER_POLICY` (least-requests | thunderagent | dualmap
   | pd | ppd | profile), `TASK_STICKY`. It refuses unreviewed combinations.
+- `scripts/setup/vast_host.sh` is the host lifecycle from here: `use HOST PORT`
+  remembers the host in `.vast-host`, `bootstrap` ships the local HEAD and
+  builds/verifies the host (idempotent), `status`, `verify`, `ship`, `ssh`.
 - `scripts/evaluation/vast_two_instance.py` runs here and drives one run end
-  to end: writes the supervisor program on the host, tunnels the proxy,
-  replays mixed56 in Docker task containers, pulls the host run directory
-  into `results/<run>/server/`. `--smoke` and `--calibrate` are host-only.
-  Extra host env goes through `--env K=V`.
-- `scripts/setup/vast_two_instance_host.sh` builds a fresh host once.
+  to end: supervisor program on the host, proxy tunnel, mixed56 replay in
+  Docker task containers, result pull into `results/<run>/server/`. Host and
+  port come from `.vast-host`. `--smoke` and `--calibrate` are host-only;
+  DualMap runs take `--calibration-run NAME`. Extra host env: `--env K=V`.
   `scripts/baselines/README.md`, section "Two-instance GPU host", has the
-  exact commands including the `uv.lock` copy.
+  full command set.
 - `scripts/baselines/{thunderagent,dualmap,ppd}_official.sh` pin the public
   upstreams by commit; the ThunderAgent fix patches and four PPD patches sit
   beside them.
@@ -62,8 +64,8 @@ GPU host, as of 2026-09-10:
   (`results/dualmap-calibration-20260910-r1`), which measured
   `DUALMAP_PREFILL_TPOT=5.543863341017641e-05` (old host: 5.44e-05). Pass that
   value with `--env` for DualMap runs on this host; recalibrate on a new one.
-- The host snapshot is `git archive` of the local HEAD. After committing code
-  the host executes, ship it again before launching.
+- The host source is a snapshot of the local HEAD. After committing code the
+  host executes, run `scripts/setup/vast_host.sh ship` before launching.
 - The PPD upstream exists only on the host, so `tests/test_ppd_*.py` fail
   locally on import; that is expected.
 

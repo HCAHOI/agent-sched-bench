@@ -7,10 +7,11 @@ over an SSH tunnel, then pulls the host-side run directory into
 results/<name>/server/. Every result-affecting flag is passed explicitly and
 recorded in results/<name>/replay-command.json and the supervisor conf.
 
-Example (DualMap, mixed56):
-  .venv/bin/python scripts/evaluation/vast_two_instance.py --host H --port P \
-    --name mixed56-vast-dualmap-20260911-r1 --router-policy dualmap \
-    --env DUALMAP_PREFILL_TPOT=5.44e-05 --env DUALMAP_CPU_CACHE_GIB=48
+Host and port come from .vast-host (scripts/setup/vast_host.sh use HOST PORT)
+unless given. Example (DualMap, mixed56):
+  .venv/bin/python scripts/evaluation/vast_two_instance.py --name dualmap-calibration-r1 --router-policy dualmap --calibrate
+  .venv/bin/python scripts/evaluation/vast_two_instance.py --name mixed56-vast-dualmap-r1 --router-policy dualmap \
+    --calibration-run dualmap-calibration-r1 --env DUALMAP_CPU_CACHE_GIB=48
 """
 from __future__ import annotations
 
@@ -36,8 +37,8 @@ def utc() -> str:
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--host", required=True)
-    p.add_argument("--port", type=int, required=True)
+    p.add_argument("--host", help="default: the host remembered by scripts/setup/vast_host.sh use")
+    p.add_argument("--port", type=int)
     p.add_argument("--name", required=True, help="run name; becomes results/<name> here and on the host")
     p.add_argument("--router-policy", required=True, choices=["least-requests", "thunderagent", "dualmap", "pd", "ppd"])
     p.add_argument("--instance-policy", default="fcfs", choices=["fcfs", "continuum"])
@@ -46,18 +47,31 @@ def main() -> int:
     p.add_argument("--timeout-s", type=int, default=1800, help="SHADOW_LLM_TIMEOUT_S on both sides")
     p.add_argument("--manifest", default=str(REPO / "analysis/development/mixed56-2l40s-concurrency32-v1/manifest.yaml"))
     p.add_argument("--env", action="append", default=[], metavar="K=V", help="extra env for the host launcher (repeatable)")
+    p.add_argument("--calibration-run", metavar="NAME",
+                   help="dualmap: take DUALMAP_PREFILL_TPOT from results/NAME/server/prefill-calibration.json")
     p.add_argument("--smoke", action="store_true", help="host-side --smoke instead of a workload replay")
     p.add_argument("--calibrate", action="store_true", help="host-side --calibrate (dualmap prefill TPOT); no replay")
     p.add_argument("--replay-budget-s", type=int, default=9000, help="SIGINT the replay after this wall time")
     p.add_argument("--tunnel-port", type=int, default=19019)
     p.add_argument("--remote-repo", default="/workspace/agent-sched-bench")
     a = p.parse_args()
+    if not (a.host and a.port):
+        remembered = REPO / ".vast-host"
+        if not remembered.exists():
+            sys.exit("no --host/--port and no .vast-host; run scripts/setup/vast_host.sh use HOST PORT")
+        a.host, port = remembered.read_text().split()
+        a.port = int(port)
+    if a.calibration_run:
+        calib = json.loads((REPO / "results" / a.calibration_run / "server" / "prefill-calibration.json").read_text())
+        a.env.append(f"DUALMAP_PREFILL_TPOT={calib['prefill_tpot']}")
+    if a.router_policy == "dualmap" and not a.calibrate and not any(e.startswith("DUALMAP_PREFILL_TPOT=") for e in a.env):
+        sys.exit("dualmap needs --calibration-run NAME (from a --calibrate run on this host) or --env DUALMAP_PREFILL_TPOT=...")
 
     run = REPO / "results" / a.name
     remote_run = f"{a.remote_repo}/results/{a.name}"
     if run.exists():
         sys.exit(f"{run} exists")
-    ssh = ["ssh", "-p", str(a.port), "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+    ssh = ["ssh", "-p", str(a.port), "-o", "BatchMode=yes", "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=15",
            "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2", f"root@{a.host}"]
 
     def remote(cmd: str, **kw) -> subprocess.CompletedProcess:
@@ -92,6 +106,8 @@ def main() -> int:
             "autostart=false\nautorestart=false\nstopasgroup=true\nkillasgroup=true\n"
             f"stdout_logfile=/workspace/{a.name}-launch.log\nredirect_stderr=true\nstdout_logfile_maxbytes=0\n")
     (run / "launch.conf").write_text(conf)
+    if a.calibration_run:
+        (run / "calibration-source.txt").write_text(a.calibration_run + "\n")
     subprocess.run(["scp", "-q", "-P", str(a.port), a.manifest, f"root@{a.host}:/workspace/manifests/{a.name}.yaml"],
                    check=True) if remote("mkdir -p /workspace/manifests").returncode == 0 else sys.exit("mkdir failed")
     subprocess.run(["scp", "-q", "-P", str(a.port), str(run / "launch.conf"),

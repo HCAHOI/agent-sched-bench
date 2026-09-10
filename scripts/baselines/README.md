@@ -67,30 +67,36 @@ container start, so everything on the host lives under `/workspace`:
 
 | Path on host | Content |
 |---|---|
-| `/workspace/agent-sched-bench` | repo snapshot (`git archive HEAD`) |
-| `/workspace/.cache/agent-sched-bench/` | upstream checkouts and their venvs, via `XDG_CACHE_HOME=/workspace/.cache` |
+| `/workspace/agent-sched-bench` | repo snapshot of the local HEAD plus `uv.lock`; `SOURCE_REV` names the commit |
+| `/workspace/.cache/agent-sched-bench/` | upstream checkouts and venvs (`XDG_CACHE_HOME=/workspace/.cache`) |
 | `/workspace/.hf_home` | model cache (`HF_HOME`) |
-| `/workspace/manifests/<run>.yaml`, `/workspace/<run>-launch.log` | per-run manifest copy and supervisor log |
+| `/workspace/ThunderAgent-{pending-release,capacity-consistent}-7ddc861`, `/workspace/venvs/` | patched ThunderAgent variants and their venvs |
+| `/workspace/manifests/<run>.yaml`, `/workspace/<run>-launch.log`, `/workspace/bootstrap.log` | per-run manifest copy, supervisor log, build log |
 | `/workspace/agent-sched-bench/results/<run>` | host-side run directory, pulled back into `results/<run>/server/` |
 
-Build a fresh host once:
+New machine, three commands from this repo:
 
 ```bash
-git archive HEAD | ssh -p $PORT root@$HOST 'mkdir -p /workspace/agent-sched-bench && tar x -C /workspace/agent-sched-bench'
-scp -P $PORT uv.lock root@$HOST:/workspace/agent-sched-bench/   # gitignored here, but the host launcher records it
-ssh -p $PORT root@$HOST 'cd /workspace/agent-sched-bench && nohup bash scripts/setup/vast_two_instance_host.sh > /workspace/bootstrap.log 2>&1 &'
+scripts/setup/vast_host.sh use HOST PORT     # remember it in .vast-host (gitignored)
+scripts/setup/vast_host.sh bootstrap         # ship source, build and verify the host (~35 min fresh, idempotent)
+.venv/bin/python scripts/evaluation/vast_two_instance.py --name fcfs-smoke-r1 --router-policy least-requests --smoke
 ```
 
-Then launch runs from here with `scripts/evaluation/vast_two_instance.py`
-(`--smoke` and `--calibrate` are host-only; anything else replays mixed56):
+`bootstrap` follows the host log and stops at `BOOTSTRAP COMPLETE` or
+`BOOTSTRAP FAILED`; rerunning skips finished steps. `vast_host.sh status`,
+`verify`, `ship` and `ssh` cover the rest. After committing code the host
+executes, run `ship` again; the launcher stamps `SOURCE_BASE_REV` with the
+local HEAD and refuses nothing, so an unshipped host silently runs old code.
+
+Runs, all from this machine (`--smoke` and `--calibrate` are host-only;
+anything else replays mixed56):
 
 ```bash
-.venv/bin/python scripts/evaluation/vast_two_instance.py --host $HOST --port $PORT \
-  --name mixed56-vast-dualmap-$(date +%Y%m%d)-r1 --router-policy dualmap \
-  --env DUALMAP_PREFILL_TPOT=<from a --calibrate run> --env DUALMAP_CPU_CACHE_GIB=48
+L=".venv/bin/python scripts/evaluation/vast_two_instance.py"
+$L --name dualmap-calibration-r1 --router-policy dualmap --calibrate
+$L --name mixed56-vast-dualmap-r1 --router-policy dualmap --calibration-run dualmap-calibration-r1 --env DUALMAP_CPU_CACHE_GIB=48
+$L --name mixed56-vast-continuum-r1 --router-policy least-requests --instance-policy continuum --task-sticky
 ```
 
 Every run records its supervisor conf, the exact replay argv and environment,
-start and end times, and exit codes under `results/<run>/`. Refresh the host
-snapshot after committing code the host executes (`git archive` again; the
-launcher stamps `SOURCE_BASE_REV` with the local HEAD).
+calibration source, start and end times, and exit codes under `results/<run>/`.
