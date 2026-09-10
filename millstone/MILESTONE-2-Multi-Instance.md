@@ -277,19 +277,19 @@ Open for the next stage:
 
 ## 10. Evidence and code
 
-Result directories live in the two worktrees next to this repository.
+Result directories live under `results/` in this repository; provenance branches `codex/thunderagent-fairness` and `codex/multi-instance-fcfs` are archived on GitHub.
 
 - Four-way comparison and DualMap modification:
-  `../../agent-sched-bench-thunderagent-fairness/results/mixed56-vast-dualmap-agent-progress-20260909-r1/` (`comparison.json`, `protocol.json`)
+  `../results/mixed56-vast-dualmap-agent-progress-20260909-r1/` (`comparison.json`, `protocol.json`)
 - ThunderAgent 60 s, fix 1, fix 2:
-  `../../agent-sched-bench-thunderagent-fairness/results/mixed56-vast-thunderagent-wait60-{,pending-release-,capacity-consistent-}20260909-r1/`
-- Original ThunderAgent: `../../agent-sched-bench-multi-instance/results/mixed56-2l40s-thunderagent-20260906-r2.tar.gz`
+  `../results/mixed56-vast-thunderagent-wait60-{,pending-release-,capacity-consistent-}20260909-r1/`
+- Original ThunderAgent: `../results/mixed56-2l40s-thunderagent-20260906-r2.tar.gz`
 - FCFS / Continuum / DualMap GPU timelines:
-  `../../agent-sched-bench-multi-instance/results/mixed56-vast-{fcfs-sticky,continuum,dualmap}-gpu-timeline-20260909-r1/gpu-balance-summary.json`
-- mixed28 two-instance stage: `../../agent-sched-bench-multi-instance/results/mixed28-2l40s-*-20260906-r*/`
-- Fixed PD and PPD: `../../agent-sched-bench-multi-instance/results/mixed56-vast-pd-pcie-20260907-r3/`, `mixed56-vast-ppd-pcie-20260907-r1/`
-- Profiling matrix: `../../agent-sched-bench-multi-instance/results/serving-length-profile-vast-20260908-complete/` (`README.md`, `paired.csv`, `requests.csv`, `summary.json`)
-- Code, branch `codex/thunderagent-fairness` commit `790b00c` and branch `codex/multi-instance-fcfs` commits `0ac2f04`, `dc7eee7`:
+  `../results/mixed56-vast-{fcfs-sticky,continuum,dualmap}-gpu-timeline-20260909-r1/gpu-balance-summary.json`
+- mixed28 two-instance stage: `../results/mixed28-2l40s-*-20260906-r*/`
+- Fixed PD and PPD: `../results/mixed56-vast-pd-pcie-20260907-r3/`, `mixed56-vast-ppd-pcie-20260907-r1/`
+- Profiling matrix: `../results/serving-length-profile-vast-20260908-complete/` (`README.md`, `paired.csv`, `requests.csv`, `summary.json`)
+- Code, ported onto the main lineage in commit `f62a7ab` (originally `790b00c`, `0ac2f04`, `dc7eee7` on the archived branches):
   `scripts/baselines/thunderagent_official_launcher.py` with `thunderagent_pending_release.patch` and `thunderagent_capacity_consistent.patch`;
   `scripts/baselines/dualmap_official_proxy.py` (`--agent-progress`);
   `scripts/baselines/ppd_official_proxy.py`, `ppd_policy.py` and the four PPD patches;
