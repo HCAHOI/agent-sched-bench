@@ -1,0 +1,67 @@
+--- a/v1/metrics/stats.py
++++ b/v1/metrics/stats.py
+@@ -9,6 +9,7 @@
+ import vllm.envs as envs
+ from vllm.compilation.cuda_graph import CUDAGraphStat
+ from vllm.v1.spec_decode.metrics import SpecDecodingStats
++from scripts.baselines.continuum_reproduction import PreemptionTracker, write_request_telemetry
+ 
+ if TYPE_CHECKING:
+     from vllm.v1.engine import EngineCoreEvent, EngineCoreOutput, FinishReason
+@@ -204,6 +205,7 @@
+ 
+     # first token latency
+     first_token_latency: float = 0.0
++    preemption: PreemptionTracker = field(default_factory=PreemptionTracker)
+ 
+     # Track if this request is corrupted (NaNs in logits)
+     is_corrupted: bool = False
+@@ -318,15 +320,18 @@
+                 req_stats.queued_ts = event.timestamp
+                 lora_states.request_waiting(req_id, lora_name)
+             elif event.type == EngineCoreEventType.SCHEDULED:
++                req_stats.preemption.scheduled(event.timestamp)
+                 if req_stats.scheduled_ts == 0.0:  # ignore preemptions
+                     req_stats.scheduled_ts = event.timestamp
+                 lora_states.request_running(req_id, lora_name)
+             elif event.type == EngineCoreEventType.PREEMPTED:
++                req_stats.preemption.preempted(event.timestamp)
+                 self.num_preempted_reqs += 1
+                 lora_states.request_waiting(req_id, lora_name)
+ 
+     def update_from_finished_request(
+         self,
++        request_id: str,
+         finish_reason: "FinishReason",
+         num_prompt_tokens: int,
+         max_tokens_param: int | None,
+@@ -372,6 +377,19 @@
+             num_cached_tokens=num_cached_tokens,
+         )
+         self.finished_requests.append(finished_req)
++        write_request_telemetry(
++            request_id=request_id,
++            finish_reason=str(finish_reason),
++            prompt_tokens=num_prompt_tokens,
++            generation_tokens=req_stats.num_generation_tokens,
++            ttft_s=req_stats.first_token_latency,
++            queue_s=queued_time,
++            prefill_s=prefill_time,
++            decode_s=decode_time,
++            inference_s=inference_time,
++            e2e_s=e2e_latency,
++            preemption=req_stats.preemption,
++        )
+ 
+         # Count corrupted requests when they finish (only once per request)
+         if req_stats.is_corrupted:
+--- a/v1/engine/output_processor.py
++++ b/v1/engine/output_processor.py
+@@ -644,6 +644,7 @@
+         assert finish_reason is not None
+         assert req_state.stats is not None
+         iteration_stats.update_from_finished_request(
++            request_id=req_state.request_id,
+             finish_reason=finish_reason,
+             num_prompt_tokens=length_from_prompt_token_ids_or_embeds(
+                 req_state.prompt_token_ids, req_state.prompt_embeds

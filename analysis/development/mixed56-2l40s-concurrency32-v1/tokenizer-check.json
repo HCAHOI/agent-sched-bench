@@ -1,0 +1,9 @@
+{
+  "first_copy_token_difference": 9,
+  "cache_block_size": 16,
+  "first_request_prompt_tokens": [
+    872,
+    872
+  ],
+  "model_revision": "8591804019c8b22094c3b5b4454e0edc05dffc98"
+}
