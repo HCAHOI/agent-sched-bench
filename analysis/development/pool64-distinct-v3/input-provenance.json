@@ -1,0 +1,58 @@
+{
+ "pool_dirs": [
+  "traces/exports/swe-rebench-original-flat-644-20260904",
+  "traces/exports/terminal-bench-original-flat-239-20260904"
+ ],
+ "pool_size": 588,
+ "n": 64,
+ "seed": 42,
+ "max_peak_tokens": 60000,
+ "excluded_by_peak": 65,
+ "exclude_parallel_tool_calls": true,
+ "excluded_by_parallel_tool_calls": 211,
+ "selection": "proportional stratified over (corpus, agent model, peak-context bucket), largest-remainder quotas, seeded sample within stratum; traces referenced in place, no replay copies",
+ "strata": {
+  "swe-rebench | gpt-5.6-sol | 16-32K": 13,
+  "swe-rebench | gpt-5.6-sol | 32-64K": 11,
+  "swe-rebench | qwen3.7-max | 16-32K": 7,
+  "swe-rebench | qwen3.7-max | 32-64K": 6,
+  "swe-rebench | qwen3.7-max | <16K": 1,
+  "terminal-bench | gpt-5.6-sol | 16-32K": 5,
+  "terminal-bench | gpt-5.6-sol | 32-64K": 2,
+  "terminal-bench | gpt-5.6-sol | <16K": 19
+ },
+ "concurrency": 32,
+ "selected_summary": {
+  "steps_total": 1928,
+  "mean_prompt_tokens_per_step": 19500,
+  "mean_peak_prompt_tokens": 25203,
+  "peak_p50": 25757.5,
+  "steps_p50": 29.0,
+  "tool_s_p50": 70.94999999999999,
+  "corpus": {
+   "swe-rebench": 38,
+   "terminal-bench": 26
+  },
+  "model": {
+   "gpt-5.6-sol": 50,
+   "qwen3.7-max": 14
+  }
+ },
+ "pressure": {
+  "n2-full": {
+   "kv_tokens": 1249760,
+   "R_avg": 0.499,
+   "R_peak": 0.645
+  },
+  "equal-524k": {
+   "kv_tokens": 524288,
+   "R_avg": 1.19,
+   "R_peak": 1.538
+  },
+  "l40s-pair": {
+   "kv_tokens": 550016,
+   "R_avg": 1.134,
+   "R_peak": 1.466
+  }
+ }
+}

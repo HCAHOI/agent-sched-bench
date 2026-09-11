@@ -37,6 +37,7 @@ def bucket(peak: int) -> str:
 def trace_stats(path: Path) -> dict:
     n_llm = n_tool = peak = prompt_sum = completion_sum = 0
     llm_s = tool_s = 0.0
+    tools_per_iteration: dict = {}
     t0 = t1 = None
     metadata_id = None
     with path.open() as fh:
@@ -61,7 +62,9 @@ def trace_stats(path: Path) -> dict:
             elif r["action_type"] == "tool_exec":
                 n_tool += 1
                 tool_s += r["ts_end"] - r["ts_start"]
+                tools_per_iteration[r.get("iteration")] = tools_per_iteration.get(r.get("iteration"), 0) + 1
     return {"metadata_instance_id": metadata_id, "n_llm": n_llm, "n_tool": n_tool, "peak_prompt_tokens": peak,
+            "parallel_tool_steps": sum(1 for c in tools_per_iteration.values() if c > 1),
             "sum_prompt_tokens": prompt_sum, "sum_completion_tokens": completion_sum,
             "llm_s": round(llm_s, 1), "tool_s": round(tool_s, 1), "wall_s": round((t1 or 0) - (t0 or 0), 1)}
 
@@ -106,13 +109,15 @@ def main() -> None:
     p.add_argument("--docker-image", default="python:3.13-slim-bookworm")
     p.add_argument("--pool-stats", type=Path, help="reuse a pool-stats.csv from an earlier build instead of rescanning the traces")
     p.add_argument("--max-peak-tokens", type=int, help="exclude traces whose peak prompt exceeds this (engine context limit minus generation headroom)")
+    p.add_argument("--exclude-parallel-tool-calls", action="store_true",
+                   help="exclude traces with a step that runs more than one tool (the Continuum shadow provider refuses parallel tool calls)")
     a = p.parse_args()
 
     if a.pool_stats:
         pool = []
         for r in csv.DictReader(a.pool_stats.open()):
             r.pop("selected", None)
-            for k in ("n_llm", "n_tool", "peak_prompt_tokens", "sum_prompt_tokens", "sum_completion_tokens"):
+            for k in ("n_llm", "n_tool", "peak_prompt_tokens", "sum_prompt_tokens", "sum_completion_tokens", "parallel_tool_steps"):
                 r[k] = int(r[k])
             for k in ("llm_s", "tool_s", "wall_s"):
                 r[k] = float(r[k])
@@ -135,6 +140,10 @@ def main() -> None:
     if a.max_peak_tokens:
         excluded = sum(1 for r in pool if r["peak_prompt_tokens"] > a.max_peak_tokens)
         pool = [r for r in pool if r["peak_prompt_tokens"] <= a.max_peak_tokens]
+    excluded_parallel = 0
+    if a.exclude_parallel_tool_calls:
+        excluded_parallel = sum(1 for r in pool if r["parallel_tool_steps"] > 0)
+        pool = [r for r in pool if r["parallel_tool_steps"] == 0]
     alloc = allocate(pool, a.n)
     rng = random.Random(a.seed)
     chosen, used = [], set()
@@ -177,6 +186,7 @@ def main() -> None:
         strata[f"{r['corpus']} | {r['model']} | {r['bucket']}"] += 1
     prov = {"pool_dirs": [str(d) for d in a.pool], "pool_size": len(pool), "n": a.n, "seed": a.seed,
             "max_peak_tokens": a.max_peak_tokens, "excluded_by_peak": excluded,
+            "exclude_parallel_tool_calls": a.exclude_parallel_tool_calls, "excluded_by_parallel_tool_calls": excluded_parallel,
             "selection": "proportional stratified over (corpus, agent model, peak-context bucket), largest-remainder "
                          "quotas, seeded sample within stratum; traces referenced in place, no replay copies",
             "strata": dict(sorted(strata.items())), "concurrency": a.concurrency,

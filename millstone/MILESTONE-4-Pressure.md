@@ -151,30 +151,46 @@ of one GPU run under MPS with a fixed 100/k percent SM share each; per-
 instance KV is set exactly with `--kv-cache-memory-bytes` and read back from
 the engine log.
 
+*Second amendment before launch (15:40 UTC).* The first run on
+pool64-distinct-v2 aborted within eight minutes: the Continuum shadow
+provider refuses steps that issue more than one tool call, and 217 of the
+359 qwen-agent traces contain such steps (no gpt-agent trace does). The
+workload is rebuilt as `pool64-distinct-v3` with those traces excluded (588
+pool traces remain after both filters): 38 swe-rebench + 26 terminal-bench,
+50 gpt-agent and 14 qwen-agent traces, 1,928 steps, mean prompt 19,500 tokens
+per step, max peak 55.6K; R_avg 0.50 on the full pair and 1.19 at 524,288
+tokens. Parallel tool calls are a real agent behaviour that this harness
+cannot yet replay under Continuum-style step signalling; the exclusion is a
+harness limitation, recorded here, not a workload choice. Capacities and
+decision rule are unchanged. Two earlier harness defects were also fixed on
+the way (commits d1b122f, 61f1769 and follow-up): qwen-agent traces record
+executor tool-call ids that differ from the model's ids, and the replay now
+aliases them; mixed56 was never affected.
+
 *Amendment before launch.* The first configuration (N=8 at 50K tokens per
 instance, 400K total) is physically ill-posed: vLLM refuses a KV cache that
 cannot hold one maximum-length request, and a replica that small could not
 serve a 90K-token context in any deployment either. The k=4 smoke failed on
 exactly that check. Revised design: the workload's peak context is bounded
-at 60K (`pool64-distinct-v2`: same sampler and seed on the 799 pool traces
-with peak ≤ 60K; 45 swe-rebench + 19 terminal-bench, 1,998 steps, mean
-prompt 18,024 tokens per step, max peak 55,550), the engine context limit is
+at 60K (`pool64-distinct-v2`, superseded by v3 above: same sampler and seed
+on the pool traces with peak ≤ 60K), the engine context limit is
 65,536 tokens, and every capped instance holds the same total of 524,288
 tokens split evenly, so N=8 has exactly one full context per instance:
 
 | Configuration | Per instance | Total KV tokens | R_avg | R_peak | Policies |
 |---|---:|---:|---:|---:|---|
-| N=2 full | 624,880 | 1,249,760 | 0.46 | 0.66 | FCFS sticky, DualMap |
-| N=2 capped | 262,144 | 524,288 | 1.10 | 1.58 | FCFS sticky, DualMap |
-| N=8 capped (k=4) | 65,536 | 524,288 | 1.10 | 1.58 | FCFS sticky, DualMap |
-| N=4 capped (k=2) | 131,072 | 524,288 | 1.10 | 1.58 | FCFS sticky, DualMap (last, optional) |
+| N=2 full | 624,880 | 1,249,760 | 0.50 | 0.65 | FCFS sticky, DualMap |
+| N=2 capped | 262,144 | 524,288 | 1.19 | 1.54 | FCFS sticky, DualMap |
+| N=8 capped (k=4) | 65,536 | 524,288 | 1.19 | 1.54 | FCFS sticky, DualMap |
+| N=4 capped (k=2) | 131,072 | 524,288 | 1.19 | 1.54 | FCFS sticky, DualMap (last, optional) |
 
 The capped rows sit at the L40S pair's pressure for this workload (550K
-tokens, R_avg 1.05), so N is the only thing that varies across them; N=2
+tokens, R_avg 1.13), so N is the only thing that varies across them; N=2
 full is the low-pressure reference. DualMap is calibrated separately at k=2
 and k=4 (its prefill constant changes under the SM share) and its CPU tier
 stays 96 GB in total (48, 24, 12 GiB per instance). Eight runs on
-pool64-distinct-v2 at concurrency 32, about 45 min each.
+pool64-distinct-v3 at concurrency 32, about 45 min each. Calibrations:
+31.3 µs per token at k=1, 48.9 at k=2, 89.5 at k=4.
 
 Measured (`scripts/evaluation/instance_balance_summary.py`, originals only):
 per-instance in-flight load and prompt tokens per 5-minute window, max-over-
