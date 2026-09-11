@@ -13,9 +13,10 @@ multi-step coding agents. Read these first, in order, before doing anything:
 2. `millstone/MILESTONE-2-Multi-Instance.md`: the current state of the
    research on 2× L40S: what was tried, what won, what failed and why. Every
    number you need is there; treat it as the record.
-3. `millstone/MILESTONE-3-Frontiers.md`: the three open frontiers (DualMap
-   fairness, closed; load balance; PD/PPD), each with what is settled and
-   the single next run.
+3. `millstone/MILESTONE-3-Frontiers.md`: the three frontiers opened after
+   Milestone 2 (DualMap fairness, cross-instance load balance, PD/PPD
+   routing), all three closed on 2026-09-11 with the runs and mechanisms
+   that closed them. Read its §0 before comparing anything to a baseline.
 4. `millstone/MILESTONE-1-Single-Instance.md` §3 only, for metric definitions
    (JCT, TTFT, TPOT, cached-prompt share, cohort windows). The rest of M1 is
    the closed single-GPU stage.
@@ -70,9 +71,21 @@ GPU host, as of 2026-09-10:
   the host also has pytest, so `tests/test_dualmap_official_proxy.py` runs
   there with `PYTHONPATH=<DualMap checkout>:/workspace/agent-sched-bench`.
 - The host source is a snapshot of the local HEAD. After committing code the
-  host executes, re-ship it (README commands) before launching.
+  host executes, re-ship it (README commands) before launching, and never
+  while a launcher is executing there (the workers import from disk).
+- PD-family runs (`ROUTER_POLICY=pd|ppd|profile`) need the CUDA 12.9 venv:
+  pass `--env PPD_CUDA=cu129 --env PPD_VENV=/workspace/venvs/ppd-cu129
+  --env PPD_NATIVE_PUSH=1`. The default cu130 wheel needs driver ≥580; this
+  host has 570. The launcher now defaults the UCX transport to `all/all`
+  (GPU-direct over PCIe, about 14 GB/s per transfer); the earlier
+  TCP-over-loopback default stalled KV pushes after two transfers.
 - The PPD upstream exists only on the host, so `tests/test_ppd_*.py` fail
   locally on import; that is expected.
+- Commit 2ebe6f4 made replays survive a replacement-task failure (recorded
+  in `throughput_summary.json` as `replacement_failures`) and gave the
+  least-requests proxy one retry on a dropped engine connection. Runs before
+  it that hit this defect: the Poisson Continuum run (aborted) and the
+  two-sided PPD run (all originals finished; summary reconstructed, see M3 §3).
 
 Caveats you must not lose:
 
@@ -85,7 +98,8 @@ Caveats you must not lose:
 - `scripts/evaluation/compare_two_instance_runs.py --candidate results/X
   --reference results/Y [--reference ...] --out results/X/comparison.json`
   produces the checklist below from run directories; it reproduces the
-  2026-09-09 `comparison.json` values.
+  2026-09-09 `comparison.json` values. `gpu_balance_summary.py` adds the
+  per-GPU busy/idle split for load-balance questions.
 
 Whenever a run is compared to a baseline, check and report all of these,
 whichever direction each moved:

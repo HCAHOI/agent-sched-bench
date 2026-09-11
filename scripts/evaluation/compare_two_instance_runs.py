@@ -62,6 +62,8 @@ def load_run(run: Path) -> Run:
                     if row.get("event") != "llm_call_end":
                         continue
                     d = row["data"]
+                    if d.get("finish_reason") == "error":  # call never served (timeout, dropped connection): no usage
+                        continue
                     sg = d["shadow_generation"]  # API usage as served: prompt, cached prompt, request id
                     calls.append(Call(task_dir.name, original, row["ts"], sg["prompt_tokens"], d["completion_tokens"],
                                       sg["cached_prompt_tokens"] or 0, sg["request_id"]))  # null = engine reported none

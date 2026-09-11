@@ -221,6 +221,11 @@ for a dropped engine connection.
 
 ## 3. Frontier C — PD/PPD routing
 
+**Closed 2026-09-11.** Fixed PD, public PPD (always-local), and the
+two-sided expected-cost router (result below) all lose to DualMap by 2.2×
+or more in mean JCT on mixed56 at 2 GPUs; the two-sided run shows why a
+per-request cost rule cannot fix it.
+
 **Settled.** Fixed PD is prefill-bound (mean JCT 71.5 min); public PPD
 routes 2,414 of 2,470 requests to local prefill on the decode worker
 (109.2 min). With predicted output 128 every appended input of 512 tokens
@@ -344,13 +349,65 @@ span within 30% of 0.184 ms × uncached tokens) and are unchanged. Commit
    uncached on D; PD = P queue + 0.295 ms × uncached on P + 0.0102 ms ×
    prompt tokens + 0.4 s handoff; queue = that side's pending prefill tokens
    at its per-token cost (amended, see above). No length threshold, no lookup table.
-   Constants are pre-declared from the matrix; any change from step 1 is
-   recorded as an amendment before the run. One mixed56 run on the 0.28.0
-   build after a smoke, compared with the existing fixed-PD and all-local
-   runs as endpoints and with the DualMap repeat for the frontier verdict.
-   If it cannot beat fixed PD on JCT, prefill/decode disaggregation is closed
-   for this workload at 2 GPUs. If step 1 predicts a win only at moderate
-   density, the same rule runs on the Poisson manifest next.
+   Pre-declared criterion: if it cannot beat fixed PD on JCT,
+   prefill/decode disaggregation is closed for this workload at 2 GPUs.
+
+**Two-sided result (`results/mixed56-vast-ppd-two-sided-20260911-r1`,
+2026-09-11 04:17–07:00 UTC, one run, smoke passed first). Verdict: does not
+beat fixed PD; Frontier C is closed.**
+
+| Metric | Two-sided | Fixed PD (09-07 r3) | DualMap (09-10 r1) |
+|---|---:|---:|---:|
+| Completion | 56/56, 2,470 | 56/56, 2,470 | 56/56, 2,470 |
+| Mean JCT, min | 75.0 | 71.5 | 33.2 |
+| P95 JCT, min | 154.5 | 143.5 | 70.6 |
+| Max JCT / makespan, min | 163.0 / 163.0 | 177.1 / 177.8 | 75.3 / 76.0 |
+| Engine TPOT, ms, token-weighted | 96.9 | 42.0 | 87.5 |
+| Steps/min, common window | 17.2 (163 min) | 22.9 | 48.1 (75 min; two-sided 27.5) |
+| Paired mean JCT vs fixed PD | +212 s, 95% [+56, +382] | — | — |
+
+Routing: 82 first turns to D; of 2,736 later turns 973 (36%) went local
+and 1,763 via P. Time to first token by path, later turns: local 40.3 s
+mean (P95 67 s), PD 74.0 s (P95 140 s); the fixed-PD run's 71.5 s (P95
+113 s). The cached-prompt share (0.60 versus 1.00) is not comparable in PD
+mode because transferred KV counts as cached on D.
+
+Mechanism (observation, then inference). The estimator minimized the time
+to first token of the request in hand and achieved it for the local
+requests, but a local prefill on D is charged nothing for what it does to
+D. Measured over the run: D's waiting queue held 13–15 requests throughout
+(fixed PD: 0), D's KV usage averaged 75–85% (fixed PD: about 30%), 12.4M
+uncached tokens were prefilled on D, and decode TPOT doubled (97 ms versus
+42 ms), which the controlled-load profiling had predicted (93–163 ms under
+local prefill). Total prefill work is the binding resource at this
+concurrency; moving a third of it from P to D relieved P and saturated D,
+and the completion curves of the two runs are identical through minute 106
+(46 of 56 done in both). Between minutes 106 and 134 D fell into a
+preemption livelock: eight running sequences with about 90K-token contexts
+exceed the 274K-token KV cache, vLLM preempted and recomputed continuously
+(38,250 preemptions in 27 minutes, generation 17–25 tokens/s against about
+100), 26 requests took about 1,680 s each, one hit the proxy's 1,800 s
+timeout; one original task and 25 replacement requests were affected. The
+fixed-PD run recorded zero preemptions on D. The router's decision at that
+moment (D at 97% KV, 17 waiting) was PD, so the livelock was built by the
+earlier local decisions, not by a wrong call at the point of failure.
+Inference: a routing rule that prices only the requesting turn's latency
+cannot be safe on the decode side; it needs D's decode TPOT and KV headroom
+in the cost, or admission control on D. Neither addresses the 2.3× gap to
+DualMap, whose advantage is 76% cache residency with both GPUs decoding,
+so the frontier is closed rather than iterated. The Poisson-manifest run
+(step 7 of the chain) is not run: the load profiling predicted PD wins
+whenever the history is not resident, not only at moderate density, and
+the failure here is structural.
+
+Run-record note. The timed-out replacement call surfaced the simulator
+defect fixed in commit 2ebe6f4 (a replacement-task failure raised after all
+56 originals had finished, and no throughput summary was written).
+`output/throughput_summary.json` for this run is reconstructed from the
+trace timestamps (first replay action minus 6.1 s as arrival zero; task
+terminal as `task_complete` plus 2.8 s; anchors from the three reference
+runs, per-task uncertainty about ±2 s) and says so in a `reconstruction`
+block; the checklist output is `comparison-reconstructed.{json,txt}`.
 
 ## 4. Evidence
 
@@ -361,6 +418,10 @@ span within 30% of 0.184 ms × uncached tokens) and are unchanged. Commit
   `../results/mixed56-vast-pd-pcie-20260907-r3/`, `../results/mixed56-vast-ppd-pcie-20260907-r1/`
 - Poisson-arrival runs: `../results/mixed56p60-vast-*-2026091{0,1}-r1/`
   (`comparison.json`, `gpu-balance-summary.json`); controlled-load profiling
-  `../results/ppd-load-profile-20260910-r1/`; two-sided PPD
+  `../results/ppd-load-profile-20260911-r3/` (`load-profile-summary.txt`;
+  r1 failed at engine start, r2 stalled on the TCP transport); two-sided PPD
   `../results/mixed56-vast-ppd-two-sided-20260911-r1/`
-- Chain script and log: `../results/night-chain-20260910.{sh,log}`
+  (`comparison-reconstructed.json`, `server/routing.jsonl` with both
+  snapshots per decision)
+- Chain scripts and shared log: `../results/night-chain-20260910.{sh,log}`,
+  `../results/night-chain{2,3,4}-20260911.sh`
