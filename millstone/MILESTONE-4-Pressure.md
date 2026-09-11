@@ -222,14 +222,30 @@ over-capacity regime. Absolute N=8 latencies are not comparable to N=2
 (shared memory bandwidth under MPS); the test is about routing behaviour.
 Hardware stays at two GPUs through this step.
 
-**Step 3 — the study step 2 selects.** If multi-instance stays: the
-pressure grid at N=8, R_avg ∈ {0.8, 1.5, 2.5} by concurrency from the same
-pool, with FCFS sticky, least-requests and DualMap; the four-GPU question
-(N=4 independent as a cross-check) is decided then. If dropped:
-single-instance work on the pool, one run per GPU in parallel, the same R
-grid on one instance, FCFS against the single-instance mechanisms
-Milestone 1 left open (prefill priority, tool-gap-aware KV retention),
-judged on mean JCT at each R.
+*N=2 capped result (read 17:45 UTC, before N=8).* FCFS sticky under the
+cap: mean JCT 12.88 vs 8.80 min at full (+245 s paired, 95% [+207, +288]),
+cached share 0.56 vs 0.96, per-request prefill 0.55 vs 0.08 s, in-engine
+queue 5.8 vs 3.3 s, decode 7.9 vs 5.8 s: KV thrash. DualMap under the cap:
+9.40 min, cached 0.94, queue 0.7 s, prefill 0.12 s, versus 9.11 min at full.
+Its cost is a proxy-side hold of 2.7 s per request that is the same at full
+and capped (a fixed throttle), which is why it is 19 s per task slower than
+FCFS at full while 209 s faster under the cap. The LMCache CPU tier supplied
+about 4% of prompt tokens (1.6M of 37M lookups, 240 retrieves of 39 ms);
+the recovery is admission, not the DRAM tier.
+
+*N=4 pair dropped (17:52 UTC).* Optional in the table above, no result read;
+the decision rule reads N=8 only. Rerun only if N=8 is anomalous.
+
+**Step 3 — pressure grid (pre-registered 17:56 UTC, before any grid
+number; queue and criteria in `PENDING.md` §2).** N=2 capped at concurrency
+48 and 64 (R_avg 1.77, 2.36), FCFS sticky and DualMap. Question: does
+admission remain the sufficient mechanism at twice the pressure, or does
+DualMap's fixed throttle fail. Decision: DualMap near the work-conserving
+bound at R 2.4 closes scheduling under KV pressure on this workload;
+degradation opens the task-level working-set admission direction
+(`PENDING.md` §3). The earlier step 3 text (grid at N=8 or single-instance
+mechanisms) is superseded by this; the N=8 verdict still decides whether
+multi-instance stays in scope.
 
 ## 4. Evidence
 
