@@ -6,6 +6,10 @@ readonly repo_url=https://github.com/freelulul/vllm-ppd.git
 readonly commit=28aaa63c6d7a0a0e00d97f8c958291bb6b6a4367
 checkout=${PPD_CHECKOUT:-${XDG_CACHE_HOME:-$HOME/.cache}/agent-sched-bench/PPD-$commit}
 venv=${PPD_VENV:-$checkout/.venv}
+# CUDA flavour of the vLLM 0.28.0 push-transport build: cu13 (PyPI wheel, needs
+# driver >= 580) or cu129 (vLLM's cu129 wheel + nixl-cu12, runs on driver 570).
+cuda=${PPD_CUDA:-cu13}
+nixl_cuda_pkg=nixl-cu13; [[ "$cuda" == cu13 ]] || nixl_cuda_pkg=nixl-cu12
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 export PYTHONPATH="$(dirname "$(dirname "$script_dir")")${PYTHONPATH:+:$PYTHONPATH}"
 
@@ -25,7 +29,7 @@ fetch() {
 
 connector() {
   if [[ "${PPD_NATIVE_PUSH:-0}" == 1 ]]; then
-    "$venv/bin/python" -c 'from importlib.metadata import version; assert version("vllm") == "0.28.0"; assert version("nixl") == version("nixl-cu13") == "1.4.1"; from vllm.distributed.kv_transfer.kv_connector.v1.nixl.connector import NixlPushConnector'
+    "$venv/bin/python" -c "from importlib.metadata import version; assert version('vllm').split('+')[0] == '0.28.0'; assert version('nixl') == version('$nixl_cuda_pkg') == '1.4.1'; from vllm.distributed.kv_transfer.kv_connector.v1.nixl.connector import NixlPushConnector"
     local push_package
     push_package=$("$venv/bin/python" -c 'import importlib.util,pathlib; print(pathlib.Path(importlib.util.find_spec("vllm").origin).parent)')
     local push_args=(--unsafe-paths --directory="$push_package" "$script_dir/ppd_push_metrics.patch")
@@ -80,8 +84,12 @@ case "${1:-}" in
   install)
     fetch
     [[ -x "$venv/bin/python" ]] || uv venv --python 3.12 "$venv"
-    if [[ "${PPD_NATIVE_PUSH:-0}" == 1 ]]; then
+    if [[ "${PPD_NATIVE_PUSH:-0}" == 1 && "$cuda" == cu13 ]]; then
       uv pip install --python "$venv/bin/python" 'vllm==0.28.0' 'nixl==1.4.1' 'nixl-cu13==1.4.1'
+    elif [[ "${PPD_NATIVE_PUSH:-0}" == 1 ]]; then
+      [[ "$cuda" == cu129 ]] || { echo "PPD_CUDA must be cu13 or cu129" >&2; exit 2; }
+      uv pip install --python "$venv/bin/python" --torch-backend=cu129 \
+        --extra-index-url https://wheels.vllm.ai/0.28.0/cu129 'vllm==0.28.0+cu129' 'nixl==1.4.1' 'nixl-cu12==1.4.1'
     else
     uv pip install --python "$venv/bin/python" 'vllm==0.13.0' 'nixl==0.7.1' 'nixl-cu12==0.7.1' \
       --requirements "$checkout/requirements.txt"
