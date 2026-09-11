@@ -178,9 +178,35 @@ ramp is real (up to 9.5% one-idle time) and least-requests does reclaim it
 spent on prefix recomputation: cached share drops 20 points and TPOT rises
 26%, and mean JCT ends 22% worse. Locality is worth more than the idle time
 it costs, at every density this workload passes through. Per-request load
-balancing is closed as a lever at 2 GPUs. What remains open is whether a
-locality-preserving router (DualMap, run 3) beats sticky FCFS on this
-gradually built workload as it does on mixed56.
+balancing is closed as a lever at 2 GPUs.
+
+**Run 3, DualMap (`results/mixed56p60-vast-dualmap-20260910-r1`).** The
+locality-preserving router wins on every metric against both FCFS variants
+while leaving the most GPU time idle:
+
+| Metric | DualMap | Sticky | Least-requests |
+|---|---:|---:|---:|
+| Mean JCT, min (from arrival) | 14.23 | 17.32 | 21.15 |
+| P95 / max JCT, min | 40.96 / 66.06 | 59.25 / 111.86 | 64.94 / 110.85 |
+| Makespan, min | 118.9 | 164.8 | 163.8 |
+| Engine TPOT, ms | 55.64 | 62.06 | 78.33 |
+| Cached prompt share | 91% | 72% | 52% |
+| Steps/min, 66.1 min window | 43.80 | 42.10 | 40.10 |
+| Both busy / one idle, whole window | 80.4% / 4.86% | 88.8% / 2.54% | 93.5% / 1.34% |
+| Ramp 20–50 min one idle | 7–18% | 2.8–9.5% | ≤0.3% |
+
+Paired mean JCT −185 s, 95% [−375, −41] against sticky and −415 s
+[−630, −244] against least-requests. Worst tasks are the same replicas.
+
+**Frontier B verdict.** Across three policies the ranking of GPU balance is
+the reverse of the ranking of JCT: least-requests keeps both GPUs busiest
+and finishes last; DualMap idles one GPU 4.9% of the time, more than
+double sticky FCFS, and finishes the cohort 46 minutes earlier with 91%
+cached share. On this workload family, at 2 GPUs, at every density the
+Poisson ramp passes through, GPU idle time is not the resource to
+reclaim; prefix residency is. Load balance is closed as a frontier. Run 5
+(Continuum) completes the four-policy table for the record; it cannot
+reopen the question.
 
 ## 3. Frontier C — PD/PPD routing
 
