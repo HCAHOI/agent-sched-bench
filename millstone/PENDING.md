@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-11 18:25 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-11 19:10 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -13,9 +13,9 @@ Per-run analysis lands in `results/<run>/comparison.txt` and
 | Order | Run | Purpose | Status |
 |---|---|---|---|
 | 1–4 | N=2 full and N=2 capped, FCFS sticky and DualMap | Step 2 reference and same-capacity control for N=8 | done (M4 §3) |
-| 5–6 | N=8 capped (k=4 per GPU under MPS), FCFS sticky and DualMap | Step 2 decision point | running, ~19:15 UTC |
+| 5–6 | N=8 capped (k=4 per GPU under MPS), FCFS sticky and DualMap | Step 2 decision point | done 19:01 UTC; verdict in M4 §3 |
 | — | N=4 capped pair | optional middle point of the N axis | dropped 17:52 UTC, no result read; rerun only if N=8 is anomalous |
-| 7–10 | N=2 capped at concurrency 48 and 64, FCFS sticky and DualMap | Step 3 pressure grid (below) | queued, `results/chain11-grid-20260911.sh`, ~19:20–22:30 UTC |
+| 7–10 | N=2 capped at concurrency 48 and 64, FCFS sticky and DualMap | Step 3 pressure grid (below) | running since 19:01 UTC, `results/chain11-grid-20260911.sh`, ~22:30 UTC |
 | 11–14 | Qwen3-32B-FP8: smoke, DualMap calibration, N=2 full FCFS sticky and DualMap at concurrency 32 | Model-size check (§5) | queued, `results/chain12-qwen32b-20260911.sh`, ~22:30–01:30 UTC |
 
 Chain 11 waits for the N=8 DualMap analysis, stops chain 10 before it
@@ -98,11 +98,12 @@ Gate: §2 result. Only if DualMap degrades at R 2.4 (or at 32B, §5).
   oracle version fed the true next-step contexts from the traces (upper bound,
   analysis only), then the online version, evaluated at the grid points
   against FCFS sticky and DualMap.
-- **N=8 verdict (tonight).** Apply M4 §3 rule. If imbalance is below the
-  threshold, the closed loop may be masking arrival-driven imbalance; the
-  open-loop N=8 pair (Poisson arrivals, mean gap 24 s) is the check before
-  multi-instance is closed. If the threshold is met, the open-loop pair adds
-  nothing to the rule and is not run.
+- **N=8 verdict (read 19:01 UTC, M4 §3).** Prong 1 met exactly at the
+  threshold (1 of 4 windows, the drain window); prong 2 not met (DualMap
+  gains 75 s, bound was 120 s). Multi-instance stays in scope by the letter
+  of the rule. The open-loop pair is not run: the threshold is met, so it
+  cannot change the verdict. The mean-JCT story is small; the makespan story
+  (26 vs 38 min) is tail stranding under sticky placement.
 
 ## 5. Model-size check with Qwen3-32B-FP8 (pre-registered 18:07 UTC, before any 32B number)
 
@@ -192,3 +193,4 @@ tool-execution line (2510.04371, 2603.18897, 2512.15834, 2607.25816).
 
 - Push branch `codex/cleanup-research-dead-code` (≈45 commits ahead, unpushed).
 - Which problem to pursue if §2 closes KV-pressure scheduling.
+- Whether a step 2 verdict carried by a single drain window keeps multi-instance as a research problem, or reduces it to tail placement (M4 §3 step 2 result).

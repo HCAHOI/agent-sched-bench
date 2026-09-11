@@ -236,6 +236,54 @@ the recovery is admission, not the DRAM tier.
 *N=4 pair dropped (17:52 UTC).* Optional in the table above, no result read;
 the decision rule reads N=8 only. Rerun only if N=8 is anomalous.
 
+**Step 2 result (read 19:01 UTC; rule as pre-registered, N=4 pair dropped).**
+Six runs on pool64-distinct-v4, 64/64 tasks and 1,951 original requests each:
+
+| Run | Mean JCT (min) | P95 | Makespan | Cached share | Per-request hold / queue / prefill / decode (s) | Imbalance mean; windows > 1.5 |
+|---|---:|---:|---:|---:|---|---|
+| N=2 full, FCFS sticky | 8.80 | 15.45 | 26.2 | 0.96 | 0 / 3.3 / 0.08 / 5.8 | 1.05; 0 of 4 |
+| N=2 full, DualMap | 9.11 | 15.87 | 24.7 | 0.95 | 2.7 / 0.7 / 0.10 / 6.3 | 1.11; 0 of 4 |
+| N=2 capped, FCFS sticky | 12.88 | 26.54 | 37.2 | 0.56 | 0 / 5.8 / 0.55 / 7.9 | 1.41; 2 of 6 |
+| N=2 capped, DualMap | 9.40 | 16.83 | 26.0 | 0.94 | 2.7 / 0.7 / 0.12 / 6.3 | 1.24; 1 of 4 |
+| N=8 capped, FCFS sticky | 11.74 | 23.20 | 38.2 | 0.58 | 0 / 3.2 / 2.5 / 8.1 | 1.42; **1 of 4** |
+| N=8 capped, DualMap | 10.49 | 22.00 | 26.4 | 0.79 | 1.4 / 1.3 / 1.3 / 7.6 | 1.65; 2 of 4 |
+
+Paired mean-JCT differences (64 trajectories, 2,000 draws): DualMap − sticky
+at N=8 **−74.6 s, 95% [−133, −16]**; at N=2 capped −209 s [−260, −163]; at
+N=2 full +18.8 s [+2, +36]. N=8 sticky − N=2 sticky at equal capacity −69 s
+[−116, −17]; N=8 DualMap − N=2 DualMap +65 s [+35, +97].
+
+*Rule.* Prong 1 (sticky imbalance > 1.5 in at least a quarter of counted
+windows at N=8): 1 of 4 five-minute windows, share 0.25, **met exactly at
+the threshold**. Prong 2 (DualMap − sticky mean JCT gap at N=8 > 2 min):
+1.24 min, **not met**. Verdict by the letter of the rule: multi-instance
+stays in scope. Sensitivity, recorded and not part of the rule: with 120 s
+windows the sticky share is 0.56 (9 windows), with 180 s 0.33 (6 windows);
+the single 300 s window that crosses 1.5 is the last counted one, with 18
+unfinished tasks and one instance already empty. The verdict therefore rests
+on tail-phase stranding, the same effect as on mixed56 (§1), not on a
+sustained steady-state imbalance: in the first three windows the share is 0.
+
+*What the pair says beyond the rule.* (1) Routing recovers little mean JCT
+at N=8 (75 s) but 11.7 min of makespan (26.4 vs 38.2), because sticky
+strands instances in the drain: for a closed batch the tail is where
+multi-instance placement matters. (2) DualMap at N=8 keeps only 0.79 cached
+share against 0.94 at N=2 with the same total KV, moving 28% of requests off
+their home instance; eight 65K caches fragment what two 262K caches hold, so
+DualMap is 65 s per task slower at N=8 than at N=2. (3) FCFS sticky is 69 s
+per task faster at N=8 than at N=2: 64 running slots against 16 halve the
+in-engine queue (3.2 vs 5.8 s) even though each prefill is 4.5× slower under
+a quarter of the SMs. The "N=8 not comparable" caveat above cut the other
+way. (4) The mechanism finding from the N=2 pair (admission, not the DRAM
+tier) holds at N=8: DualMap's CPU tier supplied 2.7M of about 37M prompt
+tokens.
+
+*Consequences.* The open-loop (Poisson) N=8 check in `PENDING.md` §4 is
+not run: the rule's threshold is met, so it cannot change the verdict.
+Whether a verdict carried by one drain window justifies keeping
+multi-instance as a research problem, rather than as a tail-placement
+detail, is the advisor's call and is listed in `PENDING.md` §8.
+
 **Step 3 — pressure grid (pre-registered 17:56 UTC, before any grid
 number; queue and criteria in `PENDING.md` §2).** N=2 capped at concurrency
 48 and 64 (R_avg 1.77, 2.36), FCFS sticky and DualMap. Question: does
