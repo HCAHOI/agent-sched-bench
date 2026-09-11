@@ -48,7 +48,14 @@ echo "== repo: $REPO_ROOT ($(git rev-parse --short HEAD 2>/dev/null || echo 'no 
 # --- two-instance serving host -------------------------------------------------
 if [ "$SERVING_HOST" = "1" ]; then
   export XDG_CACHE_HOME=${XDG_CACHE_HOME:-/workspace/.cache} HF_HOME=${HF_HOME:-/workspace/.hf_home}
-  export CONTINUUM_PYTHON=${CONTINUUM_PYTHON:-/usr/bin/python3.12} PPD_NATIVE_PUSH=1
+  # uv and its Python live under /workspace too: rental images have no python3
+  # on PATH and a small ephemeral root; venvs symlink to the managed interpreter.
+  export UV_CACHE_DIR=${UV_CACHE_DIR:-$XDG_CACHE_HOME/uv} UV_PYTHON_INSTALL_DIR=${UV_PYTHON_INSTALL_DIR:-/workspace/.uv-python}
+  command -v uv >/dev/null 2>&1 || [ -x "$HOME/.local/bin/uv" ] || curl -LsSf https://astral.sh/uv/install.sh | sh || true
+  export PATH="$HOME/.local/bin:$PATH"
+  command -v uv >/dev/null || { echo "FATAL: uv install failed" >&2; exit 1; }
+  uv python install 3.12
+  export CONTINUUM_PYTHON=${CONTINUUM_PYTHON:-$(uv python find 3.12)} THUNDERAGENT_PYTHON=${THUNDERAGENT_PYTHON:-$(uv python find 3.12)} PPD_NATIVE_PUSH=1
   C=$XDG_CACHE_HOME/agent-sched-bench
   TA=7ddc8610270e56d3b109eed8796b3a4360fc67c9
   log() { printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*"; }
@@ -71,12 +78,17 @@ PY
     for v in "$C/ThunderAgent-$TA/.venv" /workspace/venvs/thunderagent-pending-release /workspace/venvs/thunderagent-capacity-consistent; do check "$v" "" ThunderAgent; done
     blob=$(readlink -f "$HF_HOME"/hub/models--Qwen--Qwen3-4B-Instruct-2507-FP8/snapshots/8591804019c8b22094c3b5b4454e0edc05dffc98/model.safetensors)
     [ "$(stat -c %s "$blob")" -gt 5000000000 ] && log "  model blob $(stat -c %s "$blob") bytes"
-    [ "$(nvidia-smi --query-gpu=name --format=csv,noheader | grep -c L40S)" = 2 ] && log "  2x L40S visible"
+    log "  GPUs: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | sort | uniq -c | tr -s ' ' | tr '\n' ';')"
     log "VERIFY OK"
   }
   if [ "$VERIFY_ONLY" = "1" ]; then verify_serving_host; exit; fi
-  log "cuda-compat-13-0 (vLLM 0.28 cu13 wheels on driver 570)"
-  dpkg -s cuda-compat-13-0 >/dev/null 2>&1 || { apt-get update -qq; apt-get install -y -qq cuda-compat-13-0; }
+  driver_major=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n1 | cut -d. -f1)
+  if [ "$driver_major" -lt 580 ]; then
+    log "cuda-compat-13-0 (vLLM 0.28 cu13 wheels on driver $driver_major)"
+    dpkg -s cuda-compat-13-0 >/dev/null 2>&1 || { apt-get update -qq; apt-get install -y -qq cuda-compat-13-0; }
+  else
+    log "driver $driver_major runs CUDA 13 natively; no compat package"
+  fi
   log "model Qwen/Qwen3-4B-Instruct-2507-FP8 @ 8591804019c8"
   uvx --from huggingface_hub hf download Qwen/Qwen3-4B-Instruct-2507-FP8 --revision 8591804019c8b22094c3b5b4454e0edc05dffc98
   log "continuum public (vllm 0.10.2 + overlay)"
