@@ -6,14 +6,15 @@ import httpx
 import pytest
 
 from scripts.baselines import ppd_official_proxy as proxy
-from scripts.baselines.ppd_policy import (BATCH_BUDGET_TOKENS, KV_TRANSFER_FLOOR_S,
-                                          KV_TRANSFER_S_PER_TOKEN, LOCAL_PREFILL_FLOOR_S,
-                                          LOCAL_PREFILL_S_PER_TOKEN, PD_HANDOFF_S,
-                                          P_PREFILL_S_PER_TOKEN, two_sided_estimate)
+from scripts.baselines.ppd_policy import (KV_TRANSFER_FLOOR_S, KV_TRANSFER_S_PER_TOKEN,
+                                          LOCAL_PREFILL_FLOOR_S, LOCAL_PREFILL_S_PER_TOKEN,
+                                          PD_HANDOFF_S, P_PREFILL_S_PER_TOKEN, two_sided_estimate)
 
 
-def snapshot(cached=0, waiting=0):
+def snapshot(cached=0, waiting=0, pending=None):
+    """pending defaults to one agent-scale 24K prompt per waiting request."""
     return dict(cached_tokens=cached, running=1, waiting=waiting, max_num_seqs=8,
+                pending_prefill_tokens=24000 * waiting if pending is None else pending,
                 kv_cache_usage=0.1, timestamp_s=0.0)
 
 
@@ -25,20 +26,21 @@ def test_estimate_charges_measured_costs_and_queue_on_both_sides():
                                               + KV_TRANSFER_FLOOR_S + PD_HANDOFF_S)
     assert idle["use_local"]  # An idle decode worker never pays the handoff.
 
-    # One batch budget per waiting request, at that side's per-token prefill cost.
-    queued_d = two_sided_estimate(600, snapshot(), snapshot(waiting=2))
-    assert queued_d["local_ttft_s"] - idle["local_ttft_s"] == pytest.approx(
-        2 * BATCH_BUDGET_TOKENS * LOCAL_PREFILL_S_PER_TOKEN)
+    # Pending prefill tokens on a side are charged at that side's per-token cost.
+    queued_d = two_sided_estimate(600, snapshot(), snapshot(pending=48000))
+    assert queued_d["local_ttft_s"] - idle["local_ttft_s"] == pytest.approx(48000 * LOCAL_PREFILL_S_PER_TOKEN)
     assert not queued_d["use_local"]
-    queued_both = two_sided_estimate(600, snapshot(waiting=3), snapshot(waiting=2))
-    assert queued_both["pd_ttft_s"] - idle["pd_ttft_s"] == pytest.approx(
-        3 * BATCH_BUDGET_TOKENS * P_PREFILL_S_PER_TOKEN)
+    queued_both = two_sided_estimate(600, snapshot(pending=72000), snapshot(pending=48000))
+    assert queued_both["pd_ttft_s"] - idle["pd_ttft_s"] == pytest.approx(72000 * P_PREFILL_S_PER_TOKEN)
     assert queued_both["use_local"]  # A busier P outweighs D's own queue.
+    # A warm D queue (little pending work) does not repel a warm request.
+    assert two_sided_estimate(24000, snapshot(), snapshot(cached=23000, waiting=5, pending=1500))["use_local"]
 
     # A prefix already resident on D removes the tokens it would have to prefill,
     # which flips a busy decode worker back to local at agent-scale histories.
     assert not two_sided_estimate(24000, snapshot(), snapshot(waiting=9))["use_local"]
-    assert two_sided_estimate(24000, snapshot(), snapshot(cached=23000, waiting=9))["use_local"]
+    # Nine cold agent-scale prompts queued on D outweigh even a resident prefix (Milestone 3 §3).
+    assert not two_sided_estimate(24000, snapshot(), snapshot(cached=23000, waiting=9))["use_local"]
     with pytest.raises(AssertionError):
         two_sided_estimate(600, snapshot(), snapshot(cached=600))
 
@@ -115,4 +117,4 @@ async def test_turn_one_keeps_public_pd_and_later_turns_follow_the_estimate(monk
     assert decisions[2]["two_sided"]["local_ttft_s"] > decisions[2]["two_sided"]["pd_ttft_s"]
     assert [row["state_query_ms"] >= 0 for row in decisions[1:]] == [True, True]
     constants = json.loads((tmp_path / "adapter-config.json").read_text())["two_sided_constants"]
-    assert constants["PD_HANDOFF_S"] == PD_HANDOFF_S and constants["BATCH_BUDGET_TOKENS"] == BATCH_BUDGET_TOKENS
+    assert constants["PD_HANDOFF_S"] == PD_HANDOFF_S and "BATCH_BUDGET_TOKENS" not in constants

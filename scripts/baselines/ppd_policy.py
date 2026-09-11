@@ -37,7 +37,11 @@ P_PREFILL_S_PER_TOKEN = 0.295e-3
 KV_TRANSFER_S_PER_TOKEN = 0.0102e-3
 KV_TRANSFER_FLOOR_S = 0.022
 PD_HANDOFF_S = 0.4
-BATCH_BUDGET_TOKENS = 2048  # --max-num-batched-tokens on both engines.
+# Queueing is charged on the engine's actual pending prefill tokens (prompt tokens
+# not yet computed over waiting and running requests), read by cache_snapshot.
+# Amendment 2026-09-11, before any two-sided replay: the earlier proxy of one
+# 2,048-token batch per waiting request under-priced bursts of agent-scale
+# prompts by an order of magnitude in results/ppd-load-profile-20260911-r3.
 
 
 def two_sided_constants() -> dict[str, float]:
@@ -50,19 +54,18 @@ def two_sided_estimate(prompt_tokens: int, snap_p: dict[str, Any],
                        snap_d: dict[str, Any]) -> dict[str, Any]:
     """Expected time to first token on each side; prefill locally iff D is no slower.
 
-    Queueing is a deliberate simplification: each waiting request on a side is
-    charged one full prefill batch budget at that side's per-token cost, because
-    the snapshot reports queue length, not the queued prompts' lengths.
+    Each side's queue is its pending prefill work (tokens still to compute for
+    waiting and running requests) at that side's per-token cost; this request's
+    own uncached tokens are added on top.
     """
     assert prompt_tokens > 0
-    assert 0 <= snap_p["cached_tokens"] < prompt_tokens and snap_p["waiting"] >= 0
-    assert 0 <= snap_d["cached_tokens"] < prompt_tokens and snap_d["waiting"] >= 0
+    assert 0 <= snap_p["cached_tokens"] < prompt_tokens and snap_p["pending_prefill_tokens"] >= 0
+    assert 0 <= snap_d["cached_tokens"] < prompt_tokens and snap_d["pending_prefill_tokens"] >= 0
     uncached_p = prompt_tokens - snap_p["cached_tokens"]
     uncached_d = prompt_tokens - snap_d["cached_tokens"]
-    local_ttft_s = (snap_d["waiting"] * BATCH_BUDGET_TOKENS * LOCAL_PREFILL_S_PER_TOKEN
-                    + uncached_d * LOCAL_PREFILL_S_PER_TOKEN + LOCAL_PREFILL_FLOOR_S)
-    pd_ttft_s = (snap_p["waiting"] * BATCH_BUDGET_TOKENS * P_PREFILL_S_PER_TOKEN
-                 + uncached_p * P_PREFILL_S_PER_TOKEN
+    local_ttft_s = ((snap_d["pending_prefill_tokens"] + uncached_d) * LOCAL_PREFILL_S_PER_TOKEN
+                    + LOCAL_PREFILL_FLOOR_S)
+    pd_ttft_s = ((snap_p["pending_prefill_tokens"] + uncached_p) * P_PREFILL_S_PER_TOKEN
                  + prompt_tokens * KV_TRANSFER_S_PER_TOKEN + KV_TRANSFER_FLOOR_S + PD_HANDOFF_S)
     return dict(uncached_p=uncached_p, uncached_d=uncached_d, local_ttft_s=local_ttft_s,
                 pd_ttft_s=pd_ttft_s, use_local=local_ttft_s <= pd_ttft_s)
@@ -104,7 +107,10 @@ def cache_snapshot(engine: Any, prompt_token_ids: list[int]) -> dict[str, Any]:
                       None, block_hasher=engine.request_block_hasher)
     _, cached, _ = manager.coordinator.find_longest_cache_hit(
         request.block_hashes, len(prompt_token_ids) - 1)
+    queued = list(scheduler.waiting) + list(scheduler.skipped_waiting) + list(scheduler.running)
+    pending = sum(max(0, r.num_prompt_tokens - r.num_computed_tokens) for r in queued)
     return dict(cached_tokens=cached, running=len(scheduler.running),
                 waiting=len(scheduler.waiting) + len(scheduler.skipped_waiting),
+                pending_prefill_tokens=pending,
                 max_num_seqs=scheduler.max_num_running_reqs,
                 kv_cache_usage=scheduler.get_kv_cache_usage(), timestamp_s=time.time())
