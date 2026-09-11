@@ -136,6 +136,25 @@ continuum_verify_public_source() {
     "$checkout/vllm/entrypoints/openai/protocol.py"
 }
 
+continuum_lmcache_for_local_gpu() {
+  # The lmcache wheel ships CUDA machine code up to sm_100 (Hopper/B200) and no PTX
+  # newer than compute_90, so its KV-transfer kernels have no image for RTX Pro 6000
+  # Blackwell (sm_120): the first CPU offload dies with "no kernel image is available".
+  # Rebuild the same pinned version from source for the GPU actually present.
+  local environment=$1 arch so
+  arch=$("$environment/bin/python" -c 'import torch; print("%d.%d" % torch.cuda.get_device_capability())')
+  so=$(ls "$environment"/lib/python3.12/site-packages/lmcache/c_ops*.so | head -n 1)
+  if strings "$so" | grep -qx "sm_${arch/./}"; then
+    return 0
+  fi
+  echo "lmcache wheel has no sm_${arch/./} kernels; building lmcache==0.3.7 from source for arch $arch" >&2
+  uv pip install --python "$environment/bin/python" ninja
+  TORCH_CUDA_ARCH_LIST="$arch" CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}" MAX_JOBS="${MAX_JOBS:-16}" \
+    uv pip install --python "$environment/bin/python" --no-build-isolation --no-binary lmcache --reinstall-package lmcache 'lmcache==0.3.7'
+  so=$(ls "$environment"/lib/python3.12/site-packages/lmcache/c_ops*.so | head -n 1)
+  strings "$so" | grep -qx "sm_${arch/./}" || { echo "lmcache source build still lacks sm_${arch/./}" >&2; return 1; }
+}
+
 continuum_verify_wheel() {
   local environment="$1"
   test -x "$environment/bin/python" || return 1
@@ -198,6 +217,7 @@ continuum_install_overlay() {
   }
   uv pip install --python "$environment/bin/python" \
     'transformers>=4.55.2,<5' 'lmcache==0.3.7' hf_transfer
+  continuum_lmcache_for_local_gpu "$environment"
   package_dir="$(continuum_package_dir "$environment")"
   for relative in "${OVERLAY_FILES[@]}"; do
     mkdir -p "$(dirname "$package_dir/$relative")"
