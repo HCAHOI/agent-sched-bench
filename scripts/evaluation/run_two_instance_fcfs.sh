@@ -29,6 +29,15 @@ instances=($(seq 0 $((num_instances - 1))))
 if [[ "$instances_per_gpu" != 1 ]]; then
   [[ -n "${INSTANCE_GPU_MEMORY_UTILIZATION:-}" && -n "${INSTANCE_CPUSETS:-}" ]] || { echo "INSTANCES_PER_GPU>1 needs INSTANCE_GPU_MEMORY_UTILIZATION and INSTANCE_CPUSETS" >&2; exit 2; }
 fi
+# TENSOR_PARALLEL=2: one engine spanning both GPUs (single-instance deployment of a model that also fits one
+# GPU); the cross-instance proxy then has one backend. Only least-requests is reviewed for one backend.
+tensor_parallel=${TENSOR_PARALLEL:-1}
+[[ "$tensor_parallel" == 1 || "$tensor_parallel" == 2 ]] || exit 2
+if [[ "$tensor_parallel" == 2 ]]; then
+  [[ "$instances_per_gpu" == 1 && "$router_policy" == least-requests ]] || { echo "TENSOR_PARALLEL=2 needs INSTANCES_PER_GPU=1 and ROUTER_POLICY=least-requests" >&2; exit 2; }
+  num_instances=1
+  instances=(0)
+fi
 IFS=, read -r -a instance_cpusets <<< "${INSTANCE_CPUSETS:-}"
 [[ -z "${INSTANCE_CPUSETS:-}" || ${#instance_cpusets[@]} == "$num_instances" ]] || exit 2
 mode=${1:---run}
@@ -196,7 +205,7 @@ for i in "${instances[@]}"; do
   cell="$run/instance-$i"
   mkdir "$cell"
   port=$((8000+i)); kv_port=$((5557+2*i)); replay_port=$((5558+2*i))
-  gpu_index=$((i / instances_per_gpu))
+  gpu_index=$((i / instances_per_gpu)); [[ "$tensor_parallel" == 1 ]] || gpu_index=0,1
   cpuset=${PREFILL_CPUSET:-0-2}; [[ "$i" == 0 ]] || cpuset=${DECODE_CPUSET:-12-14}
   [[ -z "${INSTANCE_CPUSETS:-}" ]] || cpuset=${instance_cpusets[i]}
   cache_env=() cache_args=() kv_cap_args=()
@@ -256,7 +265,7 @@ YAML
     VLLM_REQUEST_TELEMETRY_PATH="$cell/vllm-request-telemetry.jsonl" "${telemetry_env[@]}"
     "${cache_env[@]}"
     taskset -c "$cpuset" "${engine_command[@]}"
-    --host 127.0.0.1 --port "$port" --tensor-parallel-size 1
+    --host 127.0.0.1 --port "$port" --tensor-parallel-size "$tensor_parallel"
     --gpu-memory-utilization "$cell_gpu_memory_util" --max-model-len "${MAX_MODEL_LEN:-131072}" --max-num-seqs 8
     "${kv_cap_args[@]}"
     --enable-prefix-caching --kv-cache-dtype auto --enforce-eager
@@ -270,7 +279,7 @@ YAML
   servers+=("$!")
 done
 for i in "${instances[@]}"; do
-  cell="$run/instance-$i"; port=$((8000+i)); gpu_index=$((i / instances_per_gpu))
+  cell="$run/instance-$i"; port=$((8000+i)); gpu_index=$((i / instances_per_gpu)); [[ "$tensor_parallel" == 1 ]] || gpu_index=0,1
   wait_http "$port" "${servers[i]}"
   if [[ "$dram_metrics" == on ]]; then [[ -f "$cell/dram-bandwidth-ready" && ! -s "$cell/dram-bandwidth.err" ]]; fi
   curl -fsS "http://127.0.0.1:$port/metrics" > "$cell/vllm-metrics-start.prom"
