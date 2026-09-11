@@ -50,28 +50,41 @@ scheduling under KV pressure is closed on this workload and the direction in
 prefill, decode) from `routing.jsonl` and `vllm-request-telemetry.jsonl`,
 cached share, JCT with the paired bootstrap, LMCache retrieve counters.
 
-## 3. Candidate direction: task-level working-set admission
+## 3. Candidate direction: task-level working-set admission (literature checked 18:02 UTC)
 
-Not a KV retention or prefetch mechanism (those are crowded: ThunderAgent,
-CacheWise, SAGA, Continuum, Agentix, and prefetch has nothing to recover here:
-a CPU-tier retrieve costs 39 ms). Not dependent on tool-time or output-length
-prediction (both measured as unreliable in this project).
+Not a KV retention or prefetch mechanism (crowded: ThunderAgent, CacheWise,
+SAGA, Continuum; and prefetch has nothing to recover here, a CPU-tier
+retrieve costs 39 ms). Not dependent on tool-time or output-length prediction
+(both measured as unreliable in this project).
 
 Signal: an agent's context grows monotonically; prompt at step k+1 ≥ prompt
 at step k plus output plus tool result, and the growth rate is measurable
-from the task's own history. Decision: admit a new task to an instance only
-if the projected contexts of its resident tasks over the next few steps fit
-the KV cache. This is the multiprogramming-level control of the working-set
-model with agent sessions as processes and tool gaps as I/O waits. Expected
-win: zero hold at low pressure (DualMap pays 19 s per task there), no thrash
-at high pressure.
+from the task's own history. Decision: admit a task to an instance only if
+the projected contexts of its resident tasks over the next few steps fit the
+KV cache (multiprogramming-level control of the working-set model).
 
-Before any code: literature check for task-level admission with context
-growth forecasting (Llumnix, Preble, SAGA, Agentix, CacheWise, ThunderAgent,
-Continuum, Autellix, Parrot, Mooncake). Result to be reported with sources,
-not from memory.
+**Literature check (independent agent, sources read on arxiv pages):**
+task-level admission on *current* KV occupancy is already published twice in
+2026; only the forecast is unpublished.
 
-Gate: §2 result. Only if DualMap degrades at R 2.4.
+| System | Unit | Admission signal | Forecasts context growth |
+|---|---|---|---|
+| ThunderAgent (arXiv 2602.13692) | LLM program | pause/restore on KV watermarks over Σ current context; pauses shortest programs first | no |
+| KAIROS (arXiv 2604.16682) | agent | admit from pending set while Σ current context < 0.9 × capacity | no (objective is power; no scheduler baselines) |
+| Continuum / CacheWise / SAGA | request | none (TTL or eviction by predicted tool duration) | no |
+| Llumnix, Preble, Autellix, Parrot, Mooncake | request or program | none or request-level | no |
+| ConServe (arXiv 2606.01839) | conversation | placement on observed occupancy; argues against prediction | no, deliberately |
+
+Consequence for us: the published task-level admission is ThunderAgent,
+which is already a baseline in this repo and lost to request-level
+throttling (DualMap) by 2× on mean JCT on L40S with a 51.8 s mean outside-
+engine wait and a 568-min worst task (Milestone 2). So "task-level" is not
+by itself the right unit; a working-set controller would have to show that
+growth-aware admission and victim choice fix ThunderAgent's starvation while
+keeping DualMap's cache protection, against both as baselines. Thin margin;
+the advisor's call.
+
+Gate: §2 result. Only if DualMap degrades at R 2.4 (or at 32B, §5).
 
 ## 4. After the grid
 
