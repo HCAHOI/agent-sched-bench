@@ -204,6 +204,8 @@ for i in "${instances[@]}"; do
   # Exact per-instance KV budget (bytes) for the pressure grid; the engine log's "GPU KV cache size" line
   # is the measured capacity. Without it the KV size is whatever the memory fraction leaves.
   [[ -z "${INSTANCE_KV_CACHE_BYTES:-}" ]] || kv_cap_args=(--kv-cache-memory-bytes "$INSTANCE_KV_CACHE_BYTES")
+  # Model config overrides (JSON), e.g. YaRN rope scaling when MAX_MODEL_LEN exceeds the model's native context.
+  [[ -z "${VLLM_HF_OVERRIDES:-}" ]] || kv_cap_args+=(--hf-overrides "$VLLM_HF_OVERRIDES")
   engine_command=(bash scripts/baselines/continuum_public.sh "$serve_command" "$model")
   if [[ "$router_policy" == dualmap ]]; then
     cat > "$cell/lmcache.yaml" <<YAML

@@ -26,9 +26,12 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-MODEL = "Qwen/Qwen3-4B-Instruct-2507-FP8"
 CONTINUUM_COMMIT = "316a58794a6ff86b216e579b74fd56ed0c5a911f"
-KV_BYTES_PER_TOKEN = 147_456  # Qwen3-4B bf16 KV: 2 (K,V) x 2 bytes x 36 layers x 8 KV heads x 128 head dim
+# bf16 KV bytes per token: 2 (K,V) x 2 bytes x layers x KV heads x head dim; needed only for --instance-kv-tokens
+KV_BYTES_PER_TOKEN = {
+    "Qwen/Qwen3-4B-Instruct-2507-FP8": 147_456,  # 36 layers x 8 KV heads x 128
+    "Qwen/Qwen3-32B-FP8": 262_144,  # 64 layers x 8 KV heads x 128
+}
 
 
 def utc() -> str:
@@ -44,6 +47,10 @@ def main() -> int:
     p.add_argument("--instance-policy", default="fcfs", choices=["fcfs", "continuum"])
     p.add_argument("--task-sticky", action="store_true")
     p.add_argument("--concurrency", type=int, default=32)
+    p.add_argument("--model", default="Qwen/Qwen3-4B-Instruct-2507-FP8", choices=sorted(KV_BYTES_PER_TOKEN),
+                   help="served model on every instance and the replay's shadow model")
+    p.add_argument("--hf-overrides", metavar="JSON",
+                   help="vLLM --hf-overrides for every engine, e.g. YaRN rope scaling to reach --max-model-len")
     p.add_argument("--instances-per-gpu", type=int, default=1, choices=range(1, 5), metavar="K",
                    help="engines per GPU (2K instances); K>1 runs under MPS with a 100/K %% SM share each")
     p.add_argument("--instance-kv-tokens", type=int, metavar="TOKENS",
@@ -101,8 +108,11 @@ def main() -> int:
         "TASK_STICKY": "1" if a.task_sticky else "0", "SHADOW_LLM_TIMEOUT_S": str(a.timeout_s),
         "SOURCE_BASE_REV": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
         "PREFILL_CPUSET": "48-50", "DECODE_CPUSET": "51-53", "ROUTER_CPUSET": "54",
-        "MANIFEST": f"/workspace/manifests/{a.name}.yaml", "RUN_ROOT": remote_run,
+        "MANIFEST": f"/workspace/manifests/{a.name}.yaml", "RUN_ROOT": remote_run, "MODEL": a.model,
     }
+    if a.hf_overrides:
+        json.loads(a.hf_overrides)  # fail here, not in the engine log
+        env["VLLM_HF_OVERRIDES"] = a.hf_overrides
     if a.instances_per_gpu > 1:
         if a.instance_gpu_memory_utilization is None or not a.instance_kv_tokens:
             # without the exact cap each engine profiles free memory while its siblings allocate (vLLM asserts on it)
@@ -118,7 +128,7 @@ def main() -> int:
     if a.instance_kv_tokens:
         if a.instance_kv_tokens < (a.max_model_len or 131072):
             sys.exit("--instance-kv-tokens must be at least --max-model-len: vLLM refuses a KV cache below one full-length request")
-        env["INSTANCE_KV_CACHE_BYTES"] = str(a.instance_kv_tokens * KV_BYTES_PER_TOKEN)
+        env["INSTANCE_KV_CACHE_BYTES"] = str(a.instance_kv_tokens * KV_BYTES_PER_TOKEN[a.model])
     for kv in a.env:
         k, v = kv.split("=", 1)
         env[k] = v
@@ -168,7 +178,7 @@ def main() -> int:
                 "--manifest", a.manifest, "--output-dir", str(run / "output"),
                 "--container", "docker", "--network-mode", "host",
                 "--concurrency", str(a.concurrency), "--workers", "1", "--prep-concurrency", "8", "--replay-speed", "1",
-                "--shadow-llm-api-base", f"http://127.0.0.1:{a.tunnel_port}/v1", "--shadow-llm-model", MODEL,
+                "--shadow-llm-api-base", f"http://127.0.0.1:{a.tunnel_port}/v1", "--shadow-llm-model", a.model,
                 "--shadow-llm-timeout-s", str(a.timeout_s), "--shadow-llm-seed", "0", "--shadow-llm-mode", shadow_mode,
                 "--resource-monitoring", "off", "--pmu-monitoring", "off", "--memory-bandwidth-monitoring", "off",
                 "--replacement-delay-mean-s", "10", "--replacement-seed", "42",
