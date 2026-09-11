@@ -204,9 +204,20 @@ and finishes last; DualMap idles one GPU 4.9% of the time, more than
 double sticky FCFS, and finishes the cohort 46 minutes earlier with 91%
 cached share. On this workload family, at 2 GPUs, at every density the
 Poisson ramp passes through, GPU idle time is not the resource to
-reclaim; prefix residency is. Load balance is closed as a frontier. Run 5
-(Continuum) completes the four-policy table for the record; it cannot
-reopen the question.
+reclaim; prefix residency is. Load balance is closed as a frontier.
+
+**Run 5, Continuum task-sticky (`results/mixed56p60-vast-continuum-sticky-20260911-r1`),
+aborted.** All 56 original tasks completed successfully, but at minute 100
+one replacement task's request hit a proxy-to-engine connection error
+(HTTP 500 from the least-requests proxy, `httpcore.ReadError`, no engine
+error), the replacement failed its tool-replay contract, and the simulator
+aborts the whole replay on the first replacement failure before writing
+`throughput_summary.json`. Per-task summaries for the originals exist in the
+run's simulate trace and can be reconstructed if the four-policy table is
+wanted; the run is not rerun tonight because it cannot change the verdict.
+Two defects to report, not fixed here: a single transport error on a
+background request terminates a replay, and the router proxy has no retry
+for a dropped engine connection.
 
 ## 3. Frontier C — PD/PPD routing
 
