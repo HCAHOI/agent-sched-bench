@@ -56,12 +56,12 @@ def test_failure_counts_align_model_ids_with_source_records() -> None:
     source = [
         {"action_type": "llm_call", "action_id": "llm_0",
          "data": {"raw_response": {"choices": [{"message": {"tool_calls": [{"id": "call_0_0"}]}}]}}},
-        {"action_type": "tool_exec", "action_id": "tool_0",
+        {"action_type": "tool_exec", "action_id": "tool_0_uy9W4K0eg",
          "data": {"tool_call_id": "uy9W4K0eg", "tool_name": "exec", "tool_args": {"command": "ls"}, "success": False}},
     ]
     replay = [
         {"type": "action", "action_type": "llm_call", "action_id": "llm_0", "data": {}},
-        {"type": "action", "action_type": "tool_exec", "action_id": "tool_0",
+        {"type": "action", "action_type": "tool_exec", "action_id": "tool_0_call_0_0",
          "data": {"tool_call_id": "call_0_0", "tool_name": "exec", "tool_args": {"command": "ls"}, "success": False}},
     ]
     counts = replay_action_failure_counts(source, replay, require_exact_tool_calls=True)

@@ -501,10 +501,14 @@ def _action_matches_source(
     replay_data = replay_record.get("data") or {}
     source_data = source_action.get("data") or {}
     replay_call_id = replay_data.get("tool_call_id")
-    if aliases:
-        replay_call_id = aliases.get(replay_call_id, replay_call_id)
+    replay_action_id = replay_record.get("action_id")
+    if aliases and replay_call_id in aliases:
+        # action ids embed the call id ("tool_3_<call id>"); alias that suffix too
+        if isinstance(replay_action_id, str) and replay_action_id.endswith(str(replay_call_id)):
+            replay_action_id = replay_action_id[: -len(str(replay_call_id))] + aliases[replay_call_id]
+        replay_call_id = aliases[replay_call_id]
     return (
-        replay_record.get("action_id") == source_action.get("action_id")
+        replay_action_id == source_action.get("action_id")
         and replay_call_id == source_data.get("tool_call_id")
         and replay_data.get("tool_args") == source_data.get("tool_args")
     )
