@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-11 18:08 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-11 18:25 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -154,7 +154,41 @@ vs constant 1.85) and lose the tail (q90 5.4 vs 4.5); tool-call arguments
 carry 91% of output-length variance; 57% of qwen completions are hidden
 reasoning. Decision: output length is not a schedulable signal on this data.
 
-## 7. Decisions waiting on the advisor
+## 7. Design-space levers at 32B (agreed 18:25 UTC; runs need the advisor's go after the smoke)
+
+The advisor's direction: extend the design space (parallelism, memory
+hierarchy, compute) rather than add schedulers. Two levers survive the
+literature check; one was dropped.
+
+**7.1 Parallelism: TP=2 single instance vs DP=2 two instances (Qwen3-32B).**
+- Question: 32B fits one GPU, so the deployment choice is open. TP=2 gives one
+  unified KV pool (about 400K tokens), 2× prefill speed per request, no sticky
+  placement, no cross-instance imbalance, no migration. Does the multi-instance
+  problem of Milestones 2–4 dissolve under TP at this scale?
+- Expectation: agent steps are prefill-dominated with short outputs, so TP=2
+  beats DP=2 sticky on mean JCT at concurrency 32; DP=2 wins aggregate
+  throughput only at high batch.
+- Decision: TP=2 winning makes "multi-instance" a configuration question,
+  not a scheduling one, at this model size; DP=2 winning keeps the N axis.
+- Needs: launcher single-instance TP mode (`--tensor-parallel-size 2`, one
+  engine on both GPUs, proxy with one backend), smoke, then FCFS and DualMap
+  at N=1/TP=2 full memory against chain 12's DP=2 runs. About 1 h code, 10 min
+  smoke, 2 runs of about 1 h.
+
+**7.2 Memory hierarchy at 32B: recompute vs DRAM retrieve vs migrate.**
+- Question: at 4B a retrieve costs 39 ms and recompute is cheap, so the DRAM
+  tier supplied 4% of tokens. At 32B recompute is 8× dearer and retrieve
+  1.8×; does the balance tip toward storing rather than recomputing?
+- Read from chain 12's DualMap run: LMCache retrieve counters and the
+  per-request prefill decomposition. No extra run.
+
+**7.3 Dropped: n-gram speculative decoding for tool-call arguments.** The
+observation that long outputs are copies of context is already exploited:
+ToolSpec (arXiv 2604.13519, schema-FSM drafts plus retrieved historical
+calls, up to 4.2×), AgentSpec (2608.24004), and the speculative
+tool-execution line (2510.04371, 2603.18897, 2512.15834, 2607.25816).
+
+## 8. Decisions waiting on the advisor
 
 - Push branch `codex/cleanup-research-dead-code` (≈45 commits ahead, unpushed).
 - Which problem to pursue if §2 closes KV-pressure scheduling.
