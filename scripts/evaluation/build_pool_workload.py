@@ -35,7 +35,7 @@ def bucket(peak: int) -> str:
 
 
 def trace_stats(path: Path) -> dict:
-    n_llm = n_tool = peak = prompt_sum = completion_sum = 0
+    n_llm = n_tool = peak = prompt_sum = completion_sum = zero_completion = 0
     llm_s = tool_s = 0.0
     tools_per_iteration: dict = {}
     t0 = t1 = None
@@ -58,6 +58,7 @@ def trace_stats(path: Path) -> dict:
                 peak = max(peak, p)
                 prompt_sum += p
                 completion_sum += r["data"].get("completion_tokens") or 0
+                zero_completion += not r["data"].get("completion_tokens")
                 llm_s += r["ts_end"] - r["ts_start"]
             elif r["action_type"] == "tool_exec":
                 n_tool += 1
@@ -65,6 +66,7 @@ def trace_stats(path: Path) -> dict:
                 tools_per_iteration[r.get("iteration")] = tools_per_iteration.get(r.get("iteration"), 0) + 1
     return {"metadata_instance_id": metadata_id, "n_llm": n_llm, "n_tool": n_tool, "peak_prompt_tokens": peak,
             "parallel_tool_steps": sum(1 for c in tools_per_iteration.values() if c > 1),
+            "zero_completion_steps": zero_completion,
             "sum_prompt_tokens": prompt_sum, "sum_completion_tokens": completion_sum,
             "llm_s": round(llm_s, 1), "tool_s": round(tool_s, 1), "wall_s": round((t1 or 0) - (t0 or 0), 1)}
 
@@ -117,7 +119,8 @@ def main() -> None:
         pool = []
         for r in csv.DictReader(a.pool_stats.open()):
             r.pop("selected", None)
-            for k in ("n_llm", "n_tool", "peak_prompt_tokens", "sum_prompt_tokens", "sum_completion_tokens", "parallel_tool_steps"):
+            for k in ("n_llm", "n_tool", "peak_prompt_tokens", "sum_prompt_tokens", "sum_completion_tokens", "parallel_tool_steps",
+                      "zero_completion_steps"):
                 r[k] = int(r[k])
             for k in ("llm_s", "tool_s", "wall_s"):
                 r[k] = float(r[k])
@@ -136,6 +139,10 @@ def main() -> None:
         w = csv.DictWriter(fh, fieldnames=list(pool[0].keys()))
         w.writeheader()
         w.writerows(pool)
+    # A step that recorded zero completion tokens cannot be replayed: the shadow request would carry max_tokens=0,
+    # which the engine rejects. Such a record is a defective trace, so the exclusion is unconditional.
+    excluded_zero = sum(1 for r in pool if r["zero_completion_steps"] > 0)
+    pool = [r for r in pool if r["zero_completion_steps"] == 0]
     excluded = 0
     if a.max_peak_tokens:
         excluded = sum(1 for r in pool if r["peak_prompt_tokens"] > a.max_peak_tokens)
@@ -185,6 +192,7 @@ def main() -> None:
     for r in chosen:
         strata[f"{r['corpus']} | {r['model']} | {r['bucket']}"] += 1
     prov = {"pool_dirs": [str(d) for d in a.pool], "pool_size": len(pool), "n": a.n, "seed": a.seed,
+            "excluded_by_zero_completion_step": excluded_zero,
             "max_peak_tokens": a.max_peak_tokens, "excluded_by_peak": excluded,
             "exclude_parallel_tool_calls": a.exclude_parallel_tool_calls, "excluded_by_parallel_tool_calls": excluded_parallel,
             "selection": "proportional stratified over (corpus, agent model, peak-context bucket), largest-remainder "

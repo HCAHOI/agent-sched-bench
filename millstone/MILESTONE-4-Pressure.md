@@ -167,6 +167,22 @@ the way (commits d1b122f, 61f1769 and follow-up): qwen-agent traces record
 executor tool-call ids that differ from the model's ids, and the replay now
 aliases them; mixed56 was never affected.
 
+*Third amendment before any result (15:45 UTC).* The first run on
+pool64-distinct-v3 (`results/pool64v3-pro6000-n2full-fcfs-sticky-20260911-r1`)
+aborted after 13 minutes: the terminal-bench trace break-filter-js-from-html
+records a second LLM step with zero prompt and zero completion tokens, the
+replay therefore asked the engine for `max_tokens=0`, and vLLM rejected the
+request (400). The 43 tasks that had started all completed; the run is a
+harness abort, not a result, and its numbers were not read. Eight of the 868
+pool traces (four after the two earlier filters) carry such a step; the pool
+builder now excludes them unconditionally, since a zero-token generation
+cannot be replayed. The workload is rebuilt as `pool64-distinct-v4` with the
+same sampler and seed: the 38 swe-rebench picks are identical, the
+terminal-bench <16K stratum reshuffled (26 terminal-bench traces, 15 of them
+new), 1,951 steps, mean prompt 19,355 tokens per step; R_avg 0.50 on the full
+pair and 1.18 at 524,288 tokens. Capacities and decision rule are unchanged;
+the runs are named `pool64v4-...` (`results/chain10-step2-20260911.sh`).
+
 *Amendment before launch.* The first configuration (N=8 at 50K tokens per
 instance, 400K total) is physically ill-posed: vLLM refuses a KV cache that
 cannot hold one maximum-length request, and a replica that small could not
@@ -189,7 +205,7 @@ tokens, R_avg 1.13), so N is the only thing that varies across them; N=2
 full is the low-pressure reference. DualMap is calibrated separately at k=2
 and k=4 (its prefill constant changes under the SM share) and its CPU tier
 stays 96 GB in total (48, 24, 12 GiB per instance). Eight runs on
-pool64-distinct-v3 at concurrency 32, about 45 min each. Calibrations:
+pool64-distinct-v4 at concurrency 32, about 45 min each. Calibrations:
 31.3 µs per token at k=1, 48.9 at k=2, 89.5 at k=4.
 
 Measured (`scripts/evaluation/instance_balance_summary.py`, originals only):
