@@ -144,7 +144,7 @@ continuum_lmcache_for_local_gpu() {
   local environment=$1 arch so
   arch=$("$environment/bin/python" -c 'import torch; print("%d.%d" % torch.cuda.get_device_capability())')
   so=$(ls "$environment"/lib/python3.12/site-packages/lmcache/c_ops*.so | head -n 1)
-  if strings "$so" | grep -qx "sm_${arch/./}"; then
+  if strings "$so" | grep -q "sm_${arch/./}"; then
     return 0
   fi
   echo "lmcache wheel has no sm_${arch/./} kernels; building lmcache==0.3.7 from source for arch $arch" >&2
@@ -152,7 +152,7 @@ continuum_lmcache_for_local_gpu() {
   TORCH_CUDA_ARCH_LIST="$arch" CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}" MAX_JOBS="${MAX_JOBS:-16}" \
     uv pip install --python "$environment/bin/python" --no-build-isolation --no-binary lmcache --reinstall-package lmcache 'lmcache==0.3.7'
   so=$(ls "$environment"/lib/python3.12/site-packages/lmcache/c_ops*.so | head -n 1)
-  strings "$so" | grep -qx "sm_${arch/./}" || { echo "lmcache source build still lacks sm_${arch/./}" >&2; return 1; }
+  strings "$so" | grep -q "sm_${arch/./}" || { echo "lmcache source build still lacks sm_${arch/./}" >&2; return 1; }
 }
 
 continuum_verify_wheel() {
