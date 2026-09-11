@@ -263,6 +263,14 @@ expected uncached prefill work on each side under each side's current
 load. Both sides can be snapshotted the way the decode side already is
 (`ppd_policy.cache_snapshot`: cached tokens, running, waiting, KV usage).
 
+**Engine build on this host.** The pinned vLLM 0.28.0 wheel is a CUDA 13
+build and needs driver 580 or newer; this host has driver 570 (CUDA 12.8), so
+the first profiling launch failed at engine start. PD-family runs from
+2026-09-11 on use a separate venv with vLLM 0.28.0+cu129, torch 2.13.0+cu129
+and nixl-cu12 1.4.1 (`PPD_CUDA=cu129`, `PPD_VENV=/workspace/venvs/ppd-cu129`),
+with the same two patches. JCT stays comparable with the 2026-09-07 PD/PPD
+runs under the standing cross-build caveat; TPOT carries a build offset.
+
 **Runs (2026-09-10 night chain), in order.**
 
 1. *Controlled-load profiling* (`analysis/development/ppd-load-profile-v1/plan.md`,
