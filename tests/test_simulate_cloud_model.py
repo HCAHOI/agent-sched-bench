@@ -1492,6 +1492,122 @@ def test_replacement_load_exits_after_measured_failure(
     asyncio.run(run())
 
 
+def test_replacement_failure_is_counted_and_stream_continues(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def loaded(
+        task_id: str, manifest_index: int, arrival_s: float
+    ) -> LoadedTraceSession:
+        return LoadedTraceSession(
+            source_trace=tmp_path / f"{task_id}.jsonl",
+            task_source=tmp_path / "tasks.json",
+            task_instance_id=task_id,
+            source_action_agent_id=task_id,
+            run_instance_id=task_id,
+            manifest_index=manifest_index,
+            scaffold="openclaw",
+            metadata={"execution_environment": "host"},
+            summary=None,
+            task={"instance_id": task_id},
+            actions=[
+                {
+                    "type": "action",
+                    "action_type": "llm_call",
+                    "data": {
+                        "messages_in": [{"role": "system", "content": "instructions"}]
+                    },
+                }
+            ],
+            iterations={},
+            arrival_s=arrival_s,
+        )
+
+    replayed: list[str] = []
+
+    async def fake_prepare(
+        loaded_session: LoadedTraceSession,
+        **_kwargs,
+    ) -> PreparedTraceSession:
+        return PreparedTraceSession(loaded=loaded_session, container=None)
+
+    async def fake_replay(
+        prepared: PreparedTraceSession,
+        **_kwargs,
+    ) -> ReplayTaskStats:
+        loaded_session = prepared.loaded
+        run_instance_id = loaded_session.run_instance_id
+        replayed.append(run_instance_id)
+        if run_instance_id == "short__replacement-0001":
+            raise RuntimeError(
+                "trace tool replay did not consume every source tool call"
+            )
+        if "__replacement-" in run_instance_id:
+            await asyncio.Event().wait()
+        elif loaded_session.task_instance_id == "tail":
+            await asyncio.sleep(0.15)
+        return ReplayTaskStats(
+            agent_id=loaded_session.agent_id,
+            run_instance_id=run_instance_id,
+            source_agent_id=loaded_session.source_action_agent_id,
+            manifest_index=loaded_session.manifest_index,
+            label=loaded_session.label,
+            source_trace=str(loaded_session.source_trace),
+            success=True,
+            elapsed_s=0.0,
+            action_count=0,
+            llm_call_count=0,
+            tool_exec_count=0,
+            arrival_s=loaded_session.arrival_s,
+        )
+
+    monkeypatch.setattr("trace_collect.simulator._prepare_replay_session", fake_prepare)
+    monkeypatch.setattr(
+        "trace_collect.simulator._replay_cloud_model_session", fake_replay
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator._finalize_prepared_session",
+        lambda _prepared: asyncio.sleep(0),
+    )
+
+    replacement_summary: dict[str, object] = {}
+
+    async def run() -> list[ReplayTaskStats]:
+        _prepared, stats, _arrival_zero = await asyncio.wait_for(
+            _run_cloud_model_queue(
+                [loaded("short", 0, 0.0), loaded("tail", 1, 0.01)],
+                output_path=tmp_path / "out",
+                trace_logger=object(),
+                concurrency=2,
+                container_executable=None,
+                network_mode="host",
+                container_resource_recorder=None,
+                replay_speed=1.0,
+                llm_timing=LLMTimingConfig(),
+                command_timeout_s=1.0,
+                warmup_skip_iterations=0,
+                replacement_delay_mean_s=0.0001,
+                replacement_seed=42,
+                replacement_summary=replacement_summary,
+            ),
+            timeout=5.0,
+        )
+        return stats
+
+    stats = asyncio.run(run())
+
+    # The measured tasks still finish: the failed replacement did not abort the run.
+    assert {stat.run_instance_id for stat in stats} == {"short", "tail"}
+    assert replacement_summary["replacement_failures"] == 1
+    assert replacement_summary["replacement_failed_run_ids"] == [
+        "short__replacement-0001"
+    ]
+    # The stream continued: the next cycle for that manifest index was replayed.
+    assert "short__replacement-0002" in replayed
+    assert replacement_summary["background_completed"] == 0
+    assert replacement_summary["measured_completed"] == 2
+
+
 def test_cloud_model_queue_continues_after_container_prep_runtime_error(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -72,6 +72,59 @@ async def test_routing_stream_lifetime_errors_and_release():
 
 
 @pytest.mark.asyncio
+async def test_dropped_engine_connection_retries_once_before_the_first_byte():
+    attempts = []
+    events = []
+
+    class Stream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'data: {"choices":[]}\n\n'
+            raise httpx.ReadError("dropped mid-stream")
+
+    async def backend(request):
+        payload = json.loads(request.content)
+        attempts.append((payload["job_id"], request.headers["x-request-id"]))
+        job = payload["job_id"]
+        seen = sum(1 for item in attempts if item[0] == job)
+        if job == "recovers" and seen == 1:
+            raise httpx.ReadError("engine dropped the connection")
+        if job == "broken":
+            raise httpx.RemoteProtocolError("engine dropped the connection")
+        if job == "streaming":
+            return httpx.Response(200, stream=Stream(),
+                                  headers={"content-type": "text/event-stream"})
+        return httpx.Response(200, json={"ok": True})
+
+    app = create_app(["http://engine0", "http://engine1"], events.append,
+                     httpx.MockTransport(backend), task_sticky=True)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://proxy") as client:
+            response = await client.post("/v1/chat/completions", json={"job_id": "recovers"})
+            assert response.status_code == 200
+            # Same engine, same request id: one logical request, two dispatches upstream.
+            assert attempts == [("recovers", attempts[0][1])] * 2
+            assert len([e for e in events if e["event"] == "dispatch"]) == 1
+            retry = next(e for e in events if e["event"] == "retry")
+            finish = next(e for e in events if e["event"] == "finish")
+            assert retry["engine_request_id"] == finish["engine_request_id"]
+            assert retry["reason"] == "ReadError"
+            assert finish["retries"] == 1
+
+            with pytest.raises(httpx.RemoteProtocolError):
+                await client.post("/v1/chat/completions", json={"job_id": "broken"})
+            assert [item[0] for item in attempts].count("broken") == 2
+            assert app.state.outstanding == [0, 0]
+
+            with pytest.raises(httpx.ReadError):
+                await client.post("/v1/chat/completions",
+                                  json={"job_id": "streaming", "stream": True})
+            # A drop after the first forwarded byte is not retried.
+            assert [item[0] for item in attempts].count("streaming") == 1
+            assert not [e for e in events if e["event"] == "retry" and e["job_id"] == "streaming"]
+            assert app.state.outstanding == [0, 0]
+
+
+@pytest.mark.asyncio
 async def test_task_sticky_survives_idle_and_imbalance_until_release():
     gate = asyncio.Event()
     started = asyncio.Event()

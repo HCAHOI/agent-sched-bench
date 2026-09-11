@@ -194,7 +194,8 @@ YAML
     [[ "$i" != 0 ]] || cell_gpu_memory_util=${PREFILL_GPU_MEMORY_UTILIZATION:-$gpu_memory_util}
     # Hold P blocks through the entire client timeout; D pulls only after allocation.
     cache_env=(VLLM_HOST_IP=127.0.0.1 PYTHONHASHSEED=42
-      UCX_TLS=${PD_UCX_TLS:-tcp,cuda_copy,self} UCX_NET_DEVICES=${PD_UCX_NET_DEVICES:-lo} UCX_LOG_LEVEL=info
+      # KV moves GPU-direct (cuda_ipc, 9-19 GB/s); TCP over lo is 20x slower and stalled on 2026-09-11.
+      UCX_TLS=${PD_UCX_TLS:-all} UCX_NET_DEVICES=${PD_UCX_NET_DEVICES:-all} UCX_LOG_LEVEL=info
       VLLM_NIXL_SIDE_CHANNEL_HOST=127.0.0.1 VLLM_NIXL_SIDE_CHANNEL_PORT=$((14579+i))
       VLLM_NIXL_ABORT_REQUEST_TIMEOUT=$((timeout_s+60)))
     kv_buffer_device=${PPD_KV_BUFFER_DEVICE:-cuda}

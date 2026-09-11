@@ -23,7 +23,11 @@ def create_app(
     *,
     task_sticky: bool = False,
 ) -> FastAPI:
-    """Count requests from dispatch until the upstream stream closes; no retries."""
+    """Count requests from dispatch until the upstream stream closes.
+
+    A dropped engine connection is retried once on the same engine while no byte has
+    reached the client; once streaming has started the request is not idempotent.
+    """
     if len(backends) != 2 or len(set(backends)) != 2:
         raise ValueError("two distinct backends are required")
     clients = [httpx.AsyncClient(base_url=b, timeout=None, transport=transport) for b in backends]
@@ -95,6 +99,7 @@ def create_app(
               "switched_instance": last is not None and last != index})
         upstream: httpx.Response | None = None
         finished = False
+        retries = 0
 
         async def finish(outcome: str) -> None:
             nonlocal finished
@@ -107,18 +112,37 @@ def create_app(
             finally:
                 outstanding[index] -= 1
                 emit({"event": "finish", "timestamp_s": time.time(), **common,
-                      "outcome": outcome, "outstanding_after": list(outstanding)})
+                      "outcome": outcome, "outstanding_after": list(outstanding),
+                      "retries": retries})
 
-        try:
+        async def attempt() -> bytes | None:
+            """Open upstream; read the body here when it is not streamed onward."""
+            nonlocal upstream
             upstream = await clients[index].send(
                 clients[index].build_request(
                     "POST", "/v1/chat/completions", json=payload,
                     headers={"x-request-id": route_id, "accept-encoding": "identity"},
                 ), stream=True,
             )
-            headers = {"x-route-id": route_id, "x-serving-instance": str(index)}
             if not payload.get("stream") or upstream.status_code >= 400:
-                body = await upstream.aread()
+                return await upstream.aread()
+            return None
+
+        try:
+            try:
+                body = await attempt()
+            except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError) as error:
+                # The engine dropped the connection before the client saw a byte, so
+                # resending is safe; the same request id keeps telemetry joinable.
+                if upstream is not None:
+                    await upstream.aclose()
+                    upstream = None
+                retries = 1
+                emit({"event": "retry", "timestamp_s": time.time(), **common,
+                      "reason": type(error).__name__})
+                body = await attempt()
+            headers = {"x-route-id": route_id, "x-serving-instance": str(index)}
+            if body is not None:
                 await finish("completed" if upstream.status_code < 400 else "http_error")
                 return Response(body, upstream.status_code, headers=headers,
                                 media_type=upstream.headers.get("content-type"))

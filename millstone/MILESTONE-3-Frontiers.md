@@ -284,8 +284,8 @@ runs under the standing cross-build caveat; TPOT carries a build offset. The
 first profiling attempt on that venv stalled because the launcher's default
 UCX transport (TCP over loopback) pushed 3.4 GB of KV in 6.9 s and then
 stopped after two transfers; the 2026-09-07 runs used `UCX_TLS=all
-UCX_NET_DEVICES=all` (GPU-direct, about 30 ms per transfer). PD-family runs
-must pass `PD_UCX_TLS=all PD_UCX_NET_DEVICES=all`.
+UCX_NET_DEVICES=all` (GPU-direct, about 30 ms per transfer). The launcher now
+defaults both to `all`; `PD_UCX_TLS` / `PD_UCX_NET_DEVICES` still override.
 
 **Runs (2026-09-10 night chain), in order.**
 

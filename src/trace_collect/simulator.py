@@ -2856,6 +2856,7 @@ async def _run_cloud_model_queue(
     background_slots = asyncio.Semaphore(max(0, worker_count - 1))
     active_by_worker: dict[int, LoadedTraceSession] = {}
     first_error: BaseException | None = None
+    replacement_failure_ids: list[str] = []
 
     def mark_measurement_terminal() -> None:
         nonlocal measurement_terminal_monotonic
@@ -3093,6 +3094,26 @@ async def _run_cloud_model_queue(
                                 )
                             if loaded.run_instance_id in measurement_run_ids:
                                 task_stats.append(stats)
+                    if cycle and (
+                        session_error is not None
+                        or stats is None
+                        or not stats.success
+                    ):
+                        # A replacement is background load, not evidence: record the
+                        # failure and keep the stream going with the next cycle.
+                        logger.warning(
+                            "Replacement task %s failed (%s); continuing replay",
+                            loaded.run_instance_id,
+                            session_error or "unsuccessful replay",
+                        )
+                        replacement_failure_ids.append(loaded.run_instance_id)
+                        if measurement_terminal.is_set():
+                            return
+                        schedule_replacement(
+                            loaded,
+                            terminal_monotonic=terminal_monotonic,
+                        )
+                        continue
                     if session_error is not None:
                         if first_error is None:
                             first_error = session_error
@@ -3238,6 +3259,8 @@ async def _run_cloud_model_queue(
                 "background_started": background_started,
                 "background_completed": background_completed,
                 "background_cancelled": background_cancelled,
+                "replacement_failures": len(replacement_failure_ids),
+                "replacement_failed_run_ids": list(replacement_failure_ids),
                 "replacement_start_s": max(
                     (loaded.arrival_s for loaded in loaded_sessions),
                     default=0.0,
