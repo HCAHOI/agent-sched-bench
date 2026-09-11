@@ -50,35 +50,42 @@ Repository layout that matters:
   upstreams by commit; the ThunderAgent fix patches and four PPD patches sit
   beside them.
 
-GPU host, as of 2026-09-10:
+GPU host, as of 2026-09-11:
 
-- `ssh -p 28229 root@118.163.199.123`, Vast container C.50481401, 2× L40S,
-  driver 570, Ubuntu 24.04, no volume: nothing on it survives a recycle, and
-  the home directory is regenerated on every start. Everything lives under
-  `/workspace`: repo snapshot at `/workspace/agent-sched-bench`, checkouts and
-  venvs under `/workspace/.cache/agent-sched-bench/` (`XDG_CACHE_HOME`),
-  model under `/workspace/.hf_home`, patched ThunderAgent variants at
+- `ssh -p 41548 root@connect.singapore-a.gpuhub.com`, a gpuhub/AutoDL
+  container with 2× RTX Pro 6000 Blackwell Server Edition (96 GB each),
+  driver 595 (CUDA 13.2 native), PCIe 5 on one NUMA node, cgroup limits of
+  50 cores and 240 GB. The root filesystem is a 30 GB ephemeral overlay; the
+  250 GB persistent disk is `/root/autodl-tmp`, and `/workspace` is a symlink
+  into it so every path below is unchanged: repo snapshot at
+  `/workspace/agent-sched-bench`, checkouts and venvs under
+  `/workspace/.cache/agent-sched-bench/` (`XDG_CACHE_HOME`), uv and its
+  Python under `/workspace/.cache/uv` and `/workspace/.uv-python`, model under
+  `/workspace/.hf_home`, patched ThunderAgent variants at
   `/workspace/ThunderAgent-{pending-release,capacity-consistent}-7ddc861`
-  with venvs under `/workspace/venvs/`.
-- Verified on this host on 2026-09-10: FCFS least-requests `--smoke`
-  (`results/fcfs-least-requests-smoke-20260910-r2`) and DualMap `--calibrate`
-  (`results/dualmap-calibration-20260910-r1`), which measured
-  `DUALMAP_PREFILL_TPOT=5.543863341017641e-05` (old host: 5.44e-05); pass
-  `--calibration-run dualmap-calibration-20260910-r1` for DualMap runs on this
-  host and recalibrate on a new one. The DualMap baseline was repeated here
-  (`results/mixed56-vast-dualmap-20260910-r1`, mean JCT 33.24 min, 76% cached)
-  and is the reference for candidates run on this host. The DualMap venv on
-  the host also has pytest, so `tests/test_dualmap_official_proxy.py` runs
-  there with `PYTHONPATH=<DualMap checkout>:/workspace/agent-sched-bench`.
+  with venvs under `/workspace/venvs/`, CUDA JIT cache at
+  `/workspace/.nv/ComputeCache`.
+- The driver controls runs through the Debian `supervisor` package, installed
+  by hand; after a container restart run
+  `supervisord -c /etc/supervisor/supervisord.conf` before launching.
+- Verified on this host on 2026-09-11: bootstrap (`benchmark_server.sh
+  --serving-host`, VERIFY OK) and FCFS least-requests `--smoke`
+  (`results/fcfs-least-requests-smoke-20260911-r2`): vLLM 0.10.2 with Flash
+  Attention in eager mode as on L40S, KV cache 624,880 tokens per GPU for
+  Qwen3-4B-FP8 (L40S: 275,008), smoke decode TPOT 31 ms (L40S: 39 ms). The
+  first request on a fresh JIT cache took 72 s; the cache now persists.
+- Nothing from the L40S hosts carries over: DualMap must be recalibrated
+  (`--calibrate`) and every baseline rerun here before a candidate is
+  compared. The L40S results under `results/` stay as the Milestone 2 and 3
+  record.
 - The host source is a snapshot of the local HEAD. After committing code the
   host executes, re-ship it (README commands) before launching, and never
   while a launcher is executing there (the workers import from disk).
-- PD-family runs (`ROUTER_POLICY=pd|ppd|profile`) need the CUDA 12.9 venv:
-  pass `--env PPD_CUDA=cu129 --env PPD_VENV=/workspace/venvs/ppd-cu129
-  --env PPD_NATIVE_PUSH=1`. The default cu130 wheel needs driver ≥580; this
-  host has 570. The launcher now defaults the UCX transport to `all/all`
-  (GPU-direct over PCIe, about 14 GB/s per transfer); the earlier
-  TCP-over-loopback default stalled KV pushes after two transfers.
+- PD-family runs (`ROUTER_POLICY=pd|ppd|profile`) use the default CUDA 13
+  wheel on this driver (`--env PPD_NATIVE_PUSH=1` only). On drivers older
+  than 580 they need `--env PPD_CUDA=cu129 --env PPD_VENV=<venv>`. The
+  launcher defaults the UCX transport to `all/all` (GPU-direct over PCIe);
+  TCP over loopback stalled KV pushes on the L40S host.
 - The PPD upstream exists only on the host, so `tests/test_ppd_*.py` fail
   locally on import; that is expected.
 - Commit 2ebe6f4 made replays survive a replacement-task failure (recorded

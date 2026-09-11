@@ -1,4 +1,4 @@
-"""Drive one two-instance serving run on a remote 2xL40S host from this machine.
+"""Drive one two-instance serving run on a remote two-GPU host from this machine.
 
 The host runs the engines, proxy and collectors through
 scripts/evaluation/run_two_instance_fcfs.sh under supervisor; this machine
@@ -83,6 +83,9 @@ def main() -> int:
     cache = "/workspace/.cache"
     env = {
         "HF_HOME": "/workspace/.hf_home", "XDG_CACHE_HOME": cache,
+        # driver PTX JIT cache: kernels without native code for the GPU compile once (72 s first request on
+        # Blackwell); keep the cache on the persistent disk, not the rental image's ephemeral home
+        "CUDA_CACHE_PATH": "/workspace/.nv/ComputeCache", "CUDA_CACHE_MAXSIZE": str(4 << 30),
         "RUNNER_PYTHON": f"{cache}/agent-sched-bench/venvs/continuum-public-{CONTINUUM_COMMIT}/bin/python",
         "DRAM_METRICS": "off", "CONCURRENCY": str(a.concurrency),
         "ROUTER_POLICY": a.router_policy, "INSTANCE_POLICY": a.instance_policy,

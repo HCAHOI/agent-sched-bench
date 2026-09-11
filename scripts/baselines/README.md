@@ -57,13 +57,15 @@ result receipt were retained in Git (`3b2ea8d` and `454bd13`). Recover it from
 those revisions only to inspect the historical protocol, not as a current
 entry point.
 
-## Two-instance GPU host (2× L40S on Vast)
+## Two-instance GPU host (two identical GPUs, ≥45 GB each)
 
 The two-instance runs split work across two machines. The GPU host runs the
 engines, proxy and collectors through `scripts/evaluation/run_two_instance_fcfs.sh`;
 this machine replays the agent workload in Docker task containers against the
-host proxy over an SSH tunnel. Vast regenerates the home directory on every
-container start, so everything on the host lives under `/workspace`:
+host proxy over an SSH tunnel. Rental images regenerate or reset the home
+directory, so everything on the host lives under `/workspace`. When the
+persistent disk is elsewhere (gpuhub/AutoDL: `/root/autodl-tmp`, 30 GB
+ephemeral root), make `/workspace` a symlink to a directory on it first:
 
 | Path on host | Content |
 |---|---|
@@ -74,10 +76,15 @@ container start, so everything on the host lives under `/workspace`:
 | `/workspace/manifests/<run>.yaml`, `/workspace/<run>-launch.log`, `/workspace/bootstrap.log` | per-run manifest copy, supervisor log, build log |
 | `/workspace/agent-sched-bench/results/<run>` | host-side run directory, pulled back into `results/<run>/server/` |
 
-New machine:
+New machine (the build needs no system Python or docker on the host; it
+installs uv and Python 3.12 under `/workspace`, skips the CUDA compat package
+on drivers ≥580, and the driver needs the Debian `supervisor` package with
+its daemon running, which a container restart does not bring back):
 
 ```bash
 H=root@HOST; P=PORT
+ssh -p $P $H 'mkdir -p /root/autodl-tmp/workspace && ln -sfn /root/autodl-tmp/workspace /workspace'   # gpuhub/AutoDL only
+ssh -p $P $H 'apt-get install -y -qq supervisor && (pgrep -f "supervisord -c /etc/supervisor" >/dev/null || supervisord -c /etc/supervisor/supervisord.conf)'
 git archive HEAD src scripts configs tests pyproject.toml | ssh -p $P $H 'mkdir -p /workspace/agent-sched-bench && tar x -C /workspace/agent-sched-bench'
 scp -P $P uv.lock $H:/workspace/agent-sched-bench/          # gitignored here; the host launcher records it
 ssh -p $P $H 'cd /workspace/agent-sched-bench && nohup bash scripts/setup/benchmark_server.sh --serving-host > /workspace/setup.log 2>&1 &'
