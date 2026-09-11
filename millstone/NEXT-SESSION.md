@@ -17,7 +17,11 @@ multi-step coding agents. Read these first, in order, before doing anything:
    Milestone 2 (DualMap fairness, cross-instance load balance, PD/PPD
    routing), all three closed on 2026-09-11 with the runs and mechanisms
    that closed them. Read its §0 before comparing anything to a baseline.
-4. `millstone/MILESTONE-1-Single-Instance.md` §3 only, for metric definitions
+4. `millstone/MILESTONE-4-Pressure.md`: the current stage. The new host,
+   the bridge runs showing the L40S results were an over-capacity regime,
+   the pressure axis R, the trace pool, and the pre-registered three-step
+   decision plan on whether multi-instance scheduling is a problem at all.
+5. `millstone/MILESTONE-1-Single-Instance.md` §3 only, for metric definitions
    (JCT, TTFT, TPOT, cached-prompt share, cohort windows). The rest of M1 is
    the closed single-GPU stage.
 

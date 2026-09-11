@@ -1,6 +1,8 @@
 # MILESTONE 3 — Three frontiers on 2× L40S
 
-Date: 2026-09-10. Status: in progress. Milestone 2 froze the exploration
+Date: 2026-09-10. Status: closed 2026-09-11; all three frontiers closed on
+2× L40S, and Milestone 4 reinterprets them as one operating point (KV
+demand above capacity). Milestone 2 froze the exploration
 (unmodified DualMap is the system to beat; load imbalance is not a lever on
 mixed56; PD and PPD lose on JCT). This document tracks the three directions
 that remain open, one section each. Each section is rewritten when its
