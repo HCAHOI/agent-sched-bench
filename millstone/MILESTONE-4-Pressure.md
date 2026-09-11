@@ -145,35 +145,50 @@ Terminal-bench tasks replay with minimal task records (tool replay never
 runs the real task; the trace's own instance id resolves the record). The
 four-trace `pool4-smoke-v1` manifest checks that path before any full run.
 
-**Step 2 — is multi-instance a real problem (pre-registered 2026-09-11 14:40 UTC).**
-Launcher generalized to k engines per GPU (commit 8cddf64): engines of one
-GPU run under MPS with a fixed 100/k percent SM share each; per-instance KV
-is set exactly with `--kv-cache-memory-bytes` and read back from the engine
-log. Six runs on pool64 at concurrency 32, DualMap CPU tier 96 GB in total
-(48 GiB per instance at N=2, 12 GiB at N=8):
+**Step 2 — is multi-instance a real problem (pre-registered 2026-09-11 14:40 UTC; configuration amended 15:05 UTC before any run, see below).**
+Launcher generalized to k engines per GPU (commits 8cddf64, 89c2317): engines
+of one GPU run under MPS with a fixed 100/k percent SM share each; per-
+instance KV is set exactly with `--kv-cache-memory-bytes` and read back from
+the engine log.
 
-| Configuration | Total KV tokens | R_avg | Policies |
-|---|---:|---:|---|
-| N=2 full | 1,249,760 | 0.53 | FCFS sticky, DualMap |
-| N=2 capped | 400,000 (200K per instance) | 1.66 | FCFS sticky, DualMap |
-| N=8 capped | 400,000 (50K per instance) | 1.66 | FCFS sticky, DualMap |
+*Amendment before launch.* The first configuration (N=8 at 50K tokens per
+instance, 400K total) is physically ill-posed: vLLM refuses a KV cache that
+cannot hold one maximum-length request, and a replica that small could not
+serve a 90K-token context in any deployment either. The k=4 smoke failed on
+exactly that check. Revised design: the workload's peak context is bounded
+at 60K (`pool64-distinct-v2`: same sampler and seed on the 799 pool traces
+with peak ≤ 60K; 45 swe-rebench + 19 terminal-bench, 1,998 steps, mean
+prompt 18,024 tokens per step, max peak 55,550), the engine context limit is
+65,536 tokens, and every capped instance holds the same total of 524,288
+tokens split evenly, so N=8 has exactly one full context per instance:
 
-N=2 capped against N=8 capped isolates the replica-count effect at equal
-capacity; N=2 full against N=2 capped isolates pressure. Measured
-(`scripts/evaluation/instance_balance_summary.py`, originals only): per-
-instance in-flight load and prompt tokens per 5-minute window, max-over-mean
-prompt-token imbalance over windows with at least N unfinished tasks (drain
-windows excluded, see §1), share of a task's requests served by its home
-instance, JCT with the paired bootstrap over the 64 tasks. Decision rule:
-multi-instance stays in scope if at N=8 the imbalance under FCFS sticky
-exceeds 1.5 in at least a quarter of the counted windows, or the
+| Configuration | Per instance | Total KV tokens | R_avg | R_peak | Policies |
+|---|---:|---:|---:|---:|---|
+| N=2 full | 624,880 | 1,249,760 | 0.46 | 0.66 | FCFS sticky, DualMap |
+| N=2 capped | 262,144 | 524,288 | 1.10 | 1.58 | FCFS sticky, DualMap |
+| N=8 capped (k=4) | 65,536 | 524,288 | 1.10 | 1.58 | FCFS sticky, DualMap |
+| N=4 capped (k=2) | 131,072 | 524,288 | 1.10 | 1.58 | FCFS sticky, DualMap (last, optional) |
+
+The capped rows sit at the L40S pair's pressure for this workload (550K
+tokens, R_avg 1.05), so N is the only thing that varies across them; N=2
+full is the low-pressure reference. DualMap is calibrated separately at k=2
+and k=4 (its prefill constant changes under the SM share) and its CPU tier
+stays 96 GB in total (48, 24, 12 GiB per instance). Eight runs on
+pool64-distinct-v2 at concurrency 32, about 45 min each.
+
+Measured (`scripts/evaluation/instance_balance_summary.py`, originals only):
+per-instance in-flight load and prompt tokens per 5-minute window, max-over-
+mean prompt-token imbalance over windows with at least N unfinished tasks
+(drain windows excluded, see §1), share of a task's requests served by its
+home instance, JCT with the paired bootstrap over the 64 tasks. Decision
+rule: multi-instance stays in scope if at N=8 the imbalance under FCFS
+sticky exceeds 1.5 in at least a quarter of the counted windows, or the
 DualMap-versus-sticky mean JCT gap at N=8 exceeds the 2-minute separability
-bound. The drain exclusion was fixed on 2026-09-11 15:20 UTC after the
-bridge runs and before any step 2 run. Otherwise multi-instance scheduling
-is closed as a non-problem at realistic pressure and Milestones 2–3 become a
-characterization of the over-capacity regime. Absolute N=8 latencies are
-not comparable to N=2 (shared memory bandwidth under MPS); the test is about
-routing behaviour. Hardware stays at two GPUs through this step.
+bound. Otherwise multi-instance scheduling is closed as a non-problem at
+realistic pressure and Milestones 2–3 become a characterization of the
+over-capacity regime. Absolute N=8 latencies are not comparable to N=2
+(shared memory bandwidth under MPS); the test is about routing behaviour.
+Hardware stays at two GPUs through this step.
 
 **Step 3 — the study step 2 selects.** If multi-instance stays: the
 pressure grid at N=8, R_avg ∈ {0.8, 1.5, 2.5} by concurrency from the same

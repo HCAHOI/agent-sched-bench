@@ -105,6 +105,7 @@ def main() -> None:
     p.add_argument("--capacity", action="append", default=[], help="NAME=total KV tokens, for the pressure table")
     p.add_argument("--docker-image", default="python:3.13-slim-bookworm")
     p.add_argument("--pool-stats", type=Path, help="reuse a pool-stats.csv from an earlier build instead of rescanning the traces")
+    p.add_argument("--max-peak-tokens", type=int, help="exclude traces whose peak prompt exceeds this (engine context limit minus generation headroom)")
     a = p.parse_args()
 
     if a.pool_stats:
@@ -130,6 +131,10 @@ def main() -> None:
         w = csv.DictWriter(fh, fieldnames=list(pool[0].keys()))
         w.writeheader()
         w.writerows(pool)
+    excluded = 0
+    if a.max_peak_tokens:
+        excluded = sum(1 for r in pool if r["peak_prompt_tokens"] > a.max_peak_tokens)
+        pool = [r for r in pool if r["peak_prompt_tokens"] <= a.max_peak_tokens]
     alloc = allocate(pool, a.n)
     rng = random.Random(a.seed)
     chosen, used = [], set()
@@ -171,6 +176,7 @@ def main() -> None:
     for r in chosen:
         strata[f"{r['corpus']} | {r['model']} | {r['bucket']}"] += 1
     prov = {"pool_dirs": [str(d) for d in a.pool], "pool_size": len(pool), "n": a.n, "seed": a.seed,
+            "max_peak_tokens": a.max_peak_tokens, "excluded_by_peak": excluded,
             "selection": "proportional stratified over (corpus, agent model, peak-context bucket), largest-remainder "
                          "quotas, seeded sample within stratum; traces referenced in place, no replay copies",
             "strata": dict(sorted(strata.items())), "concurrency": a.concurrency,

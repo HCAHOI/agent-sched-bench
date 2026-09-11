@@ -48,6 +48,8 @@ def main() -> int:
                    help="engines per GPU (2K instances); K>1 runs under MPS with a 100/K %% SM share each")
     p.add_argument("--instance-kv-tokens", type=int, metavar="TOKENS",
                    help="exact per-instance KV budget in tokens (--kv-cache-memory-bytes); omit for the memory-fraction default")
+    p.add_argument("--max-model-len", type=int, metavar="TOKENS",
+                   help="engine context limit (default 131072); a per-instance KV cap must hold at least one such request")
     p.add_argument("--instance-gpu-memory-utilization", type=float, metavar="FRAC",
                    help="per-instance memory fraction; required when K>1 (default 0.95/K minus headroom is not assumed)")
     p.add_argument("--timeout-s", type=int, default=1800, help="SHADOW_LLM_TIMEOUT_S on both sides")
@@ -111,7 +113,11 @@ def main() -> int:
         env["ROUTER_CPUSET"] = str(48 + 3 * n)
     if a.instance_gpu_memory_utilization is not None:
         env["INSTANCE_GPU_MEMORY_UTILIZATION"] = str(a.instance_gpu_memory_utilization)
+    if a.max_model_len:
+        env["MAX_MODEL_LEN"] = str(a.max_model_len)
     if a.instance_kv_tokens:
+        if a.instance_kv_tokens < (a.max_model_len or 131072):
+            sys.exit("--instance-kv-tokens must be at least --max-model-len: vLLM refuses a KV cache below one full-length request")
         env["INSTANCE_KV_CACHE_BYTES"] = str(a.instance_kv_tokens * KV_BYTES_PER_TOKEN)
     for kv in a.env:
         k, v = kv.split("=", 1)

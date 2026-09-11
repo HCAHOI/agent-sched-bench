@@ -255,7 +255,7 @@ YAML
     "${cache_env[@]}"
     taskset -c "$cpuset" "${engine_command[@]}"
     --host 127.0.0.1 --port "$port" --tensor-parallel-size 1
-    --gpu-memory-utilization "$cell_gpu_memory_util" --max-model-len 131072 --max-num-seqs 8
+    --gpu-memory-utilization "$cell_gpu_memory_util" --max-model-len "${MAX_MODEL_LEN:-131072}" --max-num-seqs 8
     "${kv_cap_args[@]}"
     --enable-prefix-caching --kv-cache-dtype auto --enforce-eager
     --enable-chunked-prefill --max-num-batched-tokens 2048
