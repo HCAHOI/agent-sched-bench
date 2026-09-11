@@ -109,31 +109,51 @@ every completed swe-rebench instance has its task record in
 The mixed56 sources sit at the heavy end of the pool. Only 56 traces exceed
 64K peak context, so high R comes from concurrency, not longer tasks.
 
-**Step 1 — decision workload (CPU only).** 64 distinct trajectories, no
-replicas, stratified by peak context and tool-span so the mix is
-heavy-tailed like the pool (both corpora, both agent models). Compute R_avg
-and R_peak for two configurations: 2 full-GPU instances and 8 quarter-GPU
-instances (about 115K KV tokens each, 920K total, weights replicated).
-Terminal-bench task mapping reconstructed from the registry. One replay
-smoke on the new manifest. Checks before step 2: the smoke passes, R_avg
-for the N=8 configuration lands in 1.5–2.5, and the manifest is committed
-with its R numbers before any policy run.
+**Step 1 — decision workload (done 2026-09-11, `analysis/development/pool64-distinct-v1`).**
+Built by `scripts/evaluation/build_pool_workload.py`: 64 distinct trajectories,
+no replay copies, proportional stratified sampling over (corpus, agent model,
+peak-context bucket) with seed 42, one trace per task (some instances were
+run by both agents). Result: 47 swe-rebench (37 gpt-5.6, 27 qwen3.7 agents
+overall) and 17 terminal-bench; 2,438 LLM steps; median peak context 28.5K;
+median tool time 27 s; mean prompt tokens per step 20,713. Pressure at
+concurrency 32 (the replay machine's 8 CPUs and 15 GB cap concurrency at
+the proven 32, so pressure is set by KV capacity, not by more containers):
 
-**Step 2 — is multi-instance a real problem.** Launcher generalized to k
-instances per GPU under MPS with a fixed SM share each (removes compute
-coupling; bandwidth sharing remains and is stated). Runs: FCFS sticky and
-DualMap at N=2 and N=8, same workload and concurrency, DualMap CPU tier 12
-GiB per instance at N=8 so the total stays 96 GB. Measured: per-instance
-in-flight load and prompt tokens per 5-minute window, max-over-mean
-imbalance, share of a task's requests served by its home instance, JCT
-with the paired bootstrap. Decision rule: multi-instance stays in scope if
-at N=8 the imbalance under FCFS sticky exceeds 1.5 in at least a quarter
-of the windows, or the DualMap-versus-sticky mean JCT gap exceeds the
-2-minute separability bound. Otherwise multi-instance scheduling is closed
-as a non-problem at realistic pressure and Milestones 2–3 become a
+| Capacity (total KV tokens) | R_avg | R_peak |
+|---|---:|---:|
+| N=2 full, 1,249,760 | 0.53 | 0.74 |
+| L40S pair (reference), 550,016 | 1.21 | 1.68 |
+| capped 400,000 | 1.66 | 2.31 |
+
+Terminal-bench tasks replay with minimal task records (tool replay never
+runs the real task; the trace's own instance id resolves the record). The
+four-trace `pool4-smoke-v1` manifest checks that path before any full run.
+
+**Step 2 — is multi-instance a real problem (pre-registered 2026-09-11 14:40 UTC).**
+Launcher generalized to k engines per GPU (commit 8cddf64): engines of one
+GPU run under MPS with a fixed 100/k percent SM share each; per-instance KV
+is set exactly with `--kv-cache-memory-bytes` and read back from the engine
+log. Six runs on pool64 at concurrency 32, DualMap CPU tier 96 GB in total
+(48 GiB per instance at N=2, 12 GiB at N=8):
+
+| Configuration | Total KV tokens | R_avg | Policies |
+|---|---:|---:|---|
+| N=2 full | 1,249,760 | 0.53 | FCFS sticky, DualMap |
+| N=2 capped | 400,000 (200K per instance) | 1.66 | FCFS sticky, DualMap |
+| N=8 capped | 400,000 (50K per instance) | 1.66 | FCFS sticky, DualMap |
+
+N=2 capped against N=8 capped isolates the replica-count effect at equal
+capacity; N=2 full against N=2 capped isolates pressure. Measured: per-
+instance in-flight load and prompt tokens per 5-minute window, max-over-mean
+imbalance, share of a task's requests served by its home instance, JCT with
+the paired bootstrap over the 64 tasks. Decision rule: multi-instance stays
+in scope if at N=8 the imbalance under FCFS sticky exceeds 1.5 in at least a
+quarter of the windows, or the DualMap-versus-sticky mean JCT gap at N=8
+exceeds the 2-minute separability bound. Otherwise multi-instance scheduling
+is closed as a non-problem at realistic pressure and Milestones 2–3 become a
 characterization of the over-capacity regime. Absolute N=8 latencies are
-not comparable to N=2 (co-location); the test is about routing behavior.
-Hardware stays at two GPUs through this step.
+not comparable to N=2 (shared memory bandwidth under MPS); the test is about
+routing behaviour. Hardware stays at two GPUs through this step.
 
 **Step 3 — the study step 2 selects.** If multi-instance stays: the
 pressure grid at N=8, R_avg ∈ {0.8, 1.5, 2.5} by concurrency from the same
