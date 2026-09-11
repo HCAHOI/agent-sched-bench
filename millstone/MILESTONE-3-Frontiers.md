@@ -397,6 +397,30 @@ in the cost, or admission control on D. Neither addresses the 2.3× gap to
 DualMap, whose advantage is 76% cache residency with both GPUs decoding,
 so the frontier is closed rather than iterated on mixed56.
 
+**Why disaggregation pays elsewhere and not here** (2026-09-11, from this
+project's measurements; observation first, inference after).
+
+Published PD/PPD gains (DistServe, Splitwise, Mooncake, the PPD upstream)
+come from serving conditions that our runs measured the opposite of:
+
+| Condition where PD wins | What the agent workload measured |
+|---|---|
+| Independent, short-lived conversations; prompts mostly cold, prefill is real compute that must run somewhere | Each turn shares nearly its whole prompt with the previous turn; DualMap hits 76% of prompt tokens in cache. The scarce resource is where the history lives, not prefill throughput |
+| Prompts of a few thousand tokens, outputs of hundreds; decode is a large share of GPU time, so prefill interference on running decodes is the main loss | Prompts 23K–110K, outputs about 150 tokens. Prefill dominates compute; centralizing it on one of two GPUs made that GPU the bottleneck (P queue 71 s TTFT) while D's decode isolation bought only TPOT (42 ms, the best of every policy) |
+| Goodput under TTFT/TPOT SLOs | Task JCT over 50–100 sequential steps; step latency is TTFT plus a short decode, so stable TPOT buys nothing |
+| Pools of many GPUs with a tunable prefill:decode ratio | Two GPUs, so one role bounds the system whichever way the split goes |
+| KV per request small next to compute; fast interconnect | 274K-token KV per L40S holds about three task histories; PD needs the history on P for hits and on D for decode, or re-prefills it on P every turn (the single P thrashed) |
+| Requests arrive and leave | Tool gaps of seconds to minutes between turns leave KV idle under eviction pressure |
+
+Inference: the mismatch is the per-request structure (multi-turn,
+long-context, high-reuse, short-output, judged by sequential step count),
+not the arrival pattern; burst and Poisson arrivals are both realistic and
+both fail for the same reason. Where PD could still fit agents: more GPUs
+with a prefill-heavy ratio and task-sticky prefill instances so histories
+stay hot on P, or heterogeneous hardware with memory-rich decode nodes.
+Neither exists at two GPUs, so this frontier does not reopen on the current
+host.
+
 **Step 7, two-sided on the Poisson manifest (pre-registered 2026-09-11
 07:50 UTC, before launch; `results/mixed56p60-vast-ppd-two-sided-20260911-r1`).**
 The chain's condition for this run was that the profiling predicts a win
@@ -411,6 +435,24 @@ closure above stands for both arrival patterns. Prediction from the
 mixed56 mechanism: the arrivals finish at minute 52 while tasks run about
 an hour, so concurrency reaches the mixed56 regime in the second half and
 D saturates again; a loss to FCFS sticky is expected.
+
+*Result (run 07:49–10:54 UTC, stopped by the advisor at run minute 185
+with 53 of 56 originals finished; `administrative-stop.json` in the run
+directory; recorded as a bounded result, not a completed run).* Every
+Poisson reference had finished all 56 tasks by minute 165. The 53 finished
+tasks average 39.2 min JCT (P95 96 min, max 127 min). The three unfinished
+tasks had been running 133, 133 and 144 min at the stop, so the mean over
+all 56 is at least 44.4 min against 17.3 min for FCFS sticky, 21.2 min for
+least-requests and 14.2 min for DualMap; the same three tasks took 74–112
+min under FCFS sticky and 57–66 min under DualMap. Routing at minute 83:
+846 local, 1,393 via P, no request over 155 s, so no livelock; the loss is
+the same steady-state cost as on mixed56 (all prefill on two roles instead
+of two caches). JCTs are reconstructed from trace timestamps as for the
+mixed56 run (arrival zero = first action minus 2.6 s, terminal = task
+complete plus 2.6 s, anchors from the Poisson references, about ±2 s per
+task). Verdict: the criterion fails by a factor above 2.5 at moderate
+density as well; the Frontier C closure holds for both arrival patterns
+without caveat.
 
 Run-record note. The timed-out replacement call surfaced the simulator
 defect fixed in commit 2ebe6f4 (a replacement-task failure raised after all
