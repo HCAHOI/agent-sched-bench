@@ -298,12 +298,52 @@ must pass `PD_UCX_TLS=all PD_UCX_NET_DEVICES=all`.
    coverage table's empty cells; cache state follows from N × history and is
    read from the records. Output: the (uncached tokens, D load) region where
    PD wins, and the fraction of mixed56 and Poisson-mixed56 requests inside it.
+**Controlled-load profiling result (`results/ppd-load-profile-20260911-r3`,
+18 groups, all valid; summary in `load-profile-summary.txt`).** Turn-2 means
+per cell, local minus PD, with D's cache state as measured:
+
+| Point (history) | Burst N | Local cached fraction | ΔTTFT s | ΔTPOT ms | ΔE2E s |
+|---|---:|---:|---:|---:|---:|
+| P17 (23K) | 8 | 0.99 | −0.4 | −0.2 | −0.5 |
+| P17 | 16 | 0.49 | −3.9 | +19.8 | −0.3 |
+| P17 | 32 | 0.18 | +4.9 | +50.9 | +14.3 |
+| P29 (40K) | 8 | 0.33 | +11.2 | +43.5 | +21.1 |
+| P29 | 16 | 0.00 | +19.9 | +93.3 | +41.2 |
+| P29 | 32 | 0.07 | +27.1 | +98.9 | +49.6 |
+| P35 (76K) | 8 | 0.20 | +10.5 | +92.0 | +29.8 |
+| P35 | 16 | 0.00 | +49.4 | +117.3 | +74.0 |
+| P35 | 32 | 0.02 | +56.8 | +123.9 | +82.8 |
+
+Observation: with an idle P, PD wins end-to-end in 7 of 9 cells; local wins
+only when the history is resident on D (23K history, burst 8) and ties at
+half residency while paying 20 ms per token. Under the PD path D's decode
+TPOT stays at 39–43 ms at every burst size; under local prefill it climbs to
+93–163 ms, and the D queue reaches 246 s at burst 32 with 76K histories.
+P's queue grows linearly with the burst (191 s at N=32, P35) but never
+touches decoding. Inference: the matrix's "local always wins" was the
+saturated-P artifact; the real rule is residency on D versus pending
+prefill work on each side, which is what the two-sided estimate computes.
+The online mixed56 regime (D saturated, 1.7% resident) sits in the PD-wins
+region, so all-local's collapse and fixed PD's advantage are both
+explained, and a router that sends resident requests to D and cold ones to
+P should sit between fixed PD and the residency-first single-role systems.
+
+**Amendment (2026-09-11 04:10 UTC, before any two-sided replay).** The
+pre-declared queue term charged one 2,048-token batch per waiting request
+(0.4–0.6 s); the profiling measured 1.4–12 s per queued request, because a
+queued agent prompt is a full 23K–76K prefill. The snapshot now reports each
+engine's pending prefill tokens (prompt tokens not yet computed over waiting
+and running requests) and the estimate charges them at that side's per-token
+cost. The per-token constants were confirmed by the profiling (D prefill
+span within 30% of 0.184 ms × uncached tokens) and are unchanged. Commit
+0c6eb91; the two-sided smoke with the amended code passed before C1.
+
 2. *Two-sided expected-cost routing* (`ppd_official_proxy.py --two-sided`,
    `PPD_TWO_SIDED=1`): snapshot both engines per request and route to the
    lower estimated time to first token, local = D queue + 0.184 ms ×
    uncached on D; PD = P queue + 0.295 ms × uncached on P + 0.0102 ms ×
-   prompt tokens + 0.4 s handoff; queue = waiting requests × one 2,048-token
-   batch at that side's per-token cost. No length threshold, no lookup table.
+   prompt tokens + 0.4 s handoff; queue = that side's pending prefill tokens
+   at its per-token cost (amended, see above). No length threshold, no lookup table.
    Constants are pre-declared from the matrix; any change from step 1 is
    recorded as an amendment before the run. One mixed56 run on the 0.28.0
    build after a smoke, compared with the existing fixed-PD and all-local
