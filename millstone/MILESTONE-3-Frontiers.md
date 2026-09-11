@@ -395,10 +395,22 @@ Inference: a routing rule that prices only the requesting turn's latency
 cannot be safe on the decode side; it needs D's decode TPOT and KV headroom
 in the cost, or admission control on D. Neither addresses the 2.3× gap to
 DualMap, whose advantage is 76% cache residency with both GPUs decoding,
-so the frontier is closed rather than iterated. The Poisson-manifest run
-(step 7 of the chain) is not run: the load profiling predicted PD wins
-whenever the history is not resident, not only at moderate density, and
-the failure here is structural.
+so the frontier is closed rather than iterated on mixed56.
+
+**Step 7, two-sided on the Poisson manifest (pre-registered 2026-09-11
+07:50 UTC, before launch; `results/mixed56p60-vast-ppd-two-sided-20260911-r1`).**
+The chain's condition for this run was that the profiling predicts a win
+at moderate density; it does, in the sense that local prefill wins when the
+history is resident on D (P17 at burst 8), and residency is higher while
+the Poisson arrivals ramp. References are the three Poisson runs of
+Frontier B (FCFS sticky 17.3 min, least-requests 21.1 min, DualMap 14.2 min
+mean JCT), since no fixed-PD Poisson run exists and one would not change
+the frontier verdict. Criterion: 56/56, and mean JCT below FCFS sticky's
+17.3 min keeps disaggregation open at moderate density; otherwise the
+closure above stands for both arrival patterns. Prediction from the
+mixed56 mechanism: the arrivals finish at minute 52 while tasks run about
+an hour, so concurrency reaches the mixed56 regime in the second half and
+D saturates again; a loss to FCFS sticky is expected.
 
 Run-record note. The timed-out replacement call surfaced the simulator
 defect fixed in commit 2ebe6f4 (a replacement-task failure raised after all
