@@ -158,12 +158,12 @@ cleanup() {
   local rc=$?
   trap - EXIT
   set +e
-  [[ -z "$mps_pid" ]] || { echo quit | nvidia-cuda-mps-control; sleep 1; }
   [[ -z "$sim_pid" ]] || stop_group "$sim_pid"
   [[ -z "$proxy_pid" ]] || stop_group "$proxy_pid"
   for pid in "${collectors[@]}"; do kill -TERM "$pid" 2>/dev/null; wait "$pid"; done
   for pid in "${monitors[@]}"; do stop_group "$pid"; done
   for pid in "${servers[@]}"; do stop_group "$pid"; done
+  [[ -z "$mps_pid" ]] || { echo quit | nvidia-cuda-mps-control; sleep 1; }
   date -u +%FT%TZ > "$run/end-utc.txt"
   echo "$rc" > "$run/exit-code"
 }
@@ -186,7 +186,7 @@ wait_http() {
 }
 mps_env=()
 if [[ "$instances_per_gpu" != 1 ]]; then
-  export CUDA_MPS_PIPE_DIRECTORY="$run/mps-pipe" CUDA_MPS_LOG_DIRECTORY="$run/mps-log"
+  export CUDA_MPS_PIPE_DIRECTORY="/tmp/mps-pipe-$(basename "$run")" CUDA_MPS_LOG_DIRECTORY="$run/mps-log"
   mkdir -p "$CUDA_MPS_PIPE_DIRECTORY" "$CUDA_MPS_LOG_DIRECTORY"
   nvidia-cuda-mps-control -d
   mps_pid=1
@@ -401,9 +401,9 @@ def cpu_hit_tokens(instance):
     return sum(map(float, hits))
 thunderagent = sys.argv[4] in {"thunderagent", "dualmap", "pd", "ppd", "static-x1"}
 pd_smoke = sys.argv[4] in {"pd", "ppd", "static-x1"}
-requests = [("routing-smoke", 0), ("routing-smoke", 1)]
+requests = [("routing-smoke", i) for i in range(num_instances)]
 if sys.argv[3] == "1":
-    requests = [("routing-smoke-0", 0), ("routing-smoke-1", 1)] * 2
+    requests = [(f"routing-smoke-{i}", i) for i in range(num_instances)] * 2
 if thunderagent:
     requests = [(f"routing-smoke-{i}", None) for i in range(4)]
 def send_request(item):

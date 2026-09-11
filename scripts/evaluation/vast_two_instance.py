@@ -102,8 +102,9 @@ def main() -> int:
         "MANIFEST": f"/workspace/manifests/{a.name}.yaml", "RUN_ROOT": remote_run,
     }
     if a.instances_per_gpu > 1:
-        if a.instance_gpu_memory_utilization is None:
-            sys.exit("--instances-per-gpu > 1 needs --instance-gpu-memory-utilization")
+        if a.instance_gpu_memory_utilization is None or not a.instance_kv_tokens:
+            # without the exact cap each engine profiles free memory while its siblings allocate (vLLM asserts on it)
+            sys.exit("--instances-per-gpu > 1 needs --instance-gpu-memory-utilization and --instance-kv-tokens")
         n = 2 * a.instances_per_gpu
         env["INSTANCES_PER_GPU"] = str(a.instances_per_gpu)
         env["INSTANCE_CPUSETS"] = ",".join(f"{48 + 3 * i}-{50 + 3 * i}" for i in range(n))  # 3 cores each, then the router
