@@ -67,6 +67,17 @@ class ReplayActionFailureCounts:
     action_sequence_matches: bool
 
 
+def _model_tool_call_ids(llm_action: dict[str, Any]) -> list[str]:
+    """Tool call ids the model emitted in one llm_call action, in order (empty if none recorded)."""
+    data = llm_action.get("data")
+    raw = data.get("raw_response") if isinstance(data, dict) else None
+    try:
+        calls = raw["choices"][0]["message"].get("tool_calls") or []
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return []
+    return [str(call.get("id") or "") for call in calls if isinstance(call, dict)]
+
+
 class _TraceToolReplayState:
     """Replay completed external-tool calls from one source trajectory."""
 
@@ -77,7 +88,16 @@ class _TraceToolReplayState:
         self.actions: dict[str, dict[str, Any]] = {}
         self.completed: set[str] = set()
         self.sleep_records: list[ReplaySleepRecord] = []
+        # Some agents (qwen3.7-max collections) record the executor's own call id on
+        # tool_exec while the model's tool_calls carry ids like "call_3_0"; the replay
+        # loop presents the model's id. Alias model ids to the execution record by
+        # order: the tool_exec actions after an llm_call consume its tool_calls in turn.
+        self.alias: dict[str, str] = {}
+        pending_model_ids: list[str] = []
         for action in actions:
+            if action.get("action_type") == "llm_call":
+                pending_model_ids = _model_tool_call_ids(action)
+                continue
             if action.get("action_type") != "tool_exec":
                 continue
             data = action.get("data")
@@ -87,6 +107,12 @@ class _TraceToolReplayState:
             if not call_id or call_id in self.actions:
                 raise ValueError("trace tool call IDs must be present and unique")
             self.actions[call_id] = data
+            if pending_model_ids:
+                model_id = pending_model_ids.pop(0)
+                if model_id != call_id:
+                    if model_id in self.alias or model_id in self.actions:
+                        raise ValueError("trace model tool call IDs must be unique")
+                    self.alias[model_id] = call_id
 
     @staticmethod
     def _arguments(data: dict[str, Any]) -> dict[str, Any]:
@@ -103,6 +129,7 @@ class _TraceToolReplayState:
         tool_name: str,
         arguments: dict[str, Any],
     ) -> Any:
+        call_id = self.alias.get(call_id, call_id)
         data = self.actions.get(call_id)
         if data is None:
             raise RuntimeError(f"trace has no tool call {call_id!r}")
