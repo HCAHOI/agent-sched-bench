@@ -280,7 +280,12 @@ the first profiling launch failed at engine start. PD-family runs from
 2026-09-11 on use a separate venv with vLLM 0.28.0+cu129, torch 2.13.0+cu129
 and nixl-cu12 1.4.1 (`PPD_CUDA=cu129`, `PPD_VENV=/workspace/venvs/ppd-cu129`),
 with the same two patches. JCT stays comparable with the 2026-09-07 PD/PPD
-runs under the standing cross-build caveat; TPOT carries a build offset.
+runs under the standing cross-build caveat; TPOT carries a build offset. The
+first profiling attempt on that venv stalled because the launcher's default
+UCX transport (TCP over loopback) pushed 3.4 GB of KV in 6.9 s and then
+stopped after two transfers; the 2026-09-07 runs used `UCX_TLS=all
+UCX_NET_DEVICES=all` (GPU-direct, about 30 ms per transfer). PD-family runs
+must pass `PD_UCX_TLS=all PD_UCX_NET_DEVICES=all`.
 
 **Runs (2026-09-10 night chain), in order.**
 
