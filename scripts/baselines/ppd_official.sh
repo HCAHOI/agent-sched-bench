@@ -31,7 +31,8 @@ connector() {
   if [[ "${PPD_NATIVE_PUSH:-0}" == 1 ]]; then
     "$venv/bin/python" -c "from importlib.metadata import version; assert version('vllm').split('+')[0] == '0.28.0'; assert version('nixl') == version('$nixl_cuda_pkg') == '1.4.1'; from vllm.distributed.kv_transfer.kv_connector.v1.nixl.connector import NixlPushConnector"
     local push_package
-    push_package=$("$venv/bin/python" -c 'import importlib.util,pathlib; print(pathlib.Path(importlib.util.find_spec("vllm").origin).parent)')
+    # resolve(): git apply refuses patch targets that pass through a symlink (e.g. /workspace -> data disk)
+    push_package=$("$venv/bin/python" -c 'import importlib.util,pathlib; print(pathlib.Path(importlib.util.find_spec("vllm").origin).resolve().parent)')
     local push_args=(--unsafe-paths --directory="$push_package" "$script_dir/ppd_push_metrics.patch")
     if [[ "$1" == install ]] && ! git apply --reverse --check "${push_args[@]}" 2>/dev/null; then
       git apply --check "${push_args[@]}"
@@ -57,7 +58,7 @@ from nixl._api import nixl_agent
 print('Verified vLLM 0.13.0 native NIXL imports; real GPU transfer requires smoke.')
 PYCODE
   local package
-  package=$("$venv/bin/python" -c 'import importlib.util,pathlib; print(pathlib.Path(importlib.util.find_spec("vllm").origin).parent)')
+  package=$("$venv/bin/python" -c 'import importlib.util,pathlib; print(pathlib.Path(importlib.util.find_spec("vllm").origin).resolve().parent)')
   local patch_args=(--unsafe-paths --directory="$package" "$script_dir/ppd_nixl_metrics.patch")
   if [[ "$1" == install ]] && ! git apply --reverse --check "${patch_args[@]}" 2>/dev/null; then
     git apply --check "${patch_args[@]}"
@@ -69,7 +70,7 @@ PYCODE
 request_metrics() {
   [[ "${PPD_NATIVE_PUSH:-0}" != 1 ]] || return 0
   local package
-  package=$("$venv/bin/python" -c 'import importlib.util,pathlib; print(pathlib.Path(importlib.util.find_spec("vllm").origin).parent)')
+  package=$("$venv/bin/python" -c 'import importlib.util,pathlib; print(pathlib.Path(importlib.util.find_spec("vllm").origin).resolve().parent)')
   local patch_args=(--unsafe-paths --directory="$package" "$script_dir/ppd_request_metrics.patch")
   if [[ "$1" == install ]] && ! git apply --reverse --check "${patch_args[@]}" 2>/dev/null; then
     git apply --check "${patch_args[@]}"
