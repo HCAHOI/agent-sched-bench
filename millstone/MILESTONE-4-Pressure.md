@@ -295,6 +295,48 @@ degradation opens the task-level working-set admission direction
 mechanisms) is superseded by this; the N=8 verdict still decides whether
 multi-instance stays in scope.
 
+*Step 3 result (read 22:52 UTC; `results/chain11-grid-20260911.{sh,log}`).*
+N=2 capped (262,144 tokens per instance), pool64-v4, closed loop with
+replacement, 64/64 tasks and 1,951 requests in every run:
+
+| Concurrency (R_avg) | Policy | Mean JCT (min) | P95 | Max | Makespan | Cached | Hold / queue / prefill / decode (s) | CPU-tier tokens |
+|---|---|---:|---:|---:|---:|---:|---|---:|
+| 32 (1.18) | FCFS sticky | 12.88 | 26.5 | 36.6 | 37.2 | 0.56 | 0 / 5.8 / 0.55 / 7.9 | — |
+| 32 (1.18) | DualMap | 9.40 | 16.8 | 25.3 | 26.0 | 0.94 | 2.7 / 0.7 / 0.12 / 6.3 | 1.6M |
+| 48 (1.77) | FCFS sticky | 16.59 | 37.9 | 42.8 | 43.7 | 0.09 | 0 / 16.8 / 1.0 / 9.0 | — |
+| 48 (1.77) | DualMap | 10.00 | 18.3 | 44.0 | 44.9 | 0.95 | 6.8 / 0.7 / 0.12 / 6.9 | 8.1M |
+| 64 (2.36) | FCFS sticky | 17.84 | 47.7 | 55.6 | 56.8 | 0.07 | 0 / 23.4 / 1.0 / 7.7 | — |
+| 64 (2.36) | DualMap | 9.93 | 17.8 | 25.1 | 26.3 | 0.90 | 8.1 / 0.7 / 0.17 / 6.3 | 7.9M |
+
+Paired DualMap − sticky: −396 s [−504, −285] at c48, −475 s [−631, −330]
+at c64. FCFS c64 − c48: +75 s [−10, +158].
+
+*Against the pre-registration.* The FCFS half held: the cache collapses
+(0.09, 0.07) and the in-engine queue grows to 17 and 23 s per request. The
+DualMap half did not: the hold is not a fixed throttle, it grows with
+pressure (2.7 → 6.8 → 8.1 s per request), the in-engine queue stays at 0.7 s
+and the cache at ≥ 0.90 at every point, and mean JCT moves from 9.40 to
+10.00 to 9.93 min, within 40 s of the c32 value at 2× the pressure. By the
+decision criterion (JCT growth ≈ concurrency growth is the work-conserving
+bound; DualMap is far under it, cached ≥ 0.9, queue < 1 s), **scheduling
+under KV pressure is closed on this workload**: request-level admission with
+a DRAM tier already achieves it. The CPU tier grows from 4% of prompt
+tokens at c32 to about 22% at c48 and c64, so above R ≈ 1.5 the DRAM tier
+is doing real work; that is the §5 32B question.
+
+*Where DualMap does fail: the tail, once.* At c48 the largest-context trace
+(install-windows-xp, 54 steps) was held at the proxy for 23.6 min in total
+and finished at 44.0 min, against 25.3 min at c32 and 25.1 min at c64; three
+other tasks were held over 10 min each. The throttle concentrates waiting on
+the heaviest tasks (the rich-get-richer effect the 2026-09-07 meeting notes
+§1 assumed), but it did not recur at c64 (max 25.1 min), so it is a
+one-run observation, not a characterized failure mode.
+
+*Consequence.* `PENDING.md` §3 (working-set admission) is not pursued: its
+gate was DualMap degrading, and it did not. The remaining questions are the
+design-space levers in `PENDING.md` §5 and §7 (model size, TP=2 vs DP=2,
+memory hierarchy at 32B).
+
 ## 4. Evidence
 
 - Smoke and calibration: `../results/fcfs-least-requests-smoke-20260911-r2/`,

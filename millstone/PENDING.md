@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-11 19:10 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-11 22:55 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -15,8 +15,8 @@ Per-run analysis lands in `results/<run>/comparison.txt` and
 | 1–4 | N=2 full and N=2 capped, FCFS sticky and DualMap | Step 2 reference and same-capacity control for N=8 | done (M4 §3) |
 | 5–6 | N=8 capped (k=4 per GPU under MPS), FCFS sticky and DualMap | Step 2 decision point | done 19:01 UTC; verdict in M4 §3 |
 | — | N=4 capped pair | optional middle point of the N axis | dropped 17:52 UTC, no result read; rerun only if N=8 is anomalous |
-| 7–10 | N=2 capped at concurrency 48 and 64, FCFS sticky and DualMap | Step 3 pressure grid (below) | running since 19:01 UTC, `results/chain11-grid-20260911.sh`, ~22:30 UTC |
-| 11–14 | Qwen3-32B-FP8: smoke, DualMap calibration, N=2 full FCFS sticky and DualMap at concurrency 32 | Model-size check (§5) | queued, `results/chain12-qwen32b-20260911.sh`, ~22:30–01:30 UTC |
+| 7–10 | N=2 capped at concurrency 48 and 64, FCFS sticky and DualMap | Step 3 pressure grid (below) | done 22:50 UTC; result in M4 §3 step 3 |
+| 11–14 | Qwen3-32B-FP8: smoke, DualMap calibration, N=2 full FCFS sticky and DualMap at concurrency 32 | Model-size check (§5) | running since 22:53 UTC, `results/chain12-qwen32b-20260911.sh`, ~02:00 UTC |
 
 Chain 11 waits for the N=8 DualMap analysis, stops chain 10 before it
 launches the N=4 pair, then runs the grid.
@@ -45,6 +45,12 @@ hold time and in-engine queue rise together.
 growth ≈ concurrency growth, cached share ≥ 0.9, in-engine queue < 1 s),
 scheduling under KV pressure is closed on this workload and the direction in
 §3 is not pursued. If it degrades, §3 becomes the method to build.
+
+**Result (22:50 UTC, M4 §3 step 3).** DualMap held: 9.40 / 10.00 / 9.93 min
+at c32 / c48 / c64, cached ≥ 0.90, queue 0.7 s; the hold adapts (2.7 → 8.1 s).
+FCFS collapsed (cached 0.07, queue 23 s, 17.84 min). Scheduling under KV
+pressure is closed on this workload; §3 is not pursued. One tail failure at
+c48 (largest task held 23.6 min) did not recur at c64.
 
 **Measured.** Per-request decomposition (proxy hold, in-engine queue,
 prefill, decode) from `routing.jsonl` and `vllm-request-telemetry.jsonl`,
@@ -84,11 +90,11 @@ growth-aware admission and victim choice fix ThunderAgent's starvation while
 keeping DualMap's cache protection, against both as baselines. Thin margin;
 the advisor's call.
 
-Gate: §2 result. Only if DualMap degrades at R 2.4 (or at 32B, §5).
+Gate: §2 result. **Closed 22:50 UTC: DualMap did not degrade at R 2.4.** Reopens only if the 32B run (§5) shows it degrading there.
 
 ## 4. After the grid
 
-- **DualMap holds at R 2.4.** KV-pressure scheduling closed on this workload.
+- **DualMap holds at R 2.4 (this is what happened).** KV-pressure scheduling closed on this workload.
   Open question for the advisor: which problem next. Evidence in hand that
   points elsewhere: GPU-side time per step (7–14 s) is small against tool
   time (median 66 s per step), so cost per task (GPU-hours) rather than
