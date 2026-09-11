@@ -78,6 +78,31 @@ def _model_tool_call_ids(llm_action: dict[str, Any]) -> list[str]:
     return [str(call.get("id") or "") for call in calls if isinstance(call, dict)]
 
 
+def _tool_call_id_aliases(actions: list[dict[str, Any]]) -> dict[str, str]:
+    """Map model-emitted tool call ids to the recorded executor ids where they differ.
+
+    Some agents (qwen3.7-max collections) record the executor's own id on tool_exec while
+    the model's tool_calls carry ids like "call_3_0"; the replay loop presents the model's
+    id. The tool_exec actions after an llm_call consume its tool_calls in order.
+    """
+    aliases: dict[str, str] = {}
+    pending_model_ids: list[str] = []
+    for action in actions:
+        if action.get("action_type") == "llm_call":
+            pending_model_ids = _model_tool_call_ids(action)
+            continue
+        if action.get("action_type") != "tool_exec" or not pending_model_ids:
+            continue
+        data = action.get("data")
+        call_id = str(data.get("tool_call_id") or "") if isinstance(data, dict) else ""
+        model_id = pending_model_ids.pop(0)
+        if model_id and call_id and model_id != call_id:
+            if model_id in aliases:
+                raise ValueError("trace model tool call IDs must be unique")
+            aliases[model_id] = call_id
+    return aliases
+
+
 class _TraceToolReplayState:
     """Replay completed external-tool calls from one source trajectory."""
 
@@ -88,31 +113,17 @@ class _TraceToolReplayState:
         self.actions: dict[str, dict[str, Any]] = {}
         self.completed: set[str] = set()
         self.sleep_records: list[ReplaySleepRecord] = []
-        # Some agents (qwen3.7-max collections) record the executor's own call id on
-        # tool_exec while the model's tool_calls carry ids like "call_3_0"; the replay
-        # loop presents the model's id. Alias model ids to the execution record by
-        # order: the tool_exec actions after an llm_call consume its tool_calls in turn.
-        self.alias: dict[str, str] = {}
-        pending_model_ids: list[str] = []
+        self.alias = _tool_call_id_aliases(actions)
         for action in actions:
-            if action.get("action_type") == "llm_call":
-                pending_model_ids = _model_tool_call_ids(action)
-                continue
             if action.get("action_type") != "tool_exec":
                 continue
             data = action.get("data")
             if not isinstance(data, dict):
                 raise ValueError("trace tool action has no data object")
             call_id = str(data.get("tool_call_id") or "")
-            if not call_id or call_id in self.actions:
+            if not call_id or call_id in self.actions or call_id in self.alias:
                 raise ValueError("trace tool call IDs must be present and unique")
             self.actions[call_id] = data
-            if pending_model_ids:
-                model_id = pending_model_ids.pop(0)
-                if model_id != call_id:
-                    if model_id in self.alias or model_id in self.actions:
-                        raise ValueError("trace model tool call IDs must be unique")
-                    self.alias[model_id] = call_id
 
     @staticmethod
     def _arguments(data: dict[str, Any]) -> dict[str, Any]:
@@ -477,6 +488,7 @@ def _action_matches_source(
     source_action: dict[str, Any],
     *,
     require_exact_tool_calls: bool = False,
+    aliases: dict[str, str] | None = None,
 ) -> bool:
     if replay_record.get("action_type") != source_action.get("action_type"):
         return False
@@ -488,9 +500,12 @@ def _action_matches_source(
         return True
     replay_data = replay_record.get("data") or {}
     source_data = source_action.get("data") or {}
+    replay_call_id = replay_data.get("tool_call_id")
+    if aliases:
+        replay_call_id = aliases.get(replay_call_id, replay_call_id)
     return (
         replay_record.get("action_id") == source_action.get("action_id")
-        and replay_data.get("tool_call_id") == source_data.get("tool_call_id")
+        and replay_call_id == source_data.get("tool_call_id")
         and replay_data.get("tool_args") == source_data.get("tool_args")
     )
 
@@ -513,6 +528,7 @@ def replay_action_failure_counts(
     recorded source failure.
     """
     source_replay_actions = _replayable_source_actions(source_actions)
+    aliases = _tool_call_id_aliases(source_actions)
     source_failed_actions = sum(
         1 for action in source_replay_actions if _action_failed(action)
     )
@@ -534,6 +550,7 @@ def replay_action_failure_counts(
             record,
             source_action,
             require_exact_tool_calls=require_exact_tool_calls,
+            aliases=aliases,
         ):
             action_sequence_matches = False
         if not _action_failed(record):
@@ -545,6 +562,7 @@ def replay_action_failure_counts(
                 record,
                 source_action,
                 require_exact_tool_calls=require_exact_tool_calls,
+                aliases=aliases,
             )
             or not _action_failed(source_action)
         ):

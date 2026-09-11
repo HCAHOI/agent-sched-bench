@@ -48,3 +48,22 @@ def test_unknown_id_still_rejected() -> None:
 def test_duplicate_model_ids_rejected() -> None:
     with pytest.raises(ValueError, match="unique"):
         _TraceToolReplayState([_llm("call_x"), _tool("a"), _llm("call_x"), _tool("b")], replay_speed=1e6)
+
+
+def test_failure_counts_align_model_ids_with_source_records() -> None:
+    from trace_collect.openclaw_host_runtime import replay_action_failure_counts
+
+    source = [
+        {"action_type": "llm_call", "action_id": "llm_0",
+         "data": {"raw_response": {"choices": [{"message": {"tool_calls": [{"id": "call_0_0"}]}}]}}},
+        {"action_type": "tool_exec", "action_id": "tool_0",
+         "data": {"tool_call_id": "uy9W4K0eg", "tool_name": "exec", "tool_args": {"command": "ls"}, "success": False}},
+    ]
+    replay = [
+        {"type": "action", "action_type": "llm_call", "action_id": "llm_0", "data": {}},
+        {"type": "action", "action_type": "tool_exec", "action_id": "tool_0",
+         "data": {"tool_call_id": "call_0_0", "tool_name": "exec", "tool_args": {"command": "ls"}, "success": False}},
+    ]
+    counts = replay_action_failure_counts(source, replay, require_exact_tool_calls=True)
+    assert counts.action_sequence_matches and counts.unexpected_replay_failed_actions == 0
+    assert counts.replay_failed_actions == counts.source_failed_actions == 1
