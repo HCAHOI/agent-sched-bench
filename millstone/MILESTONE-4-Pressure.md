@@ -66,6 +66,22 @@ none. Inference: with residency free, placement policy stops mattering for
 the mean; DualMap keeps a small tail advantage. DualMap's 2× on L40S was a
 property of the over-capacity regime, not of the workload.
 
+**Tail imbalance at N=2 (`instance_balance_summary.py`, 5-minute windows,
+originals only).** Under FCFS sticky, instance 0 ran dry at minute 20 and
+stayed idle to the end at minute 45 while instance 1 still carried 12, then
+8, then 7 tasks; 4 of the 9 windows have max-over-mean prompt-token
+imbalance above 1.5 and the last three are 2.0 (one GPU idle). DualMap
+migrated tasks (home-instance share 0.82 against 1.0) and idled less: 1 of
+8 windows above 1.5, makespan 38.5 min against 45.0. Mean JCT hides this
+because the stranded tasks are the long ones either way; P95 and makespan
+show it. On L40S the same FCFS sticky run had no window above 1.5, so the
+placement luck of the arrival alternation decides whether the tail strands
+one instance. Inference: imbalance exists even at N=2 and it is a tail
+phenomenon that sticky routing cannot repair; the step 2 rule therefore
+counts only windows with at least as many unfinished tasks as instances,
+so a drain that no policy could balance is not read as imbalance, while a
+stranded half-run is.
+
 **Replica check.** Each mixed56 copy's system message starts with a unique
 "Replay copy: NN" token, so the two replicas of a task diverge at the third
 token and cannot share KV. Measured on the L40S and Pro 6000 DualMap runs:
@@ -143,13 +159,17 @@ log. Six runs on pool64 at concurrency 32, DualMap CPU tier 96 GB in total
 | N=8 capped | 400,000 (50K per instance) | 1.66 | FCFS sticky, DualMap |
 
 N=2 capped against N=8 capped isolates the replica-count effect at equal
-capacity; N=2 full against N=2 capped isolates pressure. Measured: per-
+capacity; N=2 full against N=2 capped isolates pressure. Measured
+(`scripts/evaluation/instance_balance_summary.py`, originals only): per-
 instance in-flight load and prompt tokens per 5-minute window, max-over-mean
-imbalance, share of a task's requests served by its home instance, JCT with
-the paired bootstrap over the 64 tasks. Decision rule: multi-instance stays
-in scope if at N=8 the imbalance under FCFS sticky exceeds 1.5 in at least a
-quarter of the windows, or the DualMap-versus-sticky mean JCT gap at N=8
-exceeds the 2-minute separability bound. Otherwise multi-instance scheduling
+prompt-token imbalance over windows with at least N unfinished tasks (drain
+windows excluded, see §1), share of a task's requests served by its home
+instance, JCT with the paired bootstrap over the 64 tasks. Decision rule:
+multi-instance stays in scope if at N=8 the imbalance under FCFS sticky
+exceeds 1.5 in at least a quarter of the counted windows, or the
+DualMap-versus-sticky mean JCT gap at N=8 exceeds the 2-minute separability
+bound. The drain exclusion was fixed on 2026-09-11 15:20 UTC after the
+bridge runs and before any step 2 run. Otherwise multi-instance scheduling
 is closed as a non-problem at realistic pressure and Milestones 2–3 become a
 characterization of the over-capacity regime. Absolute N=8 latencies are
 not comparable to N=2 (shared memory bandwidth under MPS); the test is about
