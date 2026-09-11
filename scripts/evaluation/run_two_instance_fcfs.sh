@@ -18,6 +18,19 @@ task_sticky=${TASK_STICKY:-0}
 [[ "$task_sticky" == 0 || "$task_sticky" == 1 ]] || exit 2
 instance_policy=${INSTANCE_POLICY:-fcfs}
 router_policy=${ROUTER_POLICY:-least-requests}
+# k engines per GPU (default 1 = the two-instance configuration every recorded run used). k>1
+# emulates a larger replica pool on two GPUs: engines on one GPU share compute under MPS with
+# a fixed SM share each and share memory bandwidth; per-instance KV comes from
+# INSTANCE_GPU_MEMORY_UTILIZATION and CPU pinning from INSTANCE_CPUSETS (comma-separated ranges).
+instances_per_gpu=${INSTANCES_PER_GPU:-1}
+[[ "$instances_per_gpu" =~ ^[1-9]$ ]] || exit 2
+num_instances=$((2 * instances_per_gpu))
+instances=($(seq 0 $((num_instances - 1))))
+if [[ "$instances_per_gpu" != 1 ]]; then
+  [[ -n "${INSTANCE_GPU_MEMORY_UTILIZATION:-}" && -n "${INSTANCE_CPUSETS:-}" ]] || { echo "INSTANCES_PER_GPU>1 needs INSTANCE_GPU_MEMORY_UTILIZATION and INSTANCE_CPUSETS" >&2; exit 2; }
+fi
+IFS=, read -r -a instance_cpusets <<< "${INSTANCE_CPUSETS:-}"
+[[ -z "${INSTANCE_CPUSETS:-}" || ${#instance_cpusets[@]} == "$num_instances" ]] || exit 2
 mode=${1:---run}
 shadow_mode=continuum-public
 ppd_mode=
@@ -31,7 +44,7 @@ case "$router_policy" in
     [[ "$mode" == --calibrate || -n "${DUALMAP_PREFILL_TPOT:-}" ]] || { echo "DUALMAP_PREFILL_TPOT requires hardware calibration" >&2; exit 2; }
     shadow_mode=thunderagent ;;
   pd|ppd|static-x1|profile)
-    [[ "$instance_policy" == fcfs && "$task_sticky" == 0 ]] || exit 2
+    [[ "$instance_policy" == fcfs && "$task_sticky" == 0 && "$instances_per_gpu" == 1 ]] || exit 2
     [[ "$router_policy" != static-x1 || "$mode" == --smoke || "$mode" == --profile-ppd ]] || exit 2
     [[ "$router_policy" != profile || "$mode" == --profile-lengths ]] || exit 2
     [[ "$router_policy" != ppd || -d "${PPD_BENCHMARK_DATA:-}" ]] || { echo "PPD needs measured decision tables" >&2; exit 2; }
@@ -53,8 +66,11 @@ esac
 # two identical GPUs with at least 45 GB each (L40S 46 GB, RTX Pro 6000 96 GB); the model is recorded in hardware.txt
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits | \
   awk -F, '{names[$1]=1} $2 < 45000 {bad=1} END {exit (bad || length(names) != 1)}'
-ports=(8000 8001 9000 5557 5558 5559 5560)
-[[ "$router_policy" != dualmap ]] || ports+=(8101 8111)
+ports=(9000)
+for i in "${instances[@]}"; do
+  ports+=($((8000+i)) $((5557+2*i)) $((5558+2*i)))
+  [[ "$router_policy" != dualmap ]] || ports+=($((8101+10*i)))
+done
 [[ -z "$ppd_mode" ]] || ports+=(14579 14580)
 for port in "${ports[@]}"; do
   if timeout 1 bash -c "</dev/tcp/127.0.0.1/$port" 2>/dev/null; then
@@ -137,10 +153,12 @@ stop_group() {
   kill -KILL -- -"$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
 }
+mps_pid=
 cleanup() {
   local rc=$?
   trap - EXIT
   set +e
+  [[ -z "$mps_pid" ]] || { echo quit | nvidia-cuda-mps-control; sleep 1; }
   [[ -z "$sim_pid" ]] || stop_group "$sim_pid"
   [[ -z "$proxy_pid" ]] || stop_group "$proxy_pid"
   for pid in "${collectors[@]}"; do kill -TERM "$pid" 2>/dev/null; wait "$pid"; done
@@ -166,13 +184,26 @@ wait_http() {
   done
   return 1
 }
-for i in 0 1; do
+mps_env=()
+if [[ "$instances_per_gpu" != 1 ]]; then
+  export CUDA_MPS_PIPE_DIRECTORY="$run/mps-pipe" CUDA_MPS_LOG_DIRECTORY="$run/mps-log"
+  mkdir -p "$CUDA_MPS_PIPE_DIRECTORY" "$CUDA_MPS_LOG_DIRECTORY"
+  nvidia-cuda-mps-control -d
+  mps_pid=1
+  mps_env=(CUDA_MPS_PIPE_DIRECTORY="$CUDA_MPS_PIPE_DIRECTORY" CUDA_MPS_ACTIVE_THREAD_PERCENTAGE=$((100 / instances_per_gpu)))
+fi
+for i in "${instances[@]}"; do
   cell="$run/instance-$i"
   mkdir "$cell"
   port=$((8000+i)); kv_port=$((5557+2*i)); replay_port=$((5558+2*i))
+  gpu_index=$((i / instances_per_gpu))
   cpuset=${PREFILL_CPUSET:-0-2}; [[ "$i" == 0 ]] || cpuset=${DECODE_CPUSET:-12-14}
-  cache_env=() cache_args=()
-  cell_gpu_memory_util=$gpu_memory_util
+  [[ -z "${INSTANCE_CPUSETS:-}" ]] || cpuset=${instance_cpusets[i]}
+  cache_env=() cache_args=() kv_cap_args=()
+  cell_gpu_memory_util=${INSTANCE_GPU_MEMORY_UTILIZATION:-$gpu_memory_util}
+  # Exact per-instance KV budget (bytes) for the pressure grid; the engine log's "GPU KV cache size" line
+  # is the measured capacity. Without it the KV size is whatever the memory fraction leaves.
+  [[ -z "${INSTANCE_KV_CACHE_BYTES:-}" ]] || kv_cap_args=(--kv-cache-memory-bytes "$INSTANCE_KV_CACHE_BYTES")
   engine_command=(bash scripts/baselines/continuum_public.sh "$serve_command" "$model")
   if [[ "$router_policy" == dualmap ]]; then
     cat > "$cell/lmcache.yaml" <<YAML
@@ -218,13 +249,14 @@ YAML
     telemetry_args=(--worker-cls scripts.evaluation.cupti_dram_worker.CuptiDramWorker)
   fi
   launch=(setsid "${privilege[@]}" env HOME="$HOME" PATH="$PATH"
-    VLLM_NO_USAGE_STATS=1 CUDA_VISIBLE_DEVICES="$i" VLLM_SERVER_DEV_MODE=1
+    VLLM_NO_USAGE_STATS=1 CUDA_VISIBLE_DEVICES="$gpu_index" VLLM_SERVER_DEV_MODE=1 "${mps_env[@]}"
     PYTHONPATH="$overlay/cuda-bindings:$overlay:$repo" RUN_OUTPUT_DIR="$cell/continuum"
     VLLM_REQUEST_TELEMETRY_PATH="$cell/vllm-request-telemetry.jsonl" "${telemetry_env[@]}"
     "${cache_env[@]}"
     taskset -c "$cpuset" "${engine_command[@]}"
     --host 127.0.0.1 --port "$port" --tensor-parallel-size 1
     --gpu-memory-utilization "$cell_gpu_memory_util" --max-model-len 131072 --max-num-seqs 8
+    "${kv_cap_args[@]}"
     --enable-prefix-caching --kv-cache-dtype auto --enforce-eager
     --enable-chunked-prefill --max-num-batched-tokens 2048
     "${telemetry_args[@]}"
@@ -235,8 +267,8 @@ YAML
   "${launch[@]}" > "$cell/vllm.log" 2>&1 &
   servers+=("$!")
 done
-for i in 0 1; do
-  cell="$run/instance-$i"; port=$((8000+i))
+for i in "${instances[@]}"; do
+  cell="$run/instance-$i"; port=$((8000+i)); gpu_index=$((i / instances_per_gpu))
   wait_http "$port" "${servers[i]}"
   if [[ "$dram_metrics" == on ]]; then [[ -f "$cell/dram-bandwidth-ready" && ! -s "$cell/dram-bandwidth.err" ]]; fi
   curl -fsS "http://127.0.0.1:$port/metrics" > "$cell/vllm-metrics-start.prom"
@@ -255,7 +287,7 @@ for i in 0 1; do
       printf "%s," "$(date +%s.%N)"
       nvidia-smi -i "$1" --query-gpu=power.draw,memory.used,utilization.gpu,utilization.memory --format=csv,noheader,nounits || exit
       sleep 1
-    done' _ "$i" > "$cell/gpu.csv" 2> "$cell/gpu.err" &
+    done' _ "$gpu_index" > "$cell/gpu.csv" 2> "$cell/gpu.err" &
   monitors+=("$!")
   setsid "$python" scripts/evaluation/collect_http_metrics.py "http://127.0.0.1:$port/metrics" \
     --output "$cell/vllm-metrics-series.prom" --gaps "$cell/vllm-metrics-gaps.jsonl" \
@@ -272,7 +304,7 @@ for i in 0 1; do
     monitors+=("$!")
   fi
 done
-for i in 0 1; do
+for i in "${instances[@]}"; do
   for _ in $(seq 1 100); do
     [[ -f "$run/instance-$i/kv-events-ready" ]] && break
     kill -0 "${collectors[i]}"
@@ -315,18 +347,19 @@ print(json.dumps(calibration))
 PY
   exit 0
 fi
+backends=(); for i in "${instances[@]}"; do backends+=("http://127.0.0.1:$((8000+i))"); done
 proxy=(setsid taskset -c "${ROUTER_CPUSET:-15}" "$python" scripts/baselines/least_requests_proxy.py
-  --backends http://127.0.0.1:8000 http://127.0.0.1:8001 --events "$run/routing.jsonl")
+  --backends "${backends[@]}" --events "$run/routing.jsonl")
 [[ "$task_sticky" == 0 ]] || proxy+=(--task-sticky)
 if [[ "$router_policy" == thunderagent ]]; then
-  proxy=(setsid taskset -c "${ROUTER_CPUSET:-15}" env THUNDERAGENT_BACKENDS=http://127.0.0.1:8000,http://127.0.0.1:8001
+  proxy=(setsid taskset -c "${ROUTER_CPUSET:-15}" env THUNDERAGENT_BACKENDS=$(IFS=,; echo "${backends[*]}")
     THUNDERAGENT_CONTINUUM_FCFS=1
     THUNDERAGENT_PROFILE_DIR="$run/thunderagent-profiles" THUNDERAGENT_ROUTING_EVENTS="$run/routing.jsonl"
     SHADOW_LLM_TIMEOUT_S="$timeout_s" bash scripts/baselines/thunderagent_official.sh serve)
 fi
 if [[ "$router_policy" == dualmap ]]; then
   proxy=(setsid taskset -c "${ROUTER_CPUSET:-15}" bash scripts/baselines/dualmap_official.sh serve
-    --model "$model" --backends http://127.0.0.1:8000 http://127.0.0.1:8001
+    --model "$model" --backends "${backends[@]}"
     --output "$run" --prefill-tpot "$DUALMAP_PREFILL_TPOT" --kv-bytes-per-token "$kv_bytes_per_token"
     --cpu-cache-gib "$cpu_cache_gib" --timeout-s "$timeout_s")
   [[ "${DUALMAP_AGENT_PROGRESS:-0}" != 1 ]] || proxy+=(--agent-progress)
@@ -354,11 +387,12 @@ proxy_pid=$!
 wait_http 9000 "$proxy_pid"
 date -u +%FT%TZ > "$run/start-utc.txt"
 if [[ "$mode" == --smoke ]]; then
-  "$python" - "$model" "$run" "$task_sticky" "$router_policy" "$dram_metrics" <<'PY'
+  "$python" - "$model" "$run" "$task_sticky" "$router_policy" "$dram_metrics" "$num_instances" <<'PY'
 import json, pathlib, re, sys, time
 from concurrent.futures import ThreadPoolExecutor
 import httpx
 model, run = sys.argv[1], pathlib.Path(sys.argv[2])
+num_instances = int(sys.argv[6])
 def cpu_hit_tokens(instance):
     response = httpx.get(f"http://127.0.0.1:{8101+10*instance}/metrics")
     response.raise_for_status()
@@ -407,8 +441,8 @@ if thunderagent:
         list(pool.map(send_request, enumerate(requests)))
     if sys.argv[4] == "dualmap":
         time.sleep(11)  # LMCache publishes counters every 10 seconds; include all first-wave hits.
-        hits_before_reset = [cpu_hit_tokens(i) for i in range(2)]
-        for port in (8000, 8001):
+        hits_before_reset = [cpu_hit_tokens(i) for i in range(num_instances)]
+        for port in range(8000, 8000 + num_instances):
             response = httpx.post(f"http://127.0.0.1:{port}/reset_prefix_cache")
             response.raise_for_status()
     # Returning requests exercise the same per-job history after a completed call.
@@ -427,13 +461,13 @@ health = httpx.get("http://127.0.0.1:9000/health").json()
 if sys.argv[4] in {"dualmap", "pd", "ppd", "static-x1"}:
     assert health["outstanding"] == 0
 else:
-    assert health["programs_count"] == 0 if thunderagent else health["outstanding"] == [0, 0]
+    assert health["programs_count"] == 0 if thunderagent else health["outstanding"] == [0] * num_instances
 if thunderagent:
     rows = [json.loads(line) for line in (run / "routing.jsonl").read_text().splitlines()]
     assert len([r for r in rows if r["event"] == "dispatch"]) == 2 * len(requests)
     assert all(r["outcome"] == "complete" for r in rows if r["event"] == "finish")
 time.sleep(35)  # CUPTI decodes its one-second samples in 30-second batches.
-for i in range(2):
+for i in range(num_instances):
     cell = run / f"instance-{i}"
     if sys.argv[5] == "on":
         assert len((cell / "dram-bandwidth.csv").read_text().splitlines()) > 1
@@ -485,7 +519,7 @@ else
   monitor_start=$(date +%s)
   while kill -0 "$sim_pid" 2>/dev/null; do
     for pid in "${servers[@]}" "${collectors[@]}" "${monitors[@]}" "$proxy_pid"; do kill -0 "$pid"; done
-    for i in 0 1; do
+    for i in "${instances[@]}"; do
       cell="$run/instance-$i"
       for error in dram-bandwidth.err gpu.err vllm-metrics-series.err; do [[ ! -s "$cell/$error" ]]; done
       metric_files=(gpu.csv vllm-metrics-series.prom)
@@ -535,7 +569,7 @@ PYPROBE
   fi
   "${checker[@]}" --final
 fi
-for i in 0 1; do
+for i in "${instances[@]}"; do
   if [[ "$router_policy" == dualmap ]]; then
     curl -fsS "http://127.0.0.1:$((8101+10*i))/metrics" > "$run/instance-$i/lmcache-metrics-final.prom"
   fi
@@ -545,9 +579,9 @@ for i in 0 1; do
 done
 collectors=()
 
-"$python" - "$run" <<'PY'
+"$python" - "$run" "$num_instances" <<'PY'
 import json, pathlib, sys
-for i in range(2):
+for i in range(int(sys.argv[2])):
     summary = json.loads((pathlib.Path(sys.argv[1]) / f"instance-{i}/kv-events-summary.json").read_text())
     assert summary["batch_count"] > 0 and not summary["sequence_gaps"], summary
     assert summary["tail_replay_complete"], summary

@@ -28,10 +28,10 @@ def create_app(
     A dropped engine connection is retried once on the same engine while no byte has
     reached the client; once streaming has started the request is not idempotent.
     """
-    if len(backends) != 2 or len(set(backends)) != 2:
-        raise ValueError("two distinct backends are required")
+    if len(backends) < 2 or len(set(backends)) != len(backends):
+        raise ValueError("at least two distinct backends are required")
     clients = [httpx.AsyncClient(base_url=b, timeout=None, transport=transport) for b in backends]
-    outstanding = [0, 0]
+    outstanding = [0] * len(backends)
     next_tie = 0
     previous: dict[str, int] = {}
     visited: dict[str, set[int]] = {}
@@ -85,8 +85,8 @@ def create_app(
         if task_sticky and last is not None:
             index = last
         else:
-            index = min(range(2), key=lambda i: (outstanding[i], (i - next_tie) % 2))
-            next_tie = 1 - index
+            index = min(range(len(backends)), key=lambda i: (outstanding[i], (i - next_tie) % len(backends)))
+            next_tie = (index + 1) % len(backends)
         before = list(outstanding)
         outstanding[index] += 1
         previous[job_id] = index
@@ -175,7 +175,7 @@ def create_app(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--backends", nargs=2, required=True)
+    parser.add_argument("--backends", nargs="+", required=True)
     parser.add_argument("--port", type=int, default=9000)
     parser.add_argument("--events", type=Path, required=True)
     parser.add_argument("--task-sticky", action="store_true")

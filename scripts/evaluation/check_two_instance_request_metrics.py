@@ -31,7 +31,7 @@ def check(run: Path, *, final: bool = False) -> None:
     if final:
         assert arrivals == finishes, "Unmatched arrival/finish records"
     telemetry = {}
-    for i in range(2):
+    for i in range(len(sorted(run.glob("instance-*")))):
         terminal = rows(run / f"instance-{i}/vllm-request-telemetry.jsonl", final)
         counts = Counter(r["request_id"] for r in terminal)
         assert all(n == 1 for n in counts.values()), f"Duplicate terminal telemetry on instance {i}"

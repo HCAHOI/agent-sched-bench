@@ -1,0 +1,40 @@
+{
+ "pool_dirs": [
+  "traces/exports/swe-rebench-original-flat-644-20260904",
+  "traces/exports/terminal-bench-original-flat-239-20260904"
+ ],
+ "pool_size": 864,
+ "n": 4,
+ "seed": 7,
+ "selection": "proportional stratified over (corpus, agent model, peak-context bucket), largest-remainder quotas, seeded sample within stratum; traces referenced in place, no replay copies",
+ "strata": {
+  "swe-rebench | gpt-5.6-sol | 16-32K": 1,
+  "swe-rebench | qwen3.7-max | 16-32K": 1,
+  "swe-rebench | qwen3.7-max | 32-64K": 1,
+  "terminal-bench | gpt-5.6-sol | <16K": 1
+ },
+ "concurrency": 4,
+ "selected_summary": {
+  "steps_total": 146,
+  "mean_prompt_tokens_per_step": 13282,
+  "mean_peak_prompt_tokens": 20524,
+  "peak_p50": 19111.0,
+  "steps_p50": 39.5,
+  "tool_s_p50": 103.05,
+  "corpus": {
+   "swe-rebench": 3,
+   "terminal-bench": 1
+  },
+  "model": {
+   "gpt-5.6-sol": 2,
+   "qwen3.7-max": 2
+  }
+ },
+ "pressure": {
+  "n2-full": {
+   "kv_tokens": 1249760,
+   "R_avg": 0.043,
+   "R_peak": 0.066
+  }
+ }
+}

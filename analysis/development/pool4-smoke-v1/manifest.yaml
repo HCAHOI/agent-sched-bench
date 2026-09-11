@@ -1,0 +1,14 @@
+version: 1
+requires_trace_tool_replay: true
+defaults:
+  task_source: task-source.json
+  docker_image: python:3.13-slim-bookworm
+traces:
+- label: tobymao__sqlglot-4935
+  trace: /home/chiyu/workspace/agent-sched-bench/traces/exports/swe-rebench-original-flat-644-20260904/sqlglot-dev100__tobymao__sqlglot-4935.trace.jsonl
+- label: dpkp__kafka-python-1320
+  trace: /home/chiyu/workspace/agent-sched-bench/traces/exports/swe-rebench-original-flat-644-20260904/swe277__dpkp__kafka-python-1320.trace.jsonl
+- label: lmfit__lmfit-py-961
+  trace: /home/chiyu/workspace/agent-sched-bench/traces/exports/swe-rebench-original-flat-644-20260904/swe277__lmfit__lmfit-py-961.trace.jsonl
+- label: sam-cell-seg
+  trace: /home/chiyu/workspace/agent-sched-bench/traces/exports/terminal-bench-original-flat-239-20260904/tb__sam-cell-seg.trace.jsonl

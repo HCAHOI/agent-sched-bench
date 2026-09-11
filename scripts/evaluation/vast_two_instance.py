@@ -28,6 +28,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 MODEL = "Qwen/Qwen3-4B-Instruct-2507-FP8"
 CONTINUUM_COMMIT = "316a58794a6ff86b216e579b74fd56ed0c5a911f"
+KV_BYTES_PER_TOKEN = 147_456  # Qwen3-4B bf16 KV: 2 (K,V) x 2 bytes x 36 layers x 8 KV heads x 128 head dim
 
 
 def utc() -> str:
@@ -43,6 +44,12 @@ def main() -> int:
     p.add_argument("--instance-policy", default="fcfs", choices=["fcfs", "continuum"])
     p.add_argument("--task-sticky", action="store_true")
     p.add_argument("--concurrency", type=int, default=32)
+    p.add_argument("--instances-per-gpu", type=int, default=1, choices=range(1, 5), metavar="K",
+                   help="engines per GPU (2K instances); K>1 runs under MPS with a 100/K %% SM share each")
+    p.add_argument("--instance-kv-tokens", type=int, metavar="TOKENS",
+                   help="exact per-instance KV budget in tokens (--kv-cache-memory-bytes); omit for the memory-fraction default")
+    p.add_argument("--instance-gpu-memory-utilization", type=float, metavar="FRAC",
+                   help="per-instance memory fraction; required when K>1 (default 0.95/K minus headroom is not assumed)")
     p.add_argument("--timeout-s", type=int, default=1800, help="SHADOW_LLM_TIMEOUT_S on both sides")
     p.add_argument("--manifest", default=str(REPO / "analysis/development/mixed56-2l40s-concurrency32-v1/manifest.yaml"))
     p.add_argument("--env", action="append", default=[], metavar="K=V", help="extra env for the host launcher (repeatable)")
@@ -94,6 +101,17 @@ def main() -> int:
         "PREFILL_CPUSET": "48-50", "DECODE_CPUSET": "51-53", "ROUTER_CPUSET": "54",
         "MANIFEST": f"/workspace/manifests/{a.name}.yaml", "RUN_ROOT": remote_run,
     }
+    if a.instances_per_gpu > 1:
+        if a.instance_gpu_memory_utilization is None:
+            sys.exit("--instances-per-gpu > 1 needs --instance-gpu-memory-utilization")
+        n = 2 * a.instances_per_gpu
+        env["INSTANCES_PER_GPU"] = str(a.instances_per_gpu)
+        env["INSTANCE_CPUSETS"] = ",".join(f"{48 + 3 * i}-{50 + 3 * i}" for i in range(n))  # 3 cores each, then the router
+        env["ROUTER_CPUSET"] = str(48 + 3 * n)
+    if a.instance_gpu_memory_utilization is not None:
+        env["INSTANCE_GPU_MEMORY_UTILIZATION"] = str(a.instance_gpu_memory_utilization)
+    if a.instance_kv_tokens:
+        env["INSTANCE_KV_CACHE_BYTES"] = str(a.instance_kv_tokens * KV_BYTES_PER_TOKEN)
     for kv in a.env:
         k, v = kv.split("=", 1)
         env[k] = v
