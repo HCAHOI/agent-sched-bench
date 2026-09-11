@@ -450,7 +450,11 @@ the same steady-state cost as on mixed56 (all prefill on two roles instead
 of two caches). JCTs are reconstructed from trace timestamps as for the
 mixed56 run (arrival zero = first action minus 2.6 s, terminal = task
 complete plus 2.6 s, anchors from the Poisson references, about ±2 s per
-task). Verdict: the criterion fails by a factor above 2.5 at moderate
+task). The host went away during the artifact pull, so `server/` holds
+the engine logs of both instances and instance-0's telemetry but not
+`routing.jsonl`, `proxy.log` or instance-1's request telemetry; the
+routing counts above come from the minute-83 check on the host. Verdict:
+the criterion fails by a factor above 2.5 at moderate
 density as well; the Frontier C closure holds for both arrival patterns
 without caveat.
 
