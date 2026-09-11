@@ -50,8 +50,9 @@ esac
 [[ "$mode" != --profile-lengths || "$ppd_mode" == profile ]] || exit 2
 [[ "$run" == /* && ! -e "$run" && -f "$manifest" ]] || exit 2
 [[ $(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l) == 2 ]] || exit 2
+# two identical GPUs with at least 45 GB each (L40S 46 GB, RTX Pro 6000 96 GB); the model is recorded in hardware.txt
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits | \
-  awk -F, '$1 !~ /L40S/ || $2 < 45000 {bad=1} END {exit bad}'
+  awk -F, '{names[$1]=1} $2 < 45000 {bad=1} END {exit (bad || length(names) != 1)}'
 ports=(8000 8001 9000 5557 5558 5559 5560)
 [[ "$router_policy" != dualmap ]] || ports+=(8101 8111)
 [[ -z "$ppd_mode" ]] || ports+=(14579 14580)
