@@ -1,0 +1,151 @@
+{
+ "all_test_samples": {
+  "constant": {
+   "n": 869,
+   "q50": 1.854,
+   "q90": 4.471,
+   "q95": 5.434,
+   "q99": 15.2,
+   "mean_q": 2.591,
+   "mae": 187.0,
+   "underprediction_rate": 0.453,
+   "bucket_accuracy": 0.398,
+   "long_recall": 0.0,
+   "long_precision": 0.0
+  },
+  "last": {
+   "n": 869,
+   "q50": 1.877,
+   "q90": 7.259,
+   "q95": 10.843,
+   "q99": 19.296,
+   "mean_q": 3.497,
+   "mae": 227.9,
+   "underprediction_rate": 0.494,
+   "bucket_accuracy": 0.409,
+   "long_recall": 0.236,
+   "long_precision": 0.317
+  },
+  "running_median": {
+   "n": 869,
+   "q50": 1.75,
+   "q90": 5.847,
+   "q95": 8.793,
+   "q99": 14.281,
+   "mean_q": 2.91,
+   "mae": 190.6,
+   "underprediction_rate": 0.542,
+   "bucket_accuracy": 0.44,
+   "long_recall": 0.073,
+   "long_precision": 0.421
+  },
+  "ewma": {
+   "n": 869,
+   "q50": 1.901,
+   "q90": 5.843,
+   "q95": 8.313,
+   "q99": 16.491,
+   "mean_q": 3.002,
+   "mae": 207.8,
+   "underprediction_rate": 0.432,
+   "bucket_accuracy": 0.382,
+   "long_recall": 0.2,
+   "long_precision": 0.344
+  },
+  "shrunk_median": {
+   "n": 869,
+   "q50": 1.74,
+   "q90": 5.388,
+   "q95": 7.498,
+   "q99": 12.748,
+   "mean_q": 2.767,
+   "mae": 187.5,
+   "underprediction_rate": 0.518,
+   "bucket_accuracy": 0.445,
+   "long_recall": 0.064,
+   "long_precision": 0.5
+  }
+ },
+ "samples_with_history": {
+  "constant": {
+   "n": 694,
+   "q50": 1.924,
+   "q90": 4.903,
+   "q95": 6.026,
+   "q99": 15.678,
+   "mean_q": 2.788,
+   "mae": 218.0,
+   "underprediction_rate": 0.517,
+   "bucket_accuracy": 0.429,
+   "long_recall": 0.0,
+   "long_precision": 0.0
+  },
+  "last": {
+   "n": 694,
+   "q50": 2.038,
+   "q90": 8.314,
+   "q95": 13.08,
+   "q99": 21.242,
+   "mean_q": 3.922,
+   "mae": 269.2,
+   "underprediction_rate": 0.568,
+   "bucket_accuracy": 0.442,
+   "long_recall": 0.236,
+   "long_precision": 0.317
+  },
+  "running_median": {
+   "n": 694,
+   "q50": 1.735,
+   "q90": 6.701,
+   "q95": 9.432,
+   "q99": 17.932,
+   "mean_q": 3.188,
+   "mae": 222.6,
+   "underprediction_rate": 0.628,
+   "bucket_accuracy": 0.481,
+   "long_recall": 0.073,
+   "long_precision": 0.421
+  },
+  "ewma": {
+   "n": 694,
+   "q50": 1.991,
+   "q90": 6.393,
+   "q95": 9.095,
+   "q99": 20.687,
+   "mean_q": 3.303,
+   "mae": 244.1,
+   "underprediction_rate": 0.49,
+   "bucket_accuracy": 0.409,
+   "long_recall": 0.2,
+   "long_precision": 0.344
+  },
+  "shrunk_median": {
+   "n": 694,
+   "q50": 1.713,
+   "q90": 6.271,
+   "q95": 8.227,
+   "q99": 15.987,
+   "mean_q": 3.008,
+   "mae": 218.6,
+   "underprediction_rate": 0.598,
+   "bucket_accuracy": 0.488,
+   "long_recall": 0.064,
+   "long_precision": 0.5
+  }
+ },
+ "decomposition": {
+  "note": "token split is proportional to tiktoken o200k counts of the recorded text and tool-call arguments; recorded completion tokens include hidden reasoning for gpt-5.6-sol, so measured_tokens / actual is the visible share",
+  "args_share_mean": 0.598,
+  "args_share_median": 0.627,
+  "variance_share_args": 0.907,
+  "variance_share_text": 0.165,
+  "visible_share_by_model": {
+   "gpt-5.6-sol": 0.711,
+   "qwen3.7-max": 0.426
+  },
+  "actual_mean_by_model": {
+   "gpt-5.6-sol": 248.6,
+   "qwen3.7-max": 291.1
+  }
+ }
+}

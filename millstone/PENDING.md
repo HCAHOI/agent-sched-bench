@@ -147,10 +147,12 @@ constant q50 1.85.
    >512 tokens) and exceed-threshold hit rates alongside q-error, so the
    consumer of a prediction (admission or KV decision) can be sized.
 
-Output: one table appended to the handoff document's results section, with
-the script under `scripts/analysis/`. Decision: whether output length is a
-signal worth carrying into any scheduler at all, or whether context growth
-(§3) is the only usable per-task forecast.
+**Done 18:13 UTC** (`scripts/evaluation/output_length_history_baselines.py`,
+results in the handoff document, section "Session-history baselines"):
+history predictors gain a few percent at the median (shrunk median q50 1.74
+vs constant 1.85) and lose the tail (q90 5.4 vs 4.5); tool-call arguments
+carry 91% of output-length variance; 57% of qwen completions are hidden
+reasoning. Decision: output length is not a schedulable signal on this data.
 
 ## 7. Decisions waiting on the advisor
 

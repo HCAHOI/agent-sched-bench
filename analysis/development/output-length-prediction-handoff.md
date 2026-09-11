@@ -194,6 +194,32 @@ Local copies, including predictions, protocols, trained weights, labels, and eva
 analysis/results/output-length-source-labels-crossbench-20260904
 ```
 
+### Session-history baselines and output decomposition (2026-09-11)
+
+Meeting question (2026-09-07 §2): does a session's accumulated history of recorded output lengths predict the next output better than a per-request content model or a constant, and what part of the output does the tool-call format bound? `scripts/evaluation/output_length_history_baselines.py` answers both on the same 869 test samples, using only the session's earlier recorded lengths (causal); results in `history-baselines/`. Predictors fall back to the train median at a session's first step (175 of 869 samples). Buckets: <128, 128–512, >512 tokens; "long" = >512.
+
+| Predictor (869 samples) | q50 | q90 | q95 | q99 | MAE | Bucket acc. | Long recall / precision |
+|---|---:|---:|---:|---:|---:|---:|---|
+| Train-median constant | 1.854 | 4.471 | 5.434 | 15.2 | 187.0 | 0.398 | 0 / 0 |
+| Last recorded length | 1.877 | 7.259 | 10.843 | 19.296 | 227.9 | 0.409 | 0.236 / 0.317 |
+| Running median | 1.750 | 5.847 | 8.793 | 14.281 | 190.6 | 0.440 | 0.073 / 0.421 |
+| EWMA (α = 0.5) | 1.901 | 5.843 | 8.313 | 16.491 | 207.8 | 0.382 | 0.200 / 0.344 |
+| Median shrunk to constant (pseudo-count 3) | 1.740 | 5.388 | 7.498 | 12.748 | 187.5 | 0.445 | 0.064 / 0.500 |
+
+On the 694 samples that have history the picture is the same (shrunk median q50 1.713 vs constant 1.924; q90 6.27 vs 4.90). History buys a few percent at the median and a few points of bucket accuracy, and costs the tail: every history predictor has a worse q90/q95 than the constant. The only thing history adds that the constant cannot is some detection of long outputs, at 24% recall and 32% precision (last value). Meeting Assumption 1 (accumulated history helps) is not supported at a level any scheduler could use.
+
+Decomposition of the recorded outputs (token split proportional to tiktoken o200k counts of the visible text and tool-call arguments; recorded completion tokens also include hidden reasoning):
+
+| Quantity | Value |
+|---|---:|
+| Tool-call arguments, share of visible output tokens (mean / median) | 0.60 / 0.63 |
+| Share of output-length variance carried by tool-call arguments | 0.91 |
+| Share carried by free text | 0.17 |
+| Visible share of recorded completion tokens, gpt-5.6-sol | 0.71 |
+| Visible share of recorded completion tokens, qwen3.7-max | 0.43 |
+
+Meeting Assumption 2 is inverted: the tool-call format does not bound the variable part. Free text is short and stable; the arguments (file contents for `write_file` and `edit_file`, long shell commands) carry 91% of the variance, and for the qwen agent 57% of every completion is hidden reasoning that no prefix feature observes. Output length is therefore content-determined at the argument level, which explains why both the content models and the history models sit near the constant. Decision: output length is not a signal worth carrying into a scheduler on this data; a per-task forecast, if any, has to come from context growth, not from generation length.
+
 ## Natural-label amendment and outcome
 
 After observing the 16K censoring failure, the user changed the natural-generation cap to 32,768 tokens. This is an explicit development-protocol amendment made with the 16K outcome visible, not a preregistered choice.
