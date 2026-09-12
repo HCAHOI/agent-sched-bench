@@ -426,7 +426,7 @@ def _run_egtp(
     options: dict[str, object],
 ) -> None:
     upstream_dir = upstream_dir.resolve()
-    python = python.resolve()
+    python = python.absolute()  # not resolve(): a venv interpreter is a symlink and resolving it escapes the venv
     data_dir = data_dir.resolve()
     output_dir = output_dir.resolve()
     _verify_upstream(upstream_dir, EGTP_UPSTREAM_COMMIT, ("EGTP/egtp", "EGTP/main.py"))
@@ -629,7 +629,7 @@ def _run_outlets(
     if not config_path.is_file():
         raise FileNotFoundError(f"OUTLETS config missing: {config_path}")
     package_dir = package_dir.resolve()
-    python = python.resolve()
+    python = python.absolute()  # not resolve(): a venv interpreter is a symlink and resolving it escapes the venv
     checkpoint_path = checkpoint_path.resolve()
     config_path = config_path.resolve()
     inputs_path = inputs_path.resolve()
