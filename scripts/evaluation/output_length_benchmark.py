@@ -534,7 +534,8 @@ def label_dataset(
             if top_p is not None:
                 body["top_p"] = top_p
             response = client.post(endpoint, json=body)
-            response.raise_for_status()
+            if response.status_code >= 400:
+                raise RuntimeError(f"{sample_id}: HTTP {response.status_code}: {response.text[:300]}")
             payload = response.json()
             choices = payload.get("choices")
             usage = payload.get("usage")
