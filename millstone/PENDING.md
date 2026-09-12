@@ -342,7 +342,7 @@ otherwise C is skipped, because a tail the target model itself does not
 reproduce cannot be read from the prompt at any k. The reading rules above
 are unchanged.
 
-**B result (19:20 UTC, test split × 4 draws at temperature 0.7; 850 prefixes complete, 10 rows rejected at the
+**B result (19:15 UTC, test split × 4 draws at temperature 0.7; 850 prefixes complete, 10 rows rejected at the
 32K cap; `analysis/results/.../natural-labels-sampled-test-d4/`):** the tail is **not** inherent. P(long in another
 draw | long in one draw) = **0.70** (rule ≥ 0.5 → C runs); 72 prefixes are long in some draw, 23 in all four; the
 within-prefix share of log-length variance is 12%. Ceilings on the same 3,400 draw labels: the leave-one-draw-out
