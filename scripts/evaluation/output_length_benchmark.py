@@ -78,7 +78,20 @@ def _read_natural_labels(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     protocol_path = labels_path.parent / "protocol.json"
     if not protocol_path.is_file():
-        raise ValueError(f"natural-label protocol is missing: {protocol_path}")
+        # Recorded-trace labels (export writes one row per sample, label_source "recorded_trace") carry no
+        # natural-generation protocol: one draw, no temperature, every split. Used by the 2026-09-04 and
+        # 2026-09-12 source-label runs; TIE (require_stochastic) cannot use them.
+        rows = _read_jsonl(labels_path)
+        if not rows or any(row.get("label_source") != "recorded_trace" for row in rows):
+            raise ValueError(f"natural-label protocol is missing: {protocol_path}")
+        if require_stochastic:
+            raise ValueError("recorded-trace labels are a single deterministic draw; TIE needs natural draws")
+        expected = {(str(row["sample_id"]), 0) for row in _read_jsonl(dataset_dir / "prefixes.jsonl")}
+        keys = [(str(row.get("sample_id")), row.get("draw_id")) for row in rows]
+        if len(keys) != len(set(keys)) or set(keys) != expected:
+            raise ValueError("recorded-trace label coverage does not match the dataset")
+        return rows, {"label_source": "recorded_trace", "draws": 1, "temperature": 0.0,
+                      "splits": list(SPLITS), "model": "recorded_trace"}
     protocol = _read_json_object(protocol_path)
     dataset = _read_json_object(dataset_dir / "dataset.json")
     draws = protocol.get("draws")
