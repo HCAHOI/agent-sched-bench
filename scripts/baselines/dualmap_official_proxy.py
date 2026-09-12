@@ -91,7 +91,7 @@ def create_app(args: Any) -> RequestAudit:
     from dualmap.scheduler.utils.lazy_prefix_table import LazyExpansionController, LazyPrefixTable, HotPrefixDetector
     from dualmap.scheduler.utils.shared import SharedState
 
-    assert len(args.backends) >= 2 and args.prefill_tpot > 0 and args.ttft_slo > 0
+    assert len(args.backends) >= 1 and args.prefill_tpot > 0 and args.ttft_slo > 0  # one backend: admission only, no rebalancing target
     assert args.cpu_cache_gib > 0 and args.block_size > 0 and args.kv_bytes_per_token > 0
 
     tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)

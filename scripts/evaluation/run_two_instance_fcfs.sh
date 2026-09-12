@@ -38,6 +38,13 @@ if [[ "$tensor_parallel" == 2 ]]; then
   num_instances=1
   instances=(0)
 fi
+# SINGLE_GPU=<index>: one engine on that GPU only (the other GPU is free for unrelated work); one proxy backend.
+single_gpu=${SINGLE_GPU:-}
+if [[ -n "$single_gpu" ]]; then
+  [[ "$single_gpu" =~ ^[01]$ && "$instances_per_gpu" == 1 && "$tensor_parallel" == 1 ]] || { echo "SINGLE_GPU needs INSTANCES_PER_GPU=1 and TENSOR_PARALLEL=1" >&2; exit 2; }
+  num_instances=1
+  instances=(0)
+fi
 IFS=, read -r -a instance_cpusets <<< "${INSTANCE_CPUSETS:-}"
 [[ -z "${INSTANCE_CPUSETS:-}" || ${#instance_cpusets[@]} == "$num_instances" ]] || exit 2
 mode=${1:---run}
@@ -205,7 +212,7 @@ for i in "${instances[@]}"; do
   cell="$run/instance-$i"
   mkdir "$cell"
   port=$((8000+i)); kv_port=$((5557+2*i)); replay_port=$((5558+2*i))
-  gpu_index=$((i / instances_per_gpu)); [[ "$tensor_parallel" == 1 ]] || gpu_index=0,1
+  gpu_index=$((i / instances_per_gpu)); [[ "$tensor_parallel" == 1 ]] || gpu_index=0,1; [[ -z "$single_gpu" ]] || gpu_index=$single_gpu
   cpuset=${PREFILL_CPUSET:-0-2}; [[ "$i" == 0 ]] || cpuset=${DECODE_CPUSET:-12-14}
   [[ -z "${INSTANCE_CPUSETS:-}" ]] || cpuset=${instance_cpusets[i]}
   cache_env=() cache_args=() kv_cap_args=()
@@ -279,7 +286,7 @@ YAML
   servers+=("$!")
 done
 for i in "${instances[@]}"; do
-  cell="$run/instance-$i"; port=$((8000+i)); gpu_index=$((i / instances_per_gpu)); [[ "$tensor_parallel" == 1 ]] || gpu_index=0,1
+  cell="$run/instance-$i"; port=$((8000+i)); gpu_index=$((i / instances_per_gpu)); [[ "$tensor_parallel" == 1 ]] || gpu_index=0,1; [[ -z "$single_gpu" ]] || gpu_index=$single_gpu
   wait_http "$port" "${servers[i]}"
   if [[ "$dram_metrics" == on ]]; then [[ -f "$cell/dram-bandwidth-ready" && ! -s "$cell/dram-bandwidth.err" ]]; fi
   curl -fsS "http://127.0.0.1:$port/metrics" > "$cell/vllm-metrics-start.prom"

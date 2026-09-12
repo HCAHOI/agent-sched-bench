@@ -55,6 +55,8 @@ def main() -> int:
                    help="engines per GPU (2K instances); K>1 runs under MPS with a 100/K %% SM share each")
     p.add_argument("--tensor-parallel", type=int, default=1, choices=(1, 2),
                    help="2: one engine across both GPUs (N=1) instead of one engine per GPU; least-requests only")
+    p.add_argument("--single-gpu", type=int, choices=(0, 1), metavar="GPU",
+                   help="one engine on this GPU only (N=1); the other GPU stays free for unrelated work")
     p.add_argument("--instance-kv-tokens", type=int, metavar="TOKENS",
                    help="exact per-instance KV budget in tokens (--kv-cache-memory-bytes); omit for the memory-fraction default")
     p.add_argument("--max-model-len", type=int, metavar="TOKENS",
@@ -115,6 +117,10 @@ def main() -> int:
     if a.hf_overrides:
         json.loads(a.hf_overrides)  # fail here, not in the engine log
         env["VLLM_HF_OVERRIDES"] = a.hf_overrides
+    if a.single_gpu is not None:
+        if a.instances_per_gpu > 1 or a.tensor_parallel != 1:
+            sys.exit("--single-gpu is one engine on one GPU: no --instances-per-gpu > 1, no --tensor-parallel 2")
+        env["SINGLE_GPU"] = str(a.single_gpu)
     if a.tensor_parallel == 2:
         if a.instances_per_gpu > 1 or a.router_policy != "least-requests":
             sys.exit("--tensor-parallel 2 is a single-instance deployment: --instances-per-gpu 1 and --router-policy least-requests")
