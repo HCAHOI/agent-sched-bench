@@ -320,6 +320,16 @@ draws)? Three stages, each answering one of those:
 | C (~1.5 h) | prefixes extended by the first k = 16 / 64 / 256 tokens of the greedy completion, features from the pooling server, same MSE head; base probe scored on the same subset | information | if long recall on the subset rises above 0.5 at some k, the tail is knowable once generation starts and the sandbox estimate should be updated at that token count; if it stays flat, the prompt-side state is not the limit |
 | B (~4.5 h) | sampled labels at temperature 0.7: test × 4 draws, then all splits × 1 draw | inherent | between-draw agreement of the > 512 bucket on the test prefixes; if fewer than half of the prefixes that are long in one draw are long in another, no prompt-only predictor can reach high long recall under sampling, and the recall target is capped there |
 
+**A result (17:12 UTC, `probe-replay-pool64v4/variants/`):** no variant
+meets the primary rule; every tail variant makes the replay stage-2 estimate
+worse (p90 absolute error 25.8 s base → 31.3–55.7 s; median 5.1 → 5.3–15.4 s).
+On natural test labels they buy long recall (0.16 → 0.47 weighted, 0.56
+pinball 0.75, 0.74 pinball 0.9) only by losing precision (0.58 → 0.36 / 0.34 /
+0.23) and q50 (1.35 → 1.41 / 1.49 / 1.97): the head cannot separate long
+from not-long from the prompt-side state, it can only shift everything up.
+Diagnosis: not an objective problem; stages C and B decide between
+information and inherent.
+
 Visible when this was written: one smoke of the class head + weighted variant
 on the natural test split (long recall 0.465, precision 0.426, q50 1.44) had
 been run as a plumbing check before the criteria were fixed; the primary rule
