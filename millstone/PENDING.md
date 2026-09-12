@@ -424,27 +424,27 @@ should know before more is built on it.
 ## 10. Sandbox-side interface: what the LLM side can promise (measured 08:00 UTC)
 
 Context: a collaborator snapshots and restores each task's sandbox around the
-LLM step (restore ≤ 3 s, p50 2.2 s) and needs to know how long the step will
-take. `scripts/evaluation/step_time_staged_estimates.py` evaluates, on
+LLM step (restore p50 1.0 s, p90 1.8 s; corrected by the user 17:30 UTC from
+the earlier 2.2 / 3 s) and needs to know how long the step will take. `scripts/evaluation/step_time_staged_estimates.py` evaluates, on
 finished runs, the estimate available at each moment: stage 1 (arrival: hold
 and queue unknown), stage 2 (engine scheduled the request: remaining =
 uncached tokens × prefill constant + prior output length × causal TPOT),
 stage 3 (tool name known: tool-conditioned length prior). Priors from the
 pool excluding the run's tasks.
 
-| Run | Stage-1 wait p50 / p90 (s) | Remaining at scheduling p10 / p50 (s) | Share ≥ 3 s | Stage-2 q-err p50 / p90 | Stage-2 + probe q-err p50 / p90 | Stage-3 q-err p50 / p90 |
+| Run | Stage-1 wait p50 / p90 (s) | Remaining at scheduling p10 / p50 (s) | Share ≥ 1.8 s (≥ 3 s) | Stage-2 q-err p50 / p90 | Stage-2 + probe q-err p50 / p90 | Stage-3 q-err p50 / p90 |
 |---|---|---|---:|---|---|---|
-| 32B DualMap 96 GiB | 3.2 / 12.9 | 3.7 / 9.6 | 0.94 | 1.83 / 4.44 | 1.60 / 4.02 | 1.70 / 3.86 |
-| 32B FCFS sticky | 36.0 / 56.7 | 4.5 / 22.8 | 0.95 | 1.87 / 4.90 | 1.66 / 4.28 | 1.73 / 4.13 |
-| 4B FCFS full | 3.1 / 6.3 | 1.2 / 3.2 | 0.53 | 1.82 / 4.47 | 1.61 / 4.07 | 1.70 / 3.82 |
-| 4B DualMap capped | 1.7 / 6.2 | 1.4 / 3.6 | 0.58 | 1.79 / 4.52 | 1.57 / 4.10 | 1.70 / 3.81 |
+| 32B DualMap 96 GiB | 3.2 / 12.9 | 3.7 / 9.6 | 1.00 (0.94) | 1.83 / 4.44 | 1.60 / 4.02 | 1.70 / 3.86 |
+| 32B FCFS sticky | 36.0 / 56.7 | 4.5 / 22.8 | 1.00 (0.95) | 1.87 / 4.90 | 1.66 / 4.28 | 1.73 / 4.13 |
+| 4B FCFS full | 3.1 / 6.3 | 1.2 / 3.2 | 0.76 (0.53) | 1.82 / 4.47 | 1.61 / 4.07 | 1.70 / 3.82 |
+| 4B DualMap capped | 1.7 / 6.2 | 1.4 / 3.6 | 0.82 (0.58) | 1.79 / 4.52 | 1.57 / 4.10 | 1.70 / 3.81 |
 
 Reading. (1) The prefill-only lower bound holds 100% of the time; a bound
 that adds the 10th-percentile output length fails 14%, so the safe promise
-is "at least prefill". (2) Stage 2 is the useful event: at 32B, 94–95% of
-steps still have ≥ 3 s of engine time after scheduling, so a restore started
-at that event is almost never late; at 4B only 53–58% do, and the restore
-must start earlier (at arrival, using the hold as slack) or accept lateness.
+is "at least prefill". (2) Stage 2 is the useful event: at 32B every step has ≥ 1.8 s (the p90
+restore) of engine time after scheduling, so a restore started at that event
+is never late; at 4B 76–82% do (92–96% at the p50 restore of 1.0 s), and the
+rest must start at arrival, using the hold as slack, or accept lateness.
 (3) The tool name buys little (q-err 1.83 → 1.70): output length stays the
 unpredictable part, as the output-length study concluded. (3b, 16:50 UTC,
 user's choice "1") The hidden-state probe (§8b; Qwen3-30B-A3B final-layer
@@ -463,14 +463,14 @@ is large under FCFS (p50 36 s at 32B) and heavy-tailed under DualMap (mean
 
 **Two-marker proposal (user, 17:08 UTC): safe lower bound at arrival = queue estimate + prefill; alert when the reasoning closes.** Measured 17:13 UTC on the same four runs (`at_reasoning_end` in `probe-replay-pool64v4/staged-*.json`; reasoning tokens = recorded completion − tiktoken count of the visible text and tool arguments, alert time proportional inside the replay's decode; estimate after the alert = pool median visible tokens of the named tool × causal TPOT):
 
-| Run | Reasoning share of output tokens p50 / mean | Remaining after alert p10 / p50 (s) | Share ≥ 2.2 / 3 s after alert | After-alert abs error p50 / p90 (s) | q-err p50 / p90 |
+| Run | Reasoning share of output tokens p50 / mean | Remaining after alert p10 / p50 (s) | Share ≥ 1.0 / 1.8 s after alert | After-alert abs error p50 / p90 (s) | q-err p50 / p90 |
 |---|---|---|---|---|---|
-| 32B DualMap 96 GiB | 0.36 / 0.41 | 1.6 / 5.3 | 0.76 / 0.65 | 2.5 / 14.8 (stage 2 probe: 5.1 / 25.8) | 1.84 / 4.49 |
-| 32B FCFS sticky | same traces | 1.7 / 9.5 | 0.84 / 0.78 | 5.4 / 31.5 (10.5 / 54.1) | 1.99 / 5.12 |
-| 4B FCFS full | same traces | 0.5 / 1.8 | 0.43 / 0.33 | 0.8 / 4.9 (1.7 / 8.7) | 1.83 / 4.39 |
-| 4B DualMap capped | same traces | 0.6 / 2.0 | 0.47 / 0.37 | 0.9 / 5.4 (1.9 / 9.3) | 1.84 / 4.37 |
+| 32B DualMap 96 GiB | 0.36 / 0.41 | 1.6 / 5.3 | 0.97 / 0.85 | 2.5 / 14.8 (stage 2 probe: 5.1 / 25.8) | 1.84 / 4.49 |
+| 32B FCFS sticky | same traces | 1.7 / 9.5 | 0.98 / 0.89 | 5.4 / 31.5 (10.5 / 54.1) | 1.99 / 5.12 |
+| 4B FCFS full | same traces | 0.5 / 1.8 | 0.66 / 0.49 | 0.8 / 4.9 (1.7 / 8.7) | 1.83 / 4.39 |
+| 4B DualMap capped | same traces | 0.6 / 2.0 | 0.68 / 0.53 | 0.9 / 5.4 (1.9 / 9.3) | 1.84 / 4.37 |
 
-Reading. (1) Reasoning is a third of the output tokens (median 0.36; qwen3.7-max steps 0.57, gpt-5.6-sol 0.29 by the visible share), so the alert lands after roughly 40% of the decode. (2) The absolute error halves after the alert (32B DualMap p50 5.1 → 2.5 s, p90 25.8 → 14.8 s) because less time remains, not because the remainder is more predictable: the q-error is unchanged (1.6–1.8 → 1.84), the remaining length is the tool arguments, and their spread (write_file vs read_file) is what the prompt-side probe already could not resolve. (3) At 32B the alert is early enough for a restore in 65% of steps (≥ 3 s after it), 76% at the p50 restore of 2.2 s; at 4B only a third. (4) The lower bound at arrival: queue/hold is our decision and should be sent as the "scheduled" event; prefill is the safe bound at that moment (100% coverage, above). So the interface is three signals, not two: scheduled (with prefill bound), reasoning closed (with tool name and the tool-conditioned remainder), and the finish. A thinking-mode target model (Qwen3-30B-A3B-Thinking-2507) would make the alert a real token event and give the reasoning length as a separate prediction target; queued on GPU 1 after the tail lane (§8b).
+Reading. (1) Reasoning is a third of the output tokens (median 0.36; qwen3.7-max steps 0.57, gpt-5.6-sol 0.29 by the visible share), so the alert lands after roughly 40% of the decode. (2) The absolute error halves after the alert (32B DualMap p50 5.1 → 2.5 s, p90 25.8 → 14.8 s) because less time remains, not because the remainder is more predictable: the q-error is unchanged (1.6–1.8 → 1.84), the remaining length is the tool arguments, and their spread (write_file vs read_file) is what the prompt-side probe already could not resolve. (3) At 32B the alert is early enough for a restore in 85% of steps (≥ 1.8 s, the p90 restore, after it), 97% at the p50 restore of 1.0 s; at 4B about half (49–53% at 1.8 s, 66–68% at 1.0 s). (4) The lower bound at arrival: queue/hold is our decision and should be sent as the "scheduled" event; prefill is the safe bound at that moment (100% coverage, above). So the interface is three signals, not two: scheduled (with prefill bound), reasoning closed (with tool name and the tool-conditioned remainder), and the finish. A thinking-mode target model (Qwen3-30B-A3B-Thinking-2507) would make the alert a real token event and give the reasoning length as a separate prediction target; queued on GPU 1 after the tail lane (§8b).
 
 Reverse direction, tool-time prediction for us: with the 96 GiB tier the
 prompt miss share is 3% and flat across tool-gap lengths (0–5 s: 3%, 5–15 s:
