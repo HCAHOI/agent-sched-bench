@@ -45,6 +45,10 @@ if [[ -n "$single_gpu" ]]; then
   num_instances=1
   instances=(0)
 fi
+# PORT_BASE=<n>: shift every engine/proxy/collector port by n so two single-GPU runs can share the host.
+port_base=${PORT_BASE:-0}
+[[ "$port_base" =~ ^[0-9]+$ ]] || exit 2
+export PORT_BASE=$port_base
 IFS=, read -r -a instance_cpusets <<< "${INSTANCE_CPUSETS:-}"
 [[ -z "${INSTANCE_CPUSETS:-}" || ${#instance_cpusets[@]} == "$num_instances" ]] || exit 2
 mode=${1:---run}
@@ -64,6 +68,7 @@ case "$router_policy" in
     [[ "$router_policy" != static-x1 || "$mode" == --smoke || "$mode" == --profile-ppd ]] || exit 2
     [[ "$router_policy" != profile || "$mode" == --profile-lengths ]] || exit 2
     [[ "$router_policy" != ppd || -d "${PPD_BENCHMARK_DATA:-}" ]] || { echo "PPD needs measured decision tables" >&2; exit 2; }
+    [[ "${PORT_BASE:-0}" == 0 ]] || { echo "PD paths use fixed ports; PORT_BASE must be 0" >&2; exit 2; }
     ppd_mode=$router_policy
     shadow_mode=thunderagent ;;
   *) echo "Unsupported ROUTER_POLICY: $router_policy" >&2; exit 2 ;;
@@ -82,10 +87,10 @@ esac
 # two identical GPUs with at least 45 GB each (L40S 46 GB, RTX Pro 6000 96 GB); the model is recorded in hardware.txt
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits | \
   awk -F, '{names[$1]=1} $2 < 45000 {bad=1} END {exit (bad || length(names) != 1)}'
-ports=(9000)
+ports=($((9000+port_base)))
 for i in "${instances[@]}"; do
-  ports+=($((8000+i)) $((5557+2*i)) $((5558+2*i)))
-  [[ "$router_policy" != dualmap ]] || ports+=($((8101+10*i)))
+  ports+=($((8000+port_base+i)) $((5557+port_base+2*i)) $((5558+port_base+2*i)))
+  [[ "$router_policy" != dualmap ]] || ports+=($((8101+port_base+10*i)))
 done
 [[ -z "$ppd_mode" ]] || ports+=(14579 14580)
 for port in "${ports[@]}"; do
@@ -211,7 +216,7 @@ fi
 for i in "${instances[@]}"; do
   cell="$run/instance-$i"
   mkdir "$cell"
-  port=$((8000+i)); kv_port=$((5557+2*i)); replay_port=$((5558+2*i))
+  port=$((8000+port_base+i)); kv_port=$((5557+port_base+2*i)); replay_port=$((5558+port_base+2*i))
   gpu_index=$((i / instances_per_gpu)); [[ "$tensor_parallel" == 1 ]] || gpu_index=0,1; [[ -z "$single_gpu" ]] || gpu_index=$single_gpu
   cpuset=${PREFILL_CPUSET:-0-2}; [[ "$i" == 0 ]] || cpuset=${DECODE_CPUSET:-12-14}
   [[ -z "${INSTANCE_CPUSETS:-}" ]] || cpuset=${instance_cpusets[i]}
@@ -233,7 +238,7 @@ extra_config:
   force_store_wait: true
 internal_api_server_enabled: true
 internal_api_server_host: 127.0.0.1
-internal_api_server_port_start: $((8100+10*i))
+internal_api_server_port_start: $((8100+port_base+10*i))
 internal_api_server_include_index_list: [1]
 YAML
     cache_env=(LMCACHE_CONFIG_FILE="$cell/lmcache.yaml" LMCACHE_USE_EXPERIMENTAL=True PYTHONHASHSEED=42)
@@ -286,7 +291,7 @@ YAML
   servers+=("$!")
 done
 for i in "${instances[@]}"; do
-  cell="$run/instance-$i"; port=$((8000+i)); gpu_index=$((i / instances_per_gpu)); [[ "$tensor_parallel" == 1 ]] || gpu_index=0,1; [[ -z "$single_gpu" ]] || gpu_index=$single_gpu
+  cell="$run/instance-$i"; port=$((8000+port_base+i)); gpu_index=$((i / instances_per_gpu)); [[ "$tensor_parallel" == 1 ]] || gpu_index=0,1; [[ -z "$single_gpu" ]] || gpu_index=$single_gpu
   wait_http "$port" "${servers[i]}"
   if [[ "$dram_metrics" == on ]]; then [[ -f "$cell/dram-bandwidth-ready" && ! -s "$cell/dram-bandwidth.err" ]]; fi
   curl -fsS "http://127.0.0.1:$port/metrics" > "$cell/vllm-metrics-start.prom"
@@ -295,7 +300,7 @@ for i in "${instances[@]}"; do
     grep -q "vllm:$metric" "$cell/vllm-metrics-start.prom"
   done
   "$python" scripts/evaluation/collect_vllm_kv_events.py \
-    --endpoint "tcp://127.0.0.1:$((5557+2*i))" --replay-endpoint "tcp://127.0.0.1:$((5558+2*i))" \
+    --endpoint "tcp://127.0.0.1:$((5557+port_base+2*i))" --replay-endpoint "tcp://127.0.0.1:$((5558+port_base+2*i))" \
     --ready-file "$cell/kv-events-ready" --events-jsonl "$cell/kv-events.jsonl" \
     --summary-json "$cell/kv-events-summary.json" > "$cell/kv-collector.log" 2>&1 &
   collectors+=("$!")
@@ -312,7 +317,7 @@ for i in "${instances[@]}"; do
     2> "$cell/vllm-metrics-series.err" &
   monitors+=("$!")
   if [[ "$router_policy" == dualmap ]]; then
-    lmcache_port=$((8101+10*i))
+    lmcache_port=$((8101+port_base+10*i))
     wait_http "$lmcache_port" "${servers[i]}" metrics
     curl -fsS "http://127.0.0.1:$lmcache_port/metrics" > "$cell/lmcache-metrics-start.prom"
     grep -q 'lmcache:num_stored_tokens' "$cell/lmcache-metrics-start.prom"
@@ -334,6 +339,8 @@ if [[ "$mode" == --calibrate ]]; then
   "$python" - "$run" "$model" <<'PY'
 import json, pathlib, statistics, sys, time, uuid
 import httpx
+import os
+PB = int(os.environ.get('PORT_BASE', '0'))
 run, model = pathlib.Path(sys.argv[1]), sys.argv[2]
 measurements = []
 for i in range(2):
@@ -341,7 +348,7 @@ for i in range(2):
         rid = uuid.uuid4().hex
         payload = dict(model=model, prompt=[100+j] + [1000] * (length-1), max_tokens=1,
                        ignore_eos=True, job_id=rid, this_func_call='', is_last_step=False)
-        response = httpx.post(f'http://127.0.0.1:{8000+i}/v1/completions', json=payload,
+        response = httpx.post(f'http://127.0.0.1:{8000+PB+i}/v1/completions', json=payload,
                               headers={'x-request-id':rid}, timeout=300)
         response.raise_for_status()
         request_id = response.json()['id'] + '-0'  # Single completion prompt's engine request ID.
@@ -356,7 +363,7 @@ for i in range(2):
         assert len(found) == 1 and found[0]['prompt_tokens'] == length, found
         if j:  # First call warms kernels; all measured prompts have distinct first tokens.
             measurements.append(dict(instance=i, **found[0]))
-        released = httpx.post(f'http://127.0.0.1:{8000+i}/continuum/programs/release', json={'job_id':rid})
+        released = httpx.post(f'http://127.0.0.1:{8000+PB+i}/continuum/programs/release', json={'job_id':rid})
         released.raise_for_status()
 calibration = dict(measurements=measurements,
                    prefill_tpot=statistics.median(m['prefill_s']/m['prompt_tokens'] for m in measurements))
@@ -365,7 +372,7 @@ print(json.dumps(calibration))
 PY
   exit 0
 fi
-backends=(); for i in "${instances[@]}"; do backends+=("http://127.0.0.1:$((8000+i))"); done
+backends=(); for i in "${instances[@]}"; do backends+=("http://127.0.0.1:$((8000+port_base+i))"); done
 proxy=(setsid taskset -c "${ROUTER_CPUSET:-15}" "$python" scripts/baselines/least_requests_proxy.py
   --backends "${backends[@]}" --events "$run/routing.jsonl")
 [[ "$task_sticky" == 0 ]] || proxy+=(--task-sticky)
@@ -402,17 +409,19 @@ fi
 printf '%q ' "${proxy[@]}" > "$run/proxy.argv"
 "${proxy[@]}" > "$run/proxy.log" 2>&1 &
 proxy_pid=$!
-wait_http 9000 "$proxy_pid"
+wait_http $((9000+port_base)) "$proxy_pid"
 date -u +%FT%TZ > "$run/start-utc.txt"
 if [[ "$mode" == --smoke ]]; then
   "$python" - "$model" "$run" "$task_sticky" "$router_policy" "$dram_metrics" "$num_instances" <<'PY'
 import json, pathlib, re, sys, time
 from concurrent.futures import ThreadPoolExecutor
 import httpx
+import os
+PB = int(os.environ.get('PORT_BASE', '0'))
 model, run = sys.argv[1], pathlib.Path(sys.argv[2])
 num_instances = int(sys.argv[6])
 def cpu_hit_tokens(instance):
-    response = httpx.get(f"http://127.0.0.1:{8101+10*instance}/metrics")
+    response = httpx.get(f"http://127.0.0.1:{8101+PB+10*instance}/metrics")
     response.raise_for_status()
     hits = re.findall(r'^lmcache:num_hit_tokens_total\{[^}]*\}\s+([\d.eE+]+)', response.text, re.M)
     assert hits, "Missing CPU KV hit counter"
@@ -442,7 +451,7 @@ def send_request(item):
     if long_pd:
         # Exercise direct KV transfer beyond mixed56's observed 109,441-token maximum.
         payload["messages"][0]["content"] = " cache" * 120000
-    with httpx.stream("POST", "http://127.0.0.1:9000/v1/chat/completions", json=payload, timeout=300 if pd_smoke else 120) as response:
+    with httpx.stream("POST", f"http://127.0.0.1:{9000+PB}/v1/chat/completions", json=payload, timeout=300 if pd_smoke else 120) as response:
         response.raise_for_status()
         if not thunderagent:
             assert response.headers["x-serving-instance"] == str(expected_instance)
@@ -460,7 +469,7 @@ if thunderagent:
     if sys.argv[4] == "dualmap":
         time.sleep(11)  # LMCache publishes counters every 10 seconds; include all first-wave hits.
         hits_before_reset = [cpu_hit_tokens(i) for i in range(num_instances)]
-        for port in range(8000, 8000 + num_instances):
+        for port in range(8000+PB, 8000+PB + num_instances):
             response = httpx.post(f"http://127.0.0.1:{port}/reset_prefix_cache")
             response.raise_for_status()
     # Returning requests exercise the same per-job history after a completed call.
@@ -472,10 +481,10 @@ else:
 for job_id in dict.fromkeys(job for job, _ in requests):
     release_path = "/programs/release" if thunderagent else "/continuum/programs/release"
     release_key = "program_id" if thunderagent else "job_id"
-    response = httpx.post("http://127.0.0.1:9000" + release_path, json={release_key:job_id})
+    response = httpx.post(f"http://127.0.0.1:{9000+PB}" + release_path, json={release_key:job_id})
     response.raise_for_status()
     assert response.json()["released"]
-health = httpx.get("http://127.0.0.1:9000/health").json()
+health = httpx.get(f"http://127.0.0.1:{9000+PB}/health").json()
 if sys.argv[4] in {"dualmap", "pd", "ppd", "static-x1"}:
     assert health["outstanding"] == 0
 else:
@@ -506,7 +515,7 @@ else
   simulate=(setsid env PYTHONPATH="$repo/src:$repo" "$python" -m trace_collect.cli simulate
     --manifest "$manifest" --output-dir "$run/output" --container docker --network-mode host
     --concurrency "$concurrency" --workers 1 --prep-concurrency 8 --replay-speed 1
-    --shadow-llm-api-base http://127.0.0.1:9000/v1 --shadow-llm-model "$model"
+    --shadow-llm-api-base http://127.0.0.1:$((9000+port_base))/v1 --shadow-llm-model "$model"
     --shadow-llm-timeout-s "$timeout_s" --shadow-llm-seed 0 --shadow-llm-mode "$shadow_mode"
     --resource-monitoring off --pmu-monitoring off --memory-bandwidth-monitoring off
     --replacement-delay-mean-s 10 --replacement-seed 42 --container-cpuset-cpus 3-11 --container-cpus 2)
@@ -553,7 +562,7 @@ else
       fi
     done
     if [[ "$router_policy" != least-requests ]]; then
-      curl --max-time 30 --retry 1 --retry-delay 1 -fsS http://127.0.0.1:9000/health >/dev/null
+      curl --max-time 30 --retry 1 --retry-delay 1 -fsS http://127.0.0.1:$((9000+port_base))/health >/dev/null
       "${checker[@]}"
     fi
     sleep 5
@@ -571,9 +580,11 @@ if [[ "$router_policy" != least-requests ]]; then
     "$python" - "$run" "$model" <<'PYPROBE'
 import json, pathlib, sys, time
 import httpx
+import os
+PB = int(os.environ.get('PORT_BASE', '0'))
 run, model = pathlib.Path(sys.argv[1]), sys.argv[2]
 started = time.time()
-response = httpx.post("http://127.0.0.1:8000/v1/chat/completions",
+response = httpx.post(f"http://127.0.0.1:{8000+PB}/v1/chat/completions",
     json=dict(model=model, messages=[dict(role="user", content="Release audit probe")],
               max_tokens=1, ignore_eos=True, stream=False),
     headers={"x-request-id": "nixl-release-audit-probe"}, timeout=30)
@@ -589,9 +600,9 @@ PYPROBE
 fi
 for i in "${instances[@]}"; do
   if [[ "$router_policy" == dualmap ]]; then
-    curl -fsS "http://127.0.0.1:$((8101+10*i))/metrics" > "$run/instance-$i/lmcache-metrics-final.prom"
+    curl -fsS "http://127.0.0.1:$((8101+port_base+10*i))/metrics" > "$run/instance-$i/lmcache-metrics-final.prom"
   fi
-  curl -fsS "http://127.0.0.1:$((8000+i))/metrics" > "$run/instance-$i/vllm-metrics-final.prom"
+  curl -fsS "http://127.0.0.1:$((8000+port_base+i))/metrics" > "$run/instance-$i/vllm-metrics-final.prom"
   kill -TERM "${collectors[i]}"
   wait "${collectors[i]}"
 done

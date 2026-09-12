@@ -75,6 +75,8 @@ def main() -> int:
     p.add_argument("--profile-stage", default="load", choices=["preliminary", "full", "load"])
     p.add_argument("--replay-budget-s", type=int, default=9000, help="SIGINT the replay after this wall time")
     p.add_argument("--tunnel-port", type=int, default=19019)
+    p.add_argument("--port-base", type=int, default=0, metavar="N",
+                   help="shift every host port by N (with a distinct --tunnel-port) so two single-GPU runs can share the host")
     p.add_argument("--remote-repo", default="/workspace/agent-sched-bench")
     a = p.parse_args()
     if a.calibration_run:
@@ -121,6 +123,8 @@ def main() -> int:
         if a.instances_per_gpu > 1 or a.tensor_parallel != 1:
             sys.exit("--single-gpu is one engine on one GPU: no --instances-per-gpu > 1, no --tensor-parallel 2")
         env["SINGLE_GPU"] = str(a.single_gpu)
+    if a.port_base:
+        env["PORT_BASE"] = str(a.port_base)
     if a.tensor_parallel == 2:
         if a.instances_per_gpu > 1 or a.router_policy != "least-requests":
             sys.exit("--tensor-parallel 2 is a single-instance deployment: --instances-per-gpu 1 and --router-policy least-requests")
@@ -185,7 +189,7 @@ def main() -> int:
             if not program_running():
                 sys.exit(f"host launcher exited before serving was ready; see /workspace/{a.name}-launch.log")
             time.sleep(10)
-        tunnel = subprocess.Popen(ssh + ["-N", "-L", f"{a.tunnel_port}:127.0.0.1:9000"])
+        tunnel = subprocess.Popen(ssh + ["-N", "-L", f"{a.tunnel_port}:127.0.0.1:{9000 + a.port_base}"])
         shadow_mode = "continuum-public" if a.router_policy == "least-requests" else "thunderagent"
         argv = [str(REPO / ".venv/bin/python"), "-m", "trace_collect.cli", "simulate",
                 "--manifest", a.manifest, "--output-dir", str(run / "output"),
