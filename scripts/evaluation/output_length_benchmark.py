@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import ExitStack, contextmanager
 import json
 import math
@@ -598,13 +598,27 @@ def label_dataset(
             return rows
 
         # Prefixes are independent, so with a single draw the concurrency spans prefixes (2026-09-12);
-        # with several draws it spans the draws of one prefix, as before. Rows are appended as they
-        # finish, so a rerun with the same protocol resumes.
+        # with several draws it spans the draws of one prefix, as before. Rows are written as each
+        # prefix finishes (not in list order: one runaway generation must not hold back the rest), so a
+        # rerun with the same protocol resumes. A sample whose generation is censored or rejected is
+        # recorded in rejected.jsonl and the run continues; the caller sees the count and the coverage
+        # check on the labels refuses an incomplete set.
         prefix_workers = concurrency if draws == 1 else 1
-        with labels_path.open("a", encoding="utf-8") as output, ThreadPoolExecutor(
-            max_workers=prefix_workers
-        ) as prefix_pool:
-            for rows in prefix_pool.map(label_prefix, prefixes):
+        rejected_path = output_dir / "rejected.jsonl"
+        rejected = 0
+        with labels_path.open("a", encoding="utf-8") as output, rejected_path.open(
+            "a", encoding="utf-8"
+        ) as rejects, ThreadPoolExecutor(max_workers=prefix_workers) as prefix_pool:
+            futures = {prefix_pool.submit(label_prefix, prefix): str(prefix["sample_id"]) for prefix in prefixes}
+            for future in as_completed(futures):
+                try:
+                    rows = future.result()
+                except (RuntimeError, ValueError) as exc:
+                    rejects.write(json.dumps({"sample_id": futures[future], "error": str(exc)[:500]}) + "\n")
+                    rejects.flush()
+                    rejected += 1
+                    print(f"rejected {futures[future]}: {str(exc)[:160]}", flush=True)
+                    continue
                 for row in rows:
                     key = (str(row["sample_id"]), row["draw_id"])
                     output.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -613,7 +627,9 @@ def label_dataset(
                     completed_count += 1
                     if completed_count % 100 == 0 or completed_count == total:
                         print(f"labeled {completed_count}/{total}", flush=True)
-    return {**protocol, "completed_labels": len(completed_keys)}
+        if rejected:
+            print(f"rejected {rejected} samples (see {rejected_path})", flush=True)
+    return {**protocol, "completed_labels": len(completed_keys), "rejected": rejected}
 
 
 def _percentile(values: Sequence[float], fraction: float) -> float:
