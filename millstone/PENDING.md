@@ -4,6 +4,28 @@ Current as of 2026-09-12 05:40 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
+## 0. What every run measures, and why always FCFS sticky and DualMap
+
+The two policies are instruments, not the object of study. FCFS sticky is
+the system as deployed with no help: each task pinned to one engine, vLLM's
+own queue, no admission control, no DRAM tier. DualMap is the strongest
+existing fix we can run: request-level admission at the proxy, a DRAM KV
+tier, and migration. At any operating point (instances N, concurrency c =
+number of tasks active at once in the closed loop, model size) two numbers
+answer one question: the gap FCFS → DualMap says whether pressure is a
+problem that an existing mechanism can fix; the residual DualMap → ideal
+(engine time with no hold and no queue) says how much is left to research.
+
+| Operating point | FCFS → DualMap gap | DualMap residual | Reading |
+|---|---|---|---|
+| 4B, full memory (R 0.5) | none | none | no problem |
+| 4B, capped, c32–c64 (R 1.2–2.4) | large | small (hold 3–8 s of a 7 s step) | problem exists, solved by admission |
+| 4B, N=8 | small (mean), large (makespan) | small | tail stranding only |
+| 32B, full memory (R 1.3) | huge (57 → 30 min) | **large (hold 14 s of a 36 s step)** | problem exists, **not solved**: research goes here |
+
+Chain 13 asks what the 32B residual is made of (DRAM-tier capacity, or the
+admission logic) and whether the operating point itself is right (TP=2).
+
 ## 1. Running and queued on the GPU host (2× RTX Pro 6000)
 
 All runs on `analysis/development/pool64-distinct-v4` (64 distinct traces).
