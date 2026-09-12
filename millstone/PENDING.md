@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-11 22:55 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-12 03:10 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -16,7 +16,7 @@ Per-run analysis lands in `results/<run>/comparison.txt` and
 | 5–6 | N=8 capped (k=4 per GPU under MPS), FCFS sticky and DualMap | Step 2 decision point | done 19:01 UTC; verdict in M4 §3 |
 | — | N=4 capped pair | optional middle point of the N axis | dropped 17:52 UTC, no result read; rerun only if N=8 is anomalous |
 | 7–10 | N=2 capped at concurrency 48 and 64, FCFS sticky and DualMap | Step 3 pressure grid (below) | done 22:50 UTC; result in M4 §3 step 3 |
-| 11–14 | Qwen3-32B-FP8: smoke, DualMap calibration, N=2 full FCFS sticky and DualMap at concurrency 32 | Model-size check (§5) | running since 22:53 UTC, `results/chain12-qwen32b-20260911.sh`, ~02:00 UTC |
+| 11–14 | Qwen3-32B-FP8: smoke, DualMap calibration, N=2 full FCFS sticky and DualMap at concurrency 32 | Model-size check (§5) | done 03:01 UTC; result in M4 §3.1 |
 
 Chain 11 waits for the N=8 DualMap analysis, stops chain 10 before it
 launches the N=4 pair, then runs the grid.
@@ -90,7 +90,7 @@ growth-aware admission and victim choice fix ThunderAgent's starvation while
 keeping DualMap's cache protection, against both as baselines. Thin margin;
 the advisor's call.
 
-Gate: §2 result. **Closed 22:50 UTC: DualMap did not degrade at R 2.4.** Reopens only if the 32B run (§5) shows it degrading there.
+Gate: §2 result. Closed 22:50 UTC for the 4B model (DualMap did not degrade at R 2.4). **Reopened 03:02 UTC at 32B**: DualMap's hold is 40% of step time there (M4 §3.1). Order of tests: DRAM-tier sizing first (§5 item 1), then this direction only if capacity does not explain the hold.
 
 ## 4. After the grid
 
@@ -134,6 +134,22 @@ because each recomputed token costs more.
 and the 32B point becomes the realistic operating point for anything built
 next. If DualMap also degrades here, the working-set admission direction
 (§3) gets a second, independent motivation.
+
+**Result (03:02 UTC, M4 §3.1).** Pattern held, much larger: FCFS 57.1 min
+(cached 0.26, TPOT 156 ms), DualMap 29.7 min (cached 0.86), −1,642 s per
+task. But DualMap's hold is now 14 s per request, about 40% of step time, so
+KV-pressure scheduling is *not* closed at 32B. The DRAM tier supplied 2% of
+tokens: 48 GiB per instance is only 192K tokens at 262 KB per token,
+mis-sized for the model. 32B is the operating point from here.
+
+**Next runs at 32B (need the advisor's go; each about 75 min):**
+1. DualMap with the CPU tier at 96 GiB per instance (§7.2 test): does
+   doubling the DRAM tier cut the 14 s hold? Expectation: cached share
+   toward 0.95 and hold below 8 s; if the hold does not move, the limit is
+   admission logic, not capacity, and §3 reopens.
+2. TP=2 single instance, FCFS (§7.1): launcher ready, smoke first.
+3. A low-pressure 32B reference (concurrency 8, R 0.33) so the 32B pressure
+   cost has a floor to be measured against.
 
 ## 6. Output-length prediction (meeting notes §2), CPU only, tonight
 
@@ -186,8 +202,7 @@ literature check; one was dropped.
 - Question: at 4B a retrieve costs 39 ms and recompute is cheap, so the DRAM
   tier supplied 4% of tokens. At 32B recompute is 8× dearer and retrieve
   1.8×; does the balance tip toward storing rather than recomputing?
-- Read from chain 12's DualMap run: LMCache retrieve counters and the
-  per-request prefill decomposition. No extra run.
+- Read from chain 12's DualMap run: the tier supplied 2% of prompt tokens with 66K evictions; at 262 KB per token 48 GiB is 192K tokens, below one instance's GPU cache. The balance did not tip because the tier is too small to hold anything; the 96 GiB run (§5 next runs, item 1) is the actual test.
 
 **7.3 Dropped: n-gram speculative decoding for tool-call arguments.** The
 observation that long outputs are copies of context is already exploited:

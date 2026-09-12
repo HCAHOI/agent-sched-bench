@@ -337,6 +337,50 @@ gate was DualMap degrading, and it did not. The remaining questions are the
 design-space levers in `PENDING.md` §5 and §7 (model size, TP=2 vs DP=2,
 memory hierarchy at 32B).
 
+### 3.1 Model size: Qwen3-32B-FP8 (pre-registered `PENDING.md` §5, read 03:02 UTC)
+
+Same pool64-v4, N=2 full memory (236,496 KV tokens per instance, R_avg 1.31
+uncapped), concurrency 32, engine context 65,536 via YaRN factor 2 over the
+model's native 40,960. Calibrated prefill constant 143 µs per token (4B:
+31.3). Chain: `results/chain12-qwen32b-20260911.{sh,log}`; smoke
+`fcfs-least-requests-smoke-qwen32b-20260911-r1`, calibration
+`dualmap-calibration-pro6000-qwen32b-20260911-r1`.
+
+| Run (64/64, 1,951 requests) | Mean JCT (min) | P95 | Max | Makespan | Cached | TPOT (ms) | Hold / queue / prefill / decode (s) | CPU-tier tokens |
+|---|---:|---:|---:|---:|---:|---:|---|---:|
+| 4B, FCFS sticky (R 0.50) | 8.80 | 15.5 | 25.6 | 26.2 | 0.96 | 26 | 0 / 3.3 / 0.08 / 5.8 | — |
+| 4B, DualMap | 9.11 | 15.9 | 24.1 | 24.7 | 0.95 | 28 | 2.7 / 0.7 / 0.10 / 6.3 | — |
+| 32B, FCFS sticky (R 1.31) | 57.08 | 107.5 | 125.3 | 125.9 | 0.26 | 156 | 0 / 33.8 / 3.8 / 34.9 | — |
+| 32B, DualMap | 29.71 | 49.1 | 70.4 | 71.0 | 0.86 | 90 | 14.0 / 1.5 / 0.8 / 20.2 | 0.87M |
+
+Paired DualMap − sticky at 32B: **−1,642 s per task, 95% [−1,878, −1,418]**.
+Wall time: FCFS 2 h 6 min, DualMap 1 h 11 min.
+
+*Against the pre-registration.* The pattern held and is much larger than
+expected. FCFS: cached share 0.26, and the recomputed prefill (about 14K
+tokens per request at 143 µs) not only costs 3.8 s of prefill but stalls
+every co-batched decode under chunked prefill, so TPOT is 156 ms and decode
+alone is 35 s per request; five preemptions. DualMap recovers the cache to
+0.86 and halves TPOT, at a hold of 14 s per request (4B: 2.7 s).
+
+*What is new at 32B.* (1) The residual pressure cost under DualMap is no
+longer small: per step, hold 14 s against 22.5 s of engine time, so about
+40% of step time is admission waiting (4B: 2.7 s against 7.1 s). The
+work-conserving bound is far away; scheduling under KV pressure is *not*
+closed at this model size. (2) The DRAM tier did almost nothing (2% of prompt
+tokens, 66K evictions) because 48 GiB per instance holds only 192K tokens at
+262 KB per token, less than the instance's own GPU cache; the tier is
+mis-sized for the model, not useless. This is the `PENDING.md` §7.2 question
+and it has a direct test: the same DualMap run with 96 GiB per instance
+(cgroup 240 GB allows it). (3) Imbalance stays modest under both policies
+(sticky mean 1.22, 3 of 22 windows above 1.5; DualMap 1.19, none), so at
+this scale the multi-instance question is again secondary to KV pressure.
+
+*Consequence.* The step 3 closure ("scheduling under KV pressure is closed on
+this workload") is scoped to the 4B model. At 32B the closed question
+reopens with a measured headroom of roughly 40% of step time, and the first
+lever to test is memory-hierarchy sizing (DRAM tier), not a new scheduler.
+
 ## 4. Evidence
 
 - Smoke and calibration: `../results/fcfs-least-requests-smoke-20260911-r2/`,
