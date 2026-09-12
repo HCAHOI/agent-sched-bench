@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-12 06:45 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-12 06:40 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -265,6 +265,25 @@ logs, LMCache rebuild logs, setup and download logs and the manifests are in
 weights (37 GB, about 45 min to re-download), venvs and the LMCache sm_120
 source build (about 30 min via `benchmark_server.sh --serving-host`), CUDA
 JIT cache.
+
+## 8a. Two lanes from 06:40 UTC (user decision): GPU 0 scheduling, GPU 1 output-length
+
+**GPU 0, scheduling lane** (`results/chain14-single-gpu0-20260912.sh`, waits
+for chain 13's 96 GiB run to finish and stop): Qwen3-32B-FP8, one engine on
+GPU 0 (new `--single-gpu` mode, smoke-gated), concurrency 16 on pool64-v4:
+FCFS sticky, DualMap (96 GiB DRAM tier), Continuum (its own smoke first).
+Each about 1.5 h. These are the §0 instruments on the new platform plus the
+closest intra-engine prior; results go to M4 §3.1 as the single-engine
+baseline table.
+
+**GPU 1, output-length lane** (`/workspace/outlen/` on the host, separate
+venv): corrected SSJF-Reg (log1p target) and EGTP-static (last-256-token
+window, k = 256 and official k = 4), pre-registered in the handoff document
+(amendment 2026-09-12). Results pulled to
+`analysis/results/output-length-source-labels-crossbench-20260904/`.
+
+Dropped: c16 floor, TP=2 (no decision depends on them), repetition runs
+(all decisive gaps are 30× any plausible run noise).
 
 ## 9. Realism check: Qwen3.8-27B-FP8 (recorded 06:45 UTC, one measurement, not a platform change)
 
