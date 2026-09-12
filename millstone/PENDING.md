@@ -330,6 +330,18 @@ from not-long from the prompt-side state, it can only shift everything up.
 Diagnosis: not an objective problem; stages C and B decide between
 information and inherent.
 
+**Reorder 17:30 UTC** (user: "GPU 1 整个 lane 好像没什么好跑的了?"): the tail
+lane was stopped during the k = 16 extraction (400 of 4,235 features cached)
+and replaced by `results/host-lanes/lane2-20260912.sh` (log
+`/workspace/outlen/lane2-20260912.log`) in decision order: **B first** (it
+decides whether the tail is inherent, which also settles OUTLETS-faithful
+yes/no), then the **thinking-mode labels** (below), then **C only if B shows
+the long bucket is reproducible between draws**: P(long in another draw |
+long in one draw) ≥ 0.5 on the 4-draw test labels (`results-tail/b-agreement.json`);
+otherwise C is skipped, because a tail the target model itself does not
+reproduce cannot be read from the prompt at any k. The reading rules above
+are unchanged.
+
 Visible when this was written: one smoke of the class head + weighted variant
 on the natural test split (long recall 0.465, precision 0.426, q50 1.44) had
 been run as a plumbing check before the criteria were fixed; the primary rule
@@ -352,7 +364,7 @@ otherwise the alert only shortens the horizon. (3) Reasoning length as its own
 probe target (same features, MSE head): q50 compared with the whole-output
 probe (1.35); if reasoning length is the less predictable part, the prompt-side
 estimate should quote the visible part and treat reasoning as the interval.
-Expected ~3 h from ~00:30 UTC; rejects (censored at 64K, timeouts) are counted
+Runs inside lane 2 after B (~22:00 UTC), ~3 h; rejects (censored at 64K, timeouts) are counted
 and dropped as before.
 
 **Overnight GPU 0 (pre-registered 17:08 UTC; `results/chain20-gpu0-32b-undersized-20260912.sh`, after chain 19).**
