@@ -448,7 +448,7 @@ is sized to it, 24 GiB ≈ 98K tokens covers the mean shortfall and not the peak
 | 24 GiB (undersized) | DualMap | queued (chain 20) | | | | | | |
 
 Paired mean-JCT differences: sized tier − nothing **−3,473 s [−3,832, −3,093]** per task; undersized tier − nothing
-**+119 s [+92, +145]** (read 23:25 UTC, chain 20: 44M tokens stored and evicted, 4 retrieves, cached share unchanged at
+**+119 s [+92, +145]** (read 23:21 UTC, chain 20: 44M tokens stored and evicted, 4 retrieves, cached share unchanged at
 0.18, so the 4B reading (1) "a tier smaller than the working set is pure cost" holds at 32B, at a smaller cost
 because the 32B store call is a smaller share of a 82 s request). The 4B reading (3) holds
 with a larger margin at 32B: the sized store alone halves the step (queue 39.7 → 17.7 s, decode 36.2 → 19.6 s) because
