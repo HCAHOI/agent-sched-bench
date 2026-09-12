@@ -336,7 +336,7 @@ been run as a plumbing check before the criteria were fixed; the primary rule
 above is on the replay operating point, which had not been computed for any
 variant. Results dir on the host `/workspace/outlen/results-tail`.
 
-**Thinking-mode labels (GPU 1 after the tail lane, pre-registered 17:20 UTC; `results/host-lanes/thinking-20260912.sh`, log `/workspace/outlen/thinking-20260912.log`).**
+**Thinking-mode labels (GPU 1 after the tail lane, pre-registered 17:16 UTC; `results/host-lanes/thinking-20260912.sh`, log `/workspace/outlen/thinking-20260912.log`).**
 The user's two-marker proposal (§10) measured with a target whose reasoning
 close is a real token: Qwen3-30B-A3B-Thinking-2507-FP8 generates one draw per
 prefix of dataset-nat (temperature 0.6 / top-p 0.95, Qwen's thinking-mode
