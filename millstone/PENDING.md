@@ -336,6 +336,25 @@ been run as a plumbing check before the criteria were fixed; the primary rule
 above is on the replay operating point, which had not been computed for any
 variant. Results dir on the host `/workspace/outlen/results-tail`.
 
+**Thinking-mode labels (GPU 1 after the tail lane, pre-registered 17:20 UTC; `results/host-lanes/thinking-20260912.sh`, log `/workspace/outlen/thinking-20260912.log`).**
+The user's two-marker proposal (§10) measured with a target whose reasoning
+close is a real token: Qwen3-30B-A3B-Thinking-2507-FP8 generates one draw per
+prefix of dataset-nat (temperature 0.6 / top-p 0.95, Qwen's thinking-mode
+setting; 64K cap so reasoning is uncensored; vLLM reasoning parser splits
+`reasoning_content` from the visible message). Output
+`/workspace/outlen/natural-labels-thinking-qwen3-30b-a3b-64k`. Questions and
+reading rules, all CPU work on the labels plus the existing prompt-side
+features: (1) reasoning share of the step's output tokens (report; §10 used a
+0.36 median from recorded traces). (2) Remainder after the close, predicted
+from the tool name (pool median visible tokens per tool): q-err p50 ≤ 1.4
+means the alert carries information beyond the whole-output estimate (≈ 1.8);
+otherwise the alert only shortens the horizon. (3) Reasoning length as its own
+probe target (same features, MSE head): q50 compared with the whole-output
+probe (1.35); if reasoning length is the less predictable part, the prompt-side
+estimate should quote the visible part and treat reasoning as the interval.
+Expected ~3 h from ~00:30 UTC; rejects (censored at 64K, timeouts) are counted
+and dropped as before.
+
 **Overnight GPU 0 (pre-registered 17:08 UTC; `results/chain20-gpu0-32b-undersized-20260912.sh`, after chain 19).**
 The undersized column of the 2×2 at 32B: FCFS + 24 GiB tier, then DualMap +
 24 GiB, one engine c16 (GPU KV 236K tokens; working set 287K mean, 540K at the
@@ -442,7 +461,7 @@ is large under FCFS (p50 36 s at 32B) and heavy-tailed under DualMap (mean
 11.7 s, p50 3.2 s); it is our own decision, so it should be sent as an event
 ("scheduled"), not predicted.
 
-**Two-marker proposal (user, 17:20 UTC): safe lower bound at arrival = queue estimate + prefill; alert when the reasoning closes.** Measured 17:35 UTC on the same four runs (`at_reasoning_end` in `probe-replay-pool64v4/staged-*.json`; reasoning tokens = recorded completion − tiktoken count of the visible text and tool arguments, alert time proportional inside the replay's decode; estimate after the alert = pool median visible tokens of the named tool × causal TPOT):
+**Two-marker proposal (user, 17:08 UTC): safe lower bound at arrival = queue estimate + prefill; alert when the reasoning closes.** Measured 17:13 UTC on the same four runs (`at_reasoning_end` in `probe-replay-pool64v4/staged-*.json`; reasoning tokens = recorded completion − tiktoken count of the visible text and tool arguments, alert time proportional inside the replay's decode; estimate after the alert = pool median visible tokens of the named tool × causal TPOT):
 
 | Run | Reasoning share of output tokens p50 / mean | Remaining after alert p10 / p50 (s) | Share ≥ 2.2 / 3 s after alert | After-alert abs error p50 / p90 (s) | q-err p50 / p90 |
 |---|---|---|---|---|---|
