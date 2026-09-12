@@ -90,7 +90,7 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits | \
 ports=($((9000+port_base)))
 for i in "${instances[@]}"; do
   ports+=($((8000+port_base+i)) $((5557+port_base+2*i)) $((5558+port_base+2*i)))
-  [[ "$router_policy" != dualmap ]] || ports+=($((8101+port_base+10*i)))
+  [[ "$router_policy" != dualmap && -z "${CPU_CACHE_GIB:-}" ]] || ports+=($((8101+port_base+10*i)))
 done
 [[ -z "$ppd_mode" ]] || ports+=(14579 14580)
 for port in "${ports[@]}"; do
@@ -140,6 +140,9 @@ if [[ -n "$ppd_mode" ]]; then
     cp -a "$PPD_BENCHMARK_DATA" "$run/ppd-calibration"
   fi
 fi
+# DRAM KV tier (LMCache CPU offload) per instance: DualMap always has one (DUALMAP_CPU_CACHE_GIB, default 48);
+# CPU_CACHE_GIB gives the same tier to any other router policy, storage without admission (2026-09-12 decomposition).
+cpu_cache_gib=${CPU_CACHE_GIB:-}
 if [[ "$router_policy" == dualmap ]]; then
   cp scripts/baselines/dualmap_official{.sh,_proxy.py} "$run/"
   cpu_cache_gib=${DUALMAP_CPU_CACHE_GIB:-48}
@@ -228,7 +231,7 @@ for i in "${instances[@]}"; do
   # Model config overrides (JSON), e.g. YaRN rope scaling when MAX_MODEL_LEN exceeds the model's native context.
   [[ -z "${VLLM_HF_OVERRIDES:-}" ]] || kv_cap_args+=(--hf-overrides "$VLLM_HF_OVERRIDES")
   engine_command=(bash scripts/baselines/continuum_public.sh "$serve_command" "$model")
-  if [[ "$router_policy" == dualmap ]]; then
+  if [[ -n "$cpu_cache_gib" ]]; then
     cat > "$cell/lmcache.yaml" <<YAML
 chunk_size: 256
 local_cpu: true
@@ -316,7 +319,7 @@ for i in "${instances[@]}"; do
     --output "$cell/vllm-metrics-series.prom" --gaps "$cell/vllm-metrics-gaps.jsonl" \
     2> "$cell/vllm-metrics-series.err" &
   monitors+=("$!")
-  if [[ "$router_policy" == dualmap ]]; then
+  if [[ -n "$cpu_cache_gib" ]]; then
     lmcache_port=$((8101+port_base+10*i))
     wait_http "$lmcache_port" "${servers[i]}" metrics
     curl -fsS "http://127.0.0.1:$lmcache_port/metrics" > "$cell/lmcache-metrics-start.prom"
@@ -599,7 +602,7 @@ PYPROBE
   "${checker[@]}" --final
 fi
 for i in "${instances[@]}"; do
-  if [[ "$router_policy" == dualmap ]]; then
+  if [[ -n "$cpu_cache_gib" ]]; then
     curl -fsS "http://127.0.0.1:$((8101+port_base+10*i))/metrics" > "$run/instance-$i/lmcache-metrics-final.prom"
   fi
   curl -fsS "http://127.0.0.1:$((8000+port_base+i))/metrics" > "$run/instance-$i/vllm-metrics-final.prom"
