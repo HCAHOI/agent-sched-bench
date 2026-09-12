@@ -444,10 +444,13 @@ is sized to it, 24 GiB ≈ 98K tokens covers the mean shortfall and not the peak
 | none | none (FCFS sticky) | 111.69 | 189.4 | 211.4 | 0.18 | 170.8 | 0 / 39.7 / 4.0 / 36.2 | — |
 | 96 GiB (≥ working set) | none | **53.81** | **93.9** | **107.2** | **0.92** | **93.3** | 0 / 17.7 / 0.6 / 19.6 | 34.1M (75% of prompt tokens; 1,946 retrieves, 93 ms each; 13,346 evictions) |
 | 96 GiB | DualMap | r1 aborted at 99% (replacement-stream failure, harness); r2 queued in chain 21 | | | | | | |
-| 24 GiB (undersized) | none | queued (chain 20) | | | | | | |
+| 24 GiB (undersized) | none | 113.67 | 193.9 | 217.1 | 0.18 | 175.1 | 0 / 40.7 / 4.1 / 37.1 | **0.1M** (0%; 4 retrieves; 44.0M stored, 170,546 evictions) |
 | 24 GiB (undersized) | DualMap | queued (chain 20) | | | | | | |
 
-Paired mean-JCT difference, sized tier − nothing: **−3,473 s [−3,832, −3,093]** per task. The 4B reading (3) holds
+Paired mean-JCT differences: sized tier − nothing **−3,473 s [−3,832, −3,093]** per task; undersized tier − nothing
+**+119 s [+92, +145]** (read 23:25 UTC, chain 20: 44M tokens stored and evicted, 4 retrieves, cached share unchanged at
+0.18, so the 4B reading (1) "a tier smaller than the working set is pure cost" holds at 32B, at a smaller cost
+because the 32B store call is a smaller share of a 82 s request). The 4B reading (3) holds
 with a larger margin at 32B: the sized store alone halves the step (queue 39.7 → 17.7 s, decode 36.2 → 19.6 s) because
 the GPU cache stops thrashing (cached share 0.18 → 0.92, TPOT 171 → 93 ms), and prefill nearly disappears (4.0 →
 0.6 s). Whether admission still adds on top, and whether an undersized tier is pure cost at 32B, are the pending rows.
