@@ -443,7 +443,7 @@ is sized to it, 24 GiB ≈ 98K tokens covers the mean shortfall and not the peak
 |---|---|---:|---:|---:|---:|---:|---|---:|
 | none | none (FCFS sticky) | 111.69 | 189.4 | 211.4 | 0.18 | 170.8 | 0 / 39.7 / 4.0 / 36.2 | — |
 | 96 GiB (≥ working set) | none | **53.81** | **93.9** | **107.2** | **0.92** | **93.3** | 0 / 17.7 / 0.6 / 19.6 | 34.1M (75% of prompt tokens; 1,946 retrieves, 93 ms each; 13,346 evictions) |
-| 96 GiB | DualMap | running (chain 19) | | | | | | |
+| 96 GiB | DualMap | r1 aborted at 99% (replacement-stream failure, harness); r2 queued in chain 21 | | | | | | |
 | 24 GiB (undersized) | none | queued (chain 20) | | | | | | |
 | 24 GiB (undersized) | DualMap | queued (chain 20) | | | | | | |
 
