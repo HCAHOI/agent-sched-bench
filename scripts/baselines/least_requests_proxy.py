@@ -28,8 +28,8 @@ def create_app(
     A dropped engine connection is retried once on the same engine while no byte has
     reached the client; once streaming has started the request is not idempotent.
     """
-    if len(backends) < 2 or len(set(backends)) != len(backends):
-        raise ValueError("at least two distinct backends are required")
+    if not backends or len(set(backends)) != len(backends):
+        raise ValueError("at least one backend, all distinct, is required")  # one backend: single-engine runs
     clients = [httpx.AsyncClient(base_url=b, timeout=None, transport=transport) for b in backends]
     outstanding = [0] * len(backends)
     next_tie = 0
