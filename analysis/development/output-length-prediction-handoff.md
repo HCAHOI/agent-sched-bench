@@ -252,6 +252,17 @@ This sample therefore has stochastic behavior: the isolated 32K probe ended afte
 1. Choose and declare a label contract for non-terminating/heavy-tail draws: censored survival target, explicit invalid-draw exclusion, or another bounded target. Do not silently raise the cap again.
 2. Run the four predictor adapters only after that contract is fixed and the resulting labels have consistent coverage.
 
+## Amendment 2026-09-12: corrected SSJF-Reg and EGTP-static runs (pre-registered 06:25 UTC, before any number)
+
+The 2026-09-04 runs of both published methods were misapplied, in ways visible in their protocols:
+
+- **SSJF-Reg never trained.** The released recipe regresses raw token counts (targets in the hundreds, variance about 2×10⁵) at learning rate 1e-5, then freezes the encoder after three epochs; train loss went 220K → 216K over six epochs and the mean prediction was 11 tokens against a truth of 268. Fix: `--target-transform log1p` (regress log(1 + tokens), invert at prediction time); everything else as released.
+- **EGTP-static saw only the chat-template header.** The official extractor keeps the first *k* = 4 target-model tokens of the prompt. In LP_Bench's chat data those are the user's question; in an agent step they are `<|im_start|>system\n#`, identical for every sample, so the predictor collapsed to a constant. Fix: `--tail-tokens 256` projects the rendered prompt to its last 256 target-model tokens (the latest tool result and the previous assistant turn) before the extractor; run with *k* = 256 (the whole window) and with the official *k* = 4 on that window.
+
+Dataset re-exported locally from the same archives with the same seed (`source_labels.jsonl` byte-identical, test sample ids identical to the frozen run). Runs on the GPU host (`/workspace/outlen/`, GPU 1, venv separate from the serving stack), seed 42, released hyper-parameters otherwise.
+
+Expectation: if per-request content carries the signal, the corrected runs beat the train-median constant on q50 (< 1.85) and detect long outputs (recall > 0.3 at > 512 tokens). If they still sit at the constant, the 2026-09-11 decomposition (91% of variance in tool-call arguments, 43–71% of tokens visible) is the explanation and output length is closed as a scheduling signal on this data.
+
 ## Current limitations and open problems
 
 - Natural output has a heavy tail: one draw exceeded 16K even though the longest-prefix smoke outputs were all below 1.3K. The 32K cap is still a censoring boundary, so any cap hit invalidates that label run.

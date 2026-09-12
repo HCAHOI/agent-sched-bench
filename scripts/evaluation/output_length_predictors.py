@@ -240,6 +240,7 @@ def _ssjf_batch(
     tokenizer: Any,
     rows: Sequence[dict[str, Any]],
     device: torch.device,
+    log_target: bool = False,
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
     encoded = tokenizer(
         [row["text"] for row in rows],
@@ -253,7 +254,8 @@ def _ssjf_batch(
         "attention_mask": encoded["attention_mask"].to(device),
     }
     targets = torch.tensor(
-        [row["target"] for row in rows], dtype=torch.float32, device=device
+        [math.log1p(row["target"]) if log_target else row["target"] for row in rows],
+        dtype=torch.float32, device=device,
     )
     return inputs, targets
 
@@ -266,12 +268,15 @@ def _ssjf_predict(
     *,
     batch_size: int,
     device: torch.device,
+    log_target: bool = False,
 ) -> list[float]:
     model.eval()
     predictions: list[float] = []
     for batch in _batches(rows, batch_size):
         inputs, _targets = _ssjf_batch(tokenizer, batch, device)
         predictions.extend(model(**inputs).cpu().tolist())
+    if log_target:
+        predictions = [math.expm1(min(value, 20.0)) for value in predictions]
     return [max(1.0, float(value)) for value in predictions]
 
 
@@ -286,7 +291,18 @@ def run_ssjf_reg(
     learning_rate: float,
     seed: int,
     device_name: str,
+    target_transform: str = "raw",
 ) -> dict[str, Any]:
+    """target_transform="log1p" regresses log(1 + tokens) and inverts at prediction time.
+
+    The released recipe regresses raw token counts; on agent steps (targets in the hundreds, variance
+    ~2e5) that never left the head's initial output within the released schedule (2026-09-04 run:
+    train loss 220K -> 216K over six epochs, mean prediction 11 tokens vs 268 truth). Amendment
+    recorded in the handoff document.
+    """
+    if target_transform not in ("raw", "log1p"):
+        raise ValueError("target_transform must be raw or log1p")
+    log_target = target_transform == "log1p"
     if output_dir.exists():
         raise FileExistsError(f"output directory already exists: {output_dir}")
     if epochs <= 0 or batch_size <= 0 or learning_rate <= 0:
@@ -317,7 +333,7 @@ def run_ssjf_reg(
         model.train()
         epoch_loss = 0.0
         for batch in _batches(train_rows, batch_size):
-            inputs, targets = _ssjf_batch(tokenizer, batch, device)
+            inputs, targets = _ssjf_batch(tokenizer, batch, device, log_target)
             optimizer.zero_grad()
             loss = nn.functional.mse_loss(model(**inputs), targets)
             loss.backward()
@@ -332,6 +348,7 @@ def run_ssjf_reg(
         examples["test"],
         batch_size=batch_size,
         device=device,
+        log_target=log_target,
     )
     output_dir.mkdir(parents=True)
     predictions_path = output_dir / "predictions.jsonl"
@@ -354,6 +371,7 @@ def run_ssjf_reg(
         "label_reduction": "arithmetic_mean_over_draws",
         "input": "canonical_json_of_full_messages_then_left_truncate_to_512_tokens",
         "prediction_postprocess": "clamp_to_at_least_one_token",
+        "target_transform": target_transform,
         "encoder": encoder,
         "epochs": epochs,
         "batch_size": batch_size,
@@ -429,11 +447,18 @@ def _run_egtp(
     subprocess.run(command, check=True, cwd=entrypoint.parent, env=environment)
 
 
-def _egtp_text(messages: object, tokenizer: Any, tools: object) -> str:
+def _egtp_text(messages: object, tokenizer: Any, tools: object, tail_tokens: int | None = None) -> str:
+    """Rendered prompt for EGTP's extractor, which keeps only the first k target-model tokens.
+
+    tail_tokens keeps the last N target-model tokens of the rendered prompt instead (decoded back to
+    text), so that "first k" of the projected input is the end of the context: on agent steps the
+    rendered prompt starts with an invariant system prompt and the information about the next output
+    (the latest tool result, the previous assistant turn) is at the end. Amendment 2026-09-12.
+    """
     if not isinstance(messages, list):
         raise ValueError("prefix messages must be a list")
     kwargs = {"tools": tools} if tools else {}
-    return str(
+    text = str(
         tokenizer.apply_chat_template(
             messages,
             tokenize=False,
@@ -441,6 +466,10 @@ def _egtp_text(messages: object, tokenizer: Any, tools: object) -> str:
             **kwargs,
         )
     )
+    if tail_tokens:
+        ids = tokenizer(text, add_special_tokens=False)["input_ids"]
+        text = tokenizer.decode(ids[-tail_tokens:])
+    return text
 
 
 def _write_egtp_split(path: Path, rows: Sequence[dict[str, Any]]) -> None:
@@ -475,9 +504,12 @@ def run_egtp_static(
     extractor_batch_size: int,
     torch_dtype: str,
     seed: int,
+    tail_tokens: int | None = None,
 ) -> dict[str, Any]:
     if output_dir.exists():
         raise FileExistsError(f"output directory already exists: {output_dir}")
+    if tail_tokens is not None and tail_tokens < prompt_prefix_k:
+        raise ValueError("tail_tokens must be at least prompt_prefix_k, or the extractor sees less than the tail window")
     if min(prompt_prefix_k, num_bins, epochs, batch_size, extractor_batch_size) <= 0:
         raise ValueError("counts must be positive")
     if not 0 <= lambda_val <= 1 or learning_rate <= 0:
@@ -497,7 +529,7 @@ def run_egtp_static(
             {
                 **row,
                 "text": _egtp_text(
-                    prefix_by_id[row["sample_id"]]["messages"], tokenizer, tools
+                    prefix_by_id[row["sample_id"]]["messages"], tokenizer, tools, tail_tokens
                 ),
             }
             for row in rows
@@ -549,10 +581,11 @@ def run_egtp_static(
         "labels_path": str(labels_path.resolve()),
         "label_reduction": "arithmetic_mean_over_draws",
         "input": (
-            "full_messages_rendered_by_target_tokenizer_chat_template; official extractor "
-            "keeps only "
-            f"the first {prompt_prefix_k} target-model tokens"
+            "full_messages_rendered_by_target_tokenizer_chat_template"
+            + (f", projected to the last {tail_tokens} target-model tokens" if tail_tokens else "")
+            + f"; official extractor keeps only the first {prompt_prefix_k} target-model tokens"
         ),
+        "tail_tokens": tail_tokens,
         "unused_split": "validation",
         "model_id": model_id,
         "prompt_prefix_k": prompt_prefix_k,
@@ -1085,6 +1118,8 @@ def _build_parser() -> argparse.ArgumentParser:
     ssjf.add_argument("--learning-rate", type=float, default=1e-5)
     ssjf.add_argument("--seed", type=int, default=42)
     ssjf.add_argument("--device", default="auto")
+    ssjf.add_argument("--target-transform", choices=("raw", "log1p"), default="raw",
+                      help="log1p: regress log(1 + tokens) instead of raw counts (amendment 2026-09-12)")
     egtp = commands.add_parser("egtp-static")
     egtp.add_argument("--dataset-dir", type=Path, required=True)
     egtp.add_argument("--labels", type=Path, required=True)
@@ -1101,6 +1136,8 @@ def _build_parser() -> argparse.ArgumentParser:
     egtp.add_argument("--extractor-batch-size", type=int, default=64)
     egtp.add_argument("--torch-dtype", default="bfloat16")
     egtp.add_argument("--seed", type=int, default=42)
+    egtp.add_argument("--tail-tokens", type=int,
+                      help="project the rendered prompt to its last N target-model tokens before the extractor (amendment 2026-09-12)")
     outlets = commands.add_parser("outlets-static")
     outlets.add_argument("--dataset-dir", type=Path, required=True)
     outlets.add_argument("--output-dir", type=Path, required=True)
@@ -1139,6 +1176,7 @@ def main() -> None:
             learning_rate=args.learning_rate,
             seed=args.seed,
             device_name=args.device,
+            target_transform=args.target_transform,
         )
         print(json.dumps(result["counts"], indent=2))
     elif args.command == "egtp-static":
@@ -1157,6 +1195,7 @@ def main() -> None:
             learning_rate=args.learning_rate,
             extractor_batch_size=args.extractor_batch_size,
             torch_dtype=args.torch_dtype,
+            tail_tokens=args.tail_tokens,
             seed=args.seed,
         )
         print(json.dumps(result["counts"], indent=2))
