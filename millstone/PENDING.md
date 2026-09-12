@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-12 05:40 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-12 06:20 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -39,7 +39,8 @@ Per-run analysis lands in `results/<run>/comparison.txt` and
 | — | N=4 capped pair | optional middle point of the N axis | dropped 17:52 UTC, no result read; rerun only if N=8 is anomalous |
 | 7–10 | N=2 capped at concurrency 48 and 64, FCFS sticky and DualMap | Step 3 pressure grid (below) | done 22:50 UTC; result in M4 §3 step 3 |
 | 11–14 | Qwen3-32B-FP8: smoke, DualMap calibration, N=2 full FCFS sticky and DualMap at concurrency 32 | Model-size check (§5) | done 03:01 UTC; result in M4 §3.1 |
-| 15–18 | 32B: DualMap with 96 GiB DRAM tier; FCFS sticky c16 floor; TP=2 smoke; TP=2 FCFS sticky c32 | §5 next runs 1–3, §7.1 | running since 05:37 UTC, `results/chain13-qwen32b-levers-20260912.sh`, ~09:30 UTC |
+| 15 | 32B: DualMap with 96 GiB DRAM tier | §5 next run 1 | running since 05:37 UTC, `results/chain13-qwen32b-levers-20260912.sh`, ~06:55 UTC |
+| — | c16 floor, TP=2 smoke and run | §5 items 2–3, §7.1 | dropped 06:10 UTC (user): no decision depends on them; chain 13 is stopped after run 15 |
 
 Chain 11 waits for the N=8 DualMap analysis, stops chain 10 before it
 launches the N=4 pair, then runs the grid.
@@ -233,7 +234,39 @@ ToolSpec (arXiv 2604.13519, schema-FSM drafts plus retrieved historical
 calls, up to 4.2×), AgentSpec (2608.24004), and the speculative
 tool-execution line (2510.04371, 2603.18897, 2512.15834, 2607.25816).
 
-## 8. Decisions waiting on the advisor
+## 8. Decision 06:10 UTC: multi-instance closed, platform moves to one engine per GPU
+
+Multi-instance on this workload is an engineering note (allow migration in
+the drain), not a research problem: steady-state imbalance 1.16–1.42 at
+N=8, no steady window above 1.5, routing buys 75 s of mean JCT; at 32B
+imbalance stays ≤ 1.22. The 32B result puts the problem inside one engine:
+40% of each step waits for admission under KV pressure.
+
+**Next platform.** Qwen3-32B-FP8, one engine per GPU, two independent
+experiments in parallel (one per GPU), concurrency 16 per engine (R_avg
+1.31, same pressure as the N=2 c32 runs). Needs: launcher single-GPU mode
+(one instance, proxy with one backend; DualMap's proxy asserts two backends
+and needs that relaxed), smoke, then FCFS and DualMap on one engine as the
+two instruments of §0.
+
+**Research question.** Of the 14 s per step that DualMap holds a request,
+how much is necessary? First an oracle admission that knows every resident
+task's next context size (analysis on the traces plus one run with the
+oracle in the proxy) to bound the recoverable time; then a method only if
+the bound is worth it (the 4B grid says the bound is near zero there; the
+32B run says it is not).
+
+**Server change.** The host will be reconfigured (single GPU class or
+different count) and its data disk cleared. Saved before that: every run's
+`server/` is pulled into `results/<run>/` (verified 06:15 UTC, only the
+running 96 GiB run outstanding, pulled at its completion); host launch
+logs, LMCache rebuild logs, setup and download logs and the manifests are in
+`results/gpuhub-host-backup-20260912/`. Rebuildable and not saved: model
+weights (37 GB, about 45 min to re-download), venvs and the LMCache sm_120
+source build (about 30 min via `benchmark_server.sh --serving-host`), CUDA
+JIT cache.
+
+## 9. Decisions waiting on the advisor
 
 - Push branch `codex/cleanup-research-dead-code` (≈45 commits ahead, unpushed).
 - Which problem to pursue if §2 closes KV-pressure scheduling.
