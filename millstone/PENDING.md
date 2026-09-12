@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-12 06:20 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-12 06:45 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -266,7 +266,31 @@ weights (37 GB, about 45 min to re-download), venvs and the LMCache sm_120
 source build (about 30 min via `benchmark_server.sh --serving-host`), CUDA
 JIT cache.
 
-## 9. Decisions waiting on the advisor
+## 9. Realism check: Qwen3.8-27B-FP8 (recorded 06:45 UTC, one measurement, not a platform change)
+
+The current dense 30B-class model stays Qwen/Qwen3-32B-FP8 (Qwen3 generation,
+64 layers × 8 KV heads × 128, 262 KB KV per token). Qwen/Qwen3.8-27B-FP8 is
+newer but is a different kind of model: `qwen3_5` hybrid attention, 16 of 64
+layers full attention (4 KV heads × 256), 48 linear-attention layers with a
+constant recurrent state, native context 262,144, vLLM ≥ 0.17 required
+(recipes.vllm.ai). Two consequences: (1) none of our policies run on it
+without porting the Continuum vLLM 0.10.2 fork, DualMap patches and the
+LMCache connector to a new vLLM, days of work plus re-running every
+baseline; (2) KV per token is about 65 KB, a quarter of Qwen3-32B, so at the
+same concurrency R_avg is about 0.3 on a 96 GB GPU and the KV pressure
+measured on Qwen3-32B largely disappears, replaced by a per-sequence
+recurrent state that must be saved and restored across tool gaps but cannot
+be prefix-shared.
+
+Planned measurement (needs the advisor's go, about 1.5 h): plain vLLM
+0.28 (the PD venv on the host) serving Qwen3.8-27B-FP8, FCFS, one engine,
+concurrency 16 on pool64-v4 traces, reading only KV usage, cached share and
+per-request queue/prefill/decode. Question: is KV pressure still a problem
+on a hybrid-attention model of this class? If not, the premise of the
+KV-pressure line narrows to dense-attention deployments and the advisor
+should know before more is built on it.
+
+## 10. Decisions waiting on the advisor
 
 - Push branch `codex/cleanup-research-dead-code` (≈45 commits ahead, unpushed).
 - Which problem to pursue if §2 closes KV-pressure scheduling.
