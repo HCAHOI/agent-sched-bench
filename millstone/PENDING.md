@@ -378,7 +378,7 @@ run, `pool64v4-pro6000-qwen32b-gpu0-c16-fcfs-sticky-20260912-r1`) with a
 tier hit share under 10% confirms it; DualMap+24 faster than plain FCFS
 confirms the rescue. Expected finish (revised 17:45 UTC after FCFS+96 took 1.85 h instead of 3.5): DualMap+96 ~19:30, FCFS+24 by ~00:30 (5 h budget), DualMap+24 by ~04:00.
 
-**Fills for idle devices (user 17:50 UTC: "如果有设备空闲，但是我还没有回来，安排最有价值的实验进行填充"; pre-registered 17:58 UTC).**
+**Fills for idle devices (user: "如果有设备空闲，但是我还没有回来，安排最有价值的实验进行填充"; pre-registered 18:45 UTC, both lanes launched 18:46 waiting on their predecessors).**
 
 *Lane 3, GPU 1 after lane 2* (`results/host-lanes/lane3-20260912.sh`, log
 `/workspace/outlen/lane3-20260912.log`): the output-length work moved onto the
