@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-12 03:10 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-12 05:40 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -17,6 +17,7 @@ Per-run analysis lands in `results/<run>/comparison.txt` and
 | — | N=4 capped pair | optional middle point of the N axis | dropped 17:52 UTC, no result read; rerun only if N=8 is anomalous |
 | 7–10 | N=2 capped at concurrency 48 and 64, FCFS sticky and DualMap | Step 3 pressure grid (below) | done 22:50 UTC; result in M4 §3 step 3 |
 | 11–14 | Qwen3-32B-FP8: smoke, DualMap calibration, N=2 full FCFS sticky and DualMap at concurrency 32 | Model-size check (§5) | done 03:01 UTC; result in M4 §3.1 |
+| 15–18 | 32B: DualMap with 96 GiB DRAM tier; FCFS sticky c16 floor; TP=2 smoke; TP=2 FCFS sticky c32 | §5 next runs 1–3, §7.1 | running since 05:37 UTC, `results/chain13-qwen32b-levers-20260912.sh`, ~09:30 UTC |
 
 Chain 11 waits for the N=8 DualMap analysis, stops chain 10 before it
 launches the N=4 pair, then runs the grid.
@@ -142,7 +143,7 @@ KV-pressure scheduling is *not* closed at 32B. The DRAM tier supplied 2% of
 tokens: 48 GiB per instance is only 192K tokens at 262 KB per token,
 mis-sized for the model. 32B is the operating point from here.
 
-**Next runs at 32B (need the advisor's go; each about 75 min):**
+**Next runs at 32B (launched 05:37 UTC as chain 13 after the host sat idle from 03:01; each about 75 min):**
 1. DualMap with the CPU tier at 96 GiB per instance (§7.2 test): does
    doubling the DRAM tier cut the 14 s hold? Expectation: cached share
    toward 0.95 and hold below 8 s; if the hold does not move, the limit is
