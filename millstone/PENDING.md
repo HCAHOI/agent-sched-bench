@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-12 11:05 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-12 15:05 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -294,7 +294,7 @@ The 32B scheduling line (chains 12–16) is stopped: it was my choice, not a
 request, and it displaced the OUTLETS test the 30B model was meant for. Its
 results stay in M4 §3.1 as a robustness note.
 
-**GPU 1, OUTLETS (the user's purpose for a 30B model).** Target model
+**GPU 1, OUTLETS (the user's purpose for a 30B model).** Natural labels done 14:37 UTC (4,322 labeled, 49 rejected); corrected SSJF/EGTP on natural labels lose to the constant (handoff). Official OUTLETS code unavailable; HF prefill on the FP8 MoE is 761 tok/s (30 h for the features), so the user chose the shallow probe (final-layer hidden state from a vLLM pooling server + MLP head), running since 15:05. Target model
 Qwen3-30B-A3B-Instruct-2507-FP8 with the EAGLE-3 draft
 `lmsys/SGLang-EAGLE3-Qwen3-30B-A3B-Instruct-2507-SpecForge-Nex` (both
 downloading to the host). Steps: regenerate natural completions for the
@@ -323,6 +323,11 @@ on GPU 0, concurrency 16 (R_avg ≈ 1.2), tier sized below the GPU cache
 | FCFS sticky + tier 12 GiB (new config, smoke first) | yes | none | storage alone |
 | DualMap + tier 12 GiB | yes | yes | storage + admission |
 | FCFS sticky + tier 48 GiB | oversized | none | does capacity alone close the gap |
+
+**Result (15:00 UTC, M4 §3.2):** undersized tier = pure cost (+222 s, 0 tokens
+served); admission with an undersized tier −186 s; right-sized tier without
+admission **−353 s**, beating admission by 167 s per task. Chain 18 runs the
+missing cell (DualMap + 48 GiB) now.
 
 Decision: if FCFS + tier ≈ DualMap + tier, admission is not the mechanism
 and the work is store sizing/placement/sharing; if DualMap stays ahead,

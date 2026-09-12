@@ -394,6 +394,39 @@ this workload") is scoped to the 4B model. At 32B the closed question
 reopens with a measured headroom of roughly 40% of step time, and the first
 lever to test is memory-hierarchy sizing (DRAM tier), not a new scheduler.
 
+### 3.2 Storage versus admission, one engine (read 15:00 UTC; `results/chain17-gpu0-storage-20260912.{sh,log}`)
+
+Question (PENDING §8b): is DualMap's remaining wait an admission necessity, or
+does a right-sized DRAM store make admission unnecessary? Qwen3-4B, one engine
+on GPU 0 capped to 262,144 KV tokens, concurrency 16 (R_avg ≈ 1.2), pool64-v4,
+64/64 tasks and 1,951 requests in every run. The 12 GiB tier (≈ 85K tokens) is
+smaller than the concurrent working set (16 tasks × ≈ 20K), reproducing the 32B
+ratio; 48 GiB (≈ 340K tokens) is larger than it.
+
+| Storage tier | Admission | Mean JCT (min) | P95 | Makespan | Cached | TPOT (ms) | Hold / queue / prefill / decode (s) | Tokens served from the tier |
+|---|---|---:|---:|---:|---:|---:|---|---:|
+| none | none (FCFS sticky) | 25.99 | 42.9 | 55.7 | 0.48 | 40.5 | 0 / — / — / — | — |
+| 12 GiB (undersized) | none | 29.68 | 50.3 | 62.3 | 0.41 | 46.9 | 0 / 8.7 / 0.8 / 10.5 | **0** (190K evictions) |
+| 12 GiB (undersized) | DualMap | 22.89 | 37.7 | 52.1 | 0.78 | 36.2 | 5.9 / 0.4 / 0.4 / 8.1 | 512 |
+| 48 GiB (≥ working set) | none | **20.10** | **32.7** | **42.1** | **0.88** | **31.6** | 0 / 4.6 / 0.2 / 7.1 | 18.2M (49% of prompt tokens; 1,147 retrieves, 48 ms each) |
+
+Paired mean-JCT differences: undersized tier − nothing +222 s [+192, +252];
+DualMap + undersized tier − nothing −186 s (from 22.89 vs 25.99; bootstrap not
+run on that pair); right-sized tier − nothing −353 s [−395, −310]; right-sized
+tier − DualMap + undersized tier −167 s [−203, −132].
+
+Reading. (1) A tier smaller than the working set is pure cost: every request
+pays the synchronous store and nothing is ever retrieved before eviction.
+This is the 32B situation (48 GiB = 192K tokens against a 600K working set,
+2% served). (2) Admission works even with a useless tier: holding requests at
+the proxy keeps fewer contexts resident and the GPU cache stops thrashing
+(0.41 → 0.78). (3) A tier sized to the working set without any admission beats
+admission with an undersized tier by 167 s per task and reaches 0.88 cached
+share with a 4.6 s in-engine queue: the store, sized right, does more than the
+throttle. The remaining cell, DualMap + 48 GiB (admission on top of a
+right-sized store), is chain 18; it says whether admission adds anything once
+the store is sized.
+
 ## 4. Evidence
 
 - Smoke and calibration: `../results/fcfs-least-requests-smoke-20260911-r2/`,
