@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-12 07:05 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-12 07:10 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -269,13 +269,14 @@ JIT cache.
 
 ## 8a. Two lanes from 06:40 UTC (user decision): GPU 0 scheduling, GPU 1 output-length
 
-**GPU 0, scheduling lane** (`results/chain14-single-gpu0-20260912.sh`, waits
-for chain 13's 96 GiB run to finish and stop): Qwen3-32B-FP8, one engine on
-GPU 0 (new `--single-gpu` mode, smoke-gated), concurrency 16 on pool64-v4:
-FCFS sticky, DualMap (96 GiB DRAM tier), Continuum (its own smoke first).
-Each about 1.5 h. These are the §0 instruments on the new platform plus the
-closest intra-engine prior; results go to M4 §3.1 as the single-engine
-baseline table.
+**Scheduling lane, both GPUs from 07:05 UTC.** Qwen3-32B-FP8, one engine
+per GPU (`--single-gpu`, smoke passed 06:51, 236,496 KV tokens), concurrency
+16 on pool64-v4. Chain 14 runs FCFS sticky on GPU 0 (started 06:52) and is
+stopped after it. Then in parallel: chain 15 on GPU 1, DualMap with a 96 GiB
+DRAM tier under `--port-base 100` (new: shifted ports so two runs share the
+host, DualMap single-backend smoke first); chain 16 on GPU 0, Continuum
+task-sticky (its own smoke first). All three land by about 10:00 UTC and go
+to M4 §3.1 as the single-engine baseline table.
 
 **GPU 1, output-length lane: done 07:01 UTC.** Corrected SSJF-Reg (log1p
 target) converges to a constant (q50 2.03); EGTP-static on the last 256
