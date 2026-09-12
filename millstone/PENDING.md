@@ -329,6 +329,8 @@ served); admission with an undersized tier −186 s; right-sized tier without
 admission **−353 s**, beating admission by 167 s per task. Chain 18 (15:47 UTC): DualMap +
 48 GiB **16.91 min**, −192 s on top of the right-sized tier. Both mechanisms
 matter; the store is the larger term, admission the second (M4 §3.2).
+Confirmation at 32B running on GPU 0 since 15:48 UTC (`results/chain19-gpu0-32b-confirm-20260912.sh`):
+one engine, c16, FCFS + 96 GiB tier (sized to the ~80 GB working set), then DualMap + 96 GiB, each about 3.5 h.
 
 Decision: if FCFS + tier ≈ DualMap + tier, admission is not the mechanism
 and the work is store sizing/placement/sharing; if DualMap stays ahead,
