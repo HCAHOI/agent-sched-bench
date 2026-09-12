@@ -434,6 +434,24 @@ undersized store +222 s. Both mechanisms matter and they are not additive:
 the store removes recompute, admission removes cache contention among the
 tasks that remain resident.
 
+**32B confirmation (read 17:45 UTC; `results/chain19-gpu0-storage-20260912.{sh,log}`, chain 20 for the
+undersized column).** Same protocol at the platform model: Qwen3-32B-FP8, one engine on GPU 0 (GPU KV 236,496
+tokens), concurrency 16, working set 16 × 17.9K ≈ 287K tokens mean (540K at the p90 step); 96 GiB ≈ 393K tokens
+is sized to it, 24 GiB ≈ 98K tokens covers the mean shortfall and not the peaks. 64/64 tasks in every run.
+
+| Storage tier | Admission | Mean JCT (min) | P95 | Makespan | Cached | TPOT (ms) | Hold / queue / prefill / decode (s) | Tokens served from the tier |
+|---|---|---:|---:|---:|---:|---:|---|---:|
+| none | none (FCFS sticky) | 111.69 | 189.4 | 211.4 | 0.18 | 170.8 | 0 / 39.7 / 4.0 / 36.2 | — |
+| 96 GiB (≥ working set) | none | **53.81** | **93.9** | **107.2** | **0.92** | **93.3** | 0 / 17.7 / 0.6 / 19.6 | 34.1M (75% of prompt tokens; 1,946 retrieves, 93 ms each; 13,346 evictions) |
+| 96 GiB | DualMap | running (chain 19) | | | | | | |
+| 24 GiB (undersized) | none | queued (chain 20) | | | | | | |
+| 24 GiB (undersized) | DualMap | queued (chain 20) | | | | | | |
+
+Paired mean-JCT difference, sized tier − nothing: **−3,473 s [−3,832, −3,093]** per task. The 4B reading (3) holds
+with a larger margin at 32B: the sized store alone halves the step (queue 39.7 → 17.7 s, decode 36.2 → 19.6 s) because
+the GPU cache stops thrashing (cached share 0.18 → 0.92, TPOT 171 → 93 ms), and prefill nearly disappears (4.0 →
+0.6 s). Whether admission still adds on top, and whether an undersized tier is pure cost at 32B, are the pending rows.
+
 ## 4. Evidence
 
 - Smoke and calibration: `../results/fcfs-least-requests-smoke-20260911-r2/`,

@@ -376,7 +376,7 @@ cost" (M4 §3.2 reading 1, 4B only so far) hold at 32B, and does admission
 still rescue it (4B: −186 s)? Rule: FCFS+24 slower than plain FCFS c16 (3.8 h
 run, `pool64v4-pro6000-qwen32b-gpu0-c16-fcfs-sticky-20260912-r1`) with a
 tier hit share under 10% confirms it; DualMap+24 faster than plain FCFS
-confirms the rescue. Expected finish: FCFS+24 ~03:30 UTC, DualMap+24 ~07:00 UTC.
+confirms the rescue. Expected finish (revised 17:45 UTC after FCFS+96 took 1.85 h instead of 3.5): DualMap+96 ~19:30, FCFS+24 by ~00:30 (5 h budget), DualMap+24 by ~04:00.
 
 **GPU 0, storage pool vs admission** (`results/chain17-gpu0-storage-20260912.sh`).
 Resource picture from the 32B runs: memory is per context and lives through
@@ -400,8 +400,8 @@ served); admission with an undersized tier −186 s; right-sized tier without
 admission **−353 s**, beating admission by 167 s per task. Chain 18 (15:47 UTC): DualMap +
 48 GiB **16.91 min**, −192 s on top of the right-sized tier. Both mechanisms
 matter; the store is the larger term, admission the second (M4 §3.2).
-Confirmation at 32B running on GPU 0 since 15:48 UTC (`results/chain19-gpu0-32b-confirm-20260912.sh`):
-one engine, c16, FCFS + 96 GiB tier (sized to the ~80 GB working set), then DualMap + 96 GiB, each about 3.5 h.
+Confirmation at 32B on GPU 0 (`results/chain19-gpu0-32b-confirm-20260912.sh`): FCFS + 96 GiB landed 17:43 UTC,
+**111.69 → 53.81 min** (−3,473 s per task; cached 0.18 → 0.92; M4 §3.2 32B table); DualMap + 96 GiB running, chain 20 (24 GiB column) follows.
 
 Decision: if FCFS + tier ≈ DualMap + tier, admission is not the mechanism
 and the work is store sizing/placement/sharing; if DualMap stays ahead,
