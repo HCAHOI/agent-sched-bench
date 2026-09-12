@@ -276,6 +276,20 @@ SSJF-Reg now trains (loss 11.4 → 0.82 in log space over six epochs) and its he
 
 Decision: output length is closed as a scheduling signal on this data, now with both published methods applied as their papers intend. The explanation stands from the decomposition above: 91% of the variance sits in tool-call arguments whose length is set by content the encoder does not see (file bodies being written), and 29–57% of recorded completions are hidden reasoning.
 
+## Natural labels from Qwen3-30B-A3B-Instruct-2507-FP8 (2026-09-12)
+
+Collected on the Pro 6000 host (vLLM 0.28, one GPU, 163,840-token context, 32,768-token cap, temperature 0, seed 42,
+one draw, 16 prefixes in flight): `analysis/results/output-length-source-labels-crossbench-20260904/natural-labels-qwen3-30b-a3b-32k/`
+(`labels.jsonl`, `protocol.json`, `rejected.jsonl`). 4,322 of 4,371 prefixes labeled in 2 h 15 min; 49 rejected
+(20 hit the 32K cap, 29 exceeded the 30-minute timeout; 41 of the 49 are gpt-agent prefixes). Natural lengths: p10 33,
+p50 67, p90 367, p99 1,494, max 9,745, mean 168 tokens; 3,586 end in a tool call, 736 in a stop. The recorded source
+lengths on the same prefixes have p50 118, so the target model is terser than the source agents. The rejected samples
+are excluded from the natural-label evaluations by a filtered prefix list (`dataset-nat/filter-note.json` on the host,
+copied with the results); `dataset.json` is unchanged so the label protocol matches.
+
+The label collector was changed on the way (commits c75699f1, bbe351df): prefixes are labeled concurrently, rows are
+written as they finish, and censored or timed-out samples are recorded in `rejected.jsonl` instead of aborting the run.
+
 ## Current limitations and open problems
 
 - Natural output has a heavy tail: one draw exceeded 16K even though the longest-prefix smoke outputs were all below 1.3K. The 32K cap is still a censoring boundary, so any cap hit invalidates that label run.
