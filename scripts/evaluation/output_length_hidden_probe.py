@@ -126,13 +126,59 @@ def train(a: argparse.Namespace) -> None:
     with (a.out / "predictions.jsonl").open("w") as f:
         for (_, _, sid), p in zip(split["test"], pred):
             f.write(json.dumps({"sample_id": sid, "predicted_tokens": float(p)}) + "\n")
-    torch.save(best_state, a.out / "head.pt")
+    torch.save({"state": best_state, "mu": torch.tensor(mu), "sd": torch.tensor(sd), "hidden": a.hidden, "dropout": a.dropout},
+               a.out / "head.pt")
     (a.out / "protocol.json").write_text(json.dumps({
         "method": "hidden-state-probe (final layer, last token, MLP on log1p tokens)", "features": str(a.features.resolve()),
         "labels": str(a.labels.resolve()), "hidden": a.hidden, "dropout": a.dropout, "lr": a.lr, "weight_decay": a.weight_decay,
         "epochs": a.epochs, "batch_size": a.batch_size, "seed": a.seed, "validation_mse_log": history,
         "best_validation_mse_log": round(best, 4), "counts": {k: len(v) for k, v in split.items()}}, indent=1))
     print(f"best validation MSE (log space) {best:.4f}; test predictions {len(pred)}: mean {pred.mean():.1f} sd {pred.std():.1f}", flush=True)
+
+
+def predict(a: argparse.Namespace) -> None:
+    """Apply a trained head to another feature set (e.g. the steps of a replay run) -> predictions.jsonl."""
+    import torch
+    from torch import nn
+
+    ck = torch.load(a.head, map_location="cpu")
+    ids = json.loads((a.features / "sample_ids.json").read_text())
+    X = np.load(a.features / "features.npy").astype(np.float32)
+    x = torch.tensor((X - ck["mu"].numpy()) / ck["sd"].numpy())
+    h = ck["hidden"]
+    head = nn.Sequential(nn.Linear(X.shape[1], h), nn.GELU(), nn.Dropout(ck["dropout"]),
+                         nn.Linear(h, h), nn.GELU(), nn.Dropout(ck["dropout"]), nn.Linear(h, 1))
+    head.load_state_dict(ck["state"]); head.eval()
+    with torch.no_grad():
+        pred = torch.expm1(head(x).squeeze(-1).clamp(max=20)).clamp(min=1).numpy()
+    a.out.parent.mkdir(parents=True, exist_ok=True)
+    with a.out.open("w") as f:
+        for sid, v in zip(ids, pred):
+            f.write(json.dumps({"sample_id": sid, "predicted_tokens": float(v)}) + "\n")
+    print(f"predicted {len(ids)}: mean {pred.mean():.1f} sd {pred.std():.1f}", flush=True)
+
+
+def replay_prefixes(a: argparse.Namespace) -> None:
+    """Build a prefix dataset from a replay run's per-step prompts (messages_in), keyed job/action_id."""
+    import shutil
+    a.out.mkdir(parents=True, exist_ok=True)
+    shutil.copy(a.dataset_dir / "dataset.json", a.out / "dataset.json")  # request options (tools) only
+    n = 0
+    with (a.out / "prefixes.jsonl").open("w") as f:
+        for trace in sorted(a.run.glob("output/*/attempt_1/openclaw_host_replay.jsonl")):
+            job = trace.parts[-3]
+            if "__replacement-" in job:
+                continue
+            for line in trace.open():
+                if '"action"' not in line[:40]:
+                    continue
+                r = json.loads(line)
+                if r.get("type") != "action" or r["action_type"] != "llm_call":
+                    continue
+                f.write(json.dumps({"sample_id": f"{job}/{r['action_id']}", "split": "test",
+                                    "messages": r["data"]["messages_in"]}) + "\n")
+                n += 1
+    print(f"{n} replay prefixes from {a.run.name}", flush=True)
 
 
 def main() -> None:
@@ -150,8 +196,14 @@ def main() -> None:
     t.add_argument("--lr", type=float, default=1e-3); t.add_argument("--weight-decay", type=float, default=1e-2)
     t.add_argument("--epochs", type=int, default=200); t.add_argument("--batch-size", type=int, default=128)
     t.add_argument("--seed", type=int, default=42)
+    pr = sub.add_parser("predict")
+    pr.add_argument("--head", type=Path, required=True); pr.add_argument("--features", type=Path, required=True)
+    pr.add_argument("--out", type=Path, required=True)
+    rp = sub.add_parser("replay-prefixes")
+    rp.add_argument("--run", type=Path, required=True); rp.add_argument("--dataset-dir", type=Path, required=True)
+    rp.add_argument("--out", type=Path, required=True)
     a = p.parse_args()
-    (extract if a.command == "extract" else train)(a)
+    {"extract": extract, "train": train, "predict": predict, "replay-prefixes": replay_prefixes}[a.command](a)
 
 
 if __name__ == "__main__":

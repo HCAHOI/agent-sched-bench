@@ -42,7 +42,7 @@ def llm_steps(trace: Path) -> list[dict]:
         if r["action_type"] == "llm_call":
             d = r["data"]
             sg = d.get("shadow_generation") or {}  # replay runs: prompt and cached tokens as served, engine request id
-            steps.append({"ts_start": r["ts_start"], "ts_end": r["ts_end"],
+            steps.append({"ts_start": r["ts_start"], "ts_end": r["ts_end"], "action_id": r["action_id"],
                           "prompt": sg.get("prompt_tokens") or d.get("prompt_tokens") or 0,
                           "cached": sg.get("cached_prompt_tokens") or 0, "completion": d.get("completion_tokens") or 0,
                           "request_id": sg.get("request_id"), "tool": None, "tool_end": None})
@@ -73,8 +73,14 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("run", type=Path)
     p.add_argument("--prefill-us-per-token", type=float, required=True, help="calibrated prefill constant")
+    p.add_argument("--probe-predictions", type=Path,
+                   help="predictions.jsonl keyed <job>/<action_id> from output_length_hidden_probe.py; adds a stage-2 variant "
+                        "whose decode estimate uses the per-step predicted length instead of the pool prior")
     p.add_argument("--out", type=Path)
     a = p.parse_args()
+    probe = {}
+    if a.probe_predictions:
+        probe = {json.loads(l)["sample_id"]: json.loads(l)["predicted_tokens"] for l in a.probe_predictions.open()}
 
     argv = json.loads((a.run / "replay-command.json").read_text())["argv"]
     manifest = __import__("yaml").safe_load(open(argv[argv.index("--manifest") + 1]))
@@ -142,6 +148,10 @@ def main() -> None:
             results.setdefault("remaining", []).append(actual_remaining)
             results["dispatch"].append((est_sched, actual_remaining))
             results["toolname"].append((est_tool, actual_remaining))
+            if probe:
+                key = f"{job}/{s['action_id']}"
+                if key in probe:
+                    results.setdefault("probe", []).append((prefill_hat + probe[key] * tp, actual_remaining))
             waits.append(scheduled - x["arrival"])  # stage 1: hold + queue, unknown to the sandbox side
             if prev_finish is not None:
                 gap_rows.append((x["arrival"] - prev_finish, s["cached"] / s["prompt"] if s["prompt"] else 0.0))
@@ -173,6 +183,7 @@ def main() -> None:
                "stage1_wait_hold_plus_queue_s": {"p50": wq(.5), "p90": wq(.9), "mean": round(statistics.fmean(waits), 2)},
                "lower_bound_coverage": round(results["lower_bound_ok"] / results["n"], 4),
                "at_scheduling": summarize(results["dispatch"]), "at_tool_name": summarize(results["toolname"]),
+               **({"at_scheduling_probe": summarize(results["probe"])} if results.get("probe") else {}),
                "priors": {k: v for k, v in priors.items() if v["n"] >= 100}, "cache_by_gap": gap_table}
     print(json.dumps(summary, indent=1))
     if a.out:
