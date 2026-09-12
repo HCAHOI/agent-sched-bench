@@ -376,6 +376,19 @@ and it has a direct test: the same DualMap run with 96 GiB per instance
 (sticky mean 1.22, 3 of 22 windows above 1.5; DualMap 1.19, none), so at
 this scale the multi-instance question is again secondary to KV pressure.
 
+*DRAM tier at 96 GiB per instance (read 06:45 UTC,
+`results/pool64v4-pro6000-qwen32b-n2full-dualmap-cpu96-20260912-r1`).*
+Same DualMap run with the CPU tier doubled: mean JCT **23.35 min** (48 GiB:
+29.71), P95 41.3 (49.1), makespan 53.8 (71.0), cached share 0.95 (0.86),
+TPOT 77 ms (90); paired −382 s per task, 95% [−449, −318]. Per request:
+hold 9.9 s (14.0), queue 1.6, prefill 0.34 (0.8), decode 17.2 (20.2). The
+tier supplied 4.4M prompt tokens (0.87M at 48 GiB), sat full at 99 GB on
+both instances and still evicted about 10K times, so capacity is binding and
+not yet saturated: two 96 GiB tiers hold about 380K tokens each against a
+demand of 32 contexts averaging 19K, growing. Reading: about a third of the
+32B residual is DRAM capacity; the remaining hold, 9.9 s of a 29 s step, is
+the admission logic. Imbalance unchanged (mean 1.21, 2 of 10 windows).
+
 *Consequence.* The step 3 closure ("scheduling under KV pressure is closed on
 this workload") is scoped to the 4B model. At 32B the closed question
 reopens with a measured headroom of roughly 40% of step time, and the first

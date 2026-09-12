@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-12 06:40 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-12 06:50 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -39,7 +39,7 @@ Per-run analysis lands in `results/<run>/comparison.txt` and
 | — | N=4 capped pair | optional middle point of the N axis | dropped 17:52 UTC, no result read; rerun only if N=8 is anomalous |
 | 7–10 | N=2 capped at concurrency 48 and 64, FCFS sticky and DualMap | Step 3 pressure grid (below) | done 22:50 UTC; result in M4 §3 step 3 |
 | 11–14 | Qwen3-32B-FP8: smoke, DualMap calibration, N=2 full FCFS sticky and DualMap at concurrency 32 | Model-size check (§5) | done 03:01 UTC; result in M4 §3.1 |
-| 15 | 32B: DualMap with 96 GiB DRAM tier | §5 next run 1 | running since 05:37 UTC, `results/chain13-qwen32b-levers-20260912.sh`, ~06:55 UTC |
+| 15 | 32B: DualMap with 96 GiB DRAM tier | §5 next run 1 | done 06:45 UTC; 23.35 vs 29.71 min, hold 14 → 9.9 s; M4 §3.1 |
 | — | c16 floor, TP=2 smoke and run | §5 items 2–3, §7.1 | dropped 06:10 UTC (user): no decision depends on them; chain 13 is stopped after run 15 |
 
 Chain 11 waits for the N=8 DualMap analysis, stops chain 10 before it
@@ -167,10 +167,11 @@ tokens: 48 GiB per instance is only 192K tokens at 262 KB per token,
 mis-sized for the model. 32B is the operating point from here.
 
 **Next runs at 32B (launched 05:37 UTC as chain 13 after the host sat idle from 03:01; each about 75 min):**
-1. DualMap with the CPU tier at 96 GiB per instance (§7.2 test): does
-   doubling the DRAM tier cut the 14 s hold? Expectation: cached share
-   toward 0.95 and hold below 8 s; if the hold does not move, the limit is
-   admission logic, not capacity, and §3 reopens.
+1. DualMap with the CPU tier at 96 GiB per instance (§7.2 test): **done
+   06:45 UTC**. Cached 0.95 as expected, hold 14.0 → 9.9 s (expectation was
+   below 8 s), −382 s per task. Both explanations hold: capacity (the tier
+   is full and still evicting) and admission logic (9.9 s of a 29 s step
+   remain). §3 stays gated on the single-engine runs (§8a).
 2. TP=2 single instance, FCFS (§7.1): launcher ready, smoke first.
 3. A low-pressure 32B reference (concurrency 8, R 0.33) so the 32B pressure
    cost has a floor to be measured against.
