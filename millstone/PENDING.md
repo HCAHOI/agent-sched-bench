@@ -294,7 +294,7 @@ The 32B scheduling line (chains 12–16) is stopped: it was my choice, not a
 request, and it displaced the OUTLETS test the 30B model was meant for. Its
 results stay in M4 §3.1 as a robustness note.
 
-**GPU 1, OUTLETS (the user's purpose for a 30B model).** Natural labels done 14:37 UTC (4,322 labeled, 49 rejected); corrected SSJF/EGTP on natural labels lose to the constant (handoff). Official OUTLETS code unavailable; HF prefill on the FP8 MoE is 761 tok/s (30 h for the features), so the user chose the shallow probe (final-layer hidden state from a vLLM pooling server + MLP head), running since 15:05. **Result 16:25 UTC** (replay-step probe for §10 done 17:05 UTC; GPU 1 idle since)**:** the probe is the first predictor to beat the constant, by a wide margin (natural labels q50 1.35 vs 2.06, MAE 78 vs 119, bucket accuracy 0.81 vs 0.68; four seeds agree; recorded labels q50 1.39 vs 1.85). Tail still weak (long recall 0.16). Handoff document, "Internal-state probe". Target model
+**GPU 1, OUTLETS (the user's purpose for a 30B model).** Natural labels done 14:37 UTC (4,322 labeled, 49 rejected); corrected SSJF/EGTP on natural labels lose to the constant (handoff). Official OUTLETS code unavailable; HF prefill on the FP8 MoE is 761 tok/s (30 h for the features), so the user chose the shallow probe (final-layer hidden state from a vLLM pooling server + MLP head), running since 15:05. **Result 16:25 UTC** (replay-step probe for §10 done 16:50 UTC; GPU 1 idle since)**:** the probe is the first predictor to beat the constant, by a wide margin (natural labels q50 1.35 vs 2.06, MAE 78 vs 119, bucket accuracy 0.81 vs 0.68; four seeds agree; recorded labels q50 1.39 vs 1.85). Tail still weak (long recall 0.16). Handoff document, "Internal-state probe". Target model
 Qwen3-30B-A3B-Instruct-2507-FP8 with the EAGLE-3 draft
 `lmsys/SGLang-EAGLE3-Qwen3-30B-A3B-Instruct-2507-SpecForge-Nex` (both
 downloading to the host). Steps: regenerate natural completions for the
@@ -306,6 +306,36 @@ node) is on neither this host nor the local machine, and no public
 repository was found; the user is asked where it came from. Without it the
 head is a reimplementation from the paper (MLP on fused hidden states of
 layers 2, N/2, N−2), which changes the claim to "OUTLETS-style".
+
+**Tail lane (GPU 1, user choice "2", pre-registered 17:08 UTC; `results/host-lanes/tail-20260912.sh`, log `/workspace/outlen/tail-20260912.log`).**
+Question: is the probe's weak tail (long recall 0.16 on natural labels) an
+objective problem (the MSE head regresses long outputs to the mean), an
+information problem (the prompt's last-token state does not carry it), or an
+inherent one (the target model itself does not reproduce long outputs between
+draws)? Three stages, each answering one of those:
+
+| Stage | Runs | Question | Reading rule (fixed before numbers) |
+|---|---|---|---|
+| A (minutes) | heads on the existing final-layer features: MSE (base), pinball τ 0.75 / 0.9, long-weighted MSE (×5), 3-bucket class head + MSE, class head + weighted | objective | **Primary, decision utility:** stage-2 estimate on the 32B DualMap 96 GiB replay (recorded-label heads with the 64 tasks excluded): a variant is adopted for the sandbox estimate if p90 absolute error ≤ 22 s (base 25.8 s) with median absolute error ≤ 5.5 s (base 5.1 s). Natural-test long recall / precision, bucket accuracy, q50 are reported as mechanism, not gates. |
+| C (~1.5 h) | prefixes extended by the first k = 16 / 64 / 256 tokens of the greedy completion, features from the pooling server, same MSE head; base probe scored on the same subset | information | if long recall on the subset rises above 0.5 at some k, the tail is knowable once generation starts and the sandbox estimate should be updated at that token count; if it stays flat, the prompt-side state is not the limit |
+| B (~4.5 h) | sampled labels at temperature 0.7: test × 4 draws, then all splits × 1 draw | inherent | between-draw agreement of the > 512 bucket on the test prefixes; if fewer than half of the prefixes that are long in one draw are long in another, no prompt-only predictor can reach high long recall under sampling, and the recall target is capped there |
+
+Visible when this was written: one smoke of the class head + weighted variant
+on the natural test split (long recall 0.465, precision 0.426, q50 1.44) had
+been run as a plumbing check before the criteria were fixed; the primary rule
+above is on the replay operating point, which had not been computed for any
+variant. Results dir on the host `/workspace/outlen/results-tail`.
+
+**Overnight GPU 0 (pre-registered 17:08 UTC; `results/chain20-gpu0-32b-undersized-20260912.sh`, after chain 19).**
+The undersized column of the 2×2 at 32B: FCFS + 24 GiB tier, then DualMap +
+24 GiB, one engine c16 (GPU KV 236K tokens; working set 287K mean, 540K at the
+p90 step; 24 GiB = 98K tokens covers the mean and not the peaks, the 4B
+"12 GiB" ratio). Question: does "a tier smaller than the working set is pure
+cost" (M4 §3.2 reading 1, 4B only so far) hold at 32B, and does admission
+still rescue it (4B: −186 s)? Rule: FCFS+24 slower than plain FCFS c16 (3.8 h
+run, `pool64v4-pro6000-qwen32b-gpu0-c16-fcfs-sticky-20260912-r1`) with a
+tier hit share under 10% confirms it; DualMap+24 faster than plain FCFS
+confirms the rescue. Expected finish: FCFS+24 ~03:30 UTC, DualMap+24 ~07:00 UTC.
 
 **GPU 0, storage pool vs admission** (`results/chain17-gpu0-storage-20260912.sh`).
 Resource picture from the 32B runs: memory is per context and lives through
@@ -387,7 +417,7 @@ steps still have ≥ 3 s of engine time after scheduling, so a restore started
 at that event is almost never late; at 4B only 53–58% do, and the restore
 must start earlier (at arrival, using the hold as slack) or accept lateness.
 (3) The tool name buys little (q-err 1.83 → 1.70): output length stays the
-unpredictable part, as the output-length study concluded. (3b, 17:05 UTC,
+unpredictable part, as the output-length study concluded. (3b, 16:50 UTC,
 user's choice "1") The hidden-state probe (§8b; Qwen3-30B-A3B final-layer
 state of each replay step's prompt, head trained on recorded labels with the
 64 replayed tasks removed from train/validation, 2,831 / 401 samples) replaces
