@@ -1,0 +1,8 @@
+{
+ "model": "Qwen/Qwen3-30B-A3B-Instruct-2507-FP8",
+ "api_base": "http://127.0.0.1:8301/v1",
+ "pooling": "LAST, final layer, no normalisation",
+ "input": "chat template with tools, generation prompt appended",
+ "dim": 2048,
+ "samples": 4371
+}

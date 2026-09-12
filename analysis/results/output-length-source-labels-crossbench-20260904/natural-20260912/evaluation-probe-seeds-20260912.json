@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "task": "next_turn_output_length_prediction",
+  "dataset_dir": "/root/autodl-tmp/workspace/outlen/dataset-nat",
+  "labels_path": "/root/autodl-tmp/workspace/outlen/natural-labels-qwen3-30b-a3b-32k/labels.jsonl",
+  "split": "test",
+  "sample_count": 860,
+  "label_semantics": "one observation per sample_id/draw_id",
+  "mean_accuracy_semantics": "mean(min(predicted,actual)/max(predicted,actual))",
+  "methods": {
+    "s42": {
+      "prediction_file": "/root/autodl-tmp/workspace/outlen/results-natural/hidden-probe-natural-seed42/predictions.jsonl",
+      "sample_count": 860,
+      "labeled_draw_count": 860,
+      "q_error": {
+        "q50": 1.3496700438962452,
+        "q90": 2.661166513173595,
+        "q95": 3.9376723835746383,
+        "q99": 7.277786202430709,
+        "mean": 1.7885128580934382
+      },
+      "mean_accuracy": 0.7024805230603974,
+      "mae_tokens": 78.12350294756335,
+      "underprediction_rate": 0.48023255813953486
+    },
+    "s1": {
+      "prediction_file": "/root/autodl-tmp/workspace/outlen/results-natural/hidden-probe-natural-seed1/predictions.jsonl",
+      "sample_count": 860,
+      "labeled_draw_count": 860,
+      "q_error": {
+        "q50": 1.356987648239929,
+        "q90": 2.8225316326806507,
+        "q95": 3.797148013524254,
+        "q99": 9.546611959248455,
+        "mean": 1.8728503868766369
+      },
+      "mean_accuracy": 0.6949848750751744,
+      "mae_tokens": 82.75389520900194,
+      "underprediction_rate": 0.4476744186046512
+    },
+    "s2": {
+      "prediction_file": "/root/autodl-tmp/workspace/outlen/results-natural/hidden-probe-natural-seed2/predictions.jsonl",
+      "sample_count": 860,
+      "labeled_draw_count": 860,
+      "q_error": {
+        "q50": 1.3570142704917774,
+        "q90": 2.8002600236372515,
+        "q95": 3.7363422673322626,
+        "q99": 8.315657051067813,
+        "mean": 1.830056920049949
+      },
+      "mean_accuracy": 0.6990775452800976,
+      "mae_tokens": 80.65604311310967,
+      "underprediction_rate": 0.4313953488372093
+    },
+    "s3": {
+      "prediction_file": "/root/autodl-tmp/workspace/outlen/results-natural/hidden-probe-natural-seed3/predictions.jsonl",
+      "sample_count": 860,
+      "labeled_draw_count": 860,
+      "q_error": {
+        "q50": 1.3504463835518274,
+        "q90": 2.6457364989609684,
+        "q95": 3.6319194901664296,
+        "q99": 8.052125447143322,
+        "mean": 1.804151503961877
+      },
+      "mean_accuracy": 0.6946349294090056,
+      "mae_tokens": 79.51600538741711,
+      "underprediction_rate": 0.44651162790697674
+    }
+  }
+}
