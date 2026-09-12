@@ -75,9 +75,10 @@ def _read_natural_labels(
     labels_path: Path,
     *,
     require_stochastic: bool = False,
+    allow_recorded: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     protocol_path = labels_path.parent / "protocol.json"
-    if not protocol_path.is_file():
+    if not protocol_path.is_file() and allow_recorded:
         # Recorded-trace labels (export writes one row per sample, label_source "recorded_trace") carry no
         # natural-generation protocol: one draw, no temperature, every split. Used by the 2026-09-04 and
         # 2026-09-12 source-label runs; TIE (require_stochastic) cannot use them.
@@ -92,6 +93,8 @@ def _read_natural_labels(
             raise ValueError("recorded-trace label coverage does not match the dataset")
         return rows, {"label_source": "recorded_trace", "draws": 1, "temperature": 0.0,
                       "splits": list(SPLITS), "model": "recorded_trace"}
+    if not protocol_path.is_file():
+        raise ValueError(f"natural-label protocol is missing: {protocol_path}")
     protocol = _read_json_object(protocol_path)
     dataset = _read_json_object(dataset_dir / "dataset.json")
     draws = protocol.get("draws")
@@ -630,6 +633,7 @@ def evaluate_predictions(
     predictions: Sequence[tuple[str, Path]],
     *,
     split: str,
+    recorded_labels: bool = False,
 ) -> dict[str, Any]:
     if split not in SPLITS:
         raise ValueError(f"invalid split: {split}")
@@ -639,7 +643,7 @@ def evaluate_predictions(
     if not target_ids:
         raise ValueError(f"dataset split {split!r} contains no samples")
 
-    label_rows, label_protocol = _read_natural_labels(dataset_dir, labels_path)
+    label_rows, label_protocol = _read_natural_labels(dataset_dir, labels_path, allow_recorded=recorded_labels)
     if split not in label_protocol.get("splits", []):
         raise ValueError(f"label protocol does not cover split {split!r}")
     labels_by_id: dict[str, list[int]] = {sample_id: [] for sample_id in target_ids}
@@ -788,6 +792,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     evaluate.add_argument("--split", choices=SPLITS, default="test")
     evaluate.add_argument("--output", type=Path, required=True)
+    evaluate.add_argument("--recorded-labels", action="store_true",
+                          help="accept recorded-trace labels (exploratory: not natural target-model generations)")
     return parser
 
 
@@ -832,6 +838,7 @@ def main() -> None:
         args.labels,
         args.predictions,
         split=args.split,
+        recorded_labels=args.recorded_labels,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

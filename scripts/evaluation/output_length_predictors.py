@@ -75,7 +75,7 @@ def _messages_text(messages: object) -> str:
 
 
 def _point_examples(
-    dataset_dir: Path, labels_path: Path
+    dataset_dir: Path, labels_path: Path, recorded_labels: bool = False
 ) -> dict[str, list[dict[str, Any]]]:
     prefixes = _read_jsonl(dataset_dir / "prefixes.jsonl")
     prefix_by_id = {str(row.get("sample_id")): row for row in prefixes}
@@ -87,7 +87,7 @@ def _point_examples(
         sample_id: set() for sample_id in prefix_by_id
     }
     seen: set[tuple[str, int]] = set()
-    label_rows, _protocol = _read_natural_labels(dataset_dir, labels_path)
+    label_rows, _protocol = _read_natural_labels(dataset_dir, labels_path, allow_recorded=recorded_labels)
     for row in label_rows:
         sample_id = str(row.get("sample_id"))
         if sample_id not in labels_by_id:
@@ -292,6 +292,7 @@ def run_ssjf_reg(
     seed: int,
     device_name: str,
     target_transform: str = "raw",
+    recorded_labels: bool = False,
 ) -> dict[str, Any]:
     """target_transform="log1p" regresses log(1 + tokens) and inverts at prediction time.
 
@@ -307,7 +308,7 @@ def run_ssjf_reg(
         raise FileExistsError(f"output directory already exists: {output_dir}")
     if epochs <= 0 or batch_size <= 0 or learning_rate <= 0:
         raise ValueError("epochs, batch_size, and learning_rate must be positive")
-    examples = _point_examples(dataset_dir, labels_path)
+    examples = _point_examples(dataset_dir, labels_path, recorded_labels)
     random.seed(seed)
     torch.manual_seed(seed)
     device = _device(device_name)
@@ -505,6 +506,7 @@ def run_egtp_static(
     torch_dtype: str,
     seed: int,
     tail_tokens: int | None = None,
+    recorded_labels: bool = False,
 ) -> dict[str, Any]:
     if output_dir.exists():
         raise FileExistsError(f"output directory already exists: {output_dir}")
@@ -514,7 +516,7 @@ def run_egtp_static(
         raise ValueError("counts must be positive")
     if not 0 <= lambda_val <= 1 or learning_rate <= 0:
         raise ValueError("lambda_val must be in [0, 1] and learning_rate positive")
-    examples = _point_examples(dataset_dir, labels_path)
+    examples = _point_examples(dataset_dir, labels_path, recorded_labels)
     dataset_protocol = json.loads((dataset_dir / "dataset.json").read_text())
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     tools = (dataset_protocol.get("request_options") or {}).get("tools")
@@ -1112,6 +1114,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ssjf.add_argument("--dataset-dir", type=Path, required=True)
     ssjf.add_argument("--labels", type=Path, required=True)
     ssjf.add_argument("--output-dir", type=Path, required=True)
+    ssjf.add_argument("--recorded-labels", action="store_true", help="accept recorded-trace labels (exploratory)")
     ssjf.add_argument("--encoder", default="bert-base-uncased")
     ssjf.add_argument("--epochs", type=int, default=6)
     ssjf.add_argument("--batch-size", type=int, default=16)
@@ -1124,6 +1127,7 @@ def _build_parser() -> argparse.ArgumentParser:
     egtp.add_argument("--dataset-dir", type=Path, required=True)
     egtp.add_argument("--labels", type=Path, required=True)
     egtp.add_argument("--output-dir", type=Path, required=True)
+    egtp.add_argument("--recorded-labels", action="store_true", help="accept recorded-trace labels (exploratory)")
     egtp.add_argument("--upstream-dir", type=Path, required=True)
     egtp.add_argument("--upstream-python", type=Path, default=Path(sys.executable))
     egtp.add_argument("--model-id", required=True)
@@ -1177,6 +1181,7 @@ def main() -> None:
             seed=args.seed,
             device_name=args.device,
             target_transform=args.target_transform,
+            recorded_labels=args.recorded_labels,
         )
         print(json.dumps(result["counts"], indent=2))
     elif args.command == "egtp-static":
@@ -1196,6 +1201,7 @@ def main() -> None:
             extractor_batch_size=args.extractor_batch_size,
             torch_dtype=args.torch_dtype,
             tail_tokens=args.tail_tokens,
+            recorded_labels=args.recorded_labels,
             seed=args.seed,
         )
         print(json.dumps(result["counts"], indent=2))
