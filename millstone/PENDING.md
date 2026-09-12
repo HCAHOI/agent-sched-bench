@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-12 07:10 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-12 08:00 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -311,6 +311,43 @@ per-request queue/prefill/decode. Question: is KV pressure still a problem
 on a hybrid-attention model of this class? If not, the premise of the
 KV-pressure line narrows to dense-attention deployments and the advisor
 should know before more is built on it.
+
+## 10. Sandbox-side interface: what the LLM side can promise (measured 08:00 UTC)
+
+Context: a collaborator snapshots and restores each task's sandbox around the
+LLM step (restore ≤ 3 s, p50 2.2 s) and needs to know how long the step will
+take. `scripts/evaluation/step_time_staged_estimates.py` evaluates, on
+finished runs, the estimate available at each moment: stage 1 (arrival: hold
+and queue unknown), stage 2 (engine scheduled the request: remaining =
+uncached tokens × prefill constant + prior output length × causal TPOT),
+stage 3 (tool name known: tool-conditioned length prior). Priors from the
+pool excluding the run's tasks.
+
+| Run | Stage-1 wait p50 / p90 (s) | Remaining at scheduling p10 / p50 (s) | Share ≥ 3 s | Stage-2 q-err p50 / p90 | Stage-3 q-err p50 / p90 |
+|---|---|---|---:|---|---|
+| 32B DualMap 96 GiB | 3.2 / 12.9 | 3.7 / 9.6 | 0.94 | 1.83 / 4.44 | 1.70 / 3.86 |
+| 32B FCFS sticky | 36.0 / 56.7 | 4.5 / 22.8 | 0.95 | 1.87 / 4.90 | 1.73 / 4.13 |
+| 4B FCFS full | 3.1 / 6.3 | 1.2 / 3.2 | 0.53 | 1.82 / 4.47 | 1.70 / 3.82 |
+| 4B DualMap capped | 1.7 / 6.2 | 1.4 / 3.6 | 0.58 | 1.79 / 4.52 | 1.70 / 3.81 |
+
+Reading. (1) The prefill-only lower bound holds 100% of the time; a bound
+that adds the 10th-percentile output length fails 14%, so the safe promise
+is "at least prefill". (2) Stage 2 is the useful event: at 32B, 94–95% of
+steps still have ≥ 3 s of engine time after scheduling, so a restore started
+at that event is almost never late; at 4B only 53–58% do, and the restore
+must start earlier (at arrival, using the hold as slack) or accept lateness.
+(3) The tool name buys little (q-err 1.83 → 1.70): output length stays the
+unpredictable part, as the output-length study concluded. (4) Stage-1 wait
+is large under FCFS (p50 36 s at 32B) and heavy-tailed under DualMap (mean
+11.7 s, p50 3.2 s); it is our own decision, so it should be sent as an event
+("scheduled"), not predicted.
+
+Reverse direction, tool-time prediction for us: with the 96 GiB tier the
+prompt miss share is 3% and flat across tool-gap lengths (0–5 s: 3%, 5–15 s:
+4%, longer: 0%), so return-time-aware eviction has at most 3% of steps to
+gain at this operating point; under FCFS misses are 65% even at gaps under
+5 s (capacity thrash, not age). No consumer for tool-time prediction on our
+side right now.
 
 ## 10. Decisions waiting on the advisor
 
