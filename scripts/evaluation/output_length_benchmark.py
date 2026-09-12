@@ -576,29 +576,36 @@ def label_dataset(
                 "message": choices[0].get("message"),
             }
 
-        with labels_path.open("a", encoding="utf-8") as output:
-            for prefix in prefixes:
-                sample_id = str(prefix["sample_id"])
-                messages = prefix.get("messages")
-                if not isinstance(messages, list):
-                    raise ValueError(f"prefix {sample_id} has no messages list")
-                pending = [
-                    draw_id
-                    for draw_id in range(draws)
-                    if (sample_id, draw_id) not in completed_keys
-                ]
-                if not pending:
-                    continue
-                # Warm the shared prefix before decoding the remaining draws in parallel.
-                rows = [fetch(prefix, pending[0])]
-                with ThreadPoolExecutor(max_workers=concurrency) as executor:
-                    rows.extend(
-                        executor.map(
-                            lambda draw_id: fetch(prefix, draw_id), pending[1:]
-                        )
-                    )
+        def label_prefix(prefix: dict[str, Any]) -> list[dict[str, Any]]:
+            sample_id = str(prefix["sample_id"])
+            messages = prefix.get("messages")
+            if not isinstance(messages, list):
+                raise ValueError(f"prefix {sample_id} has no messages list")
+            pending = [
+                draw_id
+                for draw_id in range(draws)
+                if (sample_id, draw_id) not in completed_keys
+            ]
+            if not pending:
+                return []
+            # Warm the shared prefix before decoding the remaining draws in parallel.
+            rows = [fetch(prefix, pending[0])]
+            with ThreadPoolExecutor(max_workers=concurrency) as executor:
+                rows.extend(
+                    executor.map(lambda draw_id: fetch(prefix, draw_id), pending[1:])
+                )
+            return rows
+
+        # Prefixes are independent, so with a single draw the concurrency spans prefixes (2026-09-12);
+        # with several draws it spans the draws of one prefix, as before. Rows are appended as they
+        # finish, so a rerun with the same protocol resumes.
+        prefix_workers = concurrency if draws == 1 else 1
+        with labels_path.open("a", encoding="utf-8") as output, ThreadPoolExecutor(
+            max_workers=prefix_workers
+        ) as prefix_pool:
+            for rows in prefix_pool.map(label_prefix, prefixes):
                 for row in rows:
-                    key = (sample_id, row["draw_id"])
+                    key = (str(row["sample_id"]), row["draw_id"])
                     output.write(json.dumps(row, ensure_ascii=False) + "\n")
                     output.flush()
                     completed_keys.add(key)
