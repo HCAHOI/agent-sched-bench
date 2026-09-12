@@ -423,9 +423,16 @@ the proxy keeps fewer contexts resident and the GPU cache stops thrashing
 (0.41 → 0.78). (3) A tier sized to the working set without any admission beats
 admission with an undersized tier by 167 s per task and reaches 0.88 cached
 share with a 4.6 s in-engine queue: the store, sized right, does more than the
-throttle. The remaining cell, DualMap + 48 GiB (admission on top of a
-right-sized store), is chain 18; it says whether admission adds anything once
-the store is sized.
+throttle. (4) The last cell (read 15:47 UTC, chain 18): **DualMap + 48 GiB, 16.91
+min**, P95 28.7, makespan 37.5, cached 0.93, TPOT 28.6 ms, hold 3.5 s, queue
+0.4 s; −192 s per task against the right-sized tier alone, 95% [−219, −164].
+With the store sized, admission still buys 16%, and the tier is consulted far
+less (3.7M tokens served against 18.2M) because held requests keep their
+contexts on the GPU. Decomposition on this operating point: store sized to the
+working set −353 s, admission on top of it −192 s, admission alone −186 s, an
+undersized store +222 s. Both mechanisms matter and they are not additive:
+the store removes recompute, admission removes cache contention among the
+tasks that remain resident.
 
 ## 4. Evidence
 

@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-12 15:05 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-12 15:50 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -326,8 +326,9 @@ on GPU 0, concurrency 16 (R_avg ≈ 1.2), tier sized below the GPU cache
 
 **Result (15:00 UTC, M4 §3.2):** undersized tier = pure cost (+222 s, 0 tokens
 served); admission with an undersized tier −186 s; right-sized tier without
-admission **−353 s**, beating admission by 167 s per task. Chain 18 runs the
-missing cell (DualMap + 48 GiB) now.
+admission **−353 s**, beating admission by 167 s per task. Chain 18 (15:47 UTC): DualMap +
+48 GiB **16.91 min**, −192 s on top of the right-sized tier. Both mechanisms
+matter; the store is the larger term, admission the second (M4 §3.2).
 
 Decision: if FCFS + tier ≈ DualMap + tier, admission is not the mechanism
 and the work is store sizing/placement/sharing; if DualMap stays ahead,
