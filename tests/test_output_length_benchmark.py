@@ -526,21 +526,29 @@ def test_label_rejects_censored_response(
         "scripts.evaluation.output_length_benchmark.httpx.Client",
         lambda **_kwargs: FakeClient(),
     )
-    with pytest.raises(RuntimeError, match="hit max_tokens"):
-        label_dataset(
-            dataset,
-            tmp_path / "labels",
-            api_base="http://localhost/v1",
-            model="target-model",
-            api_key_env="",
-            max_tokens=10,
-            temperature=0.0,
-            top_p=None,
-            seed=1,
-            draws=1,
-            splits=("test",),
-            timeout_s=10.0,
-        )
+    # A censored generation is never written as a label: it is recorded in rejected.jsonl and the run
+    # continues (2026-09-12), so one runaway prompt cannot abort or contaminate a collection.
+    result = label_dataset(
+        dataset,
+        tmp_path / "labels",
+        api_base="http://localhost/v1",
+        model="target-model",
+        api_key_env="",
+        max_tokens=10,
+        temperature=0.0,
+        top_p=None,
+        seed=1,
+        draws=1,
+        splits=("test",),
+        timeout_s=10.0,
+    )
+    assert result["rejected"] >= 1
+    labels_path = tmp_path / "labels" / "labels.jsonl"
+    assert not labels_path.exists() or all(
+        json.loads(line)["finish_reason"] != "length" for line in labels_path.read_text().splitlines()
+    )
+    rejected = [json.loads(line) for line in (tmp_path / "labels" / "rejected.jsonl").read_text().splitlines()]
+    assert any("hit max_tokens" in row["error"] for row in rejected)
 
 
 def test_ssjf_reg_emits_common_prediction_contract(

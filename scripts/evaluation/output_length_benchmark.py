@@ -613,7 +613,7 @@ def label_dataset(
             for future in as_completed(futures):
                 try:
                     rows = future.result()
-                except (RuntimeError, ValueError) as exc:
+                except (RuntimeError, ValueError, httpx.HTTPError) as exc:  # censored, malformed, or timed out
                     rejects.write(json.dumps({"sample_id": futures[future], "error": str(exc)[:500]}) + "\n")
                     rejects.flush()
                     rejected += 1
