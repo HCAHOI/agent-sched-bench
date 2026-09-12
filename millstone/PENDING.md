@@ -342,6 +342,17 @@ otherwise C is skipped, because a tail the target model itself does not
 reproduce cannot be read from the prompt at any k. The reading rules above
 are unchanged.
 
+**B result (19:20 UTC, test split × 4 draws at temperature 0.7; 850 prefixes complete, 10 rows rejected at the
+32K cap; `analysis/results/.../natural-labels-sampled-test-d4/`):** the tail is **not** inherent. P(long in another
+draw | long in one draw) = **0.70** (rule ≥ 0.5 → C runs); 72 prefixes are long in some draw, 23 in all four; the
+within-prefix share of log-length variance is 12%. Ceilings on the same 3,400 draw labels: the leave-one-draw-out
+mean of the other draws reaches q50 1.10 / q90 1.99, long recall 0.69 at precision 0.79; even the greedy label
+alone predicts sampled draws at q50 1.06. The probe trained on greedy labels sits at q50 1.34 / long recall 0.14 /
+precision 0.67 (constant 2.03 / 0). Reading: the probe recovers the median but about a fifth of the tail that the
+target model reproduces across draws; the gap to the ceiling is information/method, so predictor work (C now,
+OUTLETS-faithful or a 32B probe, lane 3) is justified, and the sandbox interface's event design is a choice, not a
+necessity forced by unpredictability.
+
 Visible when this was written: one smoke of the class head + weighted variant
 on the natural test split (long recall 0.465, precision 0.426, q50 1.44) had
 been run as a plumbing check before the criteria were fixed; the primary rule
