@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-12 08:00 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-12 11:05 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -287,6 +287,48 @@ as intended (handoff document, "Corrected runs"). GPU 1 is free.
 
 Dropped: c16 floor, TP=2 (no decision depends on them), repetition runs
 (all decisive gaps are 30× any plausible run noise).
+
+## 8b. Lanes from 11:00 UTC (user decision): GPU 1 OUTLETS, GPU 0 storage pool
+
+The 32B scheduling line (chains 12–16) is stopped: it was my choice, not a
+request, and it displaced the OUTLETS test the 30B model was meant for. Its
+results stay in M4 §3.1 as a robustness note.
+
+**GPU 1, OUTLETS (the user's purpose for a 30B model).** Target model
+Qwen3-30B-A3B-Instruct-2507-FP8 with the EAGLE-3 draft
+`lmsys/SGLang-EAGLE3-Qwen3-30B-A3B-Instruct-2507-SpecForge-Nex` (both
+downloading to the host). Steps: regenerate natural completions for the
+4,371 prefixes with the target model (32K cap), train the OUTLETS length
+head on completion-side hidden states, evaluate on the 869 test samples
+beside the constant, SSJF and EGTP. **Blocker:** the official OUTLETS code
+(commit 4b53761, formerly at `/workspace/upstreams/outlets` on the old dev
+node) is on neither this host nor the local machine, and no public
+repository was found; the user is asked where it came from. Without it the
+head is a reimplementation from the paper (MLP on fused hidden states of
+layers 2, N/2, N−2), which changes the claim to "OUTLETS-style".
+
+**GPU 0, storage pool vs admission** (`results/chain17-gpu0-storage-20260912.sh`).
+Resource picture from the 32B runs: memory is per context and lives through
+decode and tool gaps; compute is only cold prefill; what agents need
+separated is a compute pool and a history store, not prefill and decode.
+First question: is DualMap's remaining wait (9.9 s of a 29 s step at 32B)
+an admission necessity, or does a right-sized store make admission
+unnecessary? Decomposition on Qwen3-4B capped to 262,144 tokens, one engine
+on GPU 0, concurrency 16 (R_avg ≈ 1.2), tier sized below the GPU cache
+(12 GiB ≈ 85K tokens, the 32B ratio) and far above it (48 GiB):
+
+| Run | Storage | Admission | Question |
+|---|---|---|---|
+| FCFS sticky | none | none | pressure symptom |
+| FCFS sticky + tier 12 GiB (new config, smoke first) | yes | none | storage alone |
+| DualMap + tier 12 GiB | yes | yes | storage + admission |
+| FCFS sticky + tier 48 GiB | oversized | none | does capacity alone close the gap |
+
+Decision: if FCFS + tier ≈ DualMap + tier, admission is not the mechanism
+and the work is store sizing/placement/sharing; if DualMap stays ahead,
+admission is necessary and the store is complementary; the 48 GiB row says
+whether "more DRAM" alone is the answer. About 30 min per run; winner
+confirmed once at 32B when GPU 1 frees.
 
 ## 9. Realism check: Qwen3.8-27B-FP8 (recorded 06:45 UTC, one measurement, not a platform change)
 
