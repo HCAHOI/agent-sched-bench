@@ -1,0 +1,27 @@
+{
+  "method": "egtp-static",
+  "upstream_commit": "170a47893e1351ecc062186aafc686ab3f8be3d1",
+  "upstream_dir": "/root/autodl-tmp/workspace/upstreams/l_p_bench",
+  "upstream_python": "/root/autodl-tmp/workspace/.uv-python/cpython-3.12.14-linux-x86_64-gnu/bin/python3.12",
+  "dataset_dir": "/root/autodl-tmp/workspace/outlen/dataset-nat",
+  "labels_path": "/root/autodl-tmp/workspace/outlen/natural-labels-qwen3-30b-a3b-32k/labels.jsonl",
+  "label_reduction": "arithmetic_mean_over_draws",
+  "input": "full_messages_rendered_by_target_tokenizer_chat_template, projected to the last 256 target-model tokens; official extractor keeps only the first 256 target-model tokens",
+  "tail_tokens": 256,
+  "unused_split": "validation",
+  "model_id": "/workspace/.hf_home/hub/models--Qwen--Qwen3-4B-Instruct-2507-FP8/snapshots/8591804019c8b22094c3b5b4454e0edc05dffc98",
+  "prompt_prefix_k": 256,
+  "num_bins": 20,
+  "lambda_val": 0.95,
+  "epochs": 200,
+  "batch_size": 256,
+  "learning_rate": 2e-05,
+  "extractor_batch_size": 64,
+  "torch_dtype": "bfloat16",
+  "seed": 42,
+  "counts": {
+    "train": 3031,
+    "validation": 431,
+    "test": 860
+  }
+}
