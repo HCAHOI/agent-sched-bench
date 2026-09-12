@@ -320,7 +320,7 @@ draws)? Three stages, each answering one of those:
 | C (~1.5 h) | prefixes extended by the first k = 16 / 64 / 256 tokens of the greedy completion, features from the pooling server, same MSE head; base probe scored on the same subset | information | if long recall on the subset rises above 0.5 at some k, the tail is knowable once generation starts and the sandbox estimate should be updated at that token count; if it stays flat, the prompt-side state is not the limit |
 | B (~4.5 h) | sampled labels at temperature 0.7: test × 4 draws, then all splits × 1 draw | inherent | between-draw agreement of the > 512 bucket on the test prefixes; if fewer than half of the prefixes that are long in one draw are long in another, no prompt-only predictor can reach high long recall under sampling, and the recall target is capped there |
 
-**A result (17:12 UTC, `probe-replay-pool64v4/variants/`):** no variant
+**A result (17:07 UTC, `probe-replay-pool64v4/variants/`):** no variant
 meets the primary rule; every tail variant makes the replay stage-2 estimate
 worse (p90 absolute error 25.8 s base → 31.3–55.7 s; median 5.1 → 5.3–15.4 s).
 On natural test labels they buy long recall (0.16 → 0.47 weighted, 0.56
