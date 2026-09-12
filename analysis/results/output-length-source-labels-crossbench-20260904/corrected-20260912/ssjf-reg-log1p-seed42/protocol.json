@@ -1,0 +1,29 @@
+{
+  "method": "ssjf-reg",
+  "upstream_commit": "4b866866a32626677a1841a3b92875b93b1f03ab",
+  "dataset_dir": "/root/autodl-tmp/workspace/outlen/dataset",
+  "labels_path": "/root/autodl-tmp/workspace/outlen/dataset/source_labels.jsonl",
+  "label_reduction": "arithmetic_mean_over_draws",
+  "input": "canonical_json_of_full_messages_then_left_truncate_to_512_tokens",
+  "prediction_postprocess": "clamp_to_at_least_one_token",
+  "target_transform": "log1p",
+  "encoder": "bert-base-uncased",
+  "epochs": 6,
+  "batch_size": 16,
+  "learning_rate": 1e-05,
+  "seed": 42,
+  "device": "cuda:0",
+  "train_loss": [
+    11.406692869961262,
+    3.183012737582127,
+    1.1338877097393076,
+    0.8416950491567453,
+    0.8230638296032945,
+    0.820823130197823
+  ],
+  "counts": {
+    "train": 3066,
+    "validation": 436,
+    "test": 869
+  }
+}

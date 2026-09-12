@@ -263,6 +263,19 @@ Dataset re-exported locally from the same archives with the same seed (`source_l
 
 Expectation: if per-request content carries the signal, the corrected runs beat the train-median constant on q50 (< 1.85) and detect long outputs (recall > 0.3 at > 512 tokens). If they still sit at the constant, the 2026-09-11 decomposition (91% of variance in tool-call arguments, 43–71% of tokens visible) is the explanation and output length is closed as a scheduling signal on this data.
 
+### Corrected runs: result (read 07:01 UTC, `analysis/results/output-length-source-labels-crossbench-20260904/corrected-20260912/`)
+
+| Predictor (869 test samples) | q50 | q90 | q95 | q99 | Mean accuracy | MAE | Prediction spread |
+|---|---:|---:|---:|---:|---:|---:|---|
+| Train-median constant (frozen reference) | 1.854 | 4.473 | 5.466 | 15.262 | 0.546 | 187.0 | constant 152 |
+| SSJF-Reg, log1p target | 2.025 | 4.376 | 5.331 | 13.392 | 0.533 | 190.4 | 173–176 (converged to a constant) |
+| EGTP-static, last 256 tokens, k = 256 | 1.944 | 4.875 | 6.848 | 15.048 | 0.539 | 201.4 | 79–1,717, sd 162 |
+| EGTP-static, last 256 tokens, official k = 4 | 2.044 | 5.834 | 8.061 | 15.314 | 0.507 | 224.8 | 92–1,764, sd 164 |
+
+SSJF-Reg now trains (loss 11.4 → 0.82 in log space over six epochs) and its head settles at exp(mean log length): the BERT encoder finds nothing in the last 512 tokens of the canonical context beyond the mean. EGTP with the tail window is no longer constant, its predictions spread over an order of magnitude, but they land in the wrong places: every metric is worse than the constant. The pre-registered expectation (q50 < 1.85, long-output recall > 0.3) is not met by any corrected run.
+
+Decision: output length is closed as a scheduling signal on this data, now with both published methods applied as their papers intend. The explanation stands from the decomposition above: 91% of the variance sits in tool-call arguments whose length is set by content the encoder does not see (file bodies being written), and 29–57% of recorded completions are hidden reasoning.
+
 ## Current limitations and open problems
 
 - Natural output has a heavy tail: one draw exceeded 16K even though the longest-prefix smoke outputs were all below 1.3K. The 32K cap is still a censoring boundary, so any cap hit invalidates that label run.

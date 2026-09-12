@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-12 06:50 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-12 07:05 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -277,11 +277,12 @@ Each about 1.5 h. These are the §0 instruments on the new platform plus the
 closest intra-engine prior; results go to M4 §3.1 as the single-engine
 baseline table.
 
-**GPU 1, output-length lane** (`/workspace/outlen/` on the host, separate
-venv): corrected SSJF-Reg (log1p target) and EGTP-static (last-256-token
-window, k = 256 and official k = 4), pre-registered in the handoff document
-(amendment 2026-09-12). Results pulled to
-`analysis/results/output-length-source-labels-crossbench-20260904/`.
+**GPU 1, output-length lane: done 07:01 UTC.** Corrected SSJF-Reg (log1p
+target) converges to a constant (q50 2.03); EGTP-static on the last 256
+tokens spreads its predictions but is worse than the constant on every
+metric (q50 1.94 / 2.04, q90 4.9 / 5.8). Neither meets the pre-registered
+bar. Output length is closed as a scheduling signal with both methods applied
+as intended (handoff document, "Corrected runs"). GPU 1 is free.
 
 Dropped: c16 floor, TP=2 (no decision depends on them), repetition runs
 (all decisive gaps are 30× any plausible run noise).
