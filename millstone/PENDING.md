@@ -378,6 +378,37 @@ run, `pool64v4-pro6000-qwen32b-gpu0-c16-fcfs-sticky-20260912-r1`) with a
 tier hit share under 10% confirms it; DualMap+24 faster than plain FCFS
 confirms the rescue. Expected finish (revised 17:45 UTC after FCFS+96 took 1.85 h instead of 3.5): DualMap+96 ~19:30, FCFS+24 by ~00:30 (5 h budget), DualMap+24 by ~04:00.
 
+**Fills for idle devices (user 17:50 UTC: "如果有设备空闲，但是我还没有回来，安排最有价值的实验进行填充"; pre-registered 17:58 UTC).**
+
+*Lane 3, GPU 1 after lane 2* (`results/host-lanes/lane3-20260912.sh`, log
+`/workspace/outlen/lane3-20260912.log`): the output-length work moved onto the
+platform model. Qwen3-32B-FP8 (YaRN ×4 for the 7% of prompts above 40K)
+generates thinking-mode natural labels for dataset-nat (64K cap, temperature
+0.6 / top-p 0.95, one draw; rejects dropped into `dataset-nat-32b`), a 32B
+pooling server extracts final-layer features for the 4,322 prefixes and the
+1,951 replay steps, and the probe is trained on (a) the 32B natural labels
+and (b) recorded labels with the 64 replayed tasks excluded. Questions and
+rules: (1) does the probe beat the constant on the platform model's own
+labels: q50 at least 0.2 below the constant's (30B: 1.35 vs 2.06) says the
+result transfers; (2) reasoning share of the 32B thinking output and the
+after-close remainder by tool name (same rules as the thinking-mode lane);
+(3) the sandbox stage-2 estimate on the 32B DualMap 96 GiB replay with the
+32B probe against the 30B probe row (q-err 1.60 / 4.02, abs p90 25.8 s): the
+platform probe is adopted if it is not worse. Expected 5–7 h (32B dense
+decode of reasoning traces is the cost).
+
+*Chain 21, GPU 0 after chain 20* (`results/chain21-gpu0-32b-c24-20260912.sh`,
+log `results/chain21-gpu0-c24-20260912.log`): once the store is sized, does
+admission's value grow with pressure? Concurrency 24 (mean working set 430K
+tokens, above the 96 GiB tier alone and below tier + GPU; p90-step peaks 810K
+exceed both): FCFS + 96 GiB, then DualMap + 96 GiB, 5 h budgets. Rule: the
+paired DualMap − FCFS difference at c24 compared with the c16 difference
+(chain 19). If it grows by more than the bootstrap interval, admission is
+the pressure-side mechanism and the design is "store sized to the mean,
+admit at the peaks"; if it stays within the interval or shrinks, the sized
+store carries the pressure and admission is a fixed second-order term.
+Throughput (steps/min) is reported beside JCT because c24 carries more load.
+
 **GPU 0, storage pool vs admission** (`results/chain17-gpu0-storage-20260912.sh`).
 Resource picture from the 32B runs: memory is per context and lives through
 decode and tool gaps; compute is only cold prefill; what agents need
