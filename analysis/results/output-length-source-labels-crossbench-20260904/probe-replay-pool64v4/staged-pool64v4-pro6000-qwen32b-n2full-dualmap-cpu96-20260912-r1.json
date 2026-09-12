@@ -44,40 +44,69 @@
   "over_share": 0.616,
   "actual_p50_s": 9.57
  },
+ "at_reasoning_end": {
+  "n": 1951,
+  "abs_err_p50_s": 2.45,
+  "abs_err_p90_s": 14.75,
+  "qerr_p50": 1.84,
+  "qerr_p90": 4.49,
+  "over_share": 0.437,
+  "actual_p50_s": 5.28,
+  "reasoning_token_share": {
+   "p50": 0.357,
+   "mean": 0.407
+  },
+  "remaining_after_alert_s": {
+   "p10": 1.61,
+   "p50": 5.28
+  },
+  "share_after_alert_at_least": {
+   "2.2s": 0.761,
+   "3.0s": 0.65,
+   "5.0s": 0.518
+  }
+ },
  "priors": {
   "exec": {
    "p10": 61,
    "p50": 116,
+   "vis_p50": 54,
    "n": 19345
   },
   "read_file": {
    "p10": 35,
    "p50": 82,
+   "vis_p50": 27,
    "n": 5499
   },
   "edit_file": {
    "p10": 111,
    "p50": 331,
+   "vis_p50": 203,
    "n": 2591
   },
   "final": {
    "p10": 104,
    "p50": 257,
+   "vis_p50": 214,
    "n": 804
   },
   "list_dir": {
    "p10": 47,
    "p50": 84,
+   "vis_p50": 34,
    "n": 1065
   },
   "write_file": {
    "p10": 209,
    "p50": 821,
+   "vis_p50": 654,
    "n": 504
   },
   "*": {
    "p10": 55,
    "p50": 118,
+   "vis_p50": 53,
    "n": 29809
   }
  },

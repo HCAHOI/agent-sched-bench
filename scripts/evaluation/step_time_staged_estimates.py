@@ -7,6 +7,10 @@ time until the step completes, each using only what is known at that moment:
                  error shown is the prefill+decode part only) -- this is the lower-bound stage
   at scheduling: the engine started the request (hold and queue over); remaining = prefill_hat + decode_hat(prior)
   at tool name : the first tool call's name is known; remaining = decode_hat(tool-conditioned)
+  at reasoning end: the model closed its reasoning (hidden or explicit) and the tool name is visible; remaining =
+                 visible tokens of that tool (text + arguments, pool median) x TPOT. Visible tokens are estimated
+                 with tiktoken on the recorded message, reasoning = completion - visible; the alert time inside the
+                 replay's decode is proportional to the reasoning share (the replay regenerates the same token count).
 
 prefill_hat = uncached prompt tokens x the calibrated prefill constant; decode_hat = expected output length
 x a causal TPOT estimate (median over the previous 50 completed requests on the same instance). Output
@@ -25,6 +29,11 @@ import statistics
 from collections import defaultdict
 from pathlib import Path
 
+import tiktoken
+
+ENC = tiktoken.get_encoding("o200k_base")
+count = lambda text: len(ENC.encode(text, disallowed_special=()))
+
 REPO = Path(__file__).resolve().parents[2]
 POOLS = [REPO / "traces/exports/swe-rebench-original-flat-644-20260904",
          REPO / "traces/exports/terminal-bench-original-flat-239-20260904"]
@@ -42,9 +51,15 @@ def llm_steps(trace: Path) -> list[dict]:
         if r["action_type"] == "llm_call":
             d = r["data"]
             sg = d.get("shadow_generation") or {}  # replay runs: prompt and cached tokens as served, engine request id
+            raw = d.get("raw_response")
+            raw = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            msg = ((raw.get("choices") or [{}])[0].get("message") or {})
+            visible = count(msg.get("content") or "") + sum(
+                count((tc.get("function") or {}).get("arguments") or "") for tc in (msg.get("tool_calls") or []))
             steps.append({"ts_start": r["ts_start"], "ts_end": r["ts_end"], "action_id": r["action_id"],
                           "prompt": sg.get("prompt_tokens") or d.get("prompt_tokens") or 0,
                           "cached": sg.get("cached_prompt_tokens") or 0, "completion": d.get("completion_tokens") or 0,
+                          "visible": min(visible, d.get("completion_tokens") or visible),
                           "request_id": sg.get("request_id"), "tool": None, "tool_end": None})
         elif r["action_type"] == "tool_exec" and steps and steps[-1]["tool"] is None:
             steps[-1]["tool"] = r["data"].get("tool_name")
@@ -55,6 +70,7 @@ def llm_steps(trace: Path) -> list[dict]:
 def pool_priors(exclude: set[str]) -> dict[str, dict[str, float]]:
     """Per-tool output-length quantiles over the pool, excluding the run's own trace files."""
     by_tool: dict[str, list[int]] = defaultdict(list)
+    vis_by_tool: dict[str, list[int]] = defaultdict(list)
     for d in POOLS:
         for m in map(json.loads, (d / "MANIFEST.jsonl").open()):
             if m["flattened_name"] in exclude:
@@ -62,10 +78,11 @@ def pool_priors(exclude: set[str]) -> dict[str, dict[str, float]]:
             for s in llm_steps(d / m["flattened_name"]):
                 if s["completion"]:
                     by_tool[s["tool"] or "final"].append(s["completion"])
+                    vis_by_tool[s["tool"] or "final"].append(s["visible"])
     q = lambda xs, f: sorted(xs)[int(f * (len(xs) - 1))]
-    priors = {t: {"p10": q(v, 0.1), "p50": q(v, 0.5), "n": len(v)} for t, v in by_tool.items()}
+    priors = {t: {"p10": q(v, 0.1), "p50": q(v, 0.5), "vis_p50": q(vis_by_tool[t], 0.5), "n": len(v)} for t, v in by_tool.items()}
     allv = [x for v in by_tool.values() for x in v]
-    priors["*"] = {"p10": q(allv, 0.1), "p50": q(allv, 0.5), "n": len(allv)}
+    priors["*"] = {"p10": q(allv, 0.1), "p50": q(allv, 0.5), "vis_p50": q([x for v in vis_by_tool.values() for x in v], 0.5), "n": len(allv)}
     return priors
 
 
@@ -153,6 +170,12 @@ def main() -> None:
                 if key in probe:
                     results.setdefault("probe", []).append((prefill_hat + probe[key] * tp, actual_remaining))
             waits.append(scheduled - x["arrival"])  # stage 1: hold + queue, unknown to the sandbox side
+            if s["completion"]:
+                reasoning_share = 1 - s["visible"] / s["completion"]
+                after_alert = x["decode_s"] * (1 - reasoning_share)  # decode time left once the reasoning closes
+                results.setdefault("reasoning_end", []).append((prior["vis_p50"] * tp, after_alert))
+                results.setdefault("after_alert", []).append(after_alert)
+                results.setdefault("reasoning_share", []).append(reasoning_share)
             if prev_finish is not None:
                 gap_rows.append((x["arrival"] - prev_finish, s["cached"] / s["prompt"] if s["prompt"] else 0.0))
             prev_finish = x["finish"]
@@ -184,6 +207,13 @@ def main() -> None:
                "lower_bound_coverage": round(results["lower_bound_ok"] / results["n"], 4),
                "at_scheduling": summarize(results["dispatch"]), "at_tool_name": summarize(results["toolname"]),
                **({"at_scheduling_probe": summarize(results["probe"])} if results.get("probe") else {}),
+               "at_reasoning_end": {**summarize(results["reasoning_end"]),
+                                    "reasoning_token_share": {"p50": round(statistics.median(results["reasoning_share"]), 3),
+                                                              "mean": round(statistics.fmean(results["reasoning_share"]), 3)},
+                                    "remaining_after_alert_s": {"p10": round(sorted(results["after_alert"])[int(.1 * (len(results["after_alert"]) - 1))], 2),
+                                                                "p50": round(statistics.median(results["after_alert"]), 2)},
+                                    "share_after_alert_at_least": {f"{t}s": round(sum(v >= t for v in results["after_alert"]) / len(results["after_alert"]), 3)
+                                                                   for t in (2.2, 3.0, 5.0)}},
                "priors": {k: v for k, v in priors.items() if v["n"] >= 100}, "cache_by_gap": gap_table}
     print(json.dumps(summary, indent=1))
     if a.out:

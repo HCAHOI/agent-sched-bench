@@ -442,6 +442,17 @@ is large under FCFS (p50 36 s at 32B) and heavy-tailed under DualMap (mean
 11.7 s, p50 3.2 s); it is our own decision, so it should be sent as an event
 ("scheduled"), not predicted.
 
+**Two-marker proposal (user, 17:20 UTC): safe lower bound at arrival = queue estimate + prefill; alert when the reasoning closes.** Measured 17:35 UTC on the same four runs (`at_reasoning_end` in `probe-replay-pool64v4/staged-*.json`; reasoning tokens = recorded completion − tiktoken count of the visible text and tool arguments, alert time proportional inside the replay's decode; estimate after the alert = pool median visible tokens of the named tool × causal TPOT):
+
+| Run | Reasoning share of output tokens p50 / mean | Remaining after alert p10 / p50 (s) | Share ≥ 2.2 / 3 s after alert | After-alert abs error p50 / p90 (s) | q-err p50 / p90 |
+|---|---|---|---|---|---|
+| 32B DualMap 96 GiB | 0.36 / 0.41 | 1.6 / 5.3 | 0.76 / 0.65 | 2.5 / 14.8 (stage 2 probe: 5.1 / 25.8) | 1.84 / 4.49 |
+| 32B FCFS sticky | same traces | 1.7 / 9.5 | 0.84 / 0.78 | 5.4 / 31.5 (10.5 / 54.1) | 1.99 / 5.12 |
+| 4B FCFS full | same traces | 0.5 / 1.8 | 0.43 / 0.33 | 0.8 / 4.9 (1.7 / 8.7) | 1.83 / 4.39 |
+| 4B DualMap capped | same traces | 0.6 / 2.0 | 0.47 / 0.37 | 0.9 / 5.4 (1.9 / 9.3) | 1.84 / 4.37 |
+
+Reading. (1) Reasoning is a third of the output tokens (median 0.36; qwen3.7-max steps 0.57, gpt-5.6-sol 0.29 by the visible share), so the alert lands after roughly 40% of the decode. (2) The absolute error halves after the alert (32B DualMap p50 5.1 → 2.5 s, p90 25.8 → 14.8 s) because less time remains, not because the remainder is more predictable: the q-error is unchanged (1.6–1.8 → 1.84), the remaining length is the tool arguments, and their spread (write_file vs read_file) is what the prompt-side probe already could not resolve. (3) At 32B the alert is early enough for a restore in 65% of steps (≥ 3 s after it), 76% at the p50 restore of 2.2 s; at 4B only a third. (4) The lower bound at arrival: queue/hold is our decision and should be sent as the "scheduled" event; prefill is the safe bound at that moment (100% coverage, above). So the interface is three signals, not two: scheduled (with prefill bound), reasoning closed (with tool name and the tool-conditioned remainder), and the finish. A thinking-mode target model (Qwen3-30B-A3B-Thinking-2507) would make the alert a real token event and give the reasoning length as a separate prediction target; queued on GPU 1 after the tail lane (§8b).
+
 Reverse direction, tool-time prediction for us: with the 96 GiB tier the
 prompt miss share is 3% and flat across tool-gap lengths (0–5 s: 3%, 5–15 s:
 4%, longer: 0%), so return-time-aware eviction has at most 3% of steps to
