@@ -89,9 +89,14 @@ def train(a: argparse.Namespace) -> None:
     labels: dict[str, list[int]] = {}
     for r in rows:
         labels.setdefault(str(r["sample_id"]), []).append(int(r["actual_tokens"]))
+    excluded_tasks: set[str] = set()
+    if a.exclude_manifest:  # tasks a replay run will be scored on must not be in the head's training data
+        excluded_tasks = {t["label"] for t in __import__("yaml").safe_load(a.exclude_manifest.open())["traces"]}
     split = {s: [] for s in ("train", "validation", "test")}
     for sid, ys in labels.items():
         if sid in prefixes and sid in index:
+            if prefixes[sid]["split"] != "test" and sid.split("/")[1] in excluded_tasks:
+                continue
             split[prefixes[sid]["split"]].append((index[sid], math.log1p(sum(ys) / len(ys)), sid))
     torch.manual_seed(a.seed); random.seed(a.seed); np.random.seed(a.seed)
     mu, sd = X[[i for i, _, _ in split["train"]]].mean(0), X[[i for i, _, _ in split["train"]]].std(0) + 1e-6
@@ -131,7 +136,7 @@ def train(a: argparse.Namespace) -> None:
     (a.out / "protocol.json").write_text(json.dumps({
         "method": "hidden-state-probe (final layer, last token, MLP on log1p tokens)", "features": str(a.features.resolve()),
         "labels": str(a.labels.resolve()), "hidden": a.hidden, "dropout": a.dropout, "lr": a.lr, "weight_decay": a.weight_decay,
-        "epochs": a.epochs, "batch_size": a.batch_size, "seed": a.seed, "validation_mse_log": history,
+        "epochs": a.epochs, "batch_size": a.batch_size, "seed": a.seed, "excluded_tasks": sorted(excluded_tasks), "validation_mse_log": history,
         "best_validation_mse_log": round(best, 4), "counts": {k: len(v) for k, v in split.items()}}, indent=1))
     print(f"best validation MSE (log space) {best:.4f}; test predictions {len(pred)}: mean {pred.mean():.1f} sd {pred.std():.1f}", flush=True)
 
@@ -192,6 +197,7 @@ def main() -> None:
     t.add_argument("--dataset-dir", type=Path, required=True); t.add_argument("--labels", type=Path, required=True)
     t.add_argument("--features", type=Path, required=True); t.add_argument("--out", type=Path, required=True)
     t.add_argument("--recorded-labels", action="store_true")
+    t.add_argument("--exclude-manifest", type=Path, help="pool manifest whose tasks are dropped from train/validation")
     t.add_argument("--hidden", type=int, default=256); t.add_argument("--dropout", type=float, default=0.1)
     t.add_argument("--lr", type=float, default=1e-3); t.add_argument("--weight-decay", type=float, default=1e-2)
     t.add_argument("--epochs", type=int, default=200); t.add_argument("--batch-size", type=int, default=128)

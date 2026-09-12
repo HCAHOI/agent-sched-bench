@@ -1,0 +1,122 @@
+{
+ "run": "pool64v4-pro6000-qwen32b-n2full-fcfs-sticky-20260911-r1",
+ "steps": 1951,
+ "remaining_at_scheduling_s": {
+  "p10": 4.46,
+  "p50": 22.78
+ },
+ "share_remaining_at_least": {
+  "2.2s": 0.988,
+  "3.0s": 0.947,
+  "5.0s": 0.882
+ },
+ "prefill_only_lower_bound_coverage": 1.0,
+ "stage1_wait_hold_plus_queue_s": {
+  "p50": 35.97,
+  "p90": 56.72,
+  "mean": 34.02
+ },
+ "lower_bound_coverage": 0.8391,
+ "at_scheduling": {
+  "n": 1951,
+  "abs_err_p50_s": 9.75,
+  "abs_err_p90_s": 64.86,
+  "qerr_p50": 1.87,
+  "qerr_p90": 4.9,
+  "over_share": 0.411,
+  "actual_p50_s": 22.78
+ },
+ "at_tool_name": {
+  "n": 1951,
+  "abs_err_p50_s": 9.35,
+  "abs_err_p90_s": 57.16,
+  "qerr_p50": 1.73,
+  "qerr_p90": 4.13,
+  "over_share": 0.425,
+  "actual_p50_s": 22.78
+ },
+ "at_scheduling_probe": {
+  "n": 1951,
+  "abs_err_p50_s": 10.54,
+  "abs_err_p90_s": 54.12,
+  "qerr_p50": 1.66,
+  "qerr_p90": 4.28,
+  "over_share": 0.55,
+  "actual_p50_s": 22.78
+ },
+ "priors": {
+  "exec": {
+   "p10": 61,
+   "p50": 116,
+   "n": 19345
+  },
+  "read_file": {
+   "p10": 35,
+   "p50": 82,
+   "n": 5499
+  },
+  "edit_file": {
+   "p10": 111,
+   "p50": 331,
+   "n": 2591
+  },
+  "final": {
+   "p10": 104,
+   "p50": 257,
+   "n": 804
+  },
+  "list_dir": {
+   "p10": 47,
+   "p50": 84,
+   "n": 1065
+  },
+  "write_file": {
+   "p10": 209,
+   "p50": 821,
+   "n": 504
+  },
+  "*": {
+   "p10": 55,
+   "p50": 118,
+   "n": 29809
+  }
+ },
+ "cache_by_gap": [
+  {
+   "gap_s": "0-5",
+   "steps": 1796,
+   "cached_share_mean": 0.339,
+   "miss_share": 0.649
+  },
+  {
+   "gap_s": "5-15",
+   "steps": 27,
+   "cached_share_mean": 0.112,
+   "miss_share": 0.852
+  },
+  {
+   "gap_s": "15-30",
+   "steps": 34,
+   "cached_share_mean": 0.133,
+   "miss_share": 0.853
+  },
+  {
+   "gap_s": "30-60",
+   "steps": 23,
+   "cached_share_mean": 0.052,
+   "miss_share": 0.957
+  },
+  {
+   "gap_s": "60-120",
+   "steps": 6,
+   "cached_share_mean": 0.003,
+   "miss_share": 1.0
+  },
+  {
+   "gap_s": "120-inf",
+   "steps": 1,
+   "cached_share_mean": 0.008,
+   "miss_share": 1.0
+  }
+ ]
+}

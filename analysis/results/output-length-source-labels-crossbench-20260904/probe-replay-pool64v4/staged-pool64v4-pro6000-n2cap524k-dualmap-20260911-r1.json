@@ -1,0 +1,122 @@
+{
+ "run": "pool64v4-pro6000-n2cap524k-dualmap-20260911-r1",
+ "steps": 1951,
+ "remaining_at_scheduling_s": {
+  "p10": 1.35,
+  "p50": 3.62
+ },
+ "share_remaining_at_least": {
+  "2.2s": 0.719,
+  "3.0s": 0.577,
+  "5.0s": 0.377
+ },
+ "prefill_only_lower_bound_coverage": 1.0,
+ "stage1_wait_hold_plus_queue_s": {
+  "p50": 1.73,
+  "p90": 6.15,
+  "mean": 3.62
+ },
+ "lower_bound_coverage": 0.8683,
+ "at_scheduling": {
+  "n": 1951,
+  "abs_err_p50_s": 1.76,
+  "abs_err_p90_s": 11.05,
+  "qerr_p50": 1.79,
+  "qerr_p90": 4.52,
+  "over_share": 0.463,
+  "actual_p50_s": 3.62
+ },
+ "at_tool_name": {
+  "n": 1951,
+  "abs_err_p50_s": 1.44,
+  "abs_err_p90_s": 9.91,
+  "qerr_p50": 1.7,
+  "qerr_p90": 3.81,
+  "over_share": 0.479,
+  "actual_p50_s": 3.62
+ },
+ "at_scheduling_probe": {
+  "n": 1951,
+  "abs_err_p50_s": 1.92,
+  "abs_err_p90_s": 9.28,
+  "qerr_p50": 1.57,
+  "qerr_p90": 4.1,
+  "over_share": 0.616,
+  "actual_p50_s": 3.62
+ },
+ "priors": {
+  "exec": {
+   "p10": 61,
+   "p50": 116,
+   "n": 19345
+  },
+  "read_file": {
+   "p10": 35,
+   "p50": 82,
+   "n": 5499
+  },
+  "edit_file": {
+   "p10": 111,
+   "p50": 331,
+   "n": 2591
+  },
+  "final": {
+   "p10": 104,
+   "p50": 257,
+   "n": 804
+  },
+  "list_dir": {
+   "p10": 47,
+   "p50": 84,
+   "n": 1065
+  },
+  "write_file": {
+   "p10": 209,
+   "p50": 821,
+   "n": 504
+  },
+  "*": {
+   "p10": 55,
+   "p50": 118,
+   "n": 29809
+  }
+ },
+ "cache_by_gap": [
+  {
+   "gap_s": "0-5",
+   "steps": 1801,
+   "cached_share_mean": 0.908,
+   "miss_share": 0.038
+  },
+  {
+   "gap_s": "5-15",
+   "steps": 22,
+   "cached_share_mean": 0.866,
+   "miss_share": 0.045
+  },
+  {
+   "gap_s": "15-30",
+   "steps": 34,
+   "cached_share_mean": 0.912,
+   "miss_share": 0.029
+  },
+  {
+   "gap_s": "30-60",
+   "steps": 23,
+   "cached_share_mean": 0.654,
+   "miss_share": 0.348
+  },
+  {
+   "gap_s": "60-120",
+   "steps": 6,
+   "cached_share_mean": 0.327,
+   "miss_share": 0.667
+  },
+  {
+   "gap_s": "120-inf",
+   "steps": 1,
+   "cached_share_mean": 0.008,
+   "miss_share": 1.0
+  }
+ ]
+}

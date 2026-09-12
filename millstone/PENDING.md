@@ -294,7 +294,7 @@ The 32B scheduling line (chains 12–16) is stopped: it was my choice, not a
 request, and it displaced the OUTLETS test the 30B model was meant for. Its
 results stay in M4 §3.1 as a robustness note.
 
-**GPU 1, OUTLETS (the user's purpose for a 30B model).** Natural labels done 14:37 UTC (4,322 labeled, 49 rejected); corrected SSJF/EGTP on natural labels lose to the constant (handoff). Official OUTLETS code unavailable; HF prefill on the FP8 MoE is 761 tok/s (30 h for the features), so the user chose the shallow probe (final-layer hidden state from a vLLM pooling server + MLP head), running since 15:05. **Result 16:25 UTC:** the probe is the first predictor to beat the constant, by a wide margin (natural labels q50 1.35 vs 2.06, MAE 78 vs 119, bucket accuracy 0.81 vs 0.68; four seeds agree; recorded labels q50 1.39 vs 1.85). Tail still weak (long recall 0.16). Handoff document, "Internal-state probe". Target model
+**GPU 1, OUTLETS (the user's purpose for a 30B model).** Natural labels done 14:37 UTC (4,322 labeled, 49 rejected); corrected SSJF/EGTP on natural labels lose to the constant (handoff). Official OUTLETS code unavailable; HF prefill on the FP8 MoE is 761 tok/s (30 h for the features), so the user chose the shallow probe (final-layer hidden state from a vLLM pooling server + MLP head), running since 15:05. **Result 16:25 UTC** (replay-step probe for §10 done 17:05 UTC; GPU 1 idle since)**:** the probe is the first predictor to beat the constant, by a wide margin (natural labels q50 1.35 vs 2.06, MAE 78 vs 119, bucket accuracy 0.81 vs 0.68; four seeds agree; recorded labels q50 1.39 vs 1.85). Tail still weak (long recall 0.16). Handoff document, "Internal-state probe". Target model
 Qwen3-30B-A3B-Instruct-2507-FP8 with the EAGLE-3 draft
 `lmsys/SGLang-EAGLE3-Qwen3-30B-A3B-Instruct-2507-SpecForge-Nex` (both
 downloading to the host). Steps: regenerate natural completions for the
@@ -373,12 +373,12 @@ uncached tokens × prefill constant + prior output length × causal TPOT),
 stage 3 (tool name known: tool-conditioned length prior). Priors from the
 pool excluding the run's tasks.
 
-| Run | Stage-1 wait p50 / p90 (s) | Remaining at scheduling p10 / p50 (s) | Share ≥ 3 s | Stage-2 q-err p50 / p90 | Stage-3 q-err p50 / p90 |
-|---|---|---|---:|---|---|
-| 32B DualMap 96 GiB | 3.2 / 12.9 | 3.7 / 9.6 | 0.94 | 1.83 / 4.44 | 1.70 / 3.86 |
-| 32B FCFS sticky | 36.0 / 56.7 | 4.5 / 22.8 | 0.95 | 1.87 / 4.90 | 1.73 / 4.13 |
-| 4B FCFS full | 3.1 / 6.3 | 1.2 / 3.2 | 0.53 | 1.82 / 4.47 | 1.70 / 3.82 |
-| 4B DualMap capped | 1.7 / 6.2 | 1.4 / 3.6 | 0.58 | 1.79 / 4.52 | 1.70 / 3.81 |
+| Run | Stage-1 wait p50 / p90 (s) | Remaining at scheduling p10 / p50 (s) | Share ≥ 3 s | Stage-2 q-err p50 / p90 | Stage-2 + probe q-err p50 / p90 | Stage-3 q-err p50 / p90 |
+|---|---|---|---:|---|---|---|
+| 32B DualMap 96 GiB | 3.2 / 12.9 | 3.7 / 9.6 | 0.94 | 1.83 / 4.44 | 1.60 / 4.02 | 1.70 / 3.86 |
+| 32B FCFS sticky | 36.0 / 56.7 | 4.5 / 22.8 | 0.95 | 1.87 / 4.90 | 1.66 / 4.28 | 1.73 / 4.13 |
+| 4B FCFS full | 3.1 / 6.3 | 1.2 / 3.2 | 0.53 | 1.82 / 4.47 | 1.61 / 4.07 | 1.70 / 3.82 |
+| 4B DualMap capped | 1.7 / 6.2 | 1.4 / 3.6 | 0.58 | 1.79 / 4.52 | 1.57 / 4.10 | 1.70 / 3.81 |
 
 Reading. (1) The prefill-only lower bound holds 100% of the time; a bound
 that adds the 10th-percentile output length fails 14%, so the safe promise
@@ -387,7 +387,17 @@ steps still have ≥ 3 s of engine time after scheduling, so a restore started
 at that event is almost never late; at 4B only 53–58% do, and the restore
 must start earlier (at arrival, using the hold as slack) or accept lateness.
 (3) The tool name buys little (q-err 1.83 → 1.70): output length stays the
-unpredictable part, as the output-length study concluded. (4) Stage-1 wait
+unpredictable part, as the output-length study concluded. (3b, 17:05 UTC,
+user's choice "1") The hidden-state probe (§8b; Qwen3-30B-A3B final-layer
+state of each replay step's prompt, head trained on recorded labels with the
+64 replayed tasks removed from train/validation, 2,831 / 401 samples) replaces
+the pool-prior output length at stage 2: q-err p50 1.83 → 1.60, p90 4.44 →
+4.02, absolute error p90 30 → 26 s at 32B DualMap; median absolute error is
+unchanged (4.8 → 5.1 s) and 62% of steps are over-predicted (mean prediction
+214 tokens), which is the safe side for a restore deadline. A first pass
+without the task exclusion scored 1.49 / 3.69: 46 of the 64 tasks were in the
+head's training split, so that number is discarded (§3.2). Files:
+`analysis/results/output-length-source-labels-crossbench-20260904/probe-replay-pool64v4/`. (4) Stage-1 wait
 is large under FCFS (p50 36 s at 32B) and heavy-tailed under DualMap (mean
 11.7 s, p50 3.2 s); it is our own decision, so it should be sent as an event
 ("scheduled"), not predicted.
