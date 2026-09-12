@@ -325,9 +325,38 @@ outputs from the same prefixes. The tail is still the weak spot: 16% recall of o
 Reading against the earlier negatives: the length signal exists inside the target model's representation of the whole
 context; external encoders on a 512-token window (SSJF) or 4–256 prompt tokens (EGTP) do not see it.
 
-Not yet done: the OUTLETS-faithful variant (EAGLE-3 draft backbone over the fused layer-2 / N/2 / N−2 states, ~1 day
-of vLLM-internals work), a dynamic variant (re-predict after the first generated tokens), and the probe's use inside
-the sandbox-side staged estimate (features for the replay steps, ~15 min of extraction).
+Tail variants (2026-09-12 17:07 UTC, pre-registered in `millstone/PENDING.md` §8b "Tail lane", results in
+`probe-replay-pool64v4/variants/`): pinball 0.75 / 0.9, long-weighted MSE, a 3-bucket class head, and class head +
+weighting raise long recall (0.16 → 0.47–0.74) only by losing precision (0.58 → 0.23–0.43) and q50 (1.35 → 1.41–1.97),
+and every one of them makes the sandbox stage-2 estimate worse (p90 absolute error 25.8 s → 31–56 s). The head cannot
+separate long from not-long from the prompt-side state; it can only shift everything up. Still open: the dynamic
+variant (re-predict after k generated tokens) and sampled labels (temperature 0.7), both running in the same lane;
+the OUTLETS-faithful variant (EAGLE-3 draft backbone over fused layer-2 / N/2 / N−2 states, ~1 day) is not started.
+
+## Sandbox-side interface: three signals, not a point prediction (2026-09-12)
+
+The collaborator restores each task's sandbox around the LLM step (restore p50 1.0 s, p90 1.8 s) and asked for a
+step-time estimate. Measured on four finished replay runs with `scripts/evaluation/step_time_staged_estimates.py`
+(1,951 steps each; `probe-replay-pool64v4/staged-*.json`; full tables in `millstone/PENDING.md` §10), the useful
+interface is three events with a bound attached, not one predicted duration:
+
+1. **`scheduled`** (the engine started prefill; hold and queue are the LLM side's own decisions, so they are sent, not
+   predicted). Attached bound: uncached prompt tokens × the calibrated prefill constant. It is a true lower bound on
+   the remaining time in 100% of steps. At 32B every step still has ≥ 1.8 s of engine time after this event, so a
+   restore started here is never late; at 4B 76–82% do, the rest need the hold as slack.
+2. **`reasoning closed`** (the model emitted its reasoning-end token; the tool name follows within a few tokens).
+   Attached estimate: pool median visible tokens for that tool × causal TPOT. Reasoning is a third of the output
+   tokens (median 0.36 on the recorded traces), so this lands after ~40% of the decode; the absolute error of the
+   remainder halves (32B DualMap p50 5.1 → 2.5 s, p90 25.8 → 14.8 s) because less time is left, while the relative
+   error is unchanged (q-err ≈ 1.84): what remains is the tool arguments, whose spread no prompt-side predictor
+   resolved. At 32B, 85% of steps keep ≥ 1.8 s after this event (97% keep ≥ 1.0 s); at 4B about half.
+3. **`finished`**.
+
+The point estimate at `scheduled` (prefill + probe-predicted length × TPOT) stays available as the planning value:
+q-err p50 1.60 / p90 4.02 at 32B DualMap with the leak-free probe head (pool prior 1.83 / 4.44; tool name alone
+1.70 / 3.86). The natural-label lane with a thinking-mode target (Qwen3-30B-A3B-Thinking-2507, PENDING §8b) turns
+event 2 into a real token event and adds reasoning length as its own target; no other experiment is needed for the
+interface itself.
 
 ## Current limitations and open problems
 
