@@ -201,7 +201,7 @@ def main() -> None:
     rem = sorted(results["remaining"])
     summary = {"run": a.run.name, "steps": results["n"],
                "remaining_at_scheduling_s": {"p10": round(rem[int(.1 * (len(rem) - 1))], 2), "p50": round(rem[len(rem) // 2], 2)},
-               "share_remaining_at_least": {f"{t}s": round(sum(x >= t for x in rem) / len(rem), 3) for t in (2.2, 3.0, 5.0)},
+               "share_remaining_at_least": {f"{t}s": round(sum(x >= t for x in rem) / len(rem), 3) for t in (1.0, 1.8, 3.0)},
                "prefill_only_lower_bound_coverage": round(results["prefill_only_ok"] / results["n"], 4),
                "stage1_wait_hold_plus_queue_s": {"p50": wq(.5), "p90": wq(.9), "mean": round(statistics.fmean(waits), 2)},
                "lower_bound_coverage": round(results["lower_bound_ok"] / results["n"], 4),
@@ -213,7 +213,7 @@ def main() -> None:
                                     "remaining_after_alert_s": {"p10": round(sorted(results["after_alert"])[int(.1 * (len(results["after_alert"]) - 1))], 2),
                                                                 "p50": round(statistics.median(results["after_alert"]), 2)},
                                     "share_after_alert_at_least": {f"{t}s": round(sum(v >= t for v in results["after_alert"]) / len(results["after_alert"]), 3)
-                                                                   for t in (2.2, 3.0, 5.0)}},
+                                                                   for t in (1.0, 1.8, 3.0)}},
                "priors": {k: v for k, v in priors.items() if v["n"] >= 100}, "cache_by_gap": gap_table}
     print(json.dumps(summary, indent=1))
     if a.out:
