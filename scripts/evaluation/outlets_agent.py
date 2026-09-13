@@ -513,6 +513,72 @@ def train_hazard(a: argparse.Namespace) -> None:
     print(json.dumps({k: v for k, v in out.items() if k.endswith(f"_within_{H[len(H) // 2]}")}, indent=1), flush=True)
 
 
+def eval_policy(a: argparse.Namespace) -> None:
+    """Per-step restore policy on a trained hazard head: fire the restore when P(remaining <= X) >= theta at the
+    first position where that holds; a restore takes R tokens (R = restore seconds / TPOT). Late = the step ended
+    before the restore was ready (fire + R > L); waste = tokens the restore sat ready (L - fire - R); never = no fire.
+    Baselines: fire at the first completion token (never late, maximal waste) and fire at a fixed token count."""
+    import torch
+    from torch import nn
+
+    ck = torch.load(a.head, map_location="cpu"); H = ck["horizons"]; mu, sd = ck["mu"], ck["sd"]
+    head = nn.Sequential(nn.Linear(len(mu), 256), nn.GELU(), nn.Dropout(0.1), nn.Linear(256, 2 * len(H)))
+    head.load_state_dict(ck["state"]); head.eval()
+    rows = [{**r, "_dir": a.features, "_window": a.completion_window}
+            for r in _read_jsonl(a.features / "index.jsonl") if r["n_completion"] > 0 and r["split"] == "test"]
+    if a.extra_features:
+        extra = {r["sample_id"]: {**r, "_dir": a.extra_features, "_window": a.extra_window}
+                 for r in _read_jsonl(a.extra_features / "index.jsonl") if r["n_completion"] > 0 and r["split"] == "test"}
+        rows = [extra.pop(r["sample_id"], r) for r in rows] + list(extra.values())
+    steps = []
+    with torch.no_grad():
+        for r in rows:
+            z = np.load(r["_dir"] / r["file"]); X = z["feats"].astype(np.float32)
+            if a.format == "outlets":
+                n_pk = r["n_prompt_kept"]; X = X[n_pk:]; t = np.arange(len(X))          # completion positions only
+                L = r["label_tokens"] if r["n_completion"] >= r["_window"] else r["n_completion"]
+            else:
+                pos = z["pos"].astype(np.int64); t = pos - r["n_prompt"]; keep = t >= 0; X, t = X[keep], t[keep]
+                L = r["n_completion"] if not r["truncated"] else max(r["n_completion"], r["label_total"])
+            p = torch.sigmoid(head(torch.tensor((X - mu) / sd))).numpy()
+            steps.append((t, p, int(L)))
+    R = int(round(a.restore_s / a.tpot_s))
+    out = {"steps": len(steps), "restore_tokens": R, "horizons": H, "policies": {}}
+
+    def policy(fire_fn, name):
+        late = waste = never = 0; wastes = []
+        for t, p, L in steps:
+            f = fire_fn(t, p, L)
+            if f is None:
+                never += 1; continue
+            if f + R > L:
+                late += 1
+            else:
+                wastes.append(L - f - R)
+        n = len(steps)
+        out["policies"][name] = {"late": round(late / n, 3), "never_fired": round(never / n, 3),
+                                 "waste_tokens_p50": int(np.median(wastes)) if wastes else None,
+                                 "waste_tokens_p90": int(np.percentile(wastes, 90)) if wastes else None,
+                                 "ready_in_time": round((n - late - never) / n, 3)}
+
+    policy(lambda t, p, L: 0, "fire_at_first_token")
+    for k in (64, 256):
+        policy(lambda t, p, L, k=k: k if L > k else None, f"fire_at_token_{k}")
+    for j, target in enumerate(("total", "reasoning")):
+        for i, h in enumerate(H):
+            for theta in (0.5, 0.7, 0.9):
+                c = j * len(H) + i
+
+                def fire(t, p, L, c=c, theta=theta):
+                    idx = np.nonzero(p[:, c] >= theta)[0]
+                    return int(t[idx[0]]) if len(idx) else None
+                policy(fire, f"{target}_within_{h}_theta_{theta}")
+    a.out.parent.mkdir(parents=True, exist_ok=True)
+    a.out.write_text(json.dumps(out, indent=1))
+    for k, v in out["policies"].items():
+        print(f"{k:34s} late {v['late']:.3f} never {v['never_fired']:.3f} ready {v['ready_in_time']:.3f} waste p50/p90 {v['waste_tokens_p50']}/{v['waste_tokens_p90']}", flush=True)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="command", required=True)
@@ -545,8 +611,15 @@ def main() -> None:
     th.add_argument("--horizons", default="64,256,1024"); th.add_argument("--epochs", type=int, default=30); th.add_argument("--seed", type=int, default=42)
     th.add_argument("--format", choices=("hazard", "outlets"), default="hazard"); th.add_argument("--completion-window", type=int, default=512)
     th.add_argument("--extra-features", type=Path); th.add_argument("--extra-window", type=int, default=2048)
+    ep = sub.add_parser("eval-policy")
+    ep.add_argument("--head", type=Path, required=True); ep.add_argument("--features", type=Path, required=True)
+    ep.add_argument("--extra-features", type=Path); ep.add_argument("--extra-window", type=int, default=2048)
+    ep.add_argument("--format", choices=("hazard", "outlets"), default="hazard"); ep.add_argument("--completion-window", type=int, default=512)
+    ep.add_argument("--restore-s", type=float, default=1.8); ep.add_argument("--tpot-s", type=float, default=0.03)
+    ep.add_argument("--out", type=Path, required=True)
     a = p.parse_args()
-    {"extract": extract, "train": train, "predict": predict_cmd, "extract-hazard": extract_hazard, "train-hazard": train_hazard}[a.command](a)
+    {"extract": extract, "train": train, "predict": predict_cmd, "extract-hazard": extract_hazard, "train-hazard": train_hazard,
+     "eval-policy": eval_policy}[a.command](a)
 
 
 if __name__ == "__main__":
