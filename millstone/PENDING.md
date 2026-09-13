@@ -515,7 +515,7 @@ CPU only: D′ = the same hazard probe on the Instruct model's own completions (
 OUTLETS-agent, every completion position up to 512 tokens), to answer whether the whole-step end becomes readable
 while the visible tool call is being written; the only GPU item this implies is re-extracting the ~250 completions
 longer than 512 tokens to their full length (~10 min), proposed, not launched.
-**D′ result (16:40 UTC, CPU; Instruct completions, every position up to 512 tokens; test 857 steps, 112,202
+**D′ result (16:18 UTC, CPU; Instruct completions, every position up to 512 tokens; test 857 steps, 112,202
 positions; `analysis/results/.../hazard-instruct-20260913/`).** While the tool call is being written the end of
 the step **is** readable: "ends within 64 tokens" AUROC 0.96 / 0.94 / 0.89 / 0.88 with recall 0.86 / 0.85 / 0.80 /
 0.82 at precision 0.70 / 0.79 / 0.81 / 0.96 across the four progress quartiles; "within 32 tokens" (≈ 1 s at 30 ms)
