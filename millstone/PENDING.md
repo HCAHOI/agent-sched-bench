@@ -553,7 +553,7 @@ early-ready wait from ≈ 30 s to ≈ 11 s, and feeds admission and residency fo
 19% of steps need the base tier as fallback. The replay platform (32B regenerating recorded token counts, ≈ 36%
 reasoning) exercises both tiers; the natural label sets exist for both targets.
 
-**Chain 24, GPU 0 (user 17:35 UTC "先用这个机器试试"; pre-registered 17:40 UTC; `results/chain24-gpu0-32b-c24-tier192-20260913.sh`, log `results/chain24-gpu0-c24-tier192-20260913.log`).**
+**Chain 24, GPU 0 (user ~17:05 UTC "先用这个机器试试"; pre-registered 17:11 UTC, launched 17:11; `results/chain24-gpu0-32b-c24-tier192-20260913.sh`, log `results/chain24-gpu0-c24-tier192-20260913.log`).**
 DRAM capacity reference at c24: FCFS sticky + **192 GiB DRAM tier** (786K tokens; HBM KV 236K + DRAM = 1.02M tokens
 against the c24 mean working set 430K and p90-step peaks 810K; this host has 1 TB RAM, a single-GPU rental will not),
 concurrency 24, otherwise identical to FCFS + 96 GiB at c24 (99.11 min, cached 0.44, ~105K DRAM evictions) and to
