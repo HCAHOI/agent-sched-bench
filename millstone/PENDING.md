@@ -494,7 +494,7 @@ retrained on the per-prefix median and on a 3-bucket histogram target (soft cros
 1.35, or q90 improved by ≥ 15% over the shallow probe (2.66). ~1.5 h (D) + ~6 h (B) on GPU 1; D's head trains on
 the CPU while B samples.
 
-**D result (13:32 UTC; 4,215 completions extracted, 86 transient rejects; test = 832 steps, 230,533 positions;
+**D result (13:29 UTC; 4,215 completions extracted, 86 transient rejects; test = 832 steps, 230,533 positions;
 `analysis/results/.../hazard-think-20260913/`).** The "reasoning closes within 256 tokens" flag **meets the rule at
 every progress quartile past 25%**: AUROC 0.94 / 0.88 / 0.91, recall 0.81 / 0.77 / 0.77, precision 0.78 / 0.88 / 0.99
 for progress 25–50 / 50–75 / 75–100% (Brier 0.06–0.15); within 64 tokens (≈ 2 s): AUROC 0.99 / 0.98 / 0.94, recall
