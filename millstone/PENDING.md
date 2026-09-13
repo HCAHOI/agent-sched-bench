@@ -436,7 +436,20 @@ depth with an MLP head. Per the rule the point-predictor line closes as a prompt
 remaining lever would be completion-side supervision with a draft model (OUTLETS proper), which is not a prompt-side
 estimate and is not queued. GPU 1 idle from 05:10 UTC.
 
-**Fills for idle devices (user: "如果有设备空闲，但是我还没有回来，安排最有价值的实验进行填充"; pre-registered 18:45 UTC, both lanes launched 18:46 waiting on their predecessors).**
+**Agent-trace diagnostic before any OUTLETS build (user 05:40 UTC "需要基于 agent trace 的性质调整方法吗"; CPU, natural labels, read 05:50 UTC).**
+The long tail is a tool question first: edit_file and write_file are 11% of steps (470 of 4,322) but 70% of the
+outputs above 512 tokens (39% + 31%; exec 15%, final answers 13%; read/list never). Within those tools the length is
+not visible in the prompt: write_file targets were read earlier in only 10 of 146 steps; for edit_file the target
+was read in 256 of 324 but its size explains nothing (corr of log length with log file size 0.11; with the largest
+read output −0.05; with the number of earlier edits −0.21). Even a perfect tool oracle leaves q50 1.45 (edit) and
+1.84 (write) on the per-tool median, so tool classification alone cannot reach the tail rule. What decides the size
+of an edit is the model's plan, which B shows is consistent across samples but which no prompt-visible structure or
+prompt-side hidden state (final or fused layers, lane 4) exposes. Adaptations that the data supports: a structured
+target (tool × conditional length) and event-timed dynamic updates; the "context-visible size" feature is not
+supported. OUTLETS proper remains the only untried reader of the prefix (attention over all positions with
+completion-side supervision); the paper's own static gain over its MLP baseline is ~5% MAE.
+
+: "如果有设备空闲，但是我还没有回来，安排最有价值的实验进行填充"; pre-registered 18:45 UTC, both lanes launched 18:46 waiting on their predecessors).**
 
 *Lane 3, GPU 1 after lane 2* — **cancelled by the user 02:35 UTC before it started** (GPU 1 stays idle after lane 2 until a stated need) (`results/host-lanes/lane3-20260912.sh`, log
 `/workspace/outlen/lane3-20260912.log`): the output-length work moved onto the
