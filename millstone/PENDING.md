@@ -541,6 +541,15 @@ has to start at `scheduled` on the prefill slack, exactly as §10 says (100% cov
 timing the dynamic alert is worth having only for long thinking steps and only if a sandbox held ready for ~30 s
 costs something; the safe trigger stays the `scheduled` event with the prefill bound. The dynamic line is
 recorded; the remaining consumer question (cost of an early-ready sandbox) is the collaborator's.
+**Framing (user 16:50 UTC): non-thinking and thinking targets are two workloads and are reported separately.**
+Non-thinking: median step 67 tokens, one tool call; uncertainty = tool arguments (edit/write are 70% of the tail);
+prompt-side state gives the median and the tool; no in-decode trigger can help a 1.8 s restore; restore at
+`scheduled` on the prefill bound; long-step alert only as a static ranking (AUROC 0.87 at a 5% base rate).
+Thinking: median step 995 tokens, 91% reasoning; uncertainty = reasoning length, static-unreadable; the dynamic
+reasoning-close alert (AUROC 0.88–0.99) can pre-announce `reasoning closed` and cut the early-ready wait from ≈ 30 s
+to ≈ 11 s; a step occupies GPU time and KV for minutes, so "how much longer" feeds admission and residency. The
+replay platform (32B regenerating recorded token counts, ≈ 36% reasoning) sits on the thinking side; the natural
+label sets exist for both. The event-plus-bound interface holds in both; only the value of the dynamic alert differs.
 
 **Chain 25, GPU 0 (user ~13:15 UTC "试试呗" on the FIFO working-set admission; pre-registered 13:21 UTC; `results/chain25-gpu0-32b-c24-fifo-20260913.sh`, log `results/chain25-gpu0-c24-fifo-20260913.log`).**
 Our own admission: the least-requests proxy gains `--admission-tokens N` (`scripts/baselines/least_requests_proxy.py`,
