@@ -494,7 +494,7 @@ retrained on the per-prefix median and on a 3-bucket histogram target (soft cros
 1.35, or q90 improved by ≥ 15% over the shallow probe (2.66). ~1.5 h (D) + ~6 h (B) on GPU 1; D's head trains on
 the CPU while B samples.
 
-**Chain 25, GPU 0 (user 13:20 UTC "试试呗" on the FIFO working-set admission; pre-registered 13:40 UTC; `results/chain25-gpu0-32b-c24-fifo-20260913.sh`, log `results/chain25-gpu0-c24-fifo-20260913.log`).**
+**Chain 25, GPU 0 (user ~13:15 UTC "试试呗" on the FIFO working-set admission; pre-registered 13:21 UTC; `results/chain25-gpu0-32b-c24-fifo-20260913.sh`, log `results/chain25-gpu0-c24-fifo-20260913.log`).**
 Our own admission: the least-requests proxy gains `--admission-tokens N` (`scripts/baselines/least_requests_proxy.py`,
 test `test_fifo_admission_holds_the_second_request_until_the_first_finishes`): a request is dispatched only when it is
 the oldest waiting request and the estimated prompt tokens in flight plus its own fit N (always when nothing is in
