@@ -599,6 +599,14 @@ overflow: the loss is capacity at chunk granularity, not eviction order. Reading
 is a sizing problem (tier ≥ concurrency × mean context, the knee measured by chains 24b / 26 / 27), not a policy
 problem; a return-time policy would only matter for workloads with long tool gaps (TraceLab: calls over 1 min are
 85% of tool time), which our replayed tools do not produce. The DRAM-policy line is closed before building it.
+**Sizing-rule prediction (17:32 UTC, before chains 24b / 26 / 27 report).** In-flight prompt tokens are not the
+driver either: the FIFO gate held them at p50 228K (FCFS: 408K) and the tier still thrashed identically. What must
+fit in the tier is every active task's context — the tier stores every prefilled chunk and HBM keeps only what is in
+flight — so the rule is **tier tokens ≥ concurrency × mean context** (32B: 17.9K per step): c16 → 287K < 393K
+(cached 0.92, observed), c24 → 430K > 393K (0.44, observed). Predictions: c20 + 96 GiB (358K < 393K) → cached ≥ 0.85
+and per-task JCT near the c16 value; c24 + 144 GiB (590K) → cached ≥ 0.85 and mean JCT ≤ 65 min; c24 + 48 GiB
+(197K) → cached ≤ 0.45 and mean JCT ≥ 99 min. If all three hold, the DRAM tier is a closed-form sizing rule for the
+paper; a miss on c20 would put the knee below the rule (chunk-level overhead).
 
 **Chain 24, GPU 0 (user ~17:05 UTC "先用这个机器试试"; pre-registered 17:11 UTC, launched 17:11; `results/chain24-gpu0-32b-c24-tier192-20260913.sh`, log `results/chain24-gpu0-c24-tier192-20260913.log`).**
 DRAM capacity reference at c24: FCFS sticky + **192 GiB DRAM tier** (786K tokens; HBM KV 236K + DRAM = 1.02M tokens
