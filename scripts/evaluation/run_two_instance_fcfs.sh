@@ -377,7 +377,7 @@ PY
 fi
 backends=(); for i in "${instances[@]}"; do backends+=("http://127.0.0.1:$((8000+port_base+i))"); done
 proxy=(setsid taskset -c "${ROUTER_CPUSET:-15}" "$python" scripts/baselines/least_requests_proxy.py
-  --backends "${backends[@]}" --events "$run/routing.jsonl")
+  --backends "${backends[@]}" --events "$run/routing.jsonl" --port $((9000+port_base)))
 [[ "$task_sticky" == 0 ]] || proxy+=(--task-sticky)
 # FIFO working-set admission (2026-09-13): hold new dispatches while the estimated prompt tokens in flight exceed the budget.
 [[ -z "${ADMISSION_TOKENS:-}" ]] || proxy+=(--admission-tokens "$ADMISSION_TOKENS" --chars-per-token "${ADMISSION_CHARS_PER_TOKEN:-3.6}")
