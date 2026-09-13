@@ -504,8 +504,7 @@ all processes gone). Chain 21's c24 FCFS+96 run died at 2.4 h (replay exit 143);
 rental lapsed (user: 忘记续费). Rerun as `results/chain22-gpu0-32b-c24-20260913.sh` (log
 `results/chain22-gpu0-c24-20260913.log`); the first three attempts (r2, r3 names) failed because the image's boot
 replaced our Python supervisord with a Go one and the launcher exits silently without it; fixed 06:00 UTC by
-starting `python3 -m supervisor.supervisord` again (memory note). Runs are named `…-20260913-r4`, FCFS+96 c24
-loading since 06:03 UTC. The OUTLETS-agent lane (`results/host-lanes/lane5-20260913.sh`, log
+starting `python3 -m supervisor.supervisord` again (memory note). Runs are named `…-20260913-r4`. FCFS+96 c24 landed 09:26 UTC: **99.11 min** (c16 53.81; cached 0.44, TPOT 141 ms, throughput 15.1 vs 23.6 steps/min): the sized store alone does not carry the pressure (M4 §3.2). DualMap+96 c24 running from 09:26. The OUTLETS-agent lane (`results/host-lanes/lane5-20260913.sh`, log
 `/workspace/outlen/lane5-20260913.log`) started on GPU 1 at 05:43 UTC.
 
 **GPU 0, storage pool vs admission** (`results/chain17-gpu0-storage-20260912.sh`).
