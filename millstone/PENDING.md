@@ -477,7 +477,7 @@ recall 0.56 / precision 0.29 is available if a false alarm is cheap for the cons
 0.32 / 0.43 (base rate 14%) before the call is written. Next for branch 2 would be the comparison with the
 text-based tool-resource predictor after the call is complete (~1 h, CPU).
 
-**D + B (user 11:35–11:50 UTC: reasoning-phase probes "可以是动态的… 在 xxx token 内结束的概率"; pre-registered 11:55 UTC; `results/host-lanes/lane6-20260913.sh`, log `/workspace/outlen/lane6-20260913.log`).**
+**D + B (user ~11:20–11:28 UTC: reasoning-phase probes "可以是动态的… 在 xxx token 内结束的概率"; pre-registered 11:31 UTC; `results/host-lanes/lane6-20260913.sh`, log `/workspace/outlen/lane6-20260913.log`).**
 *D, hazard probe on the thinking model.* Qwen3-30B-A3B-Thinking-2507's final-layer state along its own
 teacher-forced output (reasoning + visible, 4,301 completions, first 2,048 tokens, every 4th position plus the
 last prompt position; `extract-hazard`), a per-position MLP trained with binary cross-entropy on
