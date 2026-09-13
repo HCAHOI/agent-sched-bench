@@ -334,9 +334,11 @@ tail is reproducible, P(long in another draw | long in one) = 0.70, within-prefi
 the leave-one-draw-out ceiling is q50 1.10 with long recall 0.69, so the probe's tail gap (recall 0.14) is a method
 limit. Continuation probe (`continuation-20260913/`, the same head on prefixes extended by the first k greedy tokens):
 k = 16 and 64 add nothing about the tail (recall 0.09 / 0.05), k = 256 reaches 0.47 at precision 0.44; the
-final-layer last-token state does not expose what the model will do until it is well under way. The OUTLETS-faithful
-variant (EAGLE-3 draft backbone over fused layer-2 / N/2 / N−2 states, ~1 day) is the remaining lever for a point
-predictor and is not started.
+final-layer last-token state does not expose what the model will do until it is well under way. Multi-layer probe (`aux-layers-20260913/`, residual stream after layers 2 / 24 / 45 plus the final state, 8,192 dims,
+via `scripts/evaluation/vllm_aux_layers_sitecustomize.py`): q50 1.36–1.41 over four seeds, long recall 0.14–0.30 at
+precision 0.41–0.50, replay stage-2 p90 25.2 s; no better than the final layer alone. Conclusion of the line: the
+prompt-side hidden state, at any depth, does not expose the tail to an MLP head; a point predictor for long outputs
+would need completion-side supervision (OUTLETS proper, draft model), which is not a prompt-side estimate. Not started.
 
 ## Sandbox-side interface: three signals, not a point prediction (2026-09-12)
 

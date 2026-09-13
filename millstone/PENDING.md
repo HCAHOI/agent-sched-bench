@@ -427,6 +427,15 @@ precision ≥ 0.5 with q50 ≤ 1.35 (shallow: 0.16 / 0.58 / 1.35), and it is **a
 replay stage-2 p90 absolute error ≤ 22 s with median ≤ 5.5 s (shallow: 25.8 / 5.1). Meeting the first rule keeps
 the point-predictor line open; missing both closes it as a prompt-side hidden-state limit.
 
+**Result (05:12 UTC; `analysis/results/.../aux-layers-20260913/`): both rules missed.** Natural test, seeds
+42/1/2/3: q50 1.36 / 1.38 / 1.41 / 1.39 (shallow 1.35), q90 3.0–3.2 (shallow 2.66), long recall 0.16 / 0.30 / 0.14 /
+0.23 at precision 0.41–0.50 (shallow 0.16 / 0.58). Replay stage-2 with the recorded-label multi-layer head: p90
+absolute error 25.2 s, median 5.3 s (shallow 25.8 / 5.1; rule 22 / 5.5). The layers 2 / 24 / 45 add nothing the
+final layer's last token does not already carry; the tail is not readable from the prompt-side hidden state at any
+depth with an MLP head. Per the rule the point-predictor line closes as a prompt-side hidden-state limit: the
+remaining lever would be completion-side supervision with a draft model (OUTLETS proper), which is not a prompt-side
+estimate and is not queued. GPU 1 idle from 05:10 UTC.
+
 **Fills for idle devices (user: "如果有设备空闲，但是我还没有回来，安排最有价值的实验进行填充"; pre-registered 18:45 UTC, both lanes launched 18:46 waiting on their predecessors).**
 
 *Lane 3, GPU 1 after lane 2* — **cancelled by the user 02:35 UTC before it started** (GPU 1 stays idle after lane 2 until a stated need) (`results/host-lanes/lane3-20260912.sh`, log
