@@ -508,6 +508,13 @@ optimistic relative to a per-step read; reasoning that ran past the 2,048-token 
 Reading for the interface: for a thinking target the phase-transition alert ("reasoning closes within 256 / 64
 tokens") is a real, calibrated dynamic signal — the `reasoning closed` event of §10 can be announced ahead of time;
 the end of the whole step remains bounded by the visible-part tail.
+**B stopped 16:10 UTC at 3,972 of 13,848 draws (user: a static predictor retrained on 4–16 draws cannot plausibly
+beat the dynamic signal, 16 draws is brute force, and even +25% would not reach the rule; improve the dynamic side
+instead).** The partial file `natural-labels-sampled-trainval-d4` is kept, unused. GPU 1 idle from 16:10 UTC. Next,
+CPU only: D′ = the same hazard probe on the Instruct model's own completions (features already extracted for
+OUTLETS-agent, every completion position up to 512 tokens), to answer whether the whole-step end becomes readable
+while the visible tool call is being written; the only GPU item this implies is re-extracting the ~250 completions
+longer than 512 tokens to their full length (~10 min), proposed, not launched.
 
 **Chain 25, GPU 0 (user ~13:15 UTC "试试呗" on the FIFO working-set admission; pre-registered 13:21 UTC; `results/chain25-gpu0-32b-c24-fifo-20260913.sh`, log `results/chain25-gpu0-c24-fifo-20260913.log`).**
 Our own admission: the least-requests proxy gains `--admission-tokens N` (`scripts/baselines/least_requests_proxy.py`,
