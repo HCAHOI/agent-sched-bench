@@ -1,0 +1,89 @@
+{
+ "k16": {
+  "n_test": 842,
+  "probe_k0_same_subset": {
+   "n": 842,
+   "q50": 1.336,
+   "q90": 2.538,
+   "q95": 3.527,
+   "q99": 6.966,
+   "mean_q": 1.755,
+   "mae": 79.3,
+   "underprediction_rate": 0.489,
+   "bucket_accuracy": 0.806,
+   "long_recall": 0.163,
+   "long_precision": 0.583
+  },
+  "probe_after_k_tokens": {
+   "n": 842,
+   "q50": 1.255,
+   "q90": 2.719,
+   "q95": 3.457,
+   "q99": 8.161,
+   "mean_q": 1.748,
+   "mae": 84.9,
+   "underprediction_rate": 0.426,
+   "bucket_accuracy": 0.791,
+   "long_recall": 0.093,
+   "long_precision": 0.308
+  }
+ },
+ "k64": {
+  "n_test": 428,
+  "probe_k0_same_subset": {
+   "n": 428,
+   "q50": 1.483,
+   "q90": 3.166,
+   "q95": 4.788,
+   "q99": 11.694,
+   "mean_q": 2.089,
+   "mae": 140.4,
+   "underprediction_rate": 0.671,
+   "bucket_accuracy": 0.652,
+   "long_recall": 0.163,
+   "long_precision": 0.583
+  },
+  "probe_after_k_tokens": {
+   "n": 428,
+   "q50": 1.41,
+   "q90": 2.877,
+   "q95": 4.02,
+   "q99": 7.24,
+   "mean_q": 1.866,
+   "mae": 153.5,
+   "underprediction_rate": 0.453,
+   "bucket_accuracy": 0.675,
+   "long_recall": 0.047,
+   "long_precision": 0.133
+  }
+ },
+ "k256": {
+  "n_test": 157,
+  "probe_k0_same_subset": {
+   "n": 157,
+   "q50": 1.573,
+   "q90": 4.898,
+   "q95": 7.046,
+   "q99": 16.792,
+   "mean_q": 2.727,
+   "mae": 287.2,
+   "underprediction_rate": 0.822,
+   "bucket_accuracy": 0.656,
+   "long_recall": 0.163,
+   "long_precision": 0.583
+  },
+  "probe_after_k_tokens": {
+   "n": 157,
+   "q50": 1.441,
+   "q90": 2.932,
+   "q95": 4.311,
+   "q99": 5.625,
+   "mean_q": 1.872,
+   "mae": 267.1,
+   "underprediction_rate": 0.554,
+   "bucket_accuracy": 0.656,
+   "long_recall": 0.465,
+   "long_precision": 0.435
+  }
+ }
+}

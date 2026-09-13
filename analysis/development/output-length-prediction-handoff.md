@@ -329,9 +329,14 @@ Tail variants (2026-09-12 17:07 UTC, pre-registered in `millstone/PENDING.md` §
 `probe-replay-pool64v4/variants/`): pinball 0.75 / 0.9, long-weighted MSE, a 3-bucket class head, and class head +
 weighting raise long recall (0.16 → 0.47–0.74) only by losing precision (0.58 → 0.23–0.43) and q50 (1.35 → 1.41–1.97),
 and every one of them makes the sandbox stage-2 estimate worse (p90 absolute error 25.8 s → 31–56 s). The head cannot
-separate long from not-long from the prompt-side state; it can only shift everything up. Still open: the dynamic
-variant (re-predict after k generated tokens) and sampled labels (temperature 0.7), both running in the same lane;
-the OUTLETS-faithful variant (EAGLE-3 draft backbone over fused layer-2 / N/2 / N−2 states, ~1 day) is not started.
+separate long from not-long from the prompt-side state; it can only shift everything up. Sampled labels (2026-09-13, 850 test prefixes × 4 draws at temperature 0.7, `natural-labels-sampled-test-d4/`): the
+tail is reproducible, P(long in another draw | long in one) = 0.70, within-prefix share of log-length variance 12%;
+the leave-one-draw-out ceiling is q50 1.10 with long recall 0.69, so the probe's tail gap (recall 0.14) is a method
+limit. Continuation probe (`continuation-20260913/`, the same head on prefixes extended by the first k greedy tokens):
+k = 16 and 64 add nothing about the tail (recall 0.09 / 0.05), k = 256 reaches 0.47 at precision 0.44; the
+final-layer last-token state does not expose what the model will do until it is well under way. The OUTLETS-faithful
+variant (EAGLE-3 draft backbone over fused layer-2 / N/2 / N−2 states, ~1 day) is the remaining lever for a point
+predictor and is not started.
 
 ## Sandbox-side interface: three signals, not a point prediction (2026-09-12)
 

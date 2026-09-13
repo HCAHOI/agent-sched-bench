@@ -353,6 +353,15 @@ target model reproduces across draws; the gap to the ceiling is information/meth
 OUTLETS-faithful or a 32B probe, lane 3) is justified, and the sandbox interface's event design is a choice, not a
 necessity forced by unpredictability.
 
+**C result (04:15 UTC; `analysis/results/.../continuation-20260913/`; base probe scored on the same subsets):**
+the rule "long recall above 0.5 at some k" is **not met**. After k = 16 tokens (842 test samples): q50 1.34 → 1.26,
+long recall 0.16 → 0.09; k = 64 (428): 1.48 → 1.41, recall 0.05; k = 256 (157): 1.57 → 1.44, q90 4.9 → 2.9, recall
+0.16 → 0.47 at precision 0.44. The first 64 generated tokens add almost nothing about the tail; only at 256 tokens,
+when the output is already half-way to the 512 threshold, does the state start to show it. With B (the tail is
+reproducible between draws), the information exists in the prefix but the final-layer last-token state does not
+expose it: a representation limit of the shallow probe, the case for OUTLETS-style fused-layer or draft-model
+features if a point predictor is ever needed. GPU 1 idle from 04:13 UTC.
+
 Visible when this was written: one smoke of the class head + weighted variant
 on the natural test split (long recall 0.465, precision 0.426, q50 1.44) had
 been run as a plumbing check before the criteria were fixed; the primary rule
