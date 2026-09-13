@@ -378,6 +378,23 @@ estimate should quote the visible part and treat reasoning as the interval.
 Runs inside lane 2 after B (~22:00 UTC), ~3 h; rejects (censored at 64K, timeouts) are counted
 and dropped as before.
 
+**Result (labels 21:00–03:25 UTC, read 03:35; 4,301 labeled, 21 rejected;
+`analysis/results/.../thinking-20260913/`).** (1) In thinking mode reasoning is
+**91% of the output at the median** (mean 76%): 672 reasoning vs 44 visible
+tokens per step (p90 5,328 vs 624), against the 36% estimated from the recorded
+traces in §10. The close therefore arrives when the step is essentially over:
+44 visible tokens ≈ 1.3 s at 30 ms TPOT. (2) Remainder after the close by tool
+name: q50 1.57 / q90 4.19 (rule ≤ 1.4 not met), against 3.09 for the visible
+constant and 2.27 for the whole-output constant: the alert carries information,
+but the sandbox gains little from it because so little remains. (3) Probe on
+the existing Instruct-model features (cross-model, a limitation) with thinking
+targets: total q50 1.71 (constant 2.27), reasoning 1.67 (constant 2.79, MAE
+1,080 tokens, q90 5.6), visible 1.64. Reasoning length is the less predictable
+part in absolute terms, so a prompt-side estimate for a thinking model should
+quote the visible part plus a wide reasoning interval. Interface reading: for a
+thinking-mode target the useful early signal is `scheduled` with the prefill
+bound; `reasoning closed` is a near-finish signal rather than a mid-step update.
+
 **Overnight GPU 0 (pre-registered 17:08 UTC; `results/chain20-gpu0-32b-undersized-20260912.sh`, after chain 19).**
 The undersized column of the 2×2 at 32B: FCFS + 24 GiB tier, then DualMap +
 24 GiB, one engine c16 (GPU KV 236K tokens; working set 287K mean, 540K at the

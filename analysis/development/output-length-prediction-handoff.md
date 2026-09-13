@@ -352,6 +352,13 @@ interface is three events with a bound attached, not one predicted duration:
    resolved. At 32B, 85% of steps keep ≥ 1.8 s after this event (97% keep ≥ 1.0 s); at 4B about half.
 3. **`finished`**.
 
+Thinking-mode check (Qwen3-30B-A3B-Thinking-2507-FP8, one sampled draw per prefix at temperature 0.6, 64K cap, 4,301
+labels; `thinking-20260913/`): reasoning is 91% of the output at the median (672 reasoning vs 44 visible tokens), so
+event 2 arrives when the step is essentially finished; the remainder by tool name scores q50 1.57 (visible constant
+3.09). A probe on the Instruct-model features predicts the thinking total at q50 1.71 (constant 2.27) and the
+reasoning length at 1.67 with MAE 1,080 tokens: for a thinking target the prompt-side estimate should quote the
+visible part with a wide reasoning interval, and the early signal that matters is event 1.
+
 The point estimate at `scheduled` (prefill + probe-predicted length × TPOT) stays available as the planning value:
 q-err p50 1.60 / p90 4.02 at 32B DualMap with the leak-free probe head (pool prior 1.83 / 4.44; tool name alone
 1.70 / 3.86). The natural-label lane with a thinking-mode target (Qwen3-30B-A3B-Thinking-2507, PENDING §8b) turns

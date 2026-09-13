@@ -1,0 +1,13 @@
+{
+ "n": 854,
+ "q50": 1.637,
+ "q90": 5.013,
+ "q95": 7.397,
+ "q99": 16.855,
+ "mean_q": 2.7,
+ "mae": 142.8,
+ "underprediction_rate": 0.445,
+ "bucket_accuracy": 0.783,
+ "long_recall": 0.414,
+ "long_precision": 0.78
+}
