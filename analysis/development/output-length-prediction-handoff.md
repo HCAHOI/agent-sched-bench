@@ -363,7 +363,11 @@ For a thinking-mode target the second event can be announced ahead of time: a pe
 model's own final-layer states (`hazard-think-20260913/`, P(reasoning closes within X tokens), user's hazard
 formulation) reaches AUROC 0.88–0.94 with recall ≈ 0.8 at precision ≥ 0.78 for X = 256 past 25% of the output, and
 AUROC ≥ 0.94 with recall ≥ 0.83 for X = 64; the end of the whole step stays unpredictable in the middle of the output
-(recall 0.42–0.46) because the visible tool call after `</think>` carries the old tail.
+(recall 0.42–0.46) because the visible tool call after `</think>` carries the old tail. The same probe on the
+Instruct model's own completions (`hazard-instruct-20260913/`) shows the near-end signal exists inside the tool call
+too: "ends within 64 tokens" AUROC 0.88–0.96 with recall ≈ 0.8 at precision 0.70–0.96 at every progress quartile.
+So the dynamic alert "this step finishes within ~2 s" is available in both modes; what the prompt-side state lacks
+is only the far-ahead view.
 
 Thinking-mode check (Qwen3-30B-A3B-Thinking-2507-FP8, one sampled draw per prefix at temperature 0.6, 64K cap, 4,301
 labels; `thinking-20260913/`): reasoning is 91% of the output at the median (672 reasoning vs 44 visible tokens), so

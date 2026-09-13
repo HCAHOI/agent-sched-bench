@@ -515,6 +515,17 @@ CPU only: D′ = the same hazard probe on the Instruct model's own completions (
 OUTLETS-agent, every completion position up to 512 tokens), to answer whether the whole-step end becomes readable
 while the visible tool call is being written; the only GPU item this implies is re-extracting the ~250 completions
 longer than 512 tokens to their full length (~10 min), proposed, not launched.
+**D′ result (16:40 UTC, CPU; Instruct completions, every position up to 512 tokens; test 857 steps, 112,202
+positions; `analysis/results/.../hazard-instruct-20260913/`).** While the tool call is being written the end of
+the step **is** readable: "ends within 64 tokens" AUROC 0.96 / 0.94 / 0.89 / 0.88 with recall 0.86 / 0.85 / 0.80 /
+0.82 at precision 0.70 / 0.79 / 0.81 / 0.96 across the four progress quartiles; "within 32 tokens" (≈ 1 s at 30 ms)
+AUROC 0.98 / 0.97 / 0.95 / 0.92, recall 0.68–0.83 at precision 0.58–0.92; "within 256" is weak early (AUROC 0.78–0.79)
+only because 44–70% of positions are already within 256 of the end. Static position: "ends within 64" AUROC 0.93,
+recall 0.85 at precision 0.86 (427 of 857 steps). Same caveats as D (correlated positions; the >512 tail is cut at
+extraction). Reading: the mid-call state carries the near-end signal that the prompt-side state did not — the
+dynamic "finishing within ~2 s" alert holds in both thinking and non-thinking modes, and this is the signal to hand
+the sandbox for restore timing; the remaining GPU item is the full-length re-extraction of the >512 completions
+(~250 steps, ~10 min) to check the alert on the long tail itself — not launched without the user's yes.
 
 **Chain 25, GPU 0 (user ~13:15 UTC "试试呗" on the FIFO working-set admission; pre-registered 13:21 UTC; `results/chain25-gpu0-32b-c24-fifo-20260913.sh`, log `results/chain25-gpu0-c24-fifo-20260913.log`).**
 Our own admission: the least-requests proxy gains `--admission-tokens N` (`scripts/baselines/least_requests_proxy.py`,
