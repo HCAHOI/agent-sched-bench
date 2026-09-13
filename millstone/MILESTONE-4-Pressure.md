@@ -443,7 +443,7 @@ is sized to it, 24 GiB ≈ 98K tokens covers the mean shortfall and not the peak
 |---|---|---:|---:|---:|---:|---:|---|---:|
 | none | none (FCFS sticky) | 111.69 | 189.4 | 211.4 | 0.18 | 170.8 | 0 / 39.7 / 4.0 / 36.2 | — |
 | 96 GiB (≥ working set) | none | **53.81** | **93.9** | **107.2** | **0.92** | **93.3** | 0 / 17.7 / 0.6 / 19.6 | 34.1M (75% of prompt tokens; 1,946 retrieves, 93 ms each; 13,346 evictions) |
-| 96 GiB | DualMap | r1 aborted at 99% (replacement-stream failure, harness); r2 queued in chain 21 | | | | | | |
+| 96 GiB | DualMap (r2; r1 aborted at 99% by a replacement-stream harness failure) | **45.80** | **78.4** | **91.4** | **0.95** | **81.7** | 15.1 / 1.2 / 0.4 / 17.7 | 4.9M (11%; 378 retrieves, 68 ms; 8,614 evictions) |
 | 24 GiB (undersized) | none | 113.67 | 193.9 | 217.1 | 0.18 | 175.1 | 0 / 40.7 / 4.1 / 37.1 | **0.1M** (0%; 4 retrieves; 44.0M stored, 170,546 evictions) |
 | 24 GiB (undersized) | DualMap | 57.83 | 93.9 | 120.9 | 0.85 | 90.8 | 17.6 / 0.9 / 0.9 / 18.8 | 0.1M (0%; 21 retrieves; 37.1M stored, 143,563 evictions) |
 
@@ -456,9 +456,14 @@ gain (57.83 min against 53.81 for the sized store alone), by holding requests at
 the resident contexts fit the GPU cache (cached share 0.85, TPOT 91 ms, in-engine queue 0.9 s). The 4B reading (3) holds
 with a larger margin at 32B: the sized store alone halves the step (queue 39.7 → 17.7 s, decode 36.2 → 19.6 s) because
 the GPU cache stops thrashing (cached share 0.18 → 0.92, TPOT 171 → 93 ms), and prefill nearly disappears (4.0 →
-0.6 s). At 32B the two mechanisms are near-substitutes when used alone (store −3,473 s, admission −3,232 s; both remove the
-same GPU-cache thrash), and the store wins by 4 min per task without holding anyone. Whether they add up is the
-pending DualMap + 96 GiB row (r2, chain 21).
+0.6 s). DualMap + sized tier − sized tier alone: **−481 s [−615, −346]** (read 03:12 UTC); DualMap + sized tier − nothing
+−3,954 s [−4,391, −3,512]. Decomposition at 32B, mirroring the 4B one: store sized to the working set −3,473 s,
+admission on top of it −481 s (a further 15%; 4B: 16%), admission alone −3,232 s, store on top of admission −721 s,
+an undersized store +119 s. Used alone the two mechanisms are near-substitutes (both remove the same GPU-cache
+thrash) and the store wins by 4 min per task without holding anyone; together they are not additive, and the
+combined cell holds each request 15.1 s at the proxy to buy its last 8 min per task. With the store sized, the tier
+is consulted far less (4.9M tokens served against 34.1M) because held requests keep their contexts on the GPU.
+Chain 21 continues at concurrency 24 for the pressure axis.
 
 ## 4. Evidence
 
