@@ -451,6 +451,26 @@ completion-side supervision); the paper's own static gain over its MLP baseline 
 
 : "如果有设备空闲，但是我还没有回来，安排最有价值的实验进行填充"; pre-registered 18:45 UTC, both lanes launched 18:46 waiting on their predecessors).**
 
+**OUTLETS-agent (user go ~05:25 UTC "可以，投吧"; pre-registered 05:30 UTC; ~1 day of work, GPU 1).**
+The paper's method (arXiv 2609.01068: EAGLE-3-style draft decoder over the target's layer 2 / N/2 / N−2 states,
+log-space remaining-length head supervised at every completion position, static estimate at t = 0) adapted to
+agent steps as the diagnostic above supports: (a) backbone = the pretrained SpecForge EAGLE-3 draft for
+Qwen3-30B-A3B-Instruct-2507 (`lmsys/SGLang-EAGLE3-…-SpecForge-Nex`; fc 6144→2048, one gated decoder layer), fine-tuned
+with the length losses instead of joint training with the speculative-decoding loss (deviation 1); (b) the draft
+attends over a window of the last 1,024 prompt positions plus up to 512 teacher-forced completion positions, with
+the target's states computed on the **full** prompt (the paper truncates to 2,048 total; deviation 2); (c) structured
+static target: tool-class logits and a per-tool log-length, prediction = expected log-length under the tool
+distribution, next to the paper's scalar head; (d) dynamic remaining-length head at every completion position,
+evaluated at the paper's MAE and at the event where the tool name has appeared. Training data: the 4,322 greedy
+natural completions (target's own), splits as before; a second head on recorded labels with the 64 replayed tasks
+excluded for the replay check. Seeds 42/1/2/3 for the static head. Features: per-token `fc(cat(h2, h24, h45))`
+from the pooling server (`token_embed` task, aux patch v2), stored float16.
+Rules (unchanged from lane 4): natural test long recall ≥ 0.35 at precision ≥ 0.5 with q50 ≤ 1.35 → beats the
+shallow probe; replay stage-2 p90 absolute error ≤ 22 s with median ≤ 5.5 s → adopted for the sandbox estimate.
+Dynamic: MAE at t of the paper's definition reported; the tool-name event estimate compared with the §10 stage-3
+constant (q-err 1.70). Two ablations, frozen backbone (heads only) and scalar-only head, separate the attention
+over the prompt from the structured target. Missing both rules closes the point-predictor line for good.
+
 *Lane 3, GPU 1 after lane 2* — **cancelled by the user 02:35 UTC before it started** (GPU 1 stays idle after lane 2 until a stated need) (`results/host-lanes/lane3-20260912.sh`, log
 `/workspace/outlen/lane3-20260912.log`): the output-length work moved onto the
 platform model. Qwen3-32B-FP8 (YaRN ×4 for the 7% of prompts above 40K)
