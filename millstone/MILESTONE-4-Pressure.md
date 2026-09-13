@@ -476,6 +476,10 @@ while the others flowed (hold p50 0 s, p90 10 s, max 1,895 s). Three of five Dua
 request to the scheduler's waiting pool and the two that completed had max holds of ~1,780 s. **DualMap + 96 GiB at
 c24: does not complete the workload (indefinite starvation of one request per run).** The pressure-axis comparison
 therefore reads: the sized store alone degrades gracefully to 99 min; the official admission scheduler starves.
+The cause is in the code: DualMap's waiting pool is ordered by cached-prefix length first and arrival time second,
+with no aging, so under sustained load a request without a cached prefix (a task's first step) can wait behind a
+never-empty stream of cache-affine requests. A one-line aging rule would remove it; that variant would be a modified
+baseline and is not run without the advisor's decision.
 
 ## 4. Evidence
 
