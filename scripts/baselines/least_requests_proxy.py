@@ -1,10 +1,17 @@
-"""Request-level least-outstanding routing for independent FCFS engines."""
+"""Request-level least-outstanding routing for independent FCFS engines.
+
+Optional FIFO working-set admission (--admission-tokens N): a request is dispatched only when it is the oldest waiting
+request and the estimated prompt tokens of the requests in flight plus its own fit the budget (a request always
+dispatches when nothing is in flight). No priority, no residency term: arrival order only, so nothing starves. Prompt
+tokens are estimated from the message characters (--chars-per-token, 3.3 measured on the replay steps)."""
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 from contextlib import asynccontextmanager
 import json
+from collections import deque
 from pathlib import Path
 import time
 from typing import Any, Callable
@@ -22,6 +29,8 @@ def create_app(
     transport: httpx.AsyncBaseTransport | None = None,
     *,
     task_sticky: bool = False,
+    admission_tokens: int = 0,
+    chars_per_token: float = 3.3,
 ) -> FastAPI:
     """Count requests from dispatch until the upstream stream closes.
 
@@ -35,6 +44,18 @@ def create_app(
     next_tie = 0
     previous: dict[str, int] = {}
     visited: dict[str, set[int]] = {}
+    waiting: deque[str] = deque()          # FIFO of route ids waiting for admission
+    in_flight = {"tokens": 0}
+    admission = asyncio.Condition()
+
+    def estimate_tokens(messages: Any) -> int:
+        chars = 0
+        for m in messages if isinstance(messages, list) else []:
+            content = m.get("content") if isinstance(m, dict) else None
+            chars += len(content) if isinstance(content, str) else len(json.dumps(content or ""))
+            for tc in (m.get("tool_calls") or []) if isinstance(m, dict) else []:
+                chars += len(json.dumps(tc))
+        return int(chars / chars_per_token)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -79,8 +100,29 @@ def create_app(
             raise HTTPException(400, "job_id is required")
         if "priority" in payload or payload.get("n", 1) != 1:
             raise HTTPException(400, "FCFS routing requires n=1 and no priority")
-        # One event loop and no await between choosing and reserving an engine.
         job_id = payload["job_id"]
+        route_id = uuid.uuid4().hex
+        arrival = time.time()
+        estimated = estimate_tokens(payload.get("messages")) if admission_tokens else 0
+        emit({"event": "arrival", "timestamp_s": arrival, "route_id": route_id, "job_id": job_id,
+              "engine_request_id": "chatcmpl-" + route_id, "estimated_prompt_tokens": estimated})
+        if admission_tokens:
+            waiting.append(route_id)
+            try:
+                async with admission:
+                    await admission.wait_for(
+                        lambda: waiting[0] == route_id
+                        and (in_flight["tokens"] == 0 or in_flight["tokens"] + estimated <= admission_tokens))
+                    waiting.popleft()
+                    in_flight["tokens"] += estimated
+                    admission.notify_all()
+            except BaseException:
+                if route_id in waiting:
+                    waiting.remove(route_id)
+                async with admission:
+                    admission.notify_all()
+                raise
+        # One event loop and no await between choosing and reserving an engine.
         last = previous.get(job_id)
         if task_sticky and last is not None:
             index = last
@@ -91,12 +133,13 @@ def create_app(
         outstanding[index] += 1
         previous[job_id] = index
         visited.setdefault(job_id, set()).add(index)
-        route_id = uuid.uuid4().hex
         common = {"route_id": route_id, "job_id": job_id, "instance": index,
                   "engine_request_id": "chatcmpl-" + route_id}
         emit({"event": "dispatch", "timestamp_s": time.time(), **common,
               "outstanding_before": before, "previous_instance": last,
-              "switched_instance": last is not None and last != index})
+              "switched_instance": last is not None and last != index,
+              "admission_wait_s": round(time.time() - arrival, 4), "estimated_prompt_tokens": estimated,
+              "in_flight_tokens_after": in_flight["tokens"]})
         upstream: httpx.Response | None = None
         finished = False
         retries = 0
@@ -111,6 +154,10 @@ def create_app(
                     await upstream.aclose()
             finally:
                 outstanding[index] -= 1
+                if admission_tokens:
+                    async with admission:
+                        in_flight["tokens"] -= estimated
+                        admission.notify_all()
                 emit({"event": "finish", "timestamp_s": time.time(), **common,
                       "outcome": outcome, "outstanding_after": list(outstanding),
                       "retries": retries})
@@ -179,10 +226,13 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=9000)
     parser.add_argument("--events", type=Path, required=True)
     parser.add_argument("--task-sticky", action="store_true")
+    parser.add_argument("--admission-tokens", type=int, default=0, help="FIFO working-set budget in estimated prompt tokens (0 = off)")
+    parser.add_argument("--chars-per-token", type=float, default=3.3)
     args = parser.parse_args()
     with args.events.open("x", buffering=1) as output:
         app = create_app(args.backends, lambda row: output.write(json.dumps(row) + "\n"),
-                         task_sticky=args.task_sticky)
+                         task_sticky=args.task_sticky, admission_tokens=args.admission_tokens,
+                         chars_per_token=args.chars_per_token)
         # Counters are process-local: exactly one worker is part of this baseline.
         uvicorn.run(app, host="127.0.0.1", port=args.port, workers=1, access_log=False)
 

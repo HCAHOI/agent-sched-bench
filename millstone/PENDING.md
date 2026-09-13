@@ -494,6 +494,20 @@ retrained on the per-prefix median and on a 3-bucket histogram target (soft cros
 1.35, or q90 improved by ≥ 15% over the shallow probe (2.66). ~1.5 h (D) + ~6 h (B) on GPU 1; D's head trains on
 the CPU while B samples.
 
+**Chain 25, GPU 0 (user 13:20 UTC "试试呗" on the FIFO working-set admission; pre-registered 13:40 UTC; `results/chain25-gpu0-32b-c24-fifo-20260913.sh`, log `results/chain25-gpu0-c24-fifo-20260913.log`).**
+Our own admission: the least-requests proxy gains `--admission-tokens N` (`scripts/baselines/least_requests_proxy.py`,
+test `test_fifo_admission_holds_the_second_request_until_the_first_finishes`): a request is dispatched only when it is
+the oldest waiting request and the estimated prompt tokens in flight plus its own fit N (always when nothing is in
+flight); arrival order only, no residency or cache term, so no request can be starved. Prompt tokens are estimated
+from message characters at 3.3 chars/token (median on 459 replay steps, p10 2.55, p90 3.49). Run: 32B, one engine,
+c24, FCFS sticky + 96 GiB tier + budget **N = 236,000** (the engine's GPU KV capacity, 236,496 tokens), against
+FCFS + 96 GiB at c24 (99.11 min, cached 0.44, 15.1 steps/min) and at c16 (53.81 min); DualMap at c24 does not
+complete. Question: does a fair, bounded gate recover the store's regime under pressure? Rule: mean JCT ≤ 65 min
+with cached share ≥ 0.85 and max admission wait ≤ 600 s → the thesis holds ("store sized to the working set +
+bounded FIFO admission", no residency priority needed); mean JCT ≥ 85 min → the gate alone does not help and
+residency-aware admission is necessary; the admission-wait distribution (p50/p90/max) and throughput are reported
+either way. Smoke first (`--smoke` with the gate), ~3.5 h, 5 h budget.
+
 **OUTLETS-agent (user go ~05:25 UTC "可以，投吧"; pre-registered 05:30 UTC; ~1 day of work, GPU 1).**
 The paper's method (arXiv 2609.01068: EAGLE-3-style draft decoder over the target's layer 2 / N/2 / N−2 states,
 log-space remaining-length head supervised at every completion position, static estimate at t = 0) adapted to

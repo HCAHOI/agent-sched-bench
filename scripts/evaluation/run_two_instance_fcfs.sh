@@ -379,6 +379,8 @@ backends=(); for i in "${instances[@]}"; do backends+=("http://127.0.0.1:$((8000
 proxy=(setsid taskset -c "${ROUTER_CPUSET:-15}" "$python" scripts/baselines/least_requests_proxy.py
   --backends "${backends[@]}" --events "$run/routing.jsonl")
 [[ "$task_sticky" == 0 ]] || proxy+=(--task-sticky)
+# FIFO working-set admission (2026-09-13): hold new dispatches while the estimated prompt tokens in flight exceed the budget.
+[[ -z "${ADMISSION_TOKENS:-}" ]] || proxy+=(--admission-tokens "$ADMISSION_TOKENS" --chars-per-token "${ADMISSION_CHARS_PER_TOKEN:-3.6}")
 if [[ "$router_policy" == thunderagent ]]; then
   proxy=(setsid taskset -c "${ROUTER_CPUSET:-15}" env THUNDERAGENT_BACKENDS=$(IFS=,; echo "${backends[*]}")
     THUNDERAGENT_CONTINUUM_FCFS=1

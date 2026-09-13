@@ -171,3 +171,31 @@ async def test_task_sticky_survives_idle_and_imbalance_until_release():
             assert (await send("A")).headers["x-serving-instance"] == "1"
             gate.set()
             await other
+
+
+@pytest.mark.anyio
+async def test_fifo_admission_holds_the_second_request_until_the_first_finishes():
+    """Budget for one request: the second waits in arrival order and dispatches only after the first finishes."""
+    import asyncio
+    events: list[dict] = []
+    release = asyncio.Event()
+
+    async def backend(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            await release.wait()
+            return httpx.Response(200, json={"id": "x"})
+        return httpx.Response(200, json={"released": True})
+
+    app = create_app(["http://engine0"], events.append, httpx.MockTransport(backend), admission_tokens=100, chars_per_token=1.0)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://proxy", timeout=None) as client:
+        body = {"job_id": "a", "messages": [{"role": "user", "content": "x" * 80}], "stream": False}
+        first = asyncio.create_task(client.post("/v1/chat/completions", json=body))
+        await asyncio.sleep(0.05)
+        second = asyncio.create_task(client.post("/v1/chat/completions", json={**body, "job_id": "b"}))
+        await asyncio.sleep(0.05)
+        assert [e["event"] for e in events] == ["arrival", "dispatch", "arrival"]  # second held: 80 + 80 > 100
+        release.set()
+        assert (await first).status_code == 200 and (await second).status_code == 200
+    kinds = [e["event"] for e in events]
+    assert kinds == ["arrival", "dispatch", "arrival", "finish", "dispatch", "finish"]
+    assert events[4]["job_id"] == "b" and events[4]["admission_wait_s"] >= 0.05
