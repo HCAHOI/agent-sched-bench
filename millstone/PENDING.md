@@ -541,7 +541,7 @@ has to start at `scheduled` on the prefill slack, exactly as §10 says (100% cov
 timing the dynamic alert is worth having only for long thinking steps and only if a sandbox held ready for ~30 s
 costs something; the safe trigger stays the `scheduled` event with the prefill bound. The dynamic line is
 recorded; the remaining consumer question (cost of an early-ready sandbox) is the collaborator's.
-**Framing (user 16:50 UTC): non-thinking and thinking targets are two workloads and are reported separately.**
+**Framing (user 16:45 UTC): non-thinking and thinking targets are two workloads and are reported separately.**
 Non-thinking: median step 67 tokens, one tool call; uncertainty = tool arguments (edit/write are 70% of the tail);
 prompt-side state gives the median and the tool; no in-decode trigger can help a 1.8 s restore; restore at
 `scheduled` on the prefill bound; long-step alert only as a static ranking (AUROC 0.87 at a 5% base rate).
