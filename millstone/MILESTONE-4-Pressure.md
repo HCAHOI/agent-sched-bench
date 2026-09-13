@@ -469,7 +469,10 @@ Pressure axis (chain 22 after the host restart; PENDING §8b "Chain 21"): at con
 (0.92), TPOT 141 ms (93), queue 70.1 s / prefill 3.0 s / decode 31.8 s per request, tier served 18.1M tokens (39% of
 prompt tokens; 106,532 evictions); throughput fell to 15.1 steps/min from 23.6 at c16, so the extra concurrency is
 lost to cache thrash rather than converted into work. The sized store alone does not carry the pressure once the
-working set exceeds it. DualMap + 96 GiB at c24 (running from 09:26 UTC) decides whether admission recovers it.
+working set exceeds it. DualMap + 96 GiB at c24: the first attempt aborted at 97% because DualMap's admission starved one request for the
+full 1,800 s step timeout (hold p99 954 s, max 1,782 s over 1,898 dispatched requests; the c16 run's max was 1,778 s);
+rerun with a 3,600 s step timeout from 11:06 UTC (chain 23) so DualMap's starvation tail is measured rather than
+aborted.
 
 ## 4. Evidence
 

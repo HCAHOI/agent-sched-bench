@@ -487,6 +487,20 @@ Dynamic: MAE at t of the paper's definition reported; the tool-name event estima
 constant (q-err 1.70). Two ablations, frozen backbone (heads only) and scalar-only head, separate the attention
 over the prompt from the structured target. Missing both rules closes the point-predictor line for good.
 
+**Result (11:10 UTC; `analysis/results/.../outlets-agent-20260913/`): both rules missed.** Natural test (857):
+scalar head q50 1.32 / q90 2.52 / long recall 0.21 at precision 0.50; structured head 1.30 / 2.59 / 0.23 at 0.50
+(shallow probe 1.35 / 2.66 / 0.16 at 0.58); tool accuracy 0.86; dynamic normalised MAE 0.235. Seed 1: 1.34 / 0.07
+and 1.33 / 0.16 (seeds 2/3 pending): the tail gain is within seed noise. Ablations: frozen backbone 1.27 / recall
+0.19 (fine-tuning the draft adds nothing), scalar-only 1.30 / 0.14 (the structured target adds a few points of
+recall). Recorded-label model (64 tasks excluded, test 854): q50 1.49 / recall 0.51 at precision 0.59 (shallow
+recorded head 1.42 / 0.36 / 0.57), but on the 32B DualMap replay the stage-2 estimate is worse: p90 absolute error
+30.3 s (scalar) / 31.8 s (structured), median 4.9 / 4.8 s, against 25.8 / 5.1 s for the shallow probe (rule
+22 / 5.5). Reading: the strongest prompt-side reader we can build reproduces the paper's ~5% median gain and moves
+the tail by a few points at best; the rest of the gap to the sampling ceiling (q50 1.10, recall 0.69) is not
+reachable from the prefix with these labels and objectives. Per the rule the point-predictor line closes; the
+literature-motivated follow-ups (distributional multi-draw labels, whole-prompt pooling, recall-tuned long bin) are
+recorded above and wait for the user's go.
+
 *Lane 3, GPU 1 after lane 2* — **cancelled by the user 02:35 UTC before it started** (GPU 1 stays idle after lane 2 until a stated need) (`results/host-lanes/lane3-20260912.sh`, log
 `/workspace/outlen/lane3-20260912.log`): the output-length work moved onto the
 platform model. Qwen3-32B-FP8 (YaRN ×4 for the 7% of prompts above 40K)
@@ -520,7 +534,7 @@ all processes gone). Chain 21's c24 FCFS+96 run died at 2.4 h (replay exit 143);
 rental lapsed (user: 忘记续费). Rerun as `results/chain22-gpu0-32b-c24-20260913.sh` (log
 `results/chain22-gpu0-c24-20260913.log`); the first three attempts (r2, r3 names) failed because the image's boot
 replaced our Python supervisord with a Go one and the launcher exits silently without it; fixed 06:00 UTC by
-starting `python3 -m supervisor.supervisord` again (memory note). Runs are named `…-20260913-r4`. FCFS+96 c24 landed 09:26 UTC: **99.11 min** (c16 53.81; cached 0.44, TPOT 141 ms, throughput 15.1 vs 23.6 steps/min): the sized store alone does not carry the pressure (M4 §3.2). DualMap+96 c24 running from 09:26. The OUTLETS-agent lane (`results/host-lanes/lane5-20260913.sh`, log
+starting `python3 -m supervisor.supervisord` again (memory note). Runs are named `…-20260913-r4`. FCFS+96 c24 landed 09:26 UTC: **99.11 min** (c16 53.81; cached 0.44, TPOT 141 ms, throughput 15.1 vs 23.6 steps/min): the sized store alone does not carry the pressure (M4 §3.2). DualMap+96 c24 r4 **aborted 11:00 UTC at 1,901 of 1,951 requests**: DualMap's global scheduler starved one small request (398 tokens, task code-from-image) in its waiting pool for the full 1,800 s shadow-LLM timeout (`outcome: timeout`), the step failed and the harness ended the run — the same mechanism as the c16 r1 abort (cross-entropy-method). Hold distribution of the aborted run: p50 0 s, p90 11 s, **p99 954 s, max 1,782 s** (c16 r2: p99 390 s, max 1,778 s, just under the timeout). So DualMap's admission has a starvation tail of 15–30 min for ~1% of requests at this pressure; a baseline property, not a harness bug. Rerun as chain 23 (`results/chain23-gpu0-32b-c24-dualmap-20260913.sh`, r5) with `--timeout-s 3600` from 11:06 UTC so the tail is measured instead of aborting. The OUTLETS-agent lane (`results/host-lanes/lane5-20260913.sh`, log
 `/workspace/outlen/lane5-20260913.log`) started on GPU 1 at 05:43 UTC.
 
 **GPU 0, storage pool vs admission** (`results/chain17-gpu0-storage-20260912.sh`).

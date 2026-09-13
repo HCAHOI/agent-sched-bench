@@ -1,0 +1,77 @@
+{
+ "static_scalar": {
+  "n": 857,
+  "q50": 1.271,
+  "q90": 2.625,
+  "q95": 3.442,
+  "q99": 6.829,
+  "mean_q": 1.711,
+  "mae": 78.1,
+  "underprediction_rate": 0.414,
+  "bucket_accuracy": 0.816,
+  "long_recall": 0.186,
+  "long_precision": 0.471
+ },
+ "static_structured": {
+  "n": 857,
+  "q50": 1.279,
+  "q90": 2.696,
+  "q95": 3.99,
+  "q99": 7.709,
+  "mean_q": 1.763,
+  "mae": 77.9,
+  "underprediction_rate": 0.541,
+  "bucket_accuracy": 0.816,
+  "long_recall": 0.093,
+  "long_precision": 0.8
+ },
+ "tool_accuracy": 0.873,
+ "dynamic_mae_normalised": 0.1874,
+ "tools": [
+  "edit_file",
+  "exec",
+  "final",
+  "list_dir",
+  "message",
+  "read_file",
+  "write_file",
+  "other"
+ ],
+ "counts": {
+  "train": 3022,
+  "validation": 427,
+  "test": 857
+ },
+ "best_validation": 1.4678,
+ "validation": [
+  2.0376,
+  1.8636,
+  2.2099,
+  1.6467,
+  1.7588,
+  1.5008,
+  1.6853,
+  1.6132,
+  1.4678,
+  1.7315
+ ],
+ "config": {
+  "command": "train",
+  "features": "/workspace/outlen/feats-outlets-nat",
+  "draft_dir": "/workspace/.hf_home/hub/models--lmsys--SGLang-EAGLE3-Qwen3-30B-A3B-Instruct-2507-SpecForge-Nex/snapshots/d1ac703a537d2b8a5b748d4f5f8ca7e97efe9214",
+  "target_dir": "/workspace/.hf_home/hub/models--Qwen--Qwen3-30B-A3B-Instruct-2507-FP8/snapshots/5a5a776300a41aaa681dd7ff0106608ef2bc90db",
+  "out": "/workspace/outlen/results-outlets/nat-frozen",
+  "exclude_manifest": null,
+  "epochs": 10,
+  "backbone_lr": 1e-05,
+  "head_lr": 0.001,
+  "weight_decay": 0.01,
+  "accumulate": 8,
+  "dynamic_weight": 1.0,
+  "min_tool_count": 20,
+  "freeze_backbone": true,
+  "scalar_only": false,
+  "seed": 42
+ },
+ "excluded_tasks": 0
+}
