@@ -614,6 +614,15 @@ paper; a miss on c20 would put the knee below the rule (chunk-level overhead).
 already held by chain 26's proxy (fixed in `run_two_instance_fcfs.sh`, commit bdc21ade; shipped to the second host
 checkout `/workspace/agent-sched-bench-b` so the running chain 26 was not touched); r2 running from 19:23 UTC on
 GPU 1 with `--remote-repo /workspace/agent-sched-bench-b`. Both due ~22:40 UTC.
+**Chain 27 result (21:55 UTC): prediction missed — c20 + 96 GiB already thrashes.** 68.38 min mean JCT (c16 + 96:
+53.81, +874 s [+776, +972]; c24 + 96: 99.11, −1,843 s), cached share **0.74**, TPOT 104 ms, 19.7 steps/min, 72% of
+prompt tokens from DRAM, 45.6K evictions (c16: ~10K-class, c24: 105K). The mean-context rule (c20 × 17.9K = 358K <
+393K) is too tight: the tier needs headroom for the p90 steps (33.8K), the replacement tasks that keep the load,
+and 256-token chunk granularity. Refined rule from the four points (c16/96 ok, c20/96 partial, c24/96 thrash,
+c24/144 ok): DRAM tokens ≥ ≈ 1.4 × concurrency × mean context (c24 × 17.9K × 1.4 = 601K ≈ the 590K that worked; c20
+needs ≈ 500K > 393K). Caveat: chain 27 ran concurrently with chain 26 on the other GPU (both replays on the local
+machine, both engines on the same cpusets), so its JCT may carry some CPU contention; the cached share and eviction
+count do not.
 
 **Chain 24, GPU 0 (user ~17:05 UTC "先用这个机器试试"; pre-registered 17:11 UTC, launched 17:11; `results/chain24-gpu0-32b-c24-tier192-20260913.sh`, log `results/chain24-gpu0-c24-tier192-20260913.log`).**
 DRAM capacity reference at c24: FCFS sticky + **192 GiB DRAM tier** (786K tokens; HBM KV 236K + DRAM = 1.02M tokens
