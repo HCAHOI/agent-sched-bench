@@ -586,7 +586,7 @@ Question of the night: is a return-time-aware DRAM tier worth building? Three pi
    tier stop carrying? Pinned DRAM 48 + 96 GiB fits the 240 GB cgroup; two replays run locally at once.
 Both chains ~3.3 h from ~20:50 UTC; results recorded in M4 §3.2 as the c24 capacity curve and the c16–c24 pressure
 curve. Ideas from the observations go into the morning summary.
-**Piece 1 result (17:45 UTC; `scripts/evaluation/dram_tier_simulation.py`, `analysis/results/dram-tier-simulation-20260913/`):
+**Piece 1 result (17:27 UTC; `scripts/evaluation/dram_tier_simulation.py`, `analysis/results/dram-tier-simulation-20260913/`):
 a return-time-aware DRAM policy has no leverage on this workload.** In the c24 and c16 runs the tool gaps between
 a task's steps are p50 0.7 s, p90 2.2 s, only 5% ≥ 5 s and 1.6% ≥ 30 s, while the LLM steps take p50 31–75 s: an
 idle context comes back almost immediately, so which idle context to evict barely matters — the oracle (Belady,
