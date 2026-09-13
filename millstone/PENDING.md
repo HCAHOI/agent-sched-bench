@@ -436,7 +436,7 @@ depth with an MLP head. Per the rule the point-predictor line closes as a prompt
 remaining lever would be completion-side supervision with a draft model (OUTLETS proper), which is not a prompt-side
 estimate and is not queued. GPU 1 idle from 05:10 UTC.
 
-**Agent-trace diagnostic before any OUTLETS build (user 05:40 UTC "需要基于 agent trace 的性质调整方法吗"; CPU, natural labels, read 05:50 UTC).**
+**Agent-trace diagnostic before any OUTLETS build (user ~05:14 UTC "需要基于 agent trace 的性质调整方法吗"; CPU, natural labels, read 05:20 UTC).**
 The long tail is a tool question first: edit_file and write_file are 11% of steps (470 of 4,322) but 70% of the
 outputs above 512 tokens (39% + 31%; exec 15%, final answers 13%; read/list never). Within those tools the length is
 not visible in the prompt: write_file targets were read earlier in only 10 of 146 steps; for edit_file the target
