@@ -499,6 +499,11 @@ the pressure-side mechanism and the design is "store sized to the mean,
 admit at the peaks"; if it stays within the interval or shrinks, the sized
 store carries the pressure and admission is a fixed second-order term.
 Throughput (steps/min) is reported beside JCT because c24 carries more load.
+**05:38 UTC 2026-09-13: the host container restarted** (SSH closed, then refused for ~4 min; `/workspace` intact,
+all processes gone). Chain 21's c24 FCFS+96 run died at 2.4 h (replay exit 143); chain 21 stopped. Rerun as
+`results/chain22-gpu0-32b-c24-20260913.sh` (log `results/chain22-gpu0-c24-20260913.log`) from 05:43 UTC, same
+runs named `…-20260913-r2`. The OUTLETS-agent lane (`results/host-lanes/lane5-20260913.sh`, log
+`/workspace/outlen/lane5-20260913.log`) started on GPU 1 at 05:43 UTC.
 
 **GPU 0, storage pool vs admission** (`results/chain17-gpu0-storage-20260912.sh`).
 Resource picture from the 32B runs: memory is per context and lives through
