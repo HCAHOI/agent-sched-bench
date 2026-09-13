@@ -378,7 +378,7 @@ estimate should quote the visible part and treat reasoning as the interval.
 Runs inside lane 2 after B (~22:00 UTC), ~3 h; rejects (censored at 64K, timeouts) are counted
 and dropped as before.
 
-**Result (labels 21:00–03:25 UTC, read 03:35; 4,301 labeled, 21 rejected;
+**Result (labels 21:00–03:25 UTC, read 03:28; 4,301 labeled, 21 rejected;
 `analysis/results/.../thinking-20260913/`).** (1) In thinking mode reasoning is
 **91% of the output at the median** (mean 76%): 672 reasoning vs 44 visible
 tokens per step (p90 5,328 vs 624), against the 36% estimated from the recorded
