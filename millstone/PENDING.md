@@ -526,7 +526,7 @@ extraction). Reading: the mid-call state carries the near-end signal that the pr
 dynamic "finishing within ~2 s" alert holds in both thinking and non-thinking modes, and this is the signal to hand
 the sandbox for restore timing; the remaining GPU item is the full-length re-extraction of the >512 completions
 (~250 steps, ~10 min) to check the alert on the long tail itself — not launched without the user's yes.
-**Dynamic line pushed in order (user 16:20 UTC "按顺序推 dynamic"; read 16:40 UTC).** (i) Full-length re-extraction of
+**Dynamic line pushed in order (user 16:20 UTC "按顺序推 dynamic"; read 16:34 UTC).** (i) Full-length re-extraction of
 the 250 completions > 512 tokens (243 done, GPU 1 7.7 min, `feats-outlets-nat-long`) and the head retrained with them
 (`hazard-instruct-20260913/evaluation-full.json`): on the long steps themselves the near-end alert is moderate —
 "within 64" AUROC 0.86 in their second half with recall 0.53 at precision 0.65, "within 32" 0.95 / 0.61 / 0.76 —
