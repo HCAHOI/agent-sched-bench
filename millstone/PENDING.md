@@ -477,6 +477,23 @@ recall 0.56 / precision 0.29 is available if a false alarm is cheap for the cons
 0.32 / 0.43 (base rate 14%) before the call is written. Next for branch 2 would be the comparison with the
 text-based tool-resource predictor after the call is complete (~1 h, CPU).
 
+**D + B (user 11:35–11:50 UTC: reasoning-phase probes "可以是动态的… 在 xxx token 内结束的概率"; pre-registered 11:55 UTC; `results/host-lanes/lane6-20260913.sh`, log `/workspace/outlen/lane6-20260913.log`).**
+*D, hazard probe on the thinking model.* Qwen3-30B-A3B-Thinking-2507's final-layer state along its own
+teacher-forced output (reasoning + visible, 4,301 completions, first 2,048 tokens, every 4th position plus the
+last prompt position; `extract-hazard`), a per-position MLP trained with binary cross-entropy on
+P(remaining ≤ X) for X = 64 / 256 / 1,024 tokens, for two targets: tokens until the whole output ends and tokens
+until `</think>` (`train-hazard`). Read per horizon on the test split: AUROC, recall / precision at 0.5, Brier,
+overall, at the static position, and by progress quartile t / L. Rule: the "ends within 256 tokens" flag is usable
+for the sandbox (restore p90 1.8 s ≈ 60 tokens at 30 ms, so 256 tokens is the planning horizon) if AUROC ≥ 0.80
+and recall ≥ 0.60 at precision ≥ 0.60 for positions past 25% of the output; the "won't end within 1,024" flag is
+its complement. The static row says whether any of this is readable before decoding (expected no).
+*B, distributional labels for the non-thinking probe.* The Instruct model samples 4 draws (temperature 0.7, seed 11)
+for every train and validation prefix (test already has 4 from lane 2); the shallow probe and OUTLETS-agent are
+retrained on the per-prefix median and on a 3-bucket histogram target (soft cross-entropy), evaluated on the
+4-draw test labels and on the greedy labels. Rule (unchanged): long recall ≥ 0.35 at precision ≥ 0.5 with q50 ≤
+1.35, or q90 improved by ≥ 15% over the shallow probe (2.66). ~1.5 h (D) + ~6 h (B) on GPU 1; D's head trains on
+the CPU while B samples.
+
 **OUTLETS-agent (user go ~05:25 UTC "可以，投吧"; pre-registered 05:30 UTC; ~1 day of work, GPU 1).**
 The paper's method (arXiv 2609.01068: EAGLE-3-style draft decoder over the target's layer 2 / N/2 / N−2 states,
 log-space remaining-length head supervised at every completion position, static estimate at t = 0) adapted to

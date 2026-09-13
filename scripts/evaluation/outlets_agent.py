@@ -35,12 +35,14 @@ BUCKETS = (128, 512)
 
 
 # ----------------------------------------------------------------------------------------------------------- extract
-def _render(tok, messages, tools, completion: dict | None):
+def _render(tok, messages, tools, completion: dict | None, include_reasoning: bool = False):
     kw = {"tools": tools} if tools else {}
     prompt = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, **kw)
     if completion is None:
         return prompt, ""
     msg = {k: v for k, v in completion.items() if v is not None and k in ("role", "content", "tool_calls")}
+    if include_reasoning:  # vLLM's reasoning parser stores the text under "reasoning"; the template reads reasoning_content
+        msg["reasoning_content"] = completion.get("reasoning_content") or completion.get("reasoning") or ""
     msg.setdefault("role", "assistant"); msg.setdefault("content", "")
     for tc in msg.get("tool_calls") or []:
         try:
@@ -361,6 +363,141 @@ def predict_cmd(a: argparse.Namespace) -> None:
     print(f"predicted {len(rows)}", flush=True)
 
 
+# ------------------------------------------------------------------------------------------------------ hazard (D)
+THINK_END = 151668  # Qwen3 </think>
+
+
+def extract_hazard(a: argparse.Namespace) -> None:
+    """Per-position final-layer states along a teacher-forced completion (reasoning + visible), every --stride tokens,
+    plus the last prompt position; the pooling server runs without the aux patch (token_embed = final layer)."""
+    import base64
+    import httpx
+    from transformers import AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(a.tokenizer)
+    dataset = json.loads((a.dataset_dir / "dataset.json").read_text())
+    tools = (dataset.get("request_options") or {}).get("tools")
+    prefixes = _read_jsonl(a.dataset_dir / "prefixes.jsonl")
+    completions = {r["sample_id"]: r for r in _read_jsonl(a.completions)}
+    a.out.mkdir(parents=True, exist_ok=True)
+    index_path = a.out / "index.jsonl"
+    done = {r["sample_id"] for r in _read_jsonl(index_path)} if index_path.exists() else set()
+    todo = [p for p in prefixes if p["sample_id"] in completions and p["sample_id"] not in done]
+    print(f"{len(done)} cached, {len(todo)} to extract", flush=True)
+    tok_lock = threading.Lock()
+
+    def one(p: dict) -> dict:
+        sid = p["sample_id"]; r = completions[sid]
+        with tok_lock:
+            prompt, comp = _render(tok, p["messages"], tools, r["message"], include_reasoning=True)
+            p_ids = tok(prompt, add_special_tokens=False).input_ids
+            c_ids = tok(comp, add_special_tokens=False).input_ids[: a.completion_tokens]
+            text = prompt + tok.decode(c_ids)
+            ids = tok(text, add_special_tokens=False).input_ids
+        resp = client.post(f"{a.api_base.rstrip('/')}/pooling", json={"model": a.model, "input": text, "task": "token_embed",
+                                                                    "encoding_format": "base64"})
+        if resp.status_code >= 400:
+            raise RuntimeError(f"{sid}: HTTP {resp.status_code}: {resp.text[:200]}")
+        body = resp.json(); n_server = body["usage"]["prompt_tokens"]
+        feats = np.frombuffer(base64.b64decode(body["data"][0]["data"]), dtype=np.float32).reshape(n_server, -1)
+        if n_server != len(ids) or ids[: len(p_ids)] != p_ids:
+            raise RuntimeError(f"{sid}: tokenisation mismatch ({n_server} vs {len(ids)})")
+        n_p = len(p_ids); n_c = len(ids) - n_p
+        comp_ids = ids[n_p:]
+        think_end = comp_ids.index(THINK_END) if THINK_END in comp_ids else -1   # completion-relative position of </think>
+        pos = [n_p - 1] + list(range(n_p, n_p + n_c, a.stride))                 # last prompt token, then every stride-th completion token
+        np.savez(a.out / f"{sid.replace('/', '__')}.npz", feats=feats[pos].astype(np.float16), pos=np.asarray(pos, dtype=np.int32))
+        return {"sample_id": sid, "split": p["split"], "file": f"{sid.replace('/', '__')}.npz", "n_prompt": n_p, "n_completion": n_c,
+                "think_end": think_end, "label_total": int(r["actual_tokens"]), "truncated": n_c >= a.completion_tokens}
+
+    rejected = 0
+    with httpx.Client(timeout=a.timeout_s, trust_env=False) as client, index_path.open("a") as out, \
+            (a.out / "rejected.jsonl").open("a") as rej, ThreadPoolExecutor(max_workers=a.concurrency) as pool:
+        futures = {pool.submit(one, p): p["sample_id"] for p in todo}
+        for n, f in enumerate(as_completed(futures), 1):
+            try:
+                out.write(json.dumps(f.result()) + "\n"); out.flush()
+            except Exception as e:
+                rej.write(json.dumps({"sample_id": futures[f], "error": f"{type(e).__name__}: {e}"[:300]}) + "\n"); rej.flush(); rejected += 1
+            if n % 100 == 0:
+                print(f"extracted {n}/{len(todo)} ({rejected} rejected)", flush=True)
+    print(f"done: {len(todo) - rejected} extracted, {rejected} rejected", flush=True)
+
+
+def train_hazard(a: argparse.Namespace) -> None:
+    """Per-position MLP: P(remaining <= X) for horizons X, for the whole output and for the reasoning part; evaluated on
+    the test split per horizon and per progress quartile (t / L), plus the static position."""
+    import torch
+    from torch import nn
+
+    torch.manual_seed(a.seed); np.random.seed(a.seed)
+    H = [int(x) for x in a.horizons.split(",")]
+    rows = [r for r in _read_jsonl(a.features / "index.jsonl") if r["n_completion"] > 0]
+
+    def positions(r):
+        z = np.load(a.features / r["file"]); pos = z["pos"].astype(np.int64); X = z["feats"].astype(np.float32)
+        t = pos - r["n_prompt"]                                 # completion-relative; the static row has t = -1
+        L = r["n_completion"] if not r["truncated"] else max(r["n_completion"], r["label_total"])  # rendered length (approx. label_total)
+        rem_total = L - (t + 1)
+        rem_reason = (r["think_end"] - (t + 1)) if r["think_end"] >= 0 else rem_total
+        y = np.array([[rt <= h for h in H] + [rr <= h for h in H] for rt, rr in zip(rem_total, rem_reason)], dtype=np.float32)
+        prog = np.clip((t + 1) / max(1, L), 0, 1)
+        past_think = (t + 1) > r["think_end"] if r["think_end"] >= 0 else np.zeros_like(t, dtype=bool)
+        return X, y, prog, past_think
+
+    data = {s: [] for s in ("train", "validation", "test")}
+    for r in rows:
+        data[r["split"]].append(positions(r))
+    cat = lambda part, i: np.concatenate([d[i] for d in part])
+    Xtr, ytr = cat(data["train"], 0), cat(data["train"], 1); Xva, yva = cat(data["validation"], 0), cat(data["validation"], 1)
+    Xte, yte, pte, pastte = cat(data["test"], 0), cat(data["test"], 1), cat(data["test"], 2), cat(data["test"], 3)
+    mu, sd = Xtr.mean(0), Xtr.std(0) + 1e-6
+    T = lambda X: torch.tensor((X - mu) / sd)
+    xtr, xva, xte = T(Xtr), T(Xva), T(Xte); ytr_t, yva_t = torch.tensor(ytr), torch.tensor(yva)
+    dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    head = nn.Sequential(nn.Linear(Xtr.shape[1], 256), nn.GELU(), nn.Dropout(0.1), nn.Linear(256, 2 * len(H))).to(dev)
+    opt = torch.optim.AdamW(head.parameters(), lr=1e-3, weight_decay=1e-2)
+    xtr, ytr_t, xva, yva_t = xtr.to(dev), ytr_t.to(dev), xva.to(dev), yva_t.to(dev)
+    best, best_state = float("inf"), None
+    for epoch in range(a.epochs):
+        head.train(); perm = torch.randperm(len(xtr), device=dev)
+        for i in range(0, len(xtr), 1024):
+            b = perm[i:i + 1024]
+            loss = nn.functional.binary_cross_entropy_with_logits(head(xtr[b]), ytr_t[b])
+            opt.zero_grad(); loss.backward(); opt.step()
+        head.eval()
+        with torch.no_grad():
+            v = nn.functional.binary_cross_entropy_with_logits(head(xva), yva_t).item()
+        if v < best:
+            best, best_state = v, {k: t.detach().clone() for k, t in head.state_dict().items()}
+    head.load_state_dict(best_state); head.eval()
+    with torch.no_grad():
+        p = torch.sigmoid(head(xte.to(dev))).cpu().numpy()
+
+    def score(pr, y):
+        if y.sum() == 0 or y.sum() == len(y):
+            return {"n": int(len(y)), "positives": int(y.sum())}
+        auc = float((pr[y == 1][:, None] > pr[y == 0][None, :]).mean()) if len(y) < 20000 else float(np.mean([(pr[y == 1] > v).mean() for v in pr[y == 0][:2000]]))
+        pred = pr >= 0.5; tp = float((pred & (y == 1)).sum())
+        return {"n": int(len(y)), "positives": int(y.sum()), "auroc": round(auc, 3), "recall": round(tp / max(1, y.sum()), 3),
+                "precision": round(tp / max(1, pred.sum()), 3), "brier": round(float(((pr - y) ** 2).mean()), 4)}
+
+    out = {"horizons": H, "positions_test": int(len(yte)), "counts": {k: len(v) for k, v in data.items()}, "best_validation_bce": round(best, 4)}
+    for j, target in enumerate(("total", "reasoning")):
+        for k, h in enumerate(H):
+            c = j * len(H) + k; res = {"all": score(p[:, c], yte[:, c]), "static_t0": score(p[pte == 0, c], yte[pte == 0, c])}
+            for lo, hi in ((0, .25), (.25, .5), (.5, .75), (.75, 1.01)):
+                m = (pte > lo) & (pte <= hi) & (pte > 0)
+                res[f"progress_{lo}-{hi if hi < 1 else 1}"] = score(p[m, c], yte[m, c])
+            if target == "reasoning":
+                m = ~pastte & (pte > 0); res["during_reasoning"] = score(p[m, c], yte[m, c])
+            out[f"{target}_within_{h}"] = res
+    a.out.mkdir(parents=True, exist_ok=True)
+    (a.out / "evaluation.json").write_text(json.dumps(out, indent=1))
+    torch.save({"state": best_state, "mu": mu, "sd": sd, "horizons": H}, a.out / "head.pt")
+    print(json.dumps({k: v for k, v in out.items() if k.endswith(f"_within_{H[len(H) // 2]}")}, indent=1), flush=True)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="command", required=True)
@@ -383,8 +520,16 @@ def main() -> None:
     pr.add_argument("--model", type=Path, required=True); pr.add_argument("--features", type=Path, required=True)
     pr.add_argument("--draft-dir", type=Path, required=True); pr.add_argument("--target-dir", type=Path, required=True)
     pr.add_argument("--out", type=Path, required=True); pr.add_argument("--head", choices=("scalar", "structured"), default="scalar")
+    eh = sub.add_parser("extract-hazard")
+    eh.add_argument("--dataset-dir", type=Path, required=True); eh.add_argument("--completions", type=Path, required=True)
+    eh.add_argument("--api-base", required=True); eh.add_argument("--model", required=True); eh.add_argument("--tokenizer", required=True)
+    eh.add_argument("--out", type=Path, required=True); eh.add_argument("--completion-tokens", type=int, default=2048)
+    eh.add_argument("--stride", type=int, default=4); eh.add_argument("--concurrency", type=int, default=6); eh.add_argument("--timeout-s", type=float, default=900.0)
+    th = sub.add_parser("train-hazard")
+    th.add_argument("--features", type=Path, required=True); th.add_argument("--out", type=Path, required=True)
+    th.add_argument("--horizons", default="64,256,1024"); th.add_argument("--epochs", type=int, default=30); th.add_argument("--seed", type=int, default=42)
     a = p.parse_args()
-    {"extract": extract, "train": train, "predict": predict_cmd}[a.command](a)
+    {"extract": extract, "train": train, "predict": predict_cmd, "extract-hazard": extract_hazard, "train-hazard": train_hazard}[a.command](a)
 
 
 if __name__ == "__main__":
