@@ -628,6 +628,11 @@ count do not.
 second test point: c20 + **144 GiB** (590K tokens against 1.4 × 20 × 17.9K ≈ 500K). Prediction: cached share ≥ 0.85
 and mean JCT within 10% of c16 + 96 GiB (≤ 59 min); a miss means the factor is larger than 1.4 or the loss at c20
 is not capacity. Runs alone (no concurrent replay) so its JCT is clean. ~2.5 h.
+**Chain 26 result (23:52 UTC): prediction met.** c24 + 48 GiB: **124.29 min**, cached share **0.03**, TPOT 181 ms,
+10.9 steps/min, 0% of prompt tokens from DRAM, 176K evictions; +1,511 s [+1,267, +1,749] against 96 GiB. The c24
+DRAM capacity curve is now 48 → 124.3 (0.03) · 96 → 99.1 (0.44) · 144 → 51.8 (0.91) min (cached share): an
+undersized tier is worse than useless at pressure because every prefill still pays the synchronous store while
+nothing survives to be retrieved (the 4B "pure cost" reading at scale). Caveat as for chain 27: concurrent with it.
 
 **Chain 24, GPU 0 (user ~17:05 UTC "先用这个机器试试"; pre-registered 17:11 UTC, launched 17:11; `results/chain24-gpu0-32b-c24-tier192-20260913.sh`, log `results/chain24-gpu0-c24-tier192-20260913.log`).**
 DRAM capacity reference at c24: FCFS sticky + **192 GiB DRAM tier** (786K tokens; HBM KV 236K + DRAM = 1.02M tokens

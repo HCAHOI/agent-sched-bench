@@ -494,7 +494,10 @@ problem: an oracle that knows every task's next arrival equals LRU at every capa
 The knee sits above the mean-context rule: at c20 the same 96 GiB tier already loses part of its hit rate (chain 27,
 read 21:55 UTC: 68.38 min, cached 0.74, 45.6K evictions, +874 s [+776, +972] against c16; run concurrently with
 chain 26 on the other GPU, so its JCT may include some CPU contention), so the DRAM tier needs ≈ 1.4× the
-concurrency × mean-context product (the p90 steps, the replacement stream and chunk granularity).
+concurrency × mean-context product (the p90 steps, the replacement stream and chunk granularity). The c24 capacity
+curve (read 23:52 UTC): 48 GiB → 124.29 min, cached 0.03, 176K evictions; 96 GiB → 99.11, 0.44; 144 GiB → 51.80,
+0.91. Below the working set the tier is worse than none: every prefill pays the store and nothing survives to be
+retrieved.
 The cause is in the code: DualMap's waiting pool is ordered by cached-prefix length first and arrival time second,
 with no aging, so under sustained load a request without a cached prefix (a task's first step) can wait behind a
 never-empty stream of cache-affine requests. A one-line aging rule would remove it; that variant would be a modified
