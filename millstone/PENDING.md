@@ -570,6 +570,23 @@ include MORI-style idleness ranking and CacheWise-style ordering, not only LRU. 
 them report: the store-vs-admission decomposition at a sized DRAM tier, the starvation mechanism of
 residency-first admission, and the three-signal sandbox interface.
 
+**Night plan 2026-09-13 17:25 UTC (user: "我睡觉你就可以随便安排接下来做什么实验…自动研究推进到我发送早上询问消息").**
+Question of the night: is a return-time-aware DRAM tier worth building? Three pieces, pre-registered here:
+1. *DRAM-tier trace simulation (CPU, now).* Replay the c24 runs' own timelines (per task: request arrivals with
+   prompt tokens, finishes, tool gaps as replayed) through a capacity-limited context cache: on arrival the context
+   is a hit if resident, otherwise its prompt tokens are recomputed; after finish it stays resident; when capacity is
+   exceeded evict by policy. Policies: LRU (LMCache today), Belady/oracle (next arrival known; the upper bound of any
+   return-time policy), per-tool-median return time (the §10 stage-3 prior), and the slow-tool flag (≥ 2 s bucket
+   from the tool name). Capacities 48 / 96 / 144 GiB of 32B KV plus HBM. Output: recompute tokens and miss share per
+   policy and capacity. Rule: if oracle − LRU at 96 GiB is under 10% of prompt tokens, the DRAM-policy line is not
+   worth a day; if the per-tool-median policy captures ≥ half of the oracle's gain, it is and needs no learned model.
+2. *Chain 26, GPU 0 after chain 24b:* FCFS + 48 GiB at c24 (the low end of the capacity curve; 3.3 h).
+3. *Chain 27, GPU 1 in parallel with chain 26:* FCFS + 96 GiB at **c20** (`--port-base 100`, `--single-gpu 1`), the
+   pressure point between c16 (53.8 min, DRAM carries) and c24 (99 min, DRAM thrashes): where does the 96 GiB
+   tier stop carrying? Pinned DRAM 48 + 96 GiB fits the 240 GB cgroup; two replays run locally at once.
+Both chains ~3.3 h from ~20:50 UTC; results recorded in M4 §3.2 as the c24 capacity curve and the c16–c24 pressure
+curve. Ideas from the observations go into the morning summary.
+
 **Chain 24, GPU 0 (user ~17:05 UTC "先用这个机器试试"; pre-registered 17:11 UTC, launched 17:11; `results/chain24-gpu0-32b-c24-tier192-20260913.sh`, log `results/chain24-gpu0-c24-tier192-20260913.log`).**
 DRAM capacity reference at c24: FCFS sticky + **192 GiB DRAM tier** (786K tokens; HBM KV 236K + DRAM = 1.02M tokens
 against the c24 mean working set 430K and p90-step peaks 810K; this host has 1 TB RAM, a single-GPU rental will not),
