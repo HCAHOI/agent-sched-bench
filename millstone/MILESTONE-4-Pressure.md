@@ -465,7 +465,7 @@ combined cell holds each request 15.1 s at the proxy to buy its last 8 min per t
 is consulted far less (4.9M tokens served against 34.1M) because held requests keep their contexts on the GPU.
 Pressure axis (chain 22 after the host restart; PENDING §8b "Chain 21"): at concurrency 24 the mean working set
 (430K tokens) exceeds the 96 GiB tier alone and the p90-step peaks (810K) exceed tier + GPU. FCFS + 96 GiB at c24
-(read 09:30 UTC 2026-09-13): **99.11 min** mean JCT (c16: 53.81), P95 183.9, makespan 198.8, cached share 0.44
+(read 09:27 UTC 2026-09-13): **99.11 min** mean JCT (c16: 53.81), P95 183.9, makespan 198.8, cached share 0.44
 (0.92), TPOT 141 ms (93), queue 70.1 s / prefill 3.0 s / decode 31.8 s per request, tier served 18.1M tokens (39% of
 prompt tokens; 106,532 evictions); throughput fell to 15.1 steps/min from 23.6 at c16, so the extra concurrency is
 lost to cache thrash rather than converted into work. The sized store alone does not carry the pressure once the
