@@ -623,7 +623,7 @@ c24/144 ok): DRAM tokens ≥ ≈ 1.4 × concurrency × mean context (c24 × 17.9
 needs ≈ 500K > 393K). Caveat: chain 27 ran concurrently with chain 26 on the other GPU (both replays on the local
 machine, both engines on the same cpusets), so its JCT may carry some CPU contention; the cached share and eviction
 count do not.
-**Chain 28 (pre-registered 21:57 UTC; `results/chain28-gpu1-32b-c20-tier144-20260913.sh`, log
+**Chain 28 (pre-registered 21:55 UTC; `results/chain28-gpu1-32b-c20-tier144-20260913.sh`, log
 `results/chain28-gpu1-c20-tier144-20260913.log`; GPU 1, alone on the host, after chain 26).** The refined rule's
 second test point: c20 + **144 GiB** (590K tokens against 1.4 × 20 × 17.9K ≈ 500K). Prediction: cached share ≥ 0.85
 and mean JCT within 10% of c16 + 96 GiB (≤ 59 min); a miss means the factor is larger than 1.4 or the loss at c20
