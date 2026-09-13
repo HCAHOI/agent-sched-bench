@@ -367,7 +367,11 @@ AUROC ≥ 0.94 with recall ≥ 0.83 for X = 64; the end of the whole step stays 
 Instruct model's own completions (`hazard-instruct-20260913/`) shows the near-end signal exists inside the tool call
 too: "ends within 64 tokens" AUROC 0.88–0.96 with recall ≈ 0.8 at precision 0.70–0.96 at every progress quartile.
 So the dynamic alert "this step finishes within ~2 s" is available in both modes; what the prompt-side state lacks
-is only the far-ahead view.
+is only the far-ahead view. Scored as a restore policy (restore 1.8 s ≈ 60 tokens; `policy.json`), the alert
+matters only for long thinking steps: it cuts the time a restored sandbox sits waiting from a median of ≈ 30 s to
+≈ 11 s at one extra point of lateness, while 19% of steps need a fallback trigger; for non-thinking steps (median 67
+tokens) any in-decode trigger is late in about half the steps, so the restore starts at `scheduled` on the prefill
+slack.
 
 Thinking-mode check (Qwen3-30B-A3B-Thinking-2507-FP8, one sampled draw per prefix at temperature 0.6, 64K cap, 4,301
 labels; `thinking-20260913/`): reasoning is 91% of the output at the median (672 reasoning vs 44 visible tokens), so

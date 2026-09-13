@@ -526,6 +526,21 @@ extraction). Reading: the mid-call state carries the near-end signal that the pr
 dynamic "finishing within ~2 s" alert holds in both thinking and non-thinking modes, and this is the signal to hand
 the sandbox for restore timing; the remaining GPU item is the full-length re-extraction of the >512 completions
 (~250 steps, ~10 min) to check the alert on the long tail itself — not launched without the user's yes.
+**Dynamic line pushed in order (user 16:20 UTC "按顺序推 dynamic"; read 16:40 UTC).** (i) Full-length re-extraction of
+the 250 completions > 512 tokens (243 done, GPU 1 7.7 min, `feats-outlets-nat-long`) and the head retrained with them
+(`hazard-instruct-20260913/evaluation-full.json`): on the long steps themselves the near-end alert is moderate —
+"within 64" AUROC 0.86 in their second half with recall 0.53 at precision 0.65, "within 32" 0.95 / 0.61 / 0.76 —
+weaker than the pooled numbers, which short steps dominate. (ii) Per-step restore policy (`eval-policy`; restore
+1.8 s = 60 tokens at 30 ms; `policy.json`): fire the restore at the first position where P(remaining ≤ X) ≥ θ.
+Thinking model: firing at the first token is late in 5.5% of steps (the steps shorter than 60 tokens) with a median
+of 981 tokens (≈ 30 s) of the sandbox sitting ready; "total within 256, θ 0.5" cuts the ready-early median to 362
+tokens (−63%) at +1 point late but 19% of steps never fire (they need a fallback, e.g. the `reasoning closed`
+event); "within 1,024" adds nothing over firing immediately. Instruct model: half the steps are shorter than 60
+tokens, so **every dynamic policy is late in ≥ 48% of steps** and firing at the first token already is; the restore
+has to start at `scheduled` on the prefill slack, exactly as §10 says (100% coverage at 32B). Reading: for restore
+timing the dynamic alert is worth having only for long thinking steps and only if a sandbox held ready for ~30 s
+costs something; the safe trigger stays the `scheduled` event with the prefill bound. The dynamic line is
+recorded; the remaining consumer question (cost of an early-ready sandbox) is the collaborator's.
 
 **Chain 25, GPU 0 (user ~13:15 UTC "试试呗" on the FIFO working-set admission; pre-registered 13:21 UTC; `results/chain25-gpu0-32b-c24-fifo-20260913.sh`, log `results/chain25-gpu0-c24-fifo-20260913.log`).**
 Our own admission: the least-requests proxy gains `--admission-tokens N` (`scripts/baselines/least_requests_proxy.py`,

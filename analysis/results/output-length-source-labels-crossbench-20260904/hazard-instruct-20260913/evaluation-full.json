@@ -1,0 +1,458 @@
+{
+ "horizons": [
+  32,
+  64,
+  256
+ ],
+ "positions_test": 133100,
+ "counts": {
+  "train": 3022,
+  "validation": 427,
+  "test": 857
+ },
+ "best_validation_bce": 0.2876,
+ "total_within_32": {
+  "all": {
+   "n": 133100,
+   "positives": 26698,
+   "auroc": 0.963,
+   "recall": 0.805,
+   "precision": 0.842,
+   "brier": 0.051
+  },
+  "static_t0": {
+   "n": 857,
+   "positives": 181,
+   "auroc": 0.956,
+   "recall": 0.735,
+   "precision": 0.869,
+   "brier": 0.0611
+  },
+  "progress_0-0.25": {
+   "n": 33216,
+   "positives": 1433,
+   "auroc": 0.972,
+   "recall": 0.626,
+   "precision": 0.601,
+   "brier": 0.0262
+  },
+  "progress_0.25-0.5": {
+   "n": 33592,
+   "positives": 3012,
+   "auroc": 0.969,
+   "recall": 0.817,
+   "precision": 0.691,
+   "brier": 0.0364
+  },
+  "progress_0.5-0.75": {
+   "n": 33404,
+   "positives": 5510,
+   "auroc": 0.952,
+   "recall": 0.841,
+   "precision": 0.804,
+   "brier": 0.0447
+  },
+  "progress_0.75-1": {
+   "n": 32031,
+   "positives": 16562,
+   "auroc": 0.935,
+   "recall": 0.807,
+   "precision": 0.919,
+   "brier": 0.098
+  },
+  "long_steps_over_512": {
+   "n": 42914,
+   "positives": 1320,
+   "auroc": 0.978,
+   "recall": 0.609,
+   "precision": 0.716,
+   "brier": 0.0159
+  },
+  "long_steps_progress_0-0.5": {
+   "n": 22327,
+   "positives": 0
+  },
+  "long_steps_progress_0.5-1": {
+   "n": 20587,
+   "positives": 1320,
+   "auroc": 0.946,
+   "recall": 0.609,
+   "precision": 0.761,
+   "brier": 0.0296
+  }
+ },
+ "total_within_64": {
+  "all": {
+   "n": 133100,
+   "positives": 43971,
+   "auroc": 0.927,
+   "recall": 0.82,
+   "precision": 0.839,
+   "brier": 0.0806
+  },
+  "static_t0": {
+   "n": 857,
+   "positives": 427,
+   "auroc": 0.918,
+   "recall": 0.822,
+   "precision": 0.856,
+   "brier": 0.1133
+  },
+  "progress_0-0.25": {
+   "n": 33216,
+   "positives": 4561,
+   "auroc": 0.958,
+   "recall": 0.859,
+   "precision": 0.698,
+   "brier": 0.0539
+  },
+  "progress_0.25-0.5": {
+   "n": 33592,
+   "positives": 6373,
+   "auroc": 0.934,
+   "recall": 0.85,
+   "precision": 0.773,
+   "brier": 0.0562
+  },
+  "progress_0.5-0.75": {
+   "n": 33404,
+   "positives": 9787,
+   "auroc": 0.909,
+   "recall": 0.804,
+   "precision": 0.772,
+   "brier": 0.0907
+  },
+  "progress_0.75-1": {
+   "n": 32031,
+   "positives": 22823,
+   "auroc": 0.919,
+   "recall": 0.81,
+   "precision": 0.937,
+   "brier": 0.1224
+  },
+  "long_steps_over_512": {
+   "n": 42914,
+   "positives": 2600,
+   "auroc": 0.937,
+   "recall": 0.53,
+   "precision": 0.558,
+   "brier": 0.0412
+  },
+  "long_steps_progress_0-0.5": {
+   "n": 22327,
+   "positives": 0
+  },
+  "long_steps_progress_0.5-1": {
+   "n": 20587,
+   "positives": 2600,
+   "auroc": 0.861,
+   "recall": 0.53,
+   "precision": 0.651,
+   "brier": 0.07
+  }
+ },
+ "total_within_256": {
+  "all": {
+   "n": 133100,
+   "positives": 90626,
+   "auroc": 0.894,
+   "recall": 0.888,
+   "precision": 0.867,
+   "brier": 0.1171
+  },
+  "static_t0": {
+   "n": 857,
+   "positives": 702,
+   "auroc": 0.902,
+   "recall": 0.969,
+   "precision": 0.872,
+   "brier": 0.0943
+  },
+  "progress_0-0.25": {
+   "n": 33216,
+   "positives": 14521,
+   "auroc": 0.827,
+   "recall": 0.865,
+   "precision": 0.671,
+   "brier": 0.1667
+  },
+  "progress_0.25-0.5": {
+   "n": 33592,
+   "positives": 20275,
+   "auroc": 0.869,
+   "recall": 0.859,
+   "precision": 0.827,
+   "brier": 0.1345
+  },
+  "progress_0.5-0.75": {
+   "n": 33404,
+   "positives": 24831,
+   "auroc": 0.904,
+   "recall": 0.885,
+   "precision": 0.919,
+   "brier": 0.1016
+  },
+  "progress_0.75-1": {
+   "n": 32031,
+   "positives": 30297,
+   "auroc": 0.932,
+   "recall": 0.918,
+   "precision": 0.982,
+   "brier": 0.0643
+  },
+  "long_steps_over_512": {
+   "n": 42914,
+   "positives": 10280,
+   "auroc": 0.706,
+   "recall": 0.696,
+   "precision": 0.49,
+   "brier": 0.1702
+  },
+  "long_steps_progress_0-0.5": {
+   "n": 22327,
+   "positives": 0
+  },
+  "long_steps_progress_0.5-1": {
+   "n": 20587,
+   "positives": 10280,
+   "auroc": 0.753,
+   "recall": 0.696,
+   "precision": 0.745,
+   "brier": 0.1862
+  }
+ },
+ "reasoning_within_32": {
+  "all": {
+   "n": 133100,
+   "positives": 26698,
+   "auroc": 0.962,
+   "recall": 0.806,
+   "precision": 0.839,
+   "brier": 0.0511
+  },
+  "static_t0": {
+   "n": 857,
+   "positives": 181,
+   "auroc": 0.955,
+   "recall": 0.735,
+   "precision": 0.881,
+   "brier": 0.0617
+  },
+  "progress_0-0.25": {
+   "n": 33216,
+   "positives": 1433,
+   "auroc": 0.972,
+   "recall": 0.632,
+   "precision": 0.586,
+   "brier": 0.0267
+  },
+  "progress_0.25-0.5": {
+   "n": 33592,
+   "positives": 3012,
+   "auroc": 0.969,
+   "recall": 0.822,
+   "precision": 0.687,
+   "brier": 0.0367
+  },
+  "progress_0.5-0.75": {
+   "n": 33404,
+   "positives": 5510,
+   "auroc": 0.952,
+   "recall": 0.845,
+   "precision": 0.798,
+   "brier": 0.045
+  },
+  "progress_0.75-1": {
+   "n": 32031,
+   "positives": 16562,
+   "auroc": 0.935,
+   "recall": 0.805,
+   "precision": 0.92,
+   "brier": 0.0978
+  },
+  "during_reasoning": {
+   "n": 132243,
+   "positives": 26517,
+   "auroc": 0.963,
+   "recall": 0.806,
+   "precision": 0.839,
+   "brier": 0.0511
+  },
+  "long_steps_over_512": {
+   "n": 42914,
+   "positives": 1320,
+   "auroc": 0.978,
+   "recall": 0.597,
+   "precision": 0.717,
+   "brier": 0.0159
+  },
+  "long_steps_progress_0-0.5": {
+   "n": 22327,
+   "positives": 0
+  },
+  "long_steps_progress_0.5-1": {
+   "n": 20587,
+   "positives": 1320,
+   "auroc": 0.944,
+   "recall": 0.597,
+   "precision": 0.767,
+   "brier": 0.0295
+  }
+ },
+ "reasoning_within_64": {
+  "all": {
+   "n": 133100,
+   "positives": 43971,
+   "auroc": 0.926,
+   "recall": 0.82,
+   "precision": 0.837,
+   "brier": 0.0809
+  },
+  "static_t0": {
+   "n": 857,
+   "positives": 427,
+   "auroc": 0.916,
+   "recall": 0.817,
+   "precision": 0.862,
+   "brier": 0.1144
+  },
+  "progress_0-0.25": {
+   "n": 33216,
+   "positives": 4561,
+   "auroc": 0.957,
+   "recall": 0.859,
+   "precision": 0.692,
+   "brier": 0.0545
+  },
+  "progress_0.25-0.5": {
+   "n": 33592,
+   "positives": 6373,
+   "auroc": 0.933,
+   "recall": 0.85,
+   "precision": 0.769,
+   "brier": 0.057
+  },
+  "progress_0.5-0.75": {
+   "n": 33404,
+   "positives": 9787,
+   "auroc": 0.909,
+   "recall": 0.806,
+   "precision": 0.769,
+   "brier": 0.0909
+  },
+  "progress_0.75-1": {
+   "n": 32031,
+   "positives": 22823,
+   "auroc": 0.919,
+   "recall": 0.81,
+   "precision": 0.937,
+   "brier": 0.1219
+  },
+  "during_reasoning": {
+   "n": 132243,
+   "positives": 43544,
+   "auroc": 0.927,
+   "recall": 0.82,
+   "precision": 0.836,
+   "brier": 0.0806
+  },
+  "long_steps_over_512": {
+   "n": 42914,
+   "positives": 2600,
+   "auroc": 0.936,
+   "recall": 0.533,
+   "precision": 0.557,
+   "brier": 0.0415
+  },
+  "long_steps_progress_0-0.5": {
+   "n": 22327,
+   "positives": 0
+  },
+  "long_steps_progress_0.5-1": {
+   "n": 20587,
+   "positives": 2600,
+   "auroc": 0.857,
+   "recall": 0.533,
+   "precision": 0.653,
+   "brier": 0.0702
+  }
+ },
+ "reasoning_within_256": {
+  "all": {
+   "n": 133100,
+   "positives": 90626,
+   "auroc": 0.893,
+   "recall": 0.888,
+   "precision": 0.866,
+   "brier": 0.1172
+  },
+  "static_t0": {
+   "n": 857,
+   "positives": 702,
+   "auroc": 0.901,
+   "recall": 0.967,
+   "precision": 0.868,
+   "brier": 0.0953
+  },
+  "progress_0-0.25": {
+   "n": 33216,
+   "positives": 14521,
+   "auroc": 0.828,
+   "recall": 0.865,
+   "precision": 0.668,
+   "brier": 0.167
+  },
+  "progress_0.25-0.5": {
+   "n": 33592,
+   "positives": 20275,
+   "auroc": 0.871,
+   "recall": 0.861,
+   "precision": 0.828,
+   "brier": 0.1343
+  },
+  "progress_0.5-0.75": {
+   "n": 33404,
+   "positives": 24831,
+   "auroc": 0.904,
+   "recall": 0.886,
+   "precision": 0.919,
+   "brier": 0.1015
+  },
+  "progress_0.75-1": {
+   "n": 32031,
+   "positives": 30297,
+   "auroc": 0.932,
+   "recall": 0.918,
+   "precision": 0.982,
+   "brier": 0.0644
+  },
+  "during_reasoning": {
+   "n": 132243,
+   "positives": 89924,
+   "auroc": 0.892,
+   "recall": 0.888,
+   "precision": 0.866,
+   "brier": 0.1173
+  },
+  "long_steps_over_512": {
+   "n": 42914,
+   "positives": 10280,
+   "auroc": 0.707,
+   "recall": 0.698,
+   "precision": 0.489,
+   "brier": 0.1702
+  },
+  "long_steps_progress_0-0.5": {
+   "n": 22327,
+   "positives": 0
+  },
+  "long_steps_progress_0.5-1": {
+   "n": 20587,
+   "positives": 10280,
+   "auroc": 0.752,
+   "recall": 0.698,
+   "precision": 0.744,
+   "brier": 0.1864
+  }
+ }
+}
