@@ -1,0 +1,18 @@
+pool64v4-pro6000-qwen32b-gpu0-c24-fcfs-sticky-tier96-20260913-r4: 1951 requests, slow tools []
+| tier GiB | policy | miss share | recompute share of prompt tokens |
+| 48.0 | lru | 0.088 | 0.084 |
+| 48.0 | oracle | 0.088 | 0.084 |
+| 48.0 | toolmed | 0.093 | 0.089 |
+| 48.0 | slowflag | 0.088 | 0.084 |
+| 96.0 | lru | 0.033 | 0.002 |
+| 96.0 | oracle | 0.033 | 0.002 |
+| 96.0 | toolmed | 0.037 | 0.008 |
+| 96.0 | slowflag | 0.033 | 0.002 |
+| 144.0 | lru | 0.033 | 0.002 |
+| 144.0 | oracle | 0.033 | 0.002 |
+| 144.0 | toolmed | 0.042 | 0.013 |
+| 144.0 | slowflag | 0.033 | 0.002 |
+| 192.0 | lru | 0.033 | 0.002 |
+| 192.0 | oracle | 0.033 | 0.002 |
+| 192.0 | toolmed | 0.035 | 0.005 |
+| 192.0 | slowflag | 0.033 | 0.002 |

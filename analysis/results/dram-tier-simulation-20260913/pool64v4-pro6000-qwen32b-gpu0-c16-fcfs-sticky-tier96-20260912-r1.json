@@ -1,0 +1,176 @@
+{
+ "run": "pool64v4-pro6000-qwen32b-gpu0-c16-fcfs-sticky-tier96-20260912-r1",
+ "requests": 1951,
+ "jobs": 64,
+ "hbm_tokens": 236496,
+ "tool_median_s": {
+  "edit_file": 0.0,
+  "exec": 0.06,
+  "list_dir": 0.0,
+  "read_file": 0.0,
+  "write_file": 0.0
+ },
+ "slow_tools": [],
+ "results": [
+  {
+   "tier_gib": 48.0,
+   "policy": "lru",
+   "capacity_tokens": 433104,
+   "requests": 1951,
+   "miss_share": 0.033,
+   "recompute_tokens": 61516,
+   "recompute_share_of_prompt_tokens": 0.002,
+   "new_tokens": 1569551
+  },
+  {
+   "tier_gib": 48.0,
+   "policy": "oracle",
+   "capacity_tokens": 433104,
+   "requests": 1951,
+   "miss_share": 0.033,
+   "recompute_tokens": 61516,
+   "recompute_share_of_prompt_tokens": 0.002,
+   "new_tokens": 1569551
+  },
+  {
+   "tier_gib": 48.0,
+   "policy": "toolmed",
+   "capacity_tokens": 433104,
+   "requests": 1951,
+   "miss_share": 0.05,
+   "recompute_tokens": 875352,
+   "recompute_share_of_prompt_tokens": 0.024,
+   "new_tokens": 1533387
+  },
+  {
+   "tier_gib": 48.0,
+   "policy": "slowflag",
+   "capacity_tokens": 433104,
+   "requests": 1951,
+   "miss_share": 0.033,
+   "recompute_tokens": 61516,
+   "recompute_share_of_prompt_tokens": 0.002,
+   "new_tokens": 1569551
+  },
+  {
+   "tier_gib": 96.0,
+   "policy": "lru",
+   "capacity_tokens": 629712,
+   "requests": 1951,
+   "miss_share": 0.033,
+   "recompute_tokens": 61516,
+   "recompute_share_of_prompt_tokens": 0.002,
+   "new_tokens": 1569551
+  },
+  {
+   "tier_gib": 96.0,
+   "policy": "oracle",
+   "capacity_tokens": 629712,
+   "requests": 1951,
+   "miss_share": 0.033,
+   "recompute_tokens": 61516,
+   "recompute_share_of_prompt_tokens": 0.002,
+   "new_tokens": 1569551
+  },
+  {
+   "tier_gib": 96.0,
+   "policy": "toolmed",
+   "capacity_tokens": 629712,
+   "requests": 1951,
+   "miss_share": 0.044,
+   "recompute_tokens": 697833,
+   "recompute_share_of_prompt_tokens": 0.019,
+   "new_tokens": 1545599
+  },
+  {
+   "tier_gib": 96.0,
+   "policy": "slowflag",
+   "capacity_tokens": 629712,
+   "requests": 1951,
+   "miss_share": 0.033,
+   "recompute_tokens": 61516,
+   "recompute_share_of_prompt_tokens": 0.002,
+   "new_tokens": 1569551
+  },
+  {
+   "tier_gib": 144.0,
+   "policy": "lru",
+   "capacity_tokens": 826320,
+   "requests": 1951,
+   "miss_share": 0.033,
+   "recompute_tokens": 61516,
+   "recompute_share_of_prompt_tokens": 0.002,
+   "new_tokens": 1569551
+  },
+  {
+   "tier_gib": 144.0,
+   "policy": "oracle",
+   "capacity_tokens": 826320,
+   "requests": 1951,
+   "miss_share": 0.033,
+   "recompute_tokens": 61516,
+   "recompute_share_of_prompt_tokens": 0.002,
+   "new_tokens": 1569551
+  },
+  {
+   "tier_gib": 144.0,
+   "policy": "toolmed",
+   "capacity_tokens": 826320,
+   "requests": 1951,
+   "miss_share": 0.04,
+   "recompute_tokens": 501543,
+   "recompute_share_of_prompt_tokens": 0.014,
+   "new_tokens": 1551291
+  },
+  {
+   "tier_gib": 144.0,
+   "policy": "slowflag",
+   "capacity_tokens": 826320,
+   "requests": 1951,
+   "miss_share": 0.033,
+   "recompute_tokens": 61516,
+   "recompute_share_of_prompt_tokens": 0.002,
+   "new_tokens": 1569551
+  },
+  {
+   "tier_gib": 192.0,
+   "policy": "lru",
+   "capacity_tokens": 1022928,
+   "requests": 1951,
+   "miss_share": 0.033,
+   "recompute_tokens": 61516,
+   "recompute_share_of_prompt_tokens": 0.002,
+   "new_tokens": 1569551
+  },
+  {
+   "tier_gib": 192.0,
+   "policy": "oracle",
+   "capacity_tokens": 1022928,
+   "requests": 1951,
+   "miss_share": 0.033,
+   "recompute_tokens": 61516,
+   "recompute_share_of_prompt_tokens": 0.002,
+   "new_tokens": 1569551
+  },
+  {
+   "tier_gib": 192.0,
+   "policy": "toolmed",
+   "capacity_tokens": 1022928,
+   "requests": 1951,
+   "miss_share": 0.039,
+   "recompute_tokens": 405981,
+   "recompute_share_of_prompt_tokens": 0.011,
+   "new_tokens": 1558880
+  },
+  {
+   "tier_gib": 192.0,
+   "policy": "slowflag",
+   "capacity_tokens": 1022928,
+   "requests": 1951,
+   "miss_share": 0.033,
+   "recompute_tokens": 61516,
+   "recompute_share_of_prompt_tokens": 0.002,
+   "new_tokens": 1569551
+  }
+ ]
+}

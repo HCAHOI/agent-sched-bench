@@ -570,7 +570,7 @@ include MORI-style idleness ranking and CacheWise-style ordering, not only LRU. 
 them report: the store-vs-admission decomposition at a sized DRAM tier, the starvation mechanism of
 residency-first admission, and the three-signal sandbox interface.
 
-**Night plan 2026-09-13 17:25 UTC (user: "我睡觉你就可以随便安排接下来做什么实验…自动研究推进到我发送早上询问消息").**
+**Night plan 2026-09-13 17:22 UTC (user: "我睡觉你就可以随便安排接下来做什么实验…自动研究推进到我发送早上询问消息").**
 Question of the night: is a return-time-aware DRAM tier worth building? Three pieces, pre-registered here:
 1. *DRAM-tier trace simulation (CPU, now).* Replay the c24 runs' own timelines (per task: request arrivals with
    prompt tokens, finishes, tool gaps as replayed) through a capacity-limited context cache: on arrival the context
@@ -586,6 +586,19 @@ Question of the night: is a return-time-aware DRAM tier worth building? Three pi
    tier stop carrying? Pinned DRAM 48 + 96 GiB fits the 240 GB cgroup; two replays run locally at once.
 Both chains ~3.3 h from ~20:50 UTC; results recorded in M4 §3.2 as the c24 capacity curve and the c16–c24 pressure
 curve. Ideas from the observations go into the morning summary.
+**Piece 1 result (17:45 UTC; `scripts/evaluation/dram_tier_simulation.py`, `analysis/results/dram-tier-simulation-20260913/`):
+a return-time-aware DRAM policy has no leverage on this workload.** In the c24 and c16 runs the tool gaps between
+a task's steps are p50 0.7 s, p90 2.2 s, only 5% ≥ 5 s and 1.6% ≥ 30 s, while the LLM steps take p50 31–75 s: an
+idle context comes back almost immediately, so which idle context to evict barely matters — the oracle (Belady,
+next arrival known) equals LRU at every capacity (tier-only 24 / 48 / 96 / 144 GiB: miss share 0.188 / 0.182 /
+0.095 / 0.035 for both), the per-tool-median policy is slightly worse, and no tool has a median time ≥ 2 s so the
+slow flag never fires. The real c24 run misses far more than the context-level simulation (cached 0.44 against a
+9.5% simulated miss share at 96 GiB) because the tier is full from 10% of the run on (93–95 GiB) and the
+in-flight footprint itself (24 × 17.9K = 430K tokens) exceeds the tier (393K), which the simulation charges as free
+overflow: the loss is capacity at chunk granularity, not eviction order. Reading: on this trace pool the DRAM tier
+is a sizing problem (tier ≥ concurrency × mean context, the knee measured by chains 24b / 26 / 27), not a policy
+problem; a return-time policy would only matter for workloads with long tool gaps (TraceLab: calls over 1 min are
+85% of tool time), which our replayed tools do not produce. The DRAM-policy line is closed before building it.
 
 **Chain 24, GPU 0 (user ~17:05 UTC "先用这个机器试试"; pre-registered 17:11 UTC, launched 17:11; `results/chain24-gpu0-32b-c24-tier192-20260913.sh`, log `results/chain24-gpu0-c24-tier192-20260913.log`).**
 DRAM capacity reference at c24: FCFS sticky + **192 GiB DRAM tier** (786K tokens; HBM KV 236K + DRAM = 1.02M tokens
