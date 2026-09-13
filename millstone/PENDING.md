@@ -579,7 +579,7 @@ any DRAM eviction policy can recover at 96 GiB: gain(policy) ≤ JCT(96) − JCT
 cached ≥ 0.85 → capacity is the whole story and a return-time-aware DRAM policy has up to ~35 min/task to win at 96
 GiB; ≥ 85 min → the c24 loss is compute/throughput, not DRAM, and the eviction-policy line is not worth building.
 ~3.5 h, 5 h budget.
-**Amendment 17:25 UTC (before any number): 192 GiB cannot start on this container** — its memory cgroup is capped at
+**Amendment 17:14 UTC (before any number): 192 GiB cannot start on this container** — its memory cgroup is capped at
 240 GB (`memory.max` 257,698,037,760) although the host shows 1 TB; the engine core died while pinning the tier.
 The same question runs at **144 GiB** (590K tokens; HBM 236K + DRAM = 826K, the p90-step peak; `…-tier144-…-r1`,
 `results/chain24b-gpu0-32b-c24-tier144-20260913.sh`, log `results/chain24b-gpu0-c24-tier144-20260913.log`). Rule
