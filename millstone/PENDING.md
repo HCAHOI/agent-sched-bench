@@ -489,8 +489,9 @@ over the prompt from the structured target. Missing both rules closes the point-
 
 **Result (11:08 UTC; `analysis/results/.../outlets-agent-20260913/`): both rules missed.** Natural test (857):
 scalar head q50 1.32 / q90 2.52 / long recall 0.21 at precision 0.50; structured head 1.30 / 2.59 / 0.23 at 0.50
-(shallow probe 1.35 / 2.66 / 0.16 at 0.58); tool accuracy 0.86; dynamic normalised MAE 0.235. Seed 1: 1.34 / 0.07
-and 1.33 / 0.16 (seeds 2/3 pending): the tail gain is within seed noise. Ablations: frozen backbone 1.27 / recall
+(shallow probe 1.35 / 2.66 / 0.16 at 0.58); tool accuracy 0.86; dynamic normalised MAE 0.235. Four seeds (42/1/2/3): scalar q50 1.32 / 1.34 / 1.26 / 1.30 with long recall 0.21 / 0.07 / 0.12 / 0.23 (mean 0.16,
+exactly the shallow probe's); structured q50 1.30 / 1.33 / 1.30 / 1.38 with recall 0.23 / 0.16 / 0.19 / 0.33 (mean 0.23 at
+precision 0.32–0.88): the tail gain is a few points and within seed noise. Lane 5 finished 11:16 UTC; GPU 1 idle since. Ablations: frozen backbone 1.27 / recall
 0.19 (fine-tuning the draft adds nothing), scalar-only 1.30 / 0.14 (the structured target adds a few points of
 recall). Recorded-label model (64 tasks excluded, test 854): q50 1.49 / recall 0.51 at precision 0.59 (shallow
 recorded head 1.42 / 0.36 / 0.57), but on the 32B DualMap replay the stage-2 estimate is worse: p90 absolute error
