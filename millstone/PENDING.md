@@ -466,6 +466,16 @@ k = 256 gain, SPORK's argument curve); (5) training size; layer choice last. Pro
 features) long-bin classifier with a recall-tuned threshold + tool-name-event dynamic estimate + a tool-execution
 latency-bucket head on the recorded features; B (GPU 1, ~6 h) multi-draw train labels with distributional targets;
 C (GPU 1, ~2 h) whole-prompt pooled features. B and C wait for the user's go.
+**A result (11:20 UTC, CPU on the existing static features, natural labels for length, recorded tool timings for
+latency; class-weighted MLP, validation-selected).** Long bin (> 512 tokens, 43 positives of 860 test): AUROC 0.87
+(final layer) / 0.85 (fused layers); recall / precision at thresholds 0.5 → 0.77 / 0.21, 0.7 → 0.65 / 0.25, 0.8 →
+0.56 / 0.29. The prompt-side state ranks long outputs well; the pre-registered recall-at-precision-0.5 is not
+reachable because the base rate is 5%, which a point regressor hides and an alert exposes — a "long step" alert at
+recall 0.56 / precision 0.29 is available if a false alarm is cheap for the consumer. Tool-execution latency bucket
+(five canonical classes, 687 test steps with a following tool): exact accuracy 0.54 / 0.70 against a 0.78 majority
+(bucket ≤ 500 ms), within-one 0.80 / 0.86; the decision-relevant "≥ 2 s tool" flag reaches recall 0.78 at precision
+0.32 / 0.43 (base rate 14%) before the call is written. Next for branch 2 would be the comparison with the
+text-based tool-resource predictor after the call is complete (~1 h, CPU).
 
 **OUTLETS-agent (user go ~05:25 UTC "可以，投吧"; pre-registered 05:30 UTC; ~1 day of work, GPU 1).**
 The paper's method (arXiv 2609.01068: EAGLE-3-style draft decoder over the target's layer 2 / N/2 / N−2 states,
