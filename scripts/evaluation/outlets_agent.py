@@ -521,7 +521,7 @@ def eval_policy(a: argparse.Namespace) -> None:
     import torch
     from torch import nn
 
-    ck = torch.load(a.head, map_location="cpu"); H = ck["horizons"]; mu, sd = ck["mu"], ck["sd"]
+    ck = torch.load(a.head, map_location="cpu", weights_only=False); H = ck["horizons"]; mu, sd = ck["mu"], ck["sd"]
     head = nn.Sequential(nn.Linear(len(mu), 256), nn.GELU(), nn.Dropout(0.1), nn.Linear(256, 2 * len(H)))
     head.load_state_dict(ck["state"]); head.eval()
     rows = [{**r, "_dir": a.features, "_window": a.completion_window}
