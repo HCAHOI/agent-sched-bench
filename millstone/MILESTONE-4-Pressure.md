@@ -471,8 +471,11 @@ prompt tokens; 106,532 evictions); throughput fell to 15.1 steps/min from 23.6 a
 lost to cache thrash rather than converted into work. The sized store alone does not carry the pressure once the
 working set exceeds it. DualMap + 96 GiB at c24: the first attempt aborted at 97% because DualMap's admission starved one request for the
 full 1,800 s step timeout (hold p99 954 s, max 1,782 s over 1,898 dispatched requests; the c16 run's max was 1,778 s);
-rerun with a 3,600 s step timeout from 11:06 UTC (chain 23) so DualMap's starvation tail is measured rather than
-aborted.
+the rerun with a 3,600 s step timeout (chain 23) failed the same way: one request never dispatched in 88 min
+while the others flowed (hold p50 0 s, p90 10 s, max 1,895 s). Three of five DualMap runs at 32B single-engine lost a
+request to the scheduler's waiting pool and the two that completed had max holds of ~1,780 s. **DualMap + 96 GiB at
+c24: does not complete the workload (indefinite starvation of one request per run).** The pressure-axis comparison
+therefore reads: the sized store alone degrades gracefully to 99 min; the official admission scheduler starves.
 
 ## 4. Evidence
 
