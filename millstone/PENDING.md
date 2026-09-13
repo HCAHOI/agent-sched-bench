@@ -391,7 +391,7 @@ confirms the rescue. Expected finish (revised 17:45 UTC after FCFS+96 took 1.85 
 
 **Fills for idle devices (user: "如果有设备空闲，但是我还没有回来，安排最有价值的实验进行填充"; pre-registered 18:45 UTC, both lanes launched 18:46 waiting on their predecessors).**
 
-*Lane 3, GPU 1 after lane 2* (`results/host-lanes/lane3-20260912.sh`, log
+*Lane 3, GPU 1 after lane 2* — **cancelled by the user 02:35 UTC before it started** (GPU 1 stays idle after lane 2 until a stated need) (`results/host-lanes/lane3-20260912.sh`, log
 `/workspace/outlen/lane3-20260912.log`): the output-length work moved onto the
 platform model. Qwen3-32B-FP8 (YaRN ×4 for the 7% of prompts above 40K)
 generates thinking-mode natural labels for dataset-nat (64K cap, temperature
