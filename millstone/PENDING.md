@@ -415,10 +415,10 @@ run, `pool64v4-pro6000-qwen32b-gpu0-c16-fcfs-sticky-20260912-r1`) with a
 tier hit share under 10% confirms it; DualMap+24 faster than plain FCFS
 confirms the rescue. Expected finish (revised 17:45 UTC after FCFS+96 took 1.85 h instead of 3.5): DualMap+96 ~19:30, FCFS+24 by ~00:30 (5 h budget), DualMap+24 by ~04:00.
 
-**Lane 4, GPU 1 (user 04:35 UTC "为什么不取多几层呢？", go given 04:50; pre-registered 05:05 UTC; `results/host-lanes/lane4-20260913.sh`, log `/workspace/outlen/lane4-20260913.log`).**
+**Lane 4, GPU 1 (user ~04:20 UTC "为什么不取多几层呢？", go ~04:25; pre-registered 04:32 UTC, launched 04:32; `results/host-lanes/lane4-20260913.sh`, log `/workspace/outlen/lane4-20260913.log`).**
 Multi-layer last-token features: the residual stream after layers 2 / 24 / 45 plus the final normed state of
 Qwen3-30B-A3B-Instruct-2507-FP8 (48 layers; the EAGLE-3 / OUTLETS layer convention), 8,192 dims, from the pooling
-server with the aux-hidden-state patch `scripts/evaluation/vllm_aux_layers_sitecustomize.py` (smoke 05:00 UTC: final
+server with the aux-hidden-state patch `scripts/evaluation/vllm_aux_layers_sitecustomize.py` (smoke 04:30 UTC: final
 block matches the stored final-layer feature at cosine 0.988, eager kernels). Same MSE head, same splits, natural
 labels (test tail metrics, seeds 42/1/2/3), recorded labels with the 64 replayed tasks excluded, replay predictions.
 Question: is the tail information (B: reproducible; C: not in the final layer's last token) in other layers?
