@@ -432,15 +432,20 @@ def train_hazard(a: argparse.Namespace) -> None:
 
     torch.manual_seed(a.seed); np.random.seed(a.seed)
     H = [int(x) for x in a.horizons.split(",")]
-    rows = [r for r in _read_jsonl(a.features / "index.jsonl") if r["n_completion"] > 0]
+    rows = [{**r, "_dir": a.features, "_window": a.completion_window}
+            for r in _read_jsonl(a.features / "index.jsonl") if r["n_completion"] > 0]
+    if a.extra_features:  # e.g. the >512-token completions re-extracted to full length: replace the truncated rows
+        extra = {r["sample_id"]: {**r, "_dir": a.extra_features, "_window": a.extra_window}
+                 for r in _read_jsonl(a.extra_features / "index.jsonl") if r["n_completion"] > 0}
+        rows = [extra.pop(r["sample_id"], r) for r in rows] + list(extra.values())
 
     def positions(r):
-        z = np.load(a.features / r["file"]); X = z["feats"].astype(np.float32)
+        z = np.load(r["_dir"] / r["file"]); X = z["feats"].astype(np.float32)
         if a.format == "outlets":  # OUTLETS-agent extraction: rows are [prompt window | completion], no </think>
             n_pk = r["n_prompt_kept"]; keep = np.arange(len(X)) >= n_pk - 1
             X = X[keep]; t = np.arange(len(X)) - 1                  # static row t = -1, then completion positions 0..n_c-1
             r = {**r, "n_prompt": n_pk, "think_end": -1, "label_total": r["label_tokens"],
-                 "truncated": r["n_completion"] >= a.completion_window}
+                 "truncated": r["n_completion"] >= r["_window"]}
         else:
             pos = z["pos"].astype(np.int64); t = pos - r["n_prompt"]  # completion-relative; the static row has t = -1
         L = r["n_completion"] if not r["truncated"] else max(r["n_completion"], r["label_total"])  # rendered length (approx. label_total)
@@ -449,14 +454,15 @@ def train_hazard(a: argparse.Namespace) -> None:
         y = np.array([[rt <= h for h in H] + [rr <= h for h in H] for rt, rr in zip(rem_total, rem_reason)], dtype=np.float32)
         prog = np.clip((t + 1) / max(1, L), 0, 1)
         past_think = (t + 1) > r["think_end"] if r["think_end"] >= 0 else np.zeros_like(t, dtype=bool)
-        return X, y, prog, past_think
+        long_step = np.full(len(t), L > 512)
+        return X, y, prog, past_think, long_step
 
     data = {s: [] for s in ("train", "validation", "test")}
     for r in rows:
         data[r["split"]].append(positions(r))
     cat = lambda part, i: np.concatenate([d[i] for d in part])
     Xtr, ytr = cat(data["train"], 0), cat(data["train"], 1); Xva, yva = cat(data["validation"], 0), cat(data["validation"], 1)
-    Xte, yte, pte, pastte = cat(data["test"], 0), cat(data["test"], 1), cat(data["test"], 2), cat(data["test"], 3)
+    Xte, yte, pte, pastte, longte = (cat(data["test"], i) for i in range(5))
     mu, sd = Xtr.mean(0), Xtr.std(0) + 1e-6
     T = lambda X: torch.tensor((X - mu) / sd)
     xtr, xva, xte = T(Xtr), T(Xva), T(Xte); ytr_t, yva_t = torch.tensor(ytr), torch.tensor(yva)
@@ -497,6 +503,9 @@ def train_hazard(a: argparse.Namespace) -> None:
                 res[f"progress_{lo}-{hi if hi < 1 else 1}"] = score(p[m, c], yte[m, c])
             if target == "reasoning":
                 m = ~pastte & (pte > 0); res["during_reasoning"] = score(p[m, c], yte[m, c])
+            m = longte & (pte > 0); res["long_steps_over_512"] = score(p[m, c], yte[m, c])
+            for lo, hi in ((0, .5), (.5, 1.01)):
+                m = longte & (pte > lo) & (pte <= hi); res[f"long_steps_progress_{lo}-{hi if hi < 1 else 1}"] = score(p[m, c], yte[m, c])
             out[f"{target}_within_{h}"] = res
     a.out.mkdir(parents=True, exist_ok=True)
     (a.out / "evaluation.json").write_text(json.dumps(out, indent=1))
@@ -535,6 +544,7 @@ def main() -> None:
     th.add_argument("--features", type=Path, required=True); th.add_argument("--out", type=Path, required=True)
     th.add_argument("--horizons", default="64,256,1024"); th.add_argument("--epochs", type=int, default=30); th.add_argument("--seed", type=int, default=42)
     th.add_argument("--format", choices=("hazard", "outlets"), default="hazard"); th.add_argument("--completion-window", type=int, default=512)
+    th.add_argument("--extra-features", type=Path); th.add_argument("--extra-window", type=int, default=2048)
     a = p.parse_args()
     {"extract": extract, "train": train, "predict": predict_cmd, "extract-hazard": extract_hazard, "train-hazard": train_hazard}[a.command](a)
 
