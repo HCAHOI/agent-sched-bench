@@ -451,7 +451,7 @@ Paired mean-JCT differences: sized tier − nothing **−3,473 s [−3,832, −3
 **+119 s [+92, +145]** (read 23:21 UTC, chain 20: 44M tokens stored and evicted, 4 retrieves, cached share unchanged at
 0.18, so the 4B reading (1) "a tier smaller than the working set is pure cost" holds at 32B, at a smaller cost
 because the 32B store call is a smaller share of a 82 s request); DualMap + undersized tier − nothing **−3,232 s
-[−3,618, −2,845]** (read 01:27 UTC): admission alone, with a store that serves nothing, recovers almost the whole
+[−3,618, −2,845]** (read 01:25 UTC): admission alone, with a store that serves nothing, recovers almost the whole
 gain (57.83 min against 53.81 for the sized store alone), by holding requests at the proxy (17.6 s per request) until
 the resident contexts fit the GPU cache (cached share 0.85, TPOT 91 ms, in-engine queue 0.9 s). The 4B reading (3) holds
 with a larger margin at 32B: the sized store alone halves the step (queue 39.7 → 17.7 s, decode 36.2 → 19.6 s) because
