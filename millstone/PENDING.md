@@ -449,7 +449,7 @@ target (tool × conditional length) and event-timed dynamic updates; the "contex
 supported. OUTLETS proper remains the only untried reader of the prefix (attention over all positions with
 completion-side supervision); the paper's own static gain over its MLP baseline is ~5% MAE.
 
-: "如果有设备空闲，但是我还没有回来，安排最有价值的实验进行填充"; pre-registered 18:45 UTC, both lanes launched 18:46 waiting on their predecessors).**
+**Fills for idle devices (user: "如果有设备空闲，但是我还没有回来，安排最有价值的实验进行填充"; pre-registered 18:45 UTC, both lanes launched 18:46 waiting on their predecessors).**
 
 **OUTLETS-agent (user go ~05:25 UTC "可以，投吧"; pre-registered 05:30 UTC; ~1 day of work, GPU 1).**
 The paper's method (arXiv 2609.01068: EAGLE-3-style draft decoder over the target's layer 2 / N/2 / N−2 states,
