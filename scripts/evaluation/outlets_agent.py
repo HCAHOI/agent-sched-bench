@@ -479,8 +479,8 @@ def train_hazard(a: argparse.Namespace) -> None:
             return {"n": int(len(y)), "positives": int(y.sum())}
         auc = float((pr[y == 1][:, None] > pr[y == 0][None, :]).mean()) if len(y) < 20000 else float(np.mean([(pr[y == 1] > v).mean() for v in pr[y == 0][:2000]]))
         pred = pr >= 0.5; tp = float((pred & (y == 1)).sum())
-        return {"n": int(len(y)), "positives": int(y.sum()), "auroc": round(auc, 3), "recall": round(tp / max(1, y.sum()), 3),
-                "precision": round(tp / max(1, pred.sum()), 3), "brier": round(float(((pr - y) ** 2).mean()), 4)}
+        return {"n": int(len(y)), "positives": int(y.sum()), "auroc": round(auc, 3), "recall": round(float(tp / max(1, y.sum())), 3),
+                "precision": round(float(tp / max(1, pred.sum())), 3), "brier": round(float(((pr - y) ** 2).mean()), 4)}
 
     out = {"horizons": H, "positions_test": int(len(yte)), "counts": {k: len(v) for k, v in data.items()}, "best_validation_bce": round(best, 4)}
     for j, target in enumerate(("total", "reasoning")):
