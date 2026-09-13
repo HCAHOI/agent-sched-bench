@@ -451,6 +451,22 @@ completion-side supervision); the paper's own static gain over its MLP baseline 
 
 **Fills for idle devices (user: "如果有设备空闲，但是我还没有回来，安排最有价值的实验进行填充"; pre-registered 18:45 UTC, both lanes launched 18:46 waiting on their predecessors).**
 
+**Literature check 2026-09-13 10:45 UTC (subagent; user: "近三个月通过 hidden state 预测 agent tool call 的工作").**
+No paper from June–September 2026 predicts an agent step's output or argument length from hidden states. Agent
+hidden-state work predicts categorical targets: tool identity (SPORK 2607.03333, KV-fork + forced tool prefix,
+name 75–99% but arguments 7.6% exact at generation start; Speculate-While-You-Reason 2607.25816; Linearly Readable
+2605.07990), tool necessity (When2Tool 2605.09252, all-layer linear probe, AUROC 0.89–0.96), call errors (PNNL
+2608.27750), parameter correctness (ParamBench 2608.03071), program state on SWE-bench (KTH 2607.05188). Length from
+hidden states exists only on ≤2K-token chat prompts (OUTLETS 2609.01068; ProD 2604.07931: 16 draws per prompt,
+median/histogram targets, −10–25% MAE vs last-token regression; EGTP/PLP 2602.11812: entropy-weighted pooling over
+all prompt positions, −39% MAE on long inputs), all MAE-only, none reports long-output recall. Ranked explanations of
+our tail failure: (1) single greedy-draw labels with a point objective on a heavy-tailed target; (2) no explicit
+long-bin mass; (3) the draft sees the last 1,024 of ~13K positions; (4) content commits during reasoning (our
+k = 256 gain, SPORK's argument curve); (5) training size; layer choice last. Proposed next: A (CPU, existing
+features) long-bin classifier with a recall-tuned threshold + tool-name-event dynamic estimate + a tool-execution
+latency-bucket head on the recorded features; B (GPU 1, ~6 h) multi-draw train labels with distributional targets;
+C (GPU 1, ~2 h) whole-prompt pooled features. B and C wait for the user's go.
+
 **OUTLETS-agent (user go ~05:25 UTC "可以，投吧"; pre-registered 05:30 UTC; ~1 day of work, GPU 1).**
 The paper's method (arXiv 2609.01068: EAGLE-3-style draft decoder over the target's layer 2 / N/2 / N−2 states,
 log-space remaining-length head supervised at every completion position, static estimate at t = 0) adapted to
