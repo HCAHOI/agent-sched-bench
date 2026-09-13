@@ -21,6 +21,7 @@ import math
 import random
 import statistics
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -69,16 +70,38 @@ def extract(a: argparse.Namespace) -> None:
     a.out.mkdir(parents=True, exist_ok=True)
     index_path = a.out / "index.jsonl"
     done = {r["sample_id"] for r in _read_jsonl(index_path)} if index_path.exists() else set()
-    todo = [p for p in prefixes if p["sample_id"] not in done and (not a.completions or p["sample_id"] in completions)]
-    print(f"{len(done)} cached, {len(todo)} to extract", flush=True)
+    wanted = [p for p in prefixes if p["sample_id"] not in done and (not a.completions or p["sample_id"] in completions)]
+    tok_lock = threading.Lock()  # the fast tokenizer is not thread-safe ("Already borrowed")
+
+    def row_of(p: dict, n_p: int, kept_ids: np.ndarray) -> dict:
+        sid = p["sample_id"]
+        start = max(0, n_p - a.prompt_tokens)
+        tc = (completions.get(sid) or {}).get("tool_calls") or []
+        tool = ((tc[0].get("function") or {}).get("name") if tc else None) or ("final" if sid in completions else None)
+        return {"sample_id": sid, "split": p["split"], "file": f"{sid.replace('/', '__')}.npz", "n_prompt_kept": n_p - start,
+                "n_completion": len(kept_ids) - (n_p - start), "prompt_tokens": n_p, "label_tokens": labels.get(sid), "tool": tool}
+
+    # feature files from an interrupted run: rebuild their index rows without the server
+    recovered, todo = 0, []
+    with index_path.open("a") as out:
+        for p in wanted:
+            f = a.out / f"{p['sample_id'].replace('/', '__')}.npz"
+            if f.exists():
+                prompt, _ = _render(tok, p["messages"], tools, completions.get(p["sample_id"]))
+                n_p = len(tok(prompt, add_special_tokens=False).input_ids)
+                out.write(json.dumps(row_of(p, n_p, np.load(f)["ids"])) + "\n"); recovered += 1
+            else:
+                todo.append(p)
+    print(f"{len(done)} cached, {recovered} recovered, {len(todo)} to extract", flush=True)
 
     def one(p: dict) -> dict:
         sid = p["sample_id"]
-        prompt, comp = _render(tok, p["messages"], tools, completions.get(sid))
-        p_ids = tok(prompt, add_special_tokens=False).input_ids
-        c_ids = tok(comp, add_special_tokens=False).input_ids[: a.completion_tokens] if comp else []
-        text = prompt + (tok.decode(c_ids) if c_ids else "")
-        ids = tok(text, add_special_tokens=False).input_ids
+        with tok_lock:
+            prompt, comp = _render(tok, p["messages"], tools, completions.get(sid))
+            p_ids = tok(prompt, add_special_tokens=False).input_ids
+            c_ids = tok(comp, add_special_tokens=False).input_ids[: a.completion_tokens] if comp else []
+            text = prompt + (tok.decode(c_ids) if c_ids else "")
+            ids = tok(text, add_special_tokens=False).input_ids
         r = client.post(f"{a.api_base.rstrip('/')}/pooling", json={"model": a.model, "input": text, "task": "token_embed",
                                                                  "encoding_format": "base64"})
         if r.status_code >= 400:
@@ -95,19 +118,21 @@ def extract(a: argparse.Namespace) -> None:
         start = max(0, n_p - a.prompt_tokens)
         keep_feats = feats[start: n_p + n_c].astype(np.float16)           # positions [start, n_p + n_c)
         keep_ids = np.asarray(ids[start: n_p + n_c], dtype=np.int32)      # same positions; next tokens = shift by one
-        tc = (completions.get(sid) or {}).get("tool_calls") or []
-        tool = ((tc[0].get("function") or {}).get("name") if tc else None) or ("final" if sid in completions else None)
         np.savez(a.out / f"{sid.replace('/', '__')}.npz", feats=keep_feats, ids=keep_ids)
-        return {"sample_id": sid, "split": p["split"], "file": f"{sid.replace('/', '__')}.npz", "n_prompt_kept": n_p - start,
-                "n_completion": n_c, "prompt_tokens": n_p, "label_tokens": labels.get(sid), "tool": tool}
+        return row_of(p, n_p, keep_ids)
 
+    rejected = 0
     with httpx.Client(timeout=a.timeout_s, trust_env=False) as client, index_path.open("a") as out, \
-            ThreadPoolExecutor(max_workers=a.concurrency) as pool:
-        futures = [pool.submit(one, p) for p in todo]
+            (a.out / "rejected.jsonl").open("a") as rej, ThreadPoolExecutor(max_workers=a.concurrency) as pool:
+        futures = {pool.submit(one, p): p["sample_id"] for p in todo}
         for n, f in enumerate(as_completed(futures), 1):
-            out.write(json.dumps(f.result()) + "\n"); out.flush()
+            try:
+                out.write(json.dumps(f.result()) + "\n"); out.flush()
+            except Exception as e:  # one bad example must not end the run; it is recorded and skipped
+                rej.write(json.dumps({"sample_id": futures[f], "error": f"{type(e).__name__}: {e}"[:300]}) + "\n"); rej.flush(); rejected += 1
             if n % 100 == 0:
-                print(f"extracted {n}/{len(todo)}", flush=True)
+                print(f"extracted {n}/{len(todo)} ({rejected} rejected)", flush=True)
+    print(f"done: {len(todo) - rejected} extracted, {rejected} rejected", flush=True)
     (a.out / "protocol.json").write_text(json.dumps({"model": a.model, "features": "fc(cat(h2,h24,h45)) per token, float16",
                                                      "prompt_tokens_kept": a.prompt_tokens, "completion_tokens_max": a.completion_tokens,
                                                      "completions": str(a.completions) if a.completions else None}, indent=1))
