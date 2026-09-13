@@ -353,7 +353,7 @@ target model reproduces across draws; the gap to the ceiling is information/meth
 OUTLETS-faithful or a 32B probe, lane 3) is justified, and the sandbox interface's event design is a choice, not a
 necessity forced by unpredictability.
 
-**C result (04:15 UTC; `analysis/results/.../continuation-20260913/`; base probe scored on the same subsets):**
+**C result (04:14 UTC; `analysis/results/.../continuation-20260913/`; base probe scored on the same subsets):**
 the rule "long recall above 0.5 at some k" is **not met**. After k = 16 tokens (842 test samples): q50 1.34 → 1.26,
 long recall 0.16 → 0.09; k = 64 (428): 1.48 → 1.41, recall 0.05; k = 256 (157): 1.57 → 1.44, q90 4.9 → 2.9, recall
 0.16 → 0.47 at precision 0.44. The first 64 generated tokens add almost nothing about the tail; only at 256 tokens,
