@@ -435,8 +435,14 @@ def train_hazard(a: argparse.Namespace) -> None:
     rows = [r for r in _read_jsonl(a.features / "index.jsonl") if r["n_completion"] > 0]
 
     def positions(r):
-        z = np.load(a.features / r["file"]); pos = z["pos"].astype(np.int64); X = z["feats"].astype(np.float32)
-        t = pos - r["n_prompt"]                                 # completion-relative; the static row has t = -1
+        z = np.load(a.features / r["file"]); X = z["feats"].astype(np.float32)
+        if a.format == "outlets":  # OUTLETS-agent extraction: rows are [prompt window | completion], no </think>
+            n_pk = r["n_prompt_kept"]; keep = np.arange(len(X)) >= n_pk - 1
+            X = X[keep]; t = np.arange(len(X)) - 1                  # static row t = -1, then completion positions 0..n_c-1
+            r = {**r, "n_prompt": n_pk, "think_end": -1, "label_total": r["label_tokens"],
+                 "truncated": r["n_completion"] >= a.completion_window}
+        else:
+            pos = z["pos"].astype(np.int64); t = pos - r["n_prompt"]  # completion-relative; the static row has t = -1
         L = r["n_completion"] if not r["truncated"] else max(r["n_completion"], r["label_total"])  # rendered length (approx. label_total)
         rem_total = L - (t + 1)
         rem_reason = (r["think_end"] - (t + 1)) if r["think_end"] >= 0 else rem_total
@@ -528,6 +534,7 @@ def main() -> None:
     th = sub.add_parser("train-hazard")
     th.add_argument("--features", type=Path, required=True); th.add_argument("--out", type=Path, required=True)
     th.add_argument("--horizons", default="64,256,1024"); th.add_argument("--epochs", type=int, default=30); th.add_argument("--seed", type=int, default=42)
+    th.add_argument("--format", choices=("hazard", "outlets"), default="hazard"); th.add_argument("--completion-window", type=int, default=512)
     a = p.parse_args()
     {"extract": extract, "train": train, "predict": predict_cmd, "extract-hazard": extract_hazard, "train-hazard": train_hazard}[a.command](a)
 

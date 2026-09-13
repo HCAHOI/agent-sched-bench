@@ -508,7 +508,7 @@ optimistic relative to a per-step read; reasoning that ran past the 2,048-token 
 Reading for the interface: for a thinking target the phase-transition alert ("reasoning closes within 256 / 64
 tokens") is a real, calibrated dynamic signal — the `reasoning closed` event of §10 can be announced ahead of time;
 the end of the whole step remains bounded by the visible-part tail.
-**B stopped 16:10 UTC at 3,972 of 13,848 draws (user: a static predictor retrained on 4–16 draws cannot plausibly
+**B stopped 16:12 UTC at 4,012 of 13,848 draws (user: a static predictor retrained on 4–16 draws cannot plausibly
 beat the dynamic signal, 16 draws is brute force, and even +25% would not reach the rule; improve the dynamic side
 instead).** The partial file `natural-labels-sampled-trainval-d4` is kept, unused. GPU 1 idle from 16:10 UTC. Next,
 CPU only: D′ = the same hazard probe on the Instruct model's own completions (features already extracted for
