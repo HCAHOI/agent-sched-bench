@@ -566,6 +566,18 @@ with cached share ≥ 0.85 and max admission wait ≤ 600 s → the thesis holds
 bounded FIFO admission", no residency priority needed); mean JCT ≥ 85 min → the gate alone does not help and
 residency-aware admission is necessary; the admission-wait distribution (p50/p90/max) and throughput are reported
 either way. Smoke first (`--smoke` with the gate), ~3.5 h, 5 h budget.
+**Result (16:57 UTC): rule not met — the gate alone does not help.** Mean JCT **96.15 min** against 99.11 for FCFS +
+96 GiB at c24 (paired −177 s [−205, −151]), P95 177.5 vs 183.9, makespan 192 vs 199, throughput 14.0 vs 13.3
+steps/min; cached share **0.44 in both**, TPOT 136 vs 141 ms, tier served 40% of prompt tokens in both with ~105K
+evictions in both. The gate worked as designed (in-flight tokens held at ≈ 230K; admission wait mean 48 s, p50 34 s,
+p90 104 s, max 147 s; no starvation) and moved the wait from the engine queue (70 → 18 s) to the proxy, which is
+where the 3% comes from. My interim estimate from the proxy's routing log (mean 49.5 min, reported 16:52 UTC) was
+wrong and is retracted: the simulator's per-task JCT is the measure, as for every other cell. Mechanism: the
+misses at c24 are not in-flight contention but tier capacity — contexts of tasks in tool gaps are evicted from the
+96 GiB store before they return (same cached share and eviction count with or without the gate), which no dispatch
+order can fix. Per the pre-registered reading, bounded FIFO admission is not the pressure-side mechanism; what the
+data now points at is store capacity (192 GiB at c24, the run declined at 13:10 as unmotivated, now motivated) or
+return-time-aware eviction in the store (the slow-tool flag's consumer), both user decisions.
 
 **OUTLETS-agent (user go ~05:25 UTC "可以，投吧"; pre-registered 05:30 UTC; ~1 day of work, GPU 1).**
 The paper's method (arXiv 2609.01068: EAGLE-3-style draft decoder over the target's layer 2 / N/2 / N−2 states,
