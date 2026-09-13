@@ -359,6 +359,12 @@ interface is three events with a bound attached, not one predicted duration:
    resolved. At 32B, 85% of steps keep ≥ 1.8 s after this event (97% keep ≥ 1.0 s); at 4B about half.
 3. **`finished`**.
 
+For a thinking-mode target the second event can be announced ahead of time: a per-position probe on the thinking
+model's own final-layer states (`hazard-think-20260913/`, P(reasoning closes within X tokens), user's hazard
+formulation) reaches AUROC 0.88–0.94 with recall ≈ 0.8 at precision ≥ 0.78 for X = 256 past 25% of the output, and
+AUROC ≥ 0.94 with recall ≥ 0.83 for X = 64; the end of the whole step stays unpredictable in the middle of the output
+(recall 0.42–0.46) because the visible tool call after `</think>` carries the old tail.
+
 Thinking-mode check (Qwen3-30B-A3B-Thinking-2507-FP8, one sampled draw per prefix at temperature 0.6, 64K cap, 4,301
 labels; `thinking-20260913/`): reasoning is 91% of the output at the median (672 reasoning vs 44 visible tokens), so
 event 2 arrives when the step is essentially finished; the remainder by tool name scores q50 1.57 (visible constant

@@ -494,6 +494,21 @@ retrained on the per-prefix median and on a 3-bucket histogram target (soft cros
 1.35, or q90 improved by ≥ 15% over the shallow probe (2.66). ~1.5 h (D) + ~6 h (B) on GPU 1; D's head trains on
 the CPU while B samples.
 
+**D result (13:32 UTC; 4,215 completions extracted, 86 transient rejects; test = 832 steps, 230,533 positions;
+`analysis/results/.../hazard-think-20260913/`).** The "reasoning closes within 256 tokens" flag **meets the rule at
+every progress quartile past 25%**: AUROC 0.94 / 0.88 / 0.91, recall 0.81 / 0.77 / 0.77, precision 0.78 / 0.88 / 0.99
+for progress 25–50 / 50–75 / 75–100% (Brier 0.06–0.15); within 64 tokens (≈ 2 s): AUROC 0.99 / 0.98 / 0.94, recall
+0.92 / 0.93 / 0.83 at precision 0.91–0.97. The "whole output ends within 256 tokens" flag does **not** meet it in the
+middle quartiles (AUROC 0.81 / 0.75, recall 0.46 / 0.42, precision 0.28 / 0.49; base rate 3–18% there) and only
+passes in the last quartile (0.81, 0.62 / 0.95): once reasoning closes, what remains is the visible tool call, the
+same tail the prompt-side probes never resolved. Static position (before any token): "ends within 256" AUROC 0.98,
+recall 0.93 at precision 0.85 (147 of 832 steps), i.e. the prompt state does know which steps will barely think;
+"within 1,024" 0.83. Caveats: positions within a step are correlated (every 4th token), so the pooled AUROC is
+optimistic relative to a per-step read; reasoning that ran past the 2,048-token window is labelled as not closing.
+Reading for the interface: for a thinking target the phase-transition alert ("reasoning closes within 256 / 64
+tokens") is a real, calibrated dynamic signal — the `reasoning closed` event of §10 can be announced ahead of time;
+the end of the whole step remains bounded by the visible-part tail.
+
 **Chain 25, GPU 0 (user ~13:15 UTC "试试呗" on the FIFO working-set admission; pre-registered 13:21 UTC; `results/chain25-gpu0-32b-c24-fifo-20260913.sh`, log `results/chain25-gpu0-c24-fifo-20260913.log`).**
 Our own admission: the least-requests proxy gains `--admission-tokens N` (`scripts/baselines/least_requests_proxy.py`,
 test `test_fifo_admission_holds_the_second_request_until_the_first_finishes`): a request is dispatched only when it is
