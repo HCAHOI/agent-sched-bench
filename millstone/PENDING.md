@@ -487,7 +487,7 @@ Dynamic: MAE at t of the paper's definition reported; the tool-name event estima
 constant (q-err 1.70). Two ablations, frozen backbone (heads only) and scalar-only head, separate the attention
 over the prompt from the structured target. Missing both rules closes the point-predictor line for good.
 
-**Result (11:10 UTC; `analysis/results/.../outlets-agent-20260913/`): both rules missed.** Natural test (857):
+**Result (11:08 UTC; `analysis/results/.../outlets-agent-20260913/`): both rules missed.** Natural test (857):
 scalar head q50 1.32 / q90 2.52 / long recall 0.21 at precision 0.50; structured head 1.30 / 2.59 / 0.23 at 0.50
 (shallow probe 1.35 / 2.66 / 0.16 at 0.58); tool accuracy 0.86; dynamic normalised MAE 0.235. Seed 1: 1.34 / 0.07
 and 1.33 / 0.16 (seeds 2/3 pending): the tail gain is within seed noise. Ablations: frozen backbone 1.27 / recall
