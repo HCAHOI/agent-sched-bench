@@ -553,6 +553,23 @@ early-ready wait from ≈ 30 s to ≈ 11 s, and feeds admission and residency fo
 19% of steps need the base tier as fallback. The replay platform (32B regenerating recorded token counts, ≈ 36%
 reasoning) exercises both tiers; the natural label sets exist for both targets.
 
+**Literature check 2026-09-13 17:11 UTC (subagent): agent serving + KV offloading to DRAM + tool-aware eviction.**
+Partially claimed. **MORI** (arXiv 2606.00866, Berkeley, May 2026): HBM + DRAM tiers plus a no-cache waiting queue
+when DRAM fills; placement by a trailing 5-cycle idleness ratio per program; Claude Code on SWE-bench Pro, 20–80
+programs; +20–71% throughput over LRU offload; no return-time prediction, no DRAM→HBM prefetch, DRAM eviction in
+admission order. **CacheWise** (2606.16824, UW): per-call time-to-reuse predictor (tool name, TF-IDF args clusters,
+elapsed time) for within-tier eviction; DRAM only as a storage option; traces + code public. **TokenCake**
+(2510.18586, EuroSys'27): offload during function calls by predicted duration with prefetch back, DRAM assumed
+unbounded, multi-agent DAGs. **Continuum** (2511.02230): HBM TTL from per-tool duration CDFs, DRAM untouched LRU.
+**ThunderAgent** (2602.13692): HBM only, argues multi-tier is bandwidth-bound. Also KVFlow, CacheScout, PBKV
+(workflow DAG prefetch), CachedAttention (chat turns), Agentix (batched swaps). TraceLab (2606.30560): calls over
+1 min are 4% of calls but 85% of tool time. What is left, per the survey: the DRAM-tier keep-vs-recompute decision
+under capacity pressure ranked by predicted return time, the same prediction driving DRAM→HBM prefetch so the step
+starts warm, and an HBM offload-vs-recompute rule against PCIe bandwidth (ThunderAgent's objection); baselines must
+include MORI-style idleness ranking and CacheWise-style ordering, not only LRU. Our measured pieces that none of
+them report: the store-vs-admission decomposition at a sized DRAM tier, the starvation mechanism of
+residency-first admission, and the three-signal sandbox interface.
+
 **Chain 24, GPU 0 (user ~17:05 UTC "先用这个机器试试"; pre-registered 17:11 UTC, launched 17:11; `results/chain24-gpu0-32b-c24-tier192-20260913.sh`, log `results/chain24-gpu0-c24-tier192-20260913.log`).**
 DRAM capacity reference at c24: FCFS sticky + **192 GiB DRAM tier** (786K tokens; HBM KV 236K + DRAM = 1.02M tokens
 against the c24 mean working set 430K and p90-step peaks 810K; this host has 1 TB RAM, a single-GPU rental will not),
