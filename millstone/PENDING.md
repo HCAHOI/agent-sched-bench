@@ -607,6 +607,9 @@ flight — so the rule is **tier tokens ≥ concurrency × mean context** (32B: 
 and per-task JCT near the c16 value; c24 + 144 GiB (590K) → cached ≥ 0.85 and mean JCT ≤ 65 min; c24 + 48 GiB
 (197K) → cached ≤ 0.45 and mean JCT ≥ 99 min. If all three hold, the DRAM tier is a closed-form sizing rule for the
 paper; a miss on c20 would put the knee below the rule (chunk-level overhead).
+**Chain 24b result (19:20 UTC): prediction met.** c24 + 144 GiB: **51.80 min**, cached 0.91, TPOT 83 ms, 25.9 steps/min;
+−2,838 s [−3,106, −2,582] vs 96 GiB at c24; −120 s [−262, +21] vs c16 + 96 GiB (same per-task time, +11% throughput).
+89% of prompt tokens served from DRAM, 16K evictions (105K at 96 GiB). Recorded in M4 §3.2. Chains 26 / 27 started.
 
 **Chain 24, GPU 0 (user ~17:05 UTC "先用这个机器试试"; pre-registered 17:11 UTC, launched 17:11; `results/chain24-gpu0-32b-c24-tier192-20260913.sh`, log `results/chain24-gpu0-c24-tier192-20260913.log`).**
 DRAM capacity reference at c24: FCFS sticky + **192 GiB DRAM tier** (786K tokens; HBM KV 236K + DRAM = 1.02M tokens

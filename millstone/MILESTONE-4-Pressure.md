@@ -480,6 +480,17 @@ Our own bounded FIFO admission (arrival order under an in-flight prompt-token bu
 chain 25, read 16:57 UTC 2026-09-13) completes the workload with no wait above 147 s but recovers only 3%: 96.15 min,
 cached share 0.44 as without it, the same ~105K tier evictions. The pressure at c24 is store capacity — contexts in
 tool gaps are evicted before they return — not dispatch order.
+
+**Capacity confirms it (chain 24b, read 19:20 UTC 2026-09-13).** FCFS + **144 GiB** DRAM at c24 (590K tokens; this
+container's cgroup allows ≈ 150 GiB, not the 192 GiB first planned): **51.80 min** mean JCT, P95 93.7, makespan
+106.5, cached share **0.91**, TPOT 83 ms, 25.9 steps/min; paired −2,838 s [−3,106, −2,582] against the same
+concurrency with 96 GiB, and −120 s [−262, +21] against c16 with 96 GiB — the per-task step time of c16 at 50% more
+concurrency, i.e. 11% more throughput. The DRAM tier served 89% of prompt tokens (2,449 retrieves, 91 ms each;
+16,248 evictions against 105,684 at 96 GiB). Sizing rule, pre-registered before this number: the DRAM tier must hold
+concurrency × mean context (c24 × 17.9K = 430K tokens > 393K at 96 GiB, < 590K at 144 GiB). A trace-driven
+simulation of the tier (`scripts/evaluation/dram_tier_simulation.py`) shows the same loss is not an eviction-order
+problem: an oracle that knows every task's next arrival equals LRU at every capacity, because tool gaps are p50
+0.7 s / p90 2.2 s against LLM steps of 31–75 s; the tier is a capacity, not a policy, problem on this workload.
 The cause is in the code: DualMap's waiting pool is ordered by cached-prefix length first and arrival time second,
 with no aging, so under sustained load a request without a cached prefix (a task's first step) can wait behind a
 never-empty stream of cache-affine requests. A one-line aging rule would remove it; that variant would be a modified
