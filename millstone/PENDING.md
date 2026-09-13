@@ -599,7 +599,7 @@ overflow: the loss is capacity at chunk granularity, not eviction order. Reading
 is a sizing problem (tier ≥ concurrency × mean context, the knee measured by chains 24b / 26 / 27), not a policy
 problem; a return-time policy would only matter for workloads with long tool gaps (TraceLab: calls over 1 min are
 85% of tool time), which our replayed tools do not produce. The DRAM-policy line is closed before building it.
-**Sizing-rule prediction (17:32 UTC, before chains 24b / 26 / 27 report).** In-flight prompt tokens are not the
+**Sizing-rule prediction (17:28 UTC, before chains 24b / 26 / 27 report).** In-flight prompt tokens are not the
 driver either: the FIFO gate held them at p50 228K (FCFS: 408K) and the tier still thrashed identically. What must
 fit in the tier is every active task's context — the tier stores every prefilled chunk and HBM keeps only what is in
 flight — so the rule is **tier tokens ≥ concurrency × mean context** (32B: 17.9K per step): c16 → 287K < 393K
