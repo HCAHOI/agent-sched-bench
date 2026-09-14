@@ -1,0 +1,25 @@
+2026-09-14T06:30:41Z [tpot4] STAGE g4-dflash15-triton-fp8kv server up
+c=1   n=16  TPOT median 4.2 ms  per-stream 238 tok/s  aggregate 156 tok/s  TTFT 0.55 s  prompt 14425 tok  accepted/draft 3.526530612244898
+c=4   n=32  TPOT median 7.5 ms  per-stream 133 tok/s  aggregate 329 tok/s  TTFT 0.43 s  prompt 16814 tok  accepted/draft 3.1724137931034484
+c=8   n=64  TPOT median 10.4 ms  per-stream 96 tok/s  aggregate 465 tok/s  TTFT 0.41 s  prompt 16477 tok  accepted/draft 2.9534201954397394
+c=16  n=64  TPOT median 10.3 ms  per-stream 98 tok/s  aggregate 1064 tok/s  TTFT 0.23 s  prompt 16477 tok  accepted/draft 3.063913470993117
+c=32  n=64  TPOT median 13.9 ms  per-stream 72 tok/s  aggregate 1384 tok/s  TTFT 0.47 s  prompt 16477 tok  accepted/draft 2.8213991769547326
+c=1   n=16  TPOT median 3.8 ms  per-stream 262 tok/s  aggregate 250 tok/s  TTFT 0.05 s  prompt 1416 tok  accepted/draft 2.439201451905626
+c=4   n=32  TPOT median 5.7 ms  per-stream 177 tok/s  aggregate 721 tok/s  TTFT 0.06 s  prompt 1242 tok  accepted/draft 2.6909722222222223
+c=8   n=64  TPOT median 6.6 ms  per-stream 150 tok/s  aggregate 1032 tok/s  TTFT 0.08 s  prompt 1191 tok  accepted/draft 2.4123809523809525
+c=16  n=64  TPOT median 7.6 ms  per-stream 132 tok/s  aggregate 1486 tok/s  TTFT 0.10 s  prompt 1191 tok  accepted/draft 2.581756428918001
+c=32  n=64  TPOT median 9.9 ms  per-stream 101 tok/s  aggregate 1504 tok/s  TTFT 0.16 s  prompt 1191 tok  accepted/draft 2.325278810408922
+2026-09-14T06:32:42Z [tpot4] DONE curve g4-dflash15-triton-fp8kv
+2026-09-14T06:36:07Z [tpot4] STAGE g4-dflash15-triton-bf16kv server up
+c=1   n=16  TPOT median 4.4 ms  per-stream 227 tok/s  aggregate 136 tok/s  TTFT 0.66 s  prompt 14425 tok  accepted/draft 3.2913992297817716
+c=4   n=32  TPOT median 8.6 ms  per-stream 117 tok/s  aggregate 223 tok/s  TTFT 0.76 s  prompt 16814 tok  accepted/draft 2.917091836734694
+c=8   n=64  TPOT median 28.5 ms  per-stream 35 tok/s  aggregate 207 tok/s  TTFT 1.71 s  prompt 16477 tok  accepted/draft 2.8834355828220857
+c=16  n=64  TPOT median 59.8 ms  per-stream 17 tok/s  aggregate 209 tok/s  TTFT 2.97 s  prompt 16477 tok  accepted/draft 2.812826020251611
+c=32  n=64  TPOT median 97.8 ms  per-stream 10 tok/s  aggregate 215 tok/s  TTFT 11.57 s  prompt 16477 tok  accepted/draft 2.9912762520193863
+c=1   n=16  TPOT median 3.5 ms  per-stream 290 tok/s  aggregate 244 tok/s  TTFT 0.06 s  prompt 1416 tok  accepted/draft 2.5602409638554215
+c=4   n=32  TPOT median 6.0 ms  per-stream 165 tok/s  aggregate 661 tok/s  TTFT 0.07 s  prompt 1242 tok  accepted/draft 2.5496308449548812
+c=8   n=64  TPOT median 6.8 ms  per-stream 146 tok/s  aggregate 918 tok/s  TTFT 0.08 s  prompt 1191 tok  accepted/draft 2.490471414242728
+c=16  n=64  TPOT median 8.5 ms  per-stream 118 tok/s  aggregate 1310 tok/s  TTFT 0.10 s  prompt 1191 tok  accepted/draft 2.4171479342514437
+c=32  n=64  TPOT median 10.9 ms  per-stream 92 tok/s  aggregate 1376 tok/s  TTFT 0.18 s  prompt 1191 tok  accepted/draft 2.3816425120772946
+2026-09-14T06:40:35Z [tpot4] DONE curve g4-dflash15-triton-bf16kv
+2026-09-14T06:40:47Z [tpot4] STAGE all done

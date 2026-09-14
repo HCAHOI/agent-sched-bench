@@ -1,0 +1,2274 @@
+{
+ "model": "RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic",
+ "max_tokens": 512,
+ "seed": 0,
+ "prewarm": false,
+ "max_prompt_chars": null,
+ "levels": [
+  {
+   "concurrency": 1,
+   "requests": 16,
+   "wall_s": 21.33233865350485,
+   "output_tokens": 3329,
+   "aggregate_output_tok_s": 156.05415112107522,
+   "tpot_mean_ms": 4.215800281725571,
+   "tpot_median_ms": 4.203174407051341,
+   "per_stream_tok_s_median": 237.9154189562958,
+   "ttft_mean_s": 0.5521580309141427,
+   "prompt_tokens_mean": 14425.1875,
+   "completion_tokens_mean": 208.0625,
+   "spec_decode": {
+    "num_drafts": 735.0,
+    "num_accepted_tokens": 2592.0,
+    "num_draft_tokens": 11025.0
+   },
+   "accepted_per_draft": 3.526530612244898,
+   "per_request": [
+    {
+     "sample_id": "pydicom__pydicom-938/llm_3",
+     "prompt_tokens": 1252,
+     "completion_tokens": 85,
+     "ttft_s": 0.8265065588057041,
+     "tpot_s": 0.003482299457703318,
+     "chunks": 26,
+     "e2e_s": 1.1197609417140484
+    },
+    {
+     "sample_id": "spinning-up-rl/llm_25",
+     "prompt_tokens": 27468,
+     "completion_tokens": 66,
+     "ttft_s": 1.6976566947996616,
+     "tpot_s": 0.004080037256846061,
+     "chunks": 16,
+     "e2e_s": 1.9635861180722713
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4014/llm_23",
+     "prompt_tokens": 19078,
+     "completion_tokens": 358,
+     "ttft_s": 0.657511442899704,
+     "tpot_s": 0.004122540866043053,
+     "chunks": 82,
+     "e2e_s": 2.1299657858908176
+    },
+    {
+     "sample_id": "nginx-request-logging/llm_5",
+     "prompt_tokens": 5525,
+     "completion_tokens": 365,
+     "ttft_s": 0.16723433881998062,
+     "tpot_s": 0.00401489826553798,
+     "chunks": 109,
+     "e2e_s": 1.6293817721307278
+    },
+    {
+     "sample_id": "schedule-vacation/llm_6",
+     "prompt_tokens": 7743,
+     "completion_tokens": 420,
+     "ttft_s": 0.2341756485402584,
+     "tpot_s": 0.0011133862512635161,
+     "chunks": 32,
+     "e2e_s": 0.7013936340808868
+    },
+    {
+     "sample_id": "oasis-open__cti-python-stix2-489/llm_14",
+     "prompt_tokens": 12372,
+     "completion_tokens": 512,
+     "ttft_s": 0.39144815504550934,
+     "tpot_s": 0.0036376434398373977,
+     "chunks": 115,
+     "e2e_s": 2.250979010015726
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4194/llm_3",
+     "prompt_tokens": 8296,
+     "completion_tokens": 38,
+     "ttft_s": 0.25661877170205116,
+     "tpot_s": 0.005195795684247403,
+     "chunks": 16,
+     "e2e_s": 0.4495079219341278
+    },
+    {
+     "sample_id": "streamlink__streamlink-5792/llm_46",
+     "prompt_tokens": 26553,
+     "completion_tokens": 512,
+     "ttft_s": 1.0120500549674034,
+     "tpot_s": 0.004932881473270181,
+     "chunks": 122,
+     "e2e_s": 3.533462293446064
+    },
+    {
+     "sample_id": "simpeg__simpeg-1342/llm_32",
+     "prompt_tokens": 29905,
+     "completion_tokens": 56,
+     "ttft_s": 1.1638815738260746,
+     "tpot_s": 0.005189457197080959,
+     "chunks": 16,
+     "e2e_s": 1.4495510458946228
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_3",
+     "prompt_tokens": 3327,
+     "completion_tokens": 189,
+     "ttft_s": 0.11182358488440514,
+     "tpot_s": 0.0029853184489493675,
+     "chunks": 46,
+     "e2e_s": 0.6737563572824001
+    },
+    {
+     "sample_id": "streamlink__streamlink-5792/llm_48",
+     "prompt_tokens": 27866,
+     "completion_tokens": 434,
+     "ttft_s": 0.19191795587539673,
+     "tpot_s": 0.004283807948059628,
+     "chunks": 89,
+     "e2e_s": 2.0474945344030857
+    },
+    {
+     "sample_id": "sanitize-git-repo/llm_2",
+     "prompt_tokens": 1454,
+     "completion_tokens": 137,
+     "ttft_s": 0.06669162213802338,
+     "tpot_s": 0.0036256029544507757,
+     "chunks": 43,
+     "e2e_s": 0.5604701824486256
+    },
+    {
+     "sample_id": "airspeed-velocity__asv-704/llm_19",
+     "prompt_tokens": 18530,
+     "completion_tokens": 66,
+     "ttft_s": 0.6425952166318893,
+     "tpot_s": 0.004526033023229012,
+     "chunks": 19,
+     "e2e_s": 0.9374588578939438
+    },
+    {
+     "sample_id": "oasis-open__cti-python-stix2-489/llm_11",
+     "prompt_tokens": 7345,
+     "completion_tokens": 25,
+     "ttft_s": 0.1880255825817585,
+     "tpot_s": 0.0043978023653229075,
+     "chunks": 10,
+     "e2e_s": 0.2942212037742138
+    },
+    {
+     "sample_id": "tobymao__sqlglot-3870/llm_21",
+     "prompt_tokens": 29608,
+     "completion_tokens": 48,
+     "ttft_s": 1.1474791318178177,
+     "tpot_s": 0.005364819727045425,
+     "chunks": 15,
+     "e2e_s": 1.4003247320652008
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_8",
+     "prompt_tokens": 4481,
+     "completion_tokens": 18,
+     "ttft_s": 0.0789121612906456,
+     "tpot_s": 0.006500480148722143,
+     "chunks": 11,
+     "e2e_s": 0.19008873030543327
+    }
+   ]
+  },
+  {
+   "concurrency": 4,
+   "requests": 32,
+   "wall_s": 21.401244040578604,
+   "output_tokens": 7037,
+   "aggregate_output_tok_s": 328.81266092089044,
+   "tpot_mean_ms": 12.145263355551375,
+   "tpot_median_ms": 7.498055855170842,
+   "per_stream_tok_s_median": 133.36790486968374,
+   "ttft_mean_s": 0.4317866775672883,
+   "prompt_tokens_mean": 16814.46875,
+   "completion_tokens_mean": 219.90625,
+   "spec_decode": {
+    "num_drafts": 1682.0,
+    "num_accepted_tokens": 5336.0,
+    "num_draft_tokens": 25230.0
+   },
+   "accepted_per_draft": 3.1724137931034484,
+   "per_request": [
+    {
+     "sample_id": "pydicom__pydicom-938/llm_3",
+     "prompt_tokens": 1252,
+     "completion_tokens": 87,
+     "ttft_s": 0.05902302265167236,
+     "tpot_s": 0.007609872320710227,
+     "chunks": 29,
+     "e2e_s": 0.7138085030019283
+    },
+    {
+     "sample_id": "spinning-up-rl/llm_25",
+     "prompt_tokens": 27468,
+     "completion_tokens": 66,
+     "ttft_s": 0.14480729028582573,
+     "tpot_s": 0.004754256858275487,
+     "chunks": 15,
+     "e2e_s": 0.45524266734719276
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4014/llm_23",
+     "prompt_tokens": 19078,
+     "completion_tokens": 390,
+     "ttft_s": 0.17348594963550568,
+     "tpot_s": 0.005162142418267488,
+     "chunks": 88,
+     "e2e_s": 2.1823848970234394
+    },
+    {
+     "sample_id": "nginx-request-logging/llm_5",
+     "prompt_tokens": 5525,
+     "completion_tokens": 370,
+     "ttft_s": 0.1725681535899639,
+     "tpot_s": 0.0070573044057460985,
+     "chunks": 111,
+     "e2e_s": 2.778107937425375
+    },
+    {
+     "sample_id": "schedule-vacation/llm_6",
+     "prompt_tokens": 7743,
+     "completion_tokens": 420,
+     "ttft_s": 0.07763141021132469,
+     "tpot_s": 0.0017197164918044871,
+     "chunks": 33,
+     "e2e_s": 0.7993413619697094
+    },
+    {
+     "sample_id": "oasis-open__cti-python-stix2-489/llm_14",
+     "prompt_tokens": 12372,
+     "completion_tokens": 512,
+     "ttft_s": 0.10545285418629646,
+     "tpot_s": 0.004235723021270711,
+     "chunks": 92,
+     "e2e_s": 2.2704899199306965
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4194/llm_3",
+     "prompt_tokens": 8296,
+     "completion_tokens": 42,
+     "ttft_s": 0.09706494584679604,
+     "tpot_s": 0.009417939749432773,
+     "chunks": 20,
+     "e2e_s": 0.4842909090220928
+    },
+    {
+     "sample_id": "streamlink__streamlink-5792/llm_46",
+     "prompt_tokens": 26553,
+     "completion_tokens": 512,
+     "ttft_s": 0.1342095211148262,
+     "tpot_s": 0.0059511009275679955,
+     "chunks": 122,
+     "e2e_s": 3.1761531494557858
+    },
+    {
+     "sample_id": "simpeg__simpeg-1342/llm_32",
+     "prompt_tokens": 29905,
+     "completion_tokens": 56,
+     "ttft_s": 0.15066468715667725,
+     "tpot_s": 0.0057975288819183,
+     "chunks": 15,
+     "e2e_s": 0.4703694246709347
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_3",
+     "prompt_tokens": 3327,
+     "completion_tokens": 189,
+     "ttft_s": 0.07881714403629303,
+     "tpot_s": 0.0060991680725140775,
+     "chunks": 47,
+     "e2e_s": 1.2263356409966946
+    },
+    {
+     "sample_id": "streamlink__streamlink-5792/llm_48",
+     "prompt_tokens": 27866,
+     "completion_tokens": 447,
+     "ttft_s": 0.14440062269568443,
+     "tpot_s": 0.0075392354730800665,
+     "chunks": 94,
+     "e2e_s": 3.5084127113223076
+    },
+    {
+     "sample_id": "sanitize-git-repo/llm_2",
+     "prompt_tokens": 1454,
+     "completion_tokens": 289,
+     "ttft_s": 0.07565353065729141,
+     "tpot_s": 0.004698970406833623,
+     "chunks": 55,
+     "e2e_s": 1.4295140951871872
+    },
+    {
+     "sample_id": "airspeed-velocity__asv-704/llm_19",
+     "prompt_tokens": 18530,
+     "completion_tokens": 66,
+     "ttft_s": 0.11814244091510773,
+     "tpot_s": 0.00637456258902183,
+     "chunks": 19,
+     "e2e_s": 0.5332676954567432
+    },
+    {
+     "sample_id": "oasis-open__cti-python-stix2-489/llm_11",
+     "prompt_tokens": 7345,
+     "completion_tokens": 25,
+     "ttft_s": 0.09920487180352211,
+     "tpot_s": 0.008221635594964027,
+     "chunks": 10,
+     "e2e_s": 0.29711757600307465
+    },
+    {
+     "sample_id": "tobymao__sqlglot-3870/llm_21",
+     "prompt_tokens": 29608,
+     "completion_tokens": 47,
+     "ttft_s": 0.1509052775800228,
+     "tpot_s": 0.004959265418026758,
+     "chunks": 12,
+     "e2e_s": 0.3799990862607956
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_8",
+     "prompt_tokens": 4481,
+     "completion_tokens": 30,
+     "ttft_s": 0.0833570584654808,
+     "tpot_s": 0.03512032959481765,
+     "chunks": 15,
+     "e2e_s": 1.1025771759450436
+    },
+    {
+     "sample_id": "spinning-up-rl/llm_16",
+     "prompt_tokens": 20063,
+     "completion_tokens": 94,
+     "ttft_s": 0.11052552983164787,
+     "tpot_s": 0.028899970434365735,
+     "chunks": 30,
+     "e2e_s": 2.799058001488447
+    },
+    {
+     "sample_id": "jaywink__federation-73/llm_18",
+     "prompt_tokens": 23789,
+     "completion_tokens": 78,
+     "ttft_s": 0.8625755533576012,
+     "tpot_s": 0.025329917717676658,
+     "chunks": 28,
+     "e2e_s": 2.8144119307398796
+    },
+    {
+     "sample_id": "pre-commit__pre-commit-1092/llm_22",
+     "prompt_tokens": 13927,
+     "completion_tokens": 47,
+     "ttft_s": 0.4742164649069309,
+     "tpot_s": 0.019213703663452812,
+     "chunks": 9,
+     "e2e_s": 1.3586628772318363
+    },
+    {
+     "sample_id": "tobymao__sqlglot-2507/llm_10",
+     "prompt_tokens": 26023,
+     "completion_tokens": 154,
+     "ttft_s": 0.9950285106897354,
+     "tpot_s": 0.005465011556748472,
+     "chunks": 28,
+     "e2e_s": 1.8325860276818275
+    },
+    {
+     "sample_id": "berkerpeksag__astor-114/llm_9",
+     "prompt_tokens": 8741,
+     "completion_tokens": 381,
+     "ttft_s": 0.3540012761950493,
+     "tpot_s": 0.022085491107090523,
+     "chunks": 86,
+     "e2e_s": 8.747009165585041
+    },
+    {
+     "sample_id": "airspeed-velocity__asv-704/llm_21",
+     "prompt_tokens": 18724,
+     "completion_tokens": 131,
+     "ttft_s": 0.1186777912080288,
+     "tpot_s": 0.04553293144473663,
+     "chunks": 46,
+     "e2e_s": 6.038818508386612
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4472/llm_1",
+     "prompt_tokens": 2263,
+     "completion_tokens": 139,
+     "ttft_s": 0.12209402769804001,
+     "tpot_s": 0.025472996054568153,
+     "chunks": 30,
+     "e2e_s": 3.6386993750929832
+    },
+    {
+     "sample_id": "tobymao__sqlglot-3333/llm_41",
+     "prompt_tokens": 59834,
+     "completion_tokens": 512,
+     "ttft_s": 3.1904719285666943,
+     "tpot_s": 0.018301358085614127,
+     "chunks": 176,
+     "e2e_s": 12.543960768729448
+    },
+    {
+     "sample_id": "tobymao__sqlglot-2432/llm_29",
+     "prompt_tokens": 47034,
+     "completion_tokens": 30,
+     "ttft_s": 2.2616352699697018,
+     "tpot_s": 0.01179350026208779,
+     "chunks": 8,
+     "e2e_s": 2.6045272573828697
+    },
+    {
+     "sample_id": "cloud-custodian__cloud-custodian-5472/llm_37",
+     "prompt_tokens": 33739,
+     "completion_tokens": 484,
+     "ttft_s": 1.4564220868051052,
+     "tpot_s": 0.007456876237261616,
+     "chunks": 101,
+     "e2e_s": 5.058988854289055
+    },
+    {
+     "sample_id": "financial-document-processor/llm_1",
+     "prompt_tokens": 623,
+     "completion_tokens": 123,
+     "ttft_s": 1.1153694055974483,
+     "tpot_s": 0.0180187140759386,
+     "chunks": 64,
+     "e2e_s": 3.3148086927831173
+    },
+    {
+     "sample_id": "cloud-custodian__cloud-custodian-5472/llm_0",
+     "prompt_tokens": 1037,
+     "completion_tokens": 411,
+     "ttft_s": 0.10776279494166374,
+     "tpot_s": 0.012730070385264188,
+     "chunks": 151,
+     "e2e_s": 5.327649652957916
+    },
+    {
+     "sample_id": "code-from-image/llm_9",
+     "prompt_tokens": 3897,
+     "completion_tokens": 512,
+     "ttft_s": 0.17973541840910912,
+     "tpot_s": 0.0076944508649948295,
+     "chunks": 123,
+     "e2e_s": 4.112323991954327
+    },
+    {
+     "sample_id": "cloud-custodian__cloud-custodian-5472/llm_35",
+     "prompt_tokens": 32456,
+     "completion_tokens": 80,
+     "ttft_s": 0.1682353988289833,
+     "tpot_s": 0.005572814494371414,
+     "chunks": 15,
+     "e2e_s": 0.6091884784400463
+    },
+    {
+     "sample_id": "PennyLaneAI__pennylane-2668/llm_2",
+     "prompt_tokens": 5154,
+     "completion_tokens": 280,
+     "ttft_s": 0.20371002331376076,
+     "tpot_s": 0.006590773581817586,
+     "chunks": 65,
+     "e2e_s": 2.043179575353861
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_22",
+     "prompt_tokens": 9956,
+     "completion_tokens": 33,
+     "ttft_s": 0.23132342100143433,
+     "tpot_s": 0.0037710951874032617,
+     "chunks": 9,
+     "e2e_s": 0.3531511127948761
+    }
+   ]
+  },
+  {
+   "concurrency": 8,
+   "requests": 64,
+   "wall_s": 26.16468083485961,
+   "output_tokens": 12173,
+   "aggregate_output_tok_s": 465.24549933671364,
+   "tpot_mean_ms": 13.836378563999164,
+   "tpot_median_ms": 10.442639620324364,
+   "per_stream_tok_s_median": 95.76122861251612,
+   "ttft_mean_s": 0.4147466637659818,
+   "prompt_tokens_mean": 16477.1875,
+   "completion_tokens_mean": 190.203125,
+   "spec_decode": {
+    "num_drafts": 3070.0,
+    "num_accepted_tokens": 9067.0,
+    "num_draft_tokens": 46050.0
+   },
+   "accepted_per_draft": 2.9534201954397394,
+   "per_request": [
+    {
+     "sample_id": "pydicom__pydicom-938/llm_3",
+     "prompt_tokens": 1252,
+     "completion_tokens": 87,
+     "ttft_s": 0.06371785327792168,
+     "tpot_s": 0.00930715863441312,
+     "chunks": 29,
+     "e2e_s": 0.8644158095121384
+    },
+    {
+     "sample_id": "spinning-up-rl/llm_25",
+     "prompt_tokens": 27468,
+     "completion_tokens": 69,
+     "ttft_s": 0.20924028381705284,
+     "tpot_s": 0.005210144828785868,
+     "chunks": 16,
+     "e2e_s": 0.5655585788190365
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4014/llm_23",
+     "prompt_tokens": 19078,
+     "completion_tokens": 272,
+     "ttft_s": 0.2088896967470646,
+     "tpot_s": 0.007621447002425845,
+     "chunks": 76,
+     "e2e_s": 2.2747654244303703
+    },
+    {
+     "sample_id": "nginx-request-logging/llm_5",
+     "prompt_tokens": 5525,
+     "completion_tokens": 380,
+     "ttft_s": 0.23833517730236053,
+     "tpot_s": 0.008538603035629897,
+     "chunks": 113,
+     "e2e_s": 3.4750725254416466
+    },
+    {
+     "sample_id": "schedule-vacation/llm_6",
+     "prompt_tokens": 7743,
+     "completion_tokens": 421,
+     "ttft_s": 0.23713473603129387,
+     "tpot_s": 0.002039602097301256,
+     "chunks": 33,
+     "e2e_s": 1.0952126793563366
+    },
+    {
+     "sample_id": "oasis-open__cti-python-stix2-489/llm_14",
+     "prompt_tokens": 12372,
+     "completion_tokens": 47,
+     "ttft_s": 0.23651402443647385,
+     "tpot_s": 0.009447155196381651,
+     "chunks": 19,
+     "e2e_s": 0.672614723443985
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4194/llm_3",
+     "prompt_tokens": 8296,
+     "completion_tokens": 42,
+     "ttft_s": 0.23692671209573746,
+     "tpot_s": 0.009272838147675119,
+     "chunks": 17,
+     "e2e_s": 0.6174994334578514
+    },
+    {
+     "sample_id": "streamlink__streamlink-5792/llm_46",
+     "prompt_tokens": 26553,
+     "completion_tokens": 512,
+     "ttft_s": 0.259132519364357,
+     "tpot_s": 0.006745881501242606,
+     "chunks": 118,
+     "e2e_s": 3.7082321494817734
+    },
+    {
+     "sample_id": "simpeg__simpeg-1342/llm_32",
+     "prompt_tokens": 29905,
+     "completion_tokens": 56,
+     "ttft_s": 0.17077403515577316,
+     "tpot_s": 0.006505130502310666,
+     "chunks": 15,
+     "e2e_s": 0.5310654640197754
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_3",
+     "prompt_tokens": 3327,
+     "completion_tokens": 189,
+     "ttft_s": 0.11783075332641602,
+     "tpot_s": 0.006616881850393529,
+     "chunks": 46,
+     "e2e_s": 1.3626737892627716
+    },
+    {
+     "sample_id": "streamlink__streamlink-5792/llm_48",
+     "prompt_tokens": 27866,
+     "completion_tokens": 463,
+     "ttft_s": 0.17404887452721596,
+     "tpot_s": 0.006442216753121063,
+     "chunks": 100,
+     "e2e_s": 3.1513534486293793
+    },
+    {
+     "sample_id": "sanitize-git-repo/llm_2",
+     "prompt_tokens": 1454,
+     "completion_tokens": 289,
+     "ttft_s": 0.08364912867546082,
+     "tpot_s": 0.005475822939640946,
+     "chunks": 58,
+     "e2e_s": 1.6618155874311924
+    },
+    {
+     "sample_id": "airspeed-velocity__asv-704/llm_19",
+     "prompt_tokens": 18530,
+     "completion_tokens": 66,
+     "ttft_s": 0.12785374745726585,
+     "tpot_s": 0.007035589562012599,
+     "chunks": 19,
+     "e2e_s": 0.5870230160653591
+    },
+    {
+     "sample_id": "oasis-open__cti-python-stix2-489/llm_11",
+     "prompt_tokens": 7345,
+     "completion_tokens": 25,
+     "ttft_s": 0.12695227563381195,
+     "tpot_s": 0.009577766681710878,
+     "chunks": 11,
+     "e2e_s": 0.35811906680464745
+    },
+    {
+     "sample_id": "tobymao__sqlglot-3870/llm_21",
+     "prompt_tokens": 29608,
+     "completion_tokens": 47,
+     "ttft_s": 0.1367429755628109,
+     "tpot_s": 0.0056882779235425205,
+     "chunks": 12,
+     "e2e_s": 0.3993508033454418
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_8",
+     "prompt_tokens": 4481,
+     "completion_tokens": 18,
+     "ttft_s": 0.08714577183127403,
+     "tpot_s": 0.014436384115148993,
+     "chunks": 11,
+     "e2e_s": 0.334421269595623
+    },
+    {
+     "sample_id": "spinning-up-rl/llm_16",
+     "prompt_tokens": 20063,
+     "completion_tokens": 103,
+     "ttft_s": 0.12467865645885468,
+     "tpot_s": 0.00807492321758878,
+     "chunks": 32,
+     "e2e_s": 0.9489724226295948
+    },
+    {
+     "sample_id": "jaywink__federation-73/llm_18",
+     "prompt_tokens": 23789,
+     "completion_tokens": 68,
+     "ttft_s": 0.14046909660100937,
+     "tpot_s": 0.008529920297772137,
+     "chunks": 23,
+     "e2e_s": 0.7128039710223675
+    },
+    {
+     "sample_id": "pre-commit__pre-commit-1092/llm_22",
+     "prompt_tokens": 13927,
+     "completion_tokens": 47,
+     "ttft_s": 0.1321306861937046,
+     "tpot_s": 0.003953531870375509,
+     "chunks": 9,
+     "e2e_s": 0.3160996176302433
+    },
+    {
+     "sample_id": "tobymao__sqlglot-2507/llm_10",
+     "prompt_tokens": 26023,
+     "completion_tokens": 154,
+     "ttft_s": 0.13259673118591309,
+     "tpot_s": 0.005480611124654222,
+     "chunks": 30,
+     "e2e_s": 0.9728435538709164
+    },
+    {
+     "sample_id": "berkerpeksag__astor-114/llm_9",
+     "prompt_tokens": 8741,
+     "completion_tokens": 239,
+     "ttft_s": 0.11314169317483902,
+     "tpot_s": 0.007867497493739889,
+     "chunks": 56,
+     "e2e_s": 1.9861108995974064
+    },
+    {
+     "sample_id": "airspeed-velocity__asv-704/llm_21",
+     "prompt_tokens": 18724,
+     "completion_tokens": 55,
+     "ttft_s": 0.12632717564702034,
+     "tpot_s": 0.008837389518265371,
+     "chunks": 18,
+     "e2e_s": 0.6046290397644043
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4472/llm_1",
+     "prompt_tokens": 2263,
+     "completion_tokens": 164,
+     "ttft_s": 0.08267006650567055,
+     "tpot_s": 0.009214263455085228,
+     "chunks": 43,
+     "e2e_s": 1.5854207053780556
+    },
+    {
+     "sample_id": "tobymao__sqlglot-3333/llm_41",
+     "prompt_tokens": 59834,
+     "completion_tokens": 512,
+     "ttft_s": 0.22191893309354782,
+     "tpot_s": 0.021214589542197154,
+     "chunks": 159,
+     "e2e_s": 11.063566230237484
+    },
+    {
+     "sample_id": "tobymao__sqlglot-2432/llm_29",
+     "prompt_tokens": 47034,
+     "completion_tokens": 34,
+     "ttft_s": 0.23415717855095863,
+     "tpot_s": 0.010455718546202688,
+     "chunks": 12,
+     "e2e_s": 0.5803412087261677
+    },
+    {
+     "sample_id": "cloud-custodian__cloud-custodian-5472/llm_37",
+     "prompt_tokens": 33739,
+     "completion_tokens": 500,
+     "ttft_s": 0.17608607932925224,
+     "tpot_s": 0.014330553536663551,
+     "chunks": 113,
+     "e2e_s": 7.328511327505112
+    },
+    {
+     "sample_id": "financial-document-processor/llm_1",
+     "prompt_tokens": 623,
+     "completion_tokens": 124,
+     "ttft_s": 0.11193566024303436,
+     "tpot_s": 0.02284405392602207,
+     "chunks": 63,
+     "e2e_s": 2.9224123768508434
+    },
+    {
+     "sample_id": "cloud-custodian__cloud-custodian-5472/llm_0",
+     "prompt_tokens": 1037,
+     "completion_tokens": 342,
+     "ttft_s": 0.11462269723415375,
+     "tpot_s": 0.027271814567864466,
+     "chunks": 128,
+     "e2e_s": 9.415379952639341
+    },
+    {
+     "sample_id": "code-from-image/llm_9",
+     "prompt_tokens": 3897,
+     "completion_tokens": 512,
+     "ttft_s": 0.11412619799375534,
+     "tpot_s": 0.013211945994026274,
+     "chunks": 102,
+     "e2e_s": 6.866495203226805
+    },
+    {
+     "sample_id": "cloud-custodian__cloud-custodian-5472/llm_35",
+     "prompt_tokens": 32456,
+     "completion_tokens": 78,
+     "ttft_s": 0.17449842765927315,
+     "tpot_s": 0.006748325977619592,
+     "chunks": 16,
+     "e2e_s": 0.6955758482217789
+    },
+    {
+     "sample_id": "PennyLaneAI__pennylane-2668/llm_2",
+     "prompt_tokens": 5154,
+     "completion_tokens": 43,
+     "ttft_s": 0.1221352070569992,
+     "tpot_s": 0.02183604213808264,
+     "chunks": 19,
+     "e2e_s": 1.0400805734097958
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_22",
+     "prompt_tokens": 9956,
+     "completion_tokens": 33,
+     "ttft_s": 0.1611197330057621,
+     "tpot_s": 0.01649965113028884,
+     "chunks": 9,
+     "e2e_s": 0.6909106001257896
+    },
+    {
+     "sample_id": "pre-commit__pre-commit-1092/llm_35",
+     "prompt_tokens": 21738,
+     "completion_tokens": 512,
+     "ttft_s": 0.4289183057844639,
+     "tpot_s": 0.015866112736748157,
+     "chunks": 104,
+     "e2e_s": 8.537463907152414
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4014/llm_7",
+     "prompt_tokens": 8842,
+     "completion_tokens": 312,
+     "ttft_s": 0.12039635702967644,
+     "tpot_s": 0.024839930296231695,
+     "chunks": 94,
+     "e2e_s": 7.847978509962559
+    },
+    {
+     "sample_id": "install-windows-xp/llm_14",
+     "prompt_tokens": 9208,
+     "completion_tokens": 219,
+     "ttft_s": 0.35418638959527016,
+     "tpot_s": 0.014273021609411327,
+     "chunks": 55,
+     "e2e_s": 3.466297820210457
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4550/llm_2",
+     "prompt_tokens": 1039,
+     "completion_tokens": 58,
+     "ttft_s": 0.13061034306883812,
+     "tpot_s": 0.01484596539746251,
+     "chunks": 24,
+     "e2e_s": 0.9772137515246868
+    },
+    {
+     "sample_id": "PennyLaneAI__pennylane-2668/llm_29",
+     "prompt_tokens": 34661,
+     "completion_tokens": 512,
+     "ttft_s": 1.3606947138905525,
+     "tpot_s": 0.023669174790324064,
+     "chunks": 137,
+     "e2e_s": 13.455927040427923
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4430/llm_36",
+     "prompt_tokens": 38484,
+     "completion_tokens": 46,
+     "ttft_s": 1.6997288316488266,
+     "tpot_s": 0.037433066964149476,
+     "chunks": 13,
+     "e2e_s": 3.384687837213278
+    },
+    {
+     "sample_id": "jaywink__federation-73/llm_38",
+     "prompt_tokens": 44378,
+     "completion_tokens": 82,
+     "ttft_s": 1.3919607512652874,
+     "tpot_s": 0.014991643436161089,
+     "chunks": 22,
+     "e2e_s": 2.6078342720866203
+    },
+    {
+     "sample_id": "tobymao__sqlglot-2439/llm_6",
+     "prompt_tokens": 17277,
+     "completion_tokens": 203,
+     "ttft_s": 1.8144379258155823,
+     "tpot_s": 0.012428752063672142,
+     "chunks": 55,
+     "e2e_s": 4.326818834990263
+    },
+    {
+     "sample_id": "pydicom__pydicom-938/llm_10",
+     "prompt_tokens": 6124,
+     "completion_tokens": 275,
+     "ttft_s": 0.3853882662951946,
+     "tpot_s": 0.01682661471031878,
+     "chunks": 68,
+     "e2e_s": 4.99655793979764
+    },
+    {
+     "sample_id": "airspeed-velocity__asv-704/llm_17",
+     "prompt_tokens": 17157,
+     "completion_tokens": 88,
+     "ttft_s": 0.16385801509022713,
+     "tpot_s": 0.020260175797103465,
+     "chunks": 38,
+     "e2e_s": 1.9285497292876244
+    },
+    {
+     "sample_id": "awdeorio__mailmerge-95/llm_9",
+     "prompt_tokens": 14347,
+     "completion_tokens": 43,
+     "ttft_s": 0.5590022727847099,
+     "tpot_s": 0.012103937034096037,
+     "chunks": 14,
+     "e2e_s": 1.0688876174390316
+    },
+    {
+     "sample_id": "streamlink__streamlink-5792/llm_4",
+     "prompt_tokens": 3319,
+     "completion_tokens": 40,
+     "ttft_s": 0.5565519854426384,
+     "tpot_s": 0.005573755846573756,
+     "chunks": 8,
+     "e2e_s": 0.7746242247521877
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_18",
+     "prompt_tokens": 7533,
+     "completion_tokens": 192,
+     "ttft_s": 0.4963175915181637,
+     "tpot_s": 0.0049824724217672,
+     "chunks": 26,
+     "e2e_s": 1.4499790035188198
+    },
+    {
+     "sample_id": "simpeg__simpeg-1342/llm_33",
+     "prompt_tokens": 31288,
+     "completion_tokens": 512,
+     "ttft_s": 0.24375972151756287,
+     "tpot_s": 0.01820086676867974,
+     "chunks": 140,
+     "e2e_s": 9.546004932373762
+    },
+    {
+     "sample_id": "install-windows-xp/llm_10",
+     "prompt_tokens": 7130,
+     "completion_tokens": 121,
+     "ttft_s": 0.21210560575127602,
+     "tpot_s": 0.005118300393223763,
+     "chunks": 19,
+     "e2e_s": 0.8270965777337551
+    },
+    {
+     "sample_id": "reshard-c4-data/llm_8",
+     "prompt_tokens": 6688,
+     "completion_tokens": 465,
+     "ttft_s": 0.23937693238258362,
+     "tpot_s": 0.013060785605218905,
+     "chunks": 70,
+     "e2e_s": 6.300526469945908
+    },
+    {
+     "sample_id": "tobymao__sqlglot-2432/llm_0",
+     "prompt_tokens": 662,
+     "completion_tokens": 368,
+     "ttft_s": 0.09096776321530342,
+     "tpot_s": 0.02357249205541221,
+     "chunks": 122,
+     "e2e_s": 8.74385641515255
+    },
+    {
+     "sample_id": "cloud-custodian__cloud-custodian-5472/llm_6",
+     "prompt_tokens": 5047,
+     "completion_tokens": 45,
+     "ttft_s": 0.09224075078964233,
+     "tpot_s": 0.03253137540410866,
+     "chunks": 12,
+     "e2e_s": 1.5247240364551544
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4325/llm_10",
+     "prompt_tokens": 18295,
+     "completion_tokens": 47,
+     "ttft_s": 0.8949512913823128,
+     "tpot_s": 0.05976308420624422,
+     "chunks": 17,
+     "e2e_s": 3.6462309174239635
+    },
+    {
+     "sample_id": "tobymao__sqlglot-2439/llm_20",
+     "prompt_tokens": 32794,
+     "completion_tokens": 34,
+     "ttft_s": 1.2780546732246876,
+     "tpot_s": 0.011865831685788704,
+     "chunks": 10,
+     "e2e_s": 1.670786127448082
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4015/llm_34",
+     "prompt_tokens": 44678,
+     "completion_tokens": 512,
+     "ttft_s": 2.1806823909282684,
+     "tpot_s": 0.013920416789395469,
+     "chunks": 173,
+     "e2e_s": 9.2948536016047
+    },
+    {
+     "sample_id": "streamlink__streamlink-5792/llm_26",
+     "prompt_tokens": 15509,
+     "completion_tokens": 36,
+     "ttft_s": 2.20005501806736,
+     "tpot_s": 0.02846591281039374,
+     "chunks": 14,
+     "e2e_s": 3.1978724114596844
+    },
+    {
+     "sample_id": "pydicom__pydicom-938/llm_12",
+     "prompt_tokens": 8405,
+     "completion_tokens": 371,
+     "ttft_s": 1.6095786578953266,
+     "tpot_s": 0.010020706309257327,
+     "chunks": 69,
+     "e2e_s": 5.31788307800889
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4472/llm_20",
+     "prompt_tokens": 22551,
+     "completion_tokens": 34,
+     "ttft_s": 1.0501766838133335,
+     "tpot_s": 0.007657798289349585,
+     "chunks": 10,
+     "e2e_s": 1.3052297458052635
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_11",
+     "prompt_tokens": 5125,
+     "completion_tokens": 42,
+     "ttft_s": 0.10391169041395187,
+     "tpot_s": 0.008842821709993409,
+     "chunks": 13,
+     "e2e_s": 0.46820686012506485
+    },
+    {
+     "sample_id": "jaywink__federation-73/llm_21",
+     "prompt_tokens": 26031,
+     "completion_tokens": 64,
+     "ttft_s": 0.1500377431511879,
+     "tpot_s": 0.00911114595475651,
+     "chunks": 19,
+     "e2e_s": 0.7251437529921532
+    },
+    {
+     "sample_id": "gcc-compiler-optimization/llm_4",
+     "prompt_tokens": 1177,
+     "completion_tokens": 161,
+     "ttft_s": 0.1184445284307003,
+     "tpot_s": 0.017311592889018356,
+     "chunks": 60,
+     "e2e_s": 2.8902721144258976
+    },
+    {
+     "sample_id": "PennyLaneAI__pennylane-2668/llm_23",
+     "prompt_tokens": 27340,
+     "completion_tokens": 70,
+     "ttft_s": 0.16324841603636742,
+     "tpot_s": 0.018388186028038246,
+     "chunks": 18,
+     "e2e_s": 1.4335781745612621
+    },
+    {
+     "sample_id": "tobymao__sqlglot-3045/llm_3",
+     "prompt_tokens": 5491,
+     "completion_tokens": 27,
+     "ttft_s": 0.19954973459243774,
+     "tpot_s": 0.019504091057639856,
+     "chunks": 12,
+     "e2e_s": 0.7081887312233448
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4355/llm_8",
+     "prompt_tokens": 8672,
+     "completion_tokens": 41,
+     "ttft_s": 0.31605318561196327,
+     "tpot_s": 0.024288453999906777,
+     "chunks": 14,
+     "e2e_s": 1.2880453988909721
+    },
+    {
+     "sample_id": "tobymao__sqlglot-3045/llm_18",
+     "prompt_tokens": 22721,
+     "completion_tokens": 404,
+     "ttft_s": 0.751363892108202,
+     "tpot_s": 0.010429560694446043,
+     "chunks": 150,
+     "e2e_s": 4.955348301678896
+    },
+    {
+     "sample_id": "build-tcc-qemu/llm_4",
+     "prompt_tokens": 2766,
+     "completion_tokens": 246,
+     "ttft_s": 0.1896732673048973,
+     "tpot_s": 0.009048449232870218,
+     "chunks": 73,
+     "e2e_s": 2.407292239367962
+    }
+   ]
+  },
+  {
+   "concurrency": 16,
+   "requests": 64,
+   "wall_s": 11.684830654412508,
+   "output_tokens": 12437,
+   "aggregate_output_tok_s": 1064.3714374502683,
+   "tpot_mean_ms": 10.581952419402313,
+   "tpot_median_ms": 10.25569465717459,
+   "per_stream_tok_s_median": 97.50680313989542,
+   "ttft_mean_s": 0.22607444535242394,
+   "prompt_tokens_mean": 16477.1875,
+   "completion_tokens_mean": 194.328125,
+   "spec_decode": {
+    "num_drafts": 3051.0,
+    "num_accepted_tokens": 9348.0,
+    "num_draft_tokens": 45765.0
+   },
+   "accepted_per_draft": 3.063913470993117,
+   "per_request": [
+    {
+     "sample_id": "pydicom__pydicom-938/llm_3",
+     "prompt_tokens": 1252,
+     "completion_tokens": 85,
+     "ttft_s": 0.06338765472173691,
+     "tpot_s": 0.00857148723055919,
+     "chunks": 25,
+     "e2e_s": 0.786551933735609
+    },
+    {
+     "sample_id": "spinning-up-rl/llm_25",
+     "prompt_tokens": 27468,
+     "completion_tokens": 69,
+     "ttft_s": 0.3020622953772545,
+     "tpot_s": 0.006038610330399345,
+     "chunks": 13,
+     "e2e_s": 0.7143448628485203
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4014/llm_23",
+     "prompt_tokens": 19078,
+     "completion_tokens": 243,
+     "ttft_s": 0.24874967336654663,
+     "tpot_s": 0.011888039336839983,
+     "chunks": 71,
+     "e2e_s": 3.127977378666401
+    },
+    {
+     "sample_id": "nginx-request-logging/llm_5",
+     "prompt_tokens": 5525,
+     "completion_tokens": 359,
+     "ttft_s": 0.3014923632144928,
+     "tpot_s": 0.011748827140590999,
+     "chunks": 102,
+     "e2e_s": 4.508514788001776
+    },
+    {
+     "sample_id": "schedule-vacation/llm_6",
+     "prompt_tokens": 7743,
+     "completion_tokens": 421,
+     "ttft_s": 0.29985397309064865,
+     "tpot_s": 0.0026758660872777305,
+     "chunks": 31,
+     "e2e_s": 1.4257065318524837
+    },
+    {
+     "sample_id": "oasis-open__cti-python-stix2-489/llm_14",
+     "prompt_tokens": 12372,
+     "completion_tokens": 512,
+     "ttft_s": 0.3551890328526497,
+     "tpot_s": 0.006705106106639608,
+     "chunks": 84,
+     "e2e_s": 3.7819304652512074
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4194/llm_3",
+     "prompt_tokens": 8296,
+     "completion_tokens": 42,
+     "ttft_s": 0.35277948155999184,
+     "tpot_s": 0.012850629029477515,
+     "chunks": 17,
+     "e2e_s": 0.8803331106901169
+    },
+    {
+     "sample_id": "streamlink__streamlink-5792/llm_46",
+     "prompt_tokens": 26553,
+     "completion_tokens": 512,
+     "ttft_s": 0.4143470600247383,
+     "tpot_s": 0.009786795759154393,
+     "chunks": 121,
+     "e2e_s": 5.4156299866735935
+    },
+    {
+     "sample_id": "simpeg__simpeg-1342/llm_32",
+     "prompt_tokens": 29905,
+     "completion_tokens": 57,
+     "ttft_s": 0.4131956472992897,
+     "tpot_s": 0.007086925275091614,
+     "chunks": 14,
+     "e2e_s": 0.8117123171687126
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_3",
+     "prompt_tokens": 3327,
+     "completion_tokens": 189,
+     "ttft_s": 0.35211971774697304,
+     "tpot_s": 0.009337507029797168,
+     "chunks": 46,
+     "e2e_s": 2.110129587352276
+    },
+    {
+     "sample_id": "streamlink__streamlink-5792/llm_48",
+     "prompt_tokens": 27866,
+     "completion_tokens": 446,
+     "ttft_s": 0.463793583214283,
+     "tpot_s": 0.008332223478662833,
+     "chunks": 91,
+     "e2e_s": 4.174342907965183
+    },
+    {
+     "sample_id": "sanitize-git-repo/llm_2",
+     "prompt_tokens": 1454,
+     "completion_tokens": 283,
+     "ttft_s": 0.3525340408086777,
+     "tpot_s": 0.0070832596550173795,
+     "chunks": 51,
+     "e2e_s": 2.351490143686533
+    },
+    {
+     "sample_id": "airspeed-velocity__asv-704/llm_19",
+     "prompt_tokens": 18530,
+     "completion_tokens": 63,
+     "ttft_s": 0.46475112810730934,
+     "tpot_s": 0.008131914441623995,
+     "chunks": 17,
+     "e2e_s": 0.9694634675979614
+    },
+    {
+     "sample_id": "oasis-open__cti-python-stix2-489/llm_11",
+     "prompt_tokens": 7345,
+     "completion_tokens": 34,
+     "ttft_s": 0.46364351734519005,
+     "tpot_s": 0.009575257698694864,
+     "chunks": 12,
+     "e2e_s": 0.7819137834012508
+    },
+    {
+     "sample_id": "tobymao__sqlglot-3870/llm_21",
+     "prompt_tokens": 29608,
+     "completion_tokens": 47,
+     "ttft_s": 0.503147765994072,
+     "tpot_s": 0.00796859282190385,
+     "chunks": 13,
+     "e2e_s": 0.8721533417701721
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_8",
+     "prompt_tokens": 4481,
+     "completion_tokens": 18,
+     "ttft_s": 0.5040642842650414,
+     "tpot_s": 0.016230503425878638,
+     "chunks": 11,
+     "e2e_s": 0.7811292000114918
+    },
+    {
+     "sample_id": "spinning-up-rl/llm_16",
+     "prompt_tokens": 20063,
+     "completion_tokens": 95,
+     "ttft_s": 0.16089045256376266,
+     "tpot_s": 0.013163937216109417,
+     "chunks": 32,
+     "e2e_s": 1.3992119021713734
+    },
+    {
+     "sample_id": "jaywink__federation-73/llm_18",
+     "prompt_tokens": 23789,
+     "completion_tokens": 68,
+     "ttft_s": 0.14325587451457977,
+     "tpot_s": 0.012731428244220676,
+     "chunks": 23,
+     "e2e_s": 0.9984365962445736
+    },
+    {
+     "sample_id": "pre-commit__pre-commit-1092/llm_22",
+     "prompt_tokens": 13927,
+     "completion_tokens": 47,
+     "ttft_s": 0.18505628407001495,
+     "tpot_s": 0.004029616146631863,
+     "chunks": 8,
+     "e2e_s": 0.3714444264769554
+    },
+    {
+     "sample_id": "tobymao__sqlglot-2507/llm_10",
+     "prompt_tokens": 26023,
+     "completion_tokens": 136,
+     "ttft_s": 0.23976261541247368,
+     "tpot_s": 0.007368801313417929,
+     "chunks": 26,
+     "e2e_s": 1.2347875274717808
+    },
+    {
+     "sample_id": "berkerpeksag__astor-114/llm_9",
+     "prompt_tokens": 8741,
+     "completion_tokens": 237,
+     "ttft_s": 0.21232591941952705,
+     "tpot_s": 0.010506823580017534,
+     "chunks": 59,
+     "e2e_s": 2.6940695829689503
+    },
+    {
+     "sample_id": "airspeed-velocity__asv-704/llm_21",
+     "prompt_tokens": 18724,
+     "completion_tokens": 148,
+     "ttft_s": 0.16660425439476967,
+     "tpot_s": 0.01556019555954706,
+     "chunks": 54,
+     "e2e_s": 2.4574592523276806
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4472/llm_1",
+     "prompt_tokens": 2263,
+     "completion_tokens": 154,
+     "ttft_s": 0.16166777536273003,
+     "tpot_s": 0.010209639161046034,
+     "chunks": 38,
+     "e2e_s": 1.727532509714365
+    },
+    {
+     "sample_id": "tobymao__sqlglot-3333/llm_41",
+     "prompt_tokens": 59834,
+     "completion_tokens": 512,
+     "ttft_s": 0.28467340394854546,
+     "tpot_s": 0.013331677480336505,
+     "chunks": 161,
+     "e2e_s": 7.098272897303104
+    },
+    {
+     "sample_id": "tobymao__sqlglot-2432/llm_29",
+     "prompt_tokens": 47034,
+     "completion_tokens": 34,
+     "ttft_s": 0.2680592015385628,
+     "tpot_s": 0.01231828365813602,
+     "chunks": 12,
+     "e2e_s": 0.6764506995677948
+    },
+    {
+     "sample_id": "cloud-custodian__cloud-custodian-5472/llm_37",
+     "prompt_tokens": 33739,
+     "completion_tokens": 278,
+     "ttft_s": 0.20332104340195656,
+     "tpot_s": 0.011242439304663386,
+     "chunks": 73,
+     "e2e_s": 3.3197035789489746
+    },
+    {
+     "sample_id": "financial-document-processor/llm_1",
+     "prompt_tokens": 623,
+     "completion_tokens": 26,
+     "ttft_s": 0.1387869007885456,
+     "tpot_s": 0.018242916613817214,
+     "chunks": 12,
+     "e2e_s": 0.5974682420492172
+    },
+    {
+     "sample_id": "cloud-custodian__cloud-custodian-5472/llm_0",
+     "prompt_tokens": 1037,
+     "completion_tokens": 385,
+     "ttft_s": 0.13864749670028687,
+     "tpot_s": 0.01638040630496107,
+     "chunks": 151,
+     "e2e_s": 6.429825611412525
+    },
+    {
+     "sample_id": "code-from-image/llm_9",
+     "prompt_tokens": 3897,
+     "completion_tokens": 512,
+     "ttft_s": 0.14161064103245735,
+     "tpot_s": 0.00825033021212324,
+     "chunks": 99,
+     "e2e_s": 4.358461268246174
+    },
+    {
+     "sample_id": "cloud-custodian__cloud-custodian-5472/llm_35",
+     "prompt_tokens": 32456,
+     "completion_tokens": 80,
+     "ttft_s": 0.2137400433421135,
+     "tpot_s": 0.00956886568212811,
+     "chunks": 20,
+     "e2e_s": 0.9707373194396496
+    },
+    {
+     "sample_id": "PennyLaneAI__pennylane-2668/llm_2",
+     "prompt_tokens": 5154,
+     "completion_tokens": 49,
+     "ttft_s": 0.2118144892156124,
+     "tpot_s": 0.019318320245171588,
+     "chunks": 24,
+     "e2e_s": 1.1415538936853409
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_22",
+     "prompt_tokens": 9956,
+     "completion_tokens": 33,
+     "ttft_s": 0.16635829582810402,
+     "tpot_s": 0.007903351332060993,
+     "chunks": 8,
+     "e2e_s": 0.4197601228952408
+    },
+    {
+     "sample_id": "pre-commit__pre-commit-1092/llm_35",
+     "prompt_tokens": 21738,
+     "completion_tokens": 512,
+     "ttft_s": 0.1932191699743271,
+     "tpot_s": 0.008547095760498962,
+     "chunks": 103,
+     "e2e_s": 4.56377275660634
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4014/llm_7",
+     "prompt_tokens": 8842,
+     "completion_tokens": 508,
+     "ttft_s": 0.1259259209036827,
+     "tpot_s": 0.01073640815663855,
+     "chunks": 131,
+     "e2e_s": 5.57185960188508
+    },
+    {
+     "sample_id": "install-windows-xp/llm_14",
+     "prompt_tokens": 9208,
+     "completion_tokens": 186,
+     "ttft_s": 0.1404789388179779,
+     "tpot_s": 0.010739407990429852,
+     "chunks": 48,
+     "e2e_s": 2.1290143840014935
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4550/llm_2",
+     "prompt_tokens": 1039,
+     "completion_tokens": 58,
+     "ttft_s": 0.129433024674654,
+     "tpot_s": 0.01739077008607095,
+     "chunks": 25,
+     "e2e_s": 1.1218195520341396
+    },
+    {
+     "sample_id": "PennyLaneAI__pennylane-2668/llm_29",
+     "prompt_tokens": 34661,
+     "completion_tokens": 512,
+     "ttft_s": 0.20379354059696198,
+     "tpot_s": 0.00826880675530947,
+     "chunks": 101,
+     "e2e_s": 4.4312596172094345
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4430/llm_36",
+     "prompt_tokens": 38484,
+     "completion_tokens": 46,
+     "ttft_s": 0.24891500174999237,
+     "tpot_s": 0.010069228212038676,
+     "chunks": 13,
+     "e2e_s": 0.7053623087704182
+    },
+    {
+     "sample_id": "jaywink__federation-73/llm_38",
+     "prompt_tokens": 44378,
+     "completion_tokens": 82,
+     "ttft_s": 0.2214445099234581,
+     "tpot_s": 0.010301750153303146,
+     "chunks": 22,
+     "e2e_s": 1.0587827451527119
+    },
+    {
+     "sample_id": "tobymao__sqlglot-2439/llm_6",
+     "prompt_tokens": 17277,
+     "completion_tokens": 218,
+     "ttft_s": 0.20155691727995872,
+     "tpot_s": 0.011917517155683535,
+     "chunks": 62,
+     "e2e_s": 2.7883130349218845
+    },
+    {
+     "sample_id": "pydicom__pydicom-938/llm_10",
+     "prompt_tokens": 6124,
+     "completion_tokens": 231,
+     "ttft_s": 0.13308961689472198,
+     "tpot_s": 0.01034611303197301,
+     "chunks": 57,
+     "e2e_s": 2.5131423100829124
+    },
+    {
+     "sample_id": "airspeed-velocity__asv-704/llm_17",
+     "prompt_tokens": 17157,
+     "completion_tokens": 79,
+     "ttft_s": 0.17693409696221352,
+     "tpot_s": 0.019382458992111377,
+     "chunks": 37,
+     "e2e_s": 1.690604742616415
+    },
+    {
+     "sample_id": "awdeorio__mailmerge-95/llm_9",
+     "prompt_tokens": 14347,
+     "completion_tokens": 87,
+     "ttft_s": 0.17344927787780762,
+     "tpot_s": 0.012919629599119341,
+     "chunks": 28,
+     "e2e_s": 1.2870338410139084
+    },
+    {
+     "sample_id": "streamlink__streamlink-5792/llm_4",
+     "prompt_tokens": 3319,
+     "completion_tokens": 40,
+     "ttft_s": 0.14546747505664825,
+     "tpot_s": 0.00633368669794156,
+     "chunks": 8,
+     "e2e_s": 0.39362017065286636
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_18",
+     "prompt_tokens": 7533,
+     "completion_tokens": 192,
+     "ttft_s": 0.1611669845879078,
+     "tpot_s": 0.005213783010450333,
+     "chunks": 25,
+     "e2e_s": 1.1581792458891869
+    },
+    {
+     "sample_id": "simpeg__simpeg-1342/llm_33",
+     "prompt_tokens": 31288,
+     "completion_tokens": 512,
+     "ttft_s": 0.19530314579606056,
+     "tpot_s": 0.00952841284631983,
+     "chunks": 138,
+     "e2e_s": 5.065366081893444
+    },
+    {
+     "sample_id": "install-windows-xp/llm_10",
+     "prompt_tokens": 7130,
+     "completion_tokens": 121,
+     "ttft_s": 0.1458735391497612,
+     "tpot_s": 0.0062569308405121165,
+     "chunks": 20,
+     "e2e_s": 0.898901779204607
+    },
+    {
+     "sample_id": "reshard-c4-data/llm_8",
+     "prompt_tokens": 6688,
+     "completion_tokens": 460,
+     "ttft_s": 0.15415876358747482,
+     "tpot_s": 0.006298819869302197,
+     "chunks": 70,
+     "e2e_s": 3.04782060906291
+    },
+    {
+     "sample_id": "tobymao__sqlglot-2432/llm_0",
+     "prompt_tokens": 662,
+     "completion_tokens": 369,
+     "ttft_s": 0.1286030076444149,
+     "tpot_s": 0.011087953396465467,
+     "chunks": 112,
+     "e2e_s": 4.209891319274902
+    },
+    {
+     "sample_id": "cloud-custodian__cloud-custodian-5472/llm_6",
+     "prompt_tokens": 5047,
+     "completion_tokens": 45,
+     "ttft_s": 0.13352534547448158,
+     "tpot_s": 0.009873955764553764,
+     "chunks": 12,
+     "e2e_s": 0.568391989916563
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4325/llm_10",
+     "prompt_tokens": 18295,
+     "completion_tokens": 47,
+     "ttft_s": 0.18643386662006378,
+     "tpot_s": 0.013999118105224941,
+     "chunks": 17,
+     "e2e_s": 0.8318425230681896
+    },
+    {
+     "sample_id": "tobymao__sqlglot-2439/llm_20",
+     "prompt_tokens": 32794,
+     "completion_tokens": 34,
+     "ttft_s": 0.2023811750113964,
+     "tpot_s": 0.010064411569725384,
+     "chunks": 10,
+     "e2e_s": 0.5353971756994724
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4015/llm_34",
+     "prompt_tokens": 44678,
+     "completion_tokens": 46,
+     "ttft_s": 0.20889370143413544,
+     "tpot_s": 0.010320858077870474,
+     "chunks": 13,
+     "e2e_s": 0.6749793700873852
+    },
+    {
+     "sample_id": "streamlink__streamlink-5792/llm_26",
+     "prompt_tokens": 15509,
+     "completion_tokens": 38,
+     "ttft_s": 0.16697333008050919,
+     "tpot_s": 0.013801191908282202,
+     "chunks": 14,
+     "e2e_s": 0.6792016886174679
+    },
+    {
+     "sample_id": "pydicom__pydicom-938/llm_12",
+     "prompt_tokens": 8405,
+     "completion_tokens": 392,
+     "ttft_s": 0.13983266055583954,
+     "tpot_s": 0.0070271111948563315,
+     "chunks": 78,
+     "e2e_s": 2.887854788452387
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4472/llm_20",
+     "prompt_tokens": 22551,
+     "completion_tokens": 34,
+     "ttft_s": 0.19140005484223366,
+     "tpot_s": 0.010040833981651249,
+     "chunks": 10,
+     "e2e_s": 0.523458369076252
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_11",
+     "prompt_tokens": 5125,
+     "completion_tokens": 42,
+     "ttft_s": 0.15166858211159706,
+     "tpot_s": 0.012641296517558215,
+     "chunks": 14,
+     "e2e_s": 0.6719753220677376
+    },
+    {
+     "sample_id": "jaywink__federation-73/llm_21",
+     "prompt_tokens": 26031,
+     "completion_tokens": 64,
+     "ttft_s": 0.18798866495490074,
+     "tpot_s": 0.01126646457446946,
+     "chunks": 19,
+     "e2e_s": 0.8982272669672966
+    },
+    {
+     "sample_id": "gcc-compiler-optimization/llm_4",
+     "prompt_tokens": 1177,
+     "completion_tokens": 140,
+     "ttft_s": 0.18641485646367073,
+     "tpot_s": 0.01359622654833382,
+     "chunks": 52,
+     "e2e_s": 2.077654108405113
+    },
+    {
+     "sample_id": "PennyLaneAI__pennylane-2668/llm_23",
+     "prompt_tokens": 27340,
+     "completion_tokens": 76,
+     "ttft_s": 0.24142645671963692,
+     "tpot_s": 0.0103310626745224,
+     "chunks": 21,
+     "e2e_s": 1.0186862237751484
+    },
+    {
+     "sample_id": "tobymao__sqlglot-3045/llm_3",
+     "prompt_tokens": 5491,
+     "completion_tokens": 27,
+     "ttft_s": 0.20715662091970444,
+     "tpot_s": 0.013778048352553295,
+     "chunks": 11,
+     "e2e_s": 0.5669662542641163
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4355/llm_8",
+     "prompt_tokens": 8672,
+     "completion_tokens": 41,
+     "ttft_s": 0.1757470928132534,
+     "tpot_s": 0.012769727315753699,
+     "chunks": 14,
+     "e2e_s": 0.6891109123826027
+    },
+    {
+     "sample_id": "tobymao__sqlglot-3045/llm_18",
+     "prompt_tokens": 22721,
+     "completion_tokens": 512,
+     "ttft_s": 0.1907164864242077,
+     "tpot_s": 0.009657177950188138,
+     "chunks": 190,
+     "e2e_s": 5.126543238759041
+    },
+    {
+     "sample_id": "build-tcc-qemu/llm_4",
+     "prompt_tokens": 2766,
+     "completion_tokens": 512,
+     "ttft_s": 0.12770676612854004,
+     "tpot_s": 0.008600120850038622,
+     "chunks": 170,
+     "e2e_s": 4.523795146495104
+    }
+   ]
+  },
+  {
+   "concurrency": 32,
+   "requests": 64,
+   "wall_s": 10.071549106389284,
+   "output_tokens": 13943,
+   "aggregate_output_tok_s": 1384.3947790667783,
+   "tpot_mean_ms": 13.975979191023635,
+   "tpot_median_ms": 13.900398728092956,
+   "per_stream_tok_s_median": 71.94038239917407,
+   "ttft_mean_s": 0.4678623898071237,
+   "prompt_tokens_mean": 16477.1875,
+   "completion_tokens_mean": 217.859375,
+   "spec_decode": {
+    "num_drafts": 3645.0,
+    "num_accepted_tokens": 10284.0,
+    "num_draft_tokens": 54675.0
+   },
+   "accepted_per_draft": 2.8213991769547326,
+   "per_request": [
+    {
+     "sample_id": "pydicom__pydicom-938/llm_3",
+     "prompt_tokens": 1252,
+     "completion_tokens": 95,
+     "ttft_s": 0.11808038502931595,
+     "tpot_s": 0.015854332239386884,
+     "chunks": 30,
+     "e2e_s": 1.6089200712740421
+    },
+    {
+     "sample_id": "spinning-up-rl/llm_25",
+     "prompt_tokens": 27468,
+     "completion_tokens": 66,
+     "ttft_s": 0.2278178595006466,
+     "tpot_s": 0.008441601235132951,
+     "chunks": 15,
+     "e2e_s": 0.7781895697116852
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4014/llm_23",
+     "prompt_tokens": 19078,
+     "completion_tokens": 512,
+     "ttft_s": 0.2682070955634117,
+     "tpot_s": 0.011401411284439252,
+     "chunks": 113,
+     "e2e_s": 6.097164645791054
+    },
+    {
+     "sample_id": "nginx-request-logging/llm_5",
+     "prompt_tokens": 5525,
+     "completion_tokens": 386,
+     "ttft_s": 0.26821206137537956,
+     "tpot_s": 0.015132782511509858,
+     "chunks": 113,
+     "e2e_s": 6.09676305949688
+    },
+    {
+     "sample_id": "schedule-vacation/llm_6",
+     "prompt_tokens": 7743,
+     "completion_tokens": 421,
+     "ttft_s": 0.2683113366365433,
+     "tpot_s": 0.003354866758343719,
+     "chunks": 29,
+     "e2e_s": 1.6817446686327457
+    },
+    {
+     "sample_id": "oasis-open__cti-python-stix2-489/llm_14",
+     "prompt_tokens": 12372,
+     "completion_tokens": 512,
+     "ttft_s": 0.30841007828712463,
+     "tpot_s": 0.009426895055168995,
+     "chunks": 92,
+     "e2e_s": 5.12753676995635
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4194/llm_3",
+     "prompt_tokens": 8296,
+     "completion_tokens": 38,
+     "ttft_s": 0.30766870826482773,
+     "tpot_s": 0.012914188206195831,
+     "chunks": 14,
+     "e2e_s": 0.7865570113062859
+    },
+    {
+     "sample_id": "streamlink__streamlink-5792/llm_46",
+     "prompt_tokens": 26553,
+     "completion_tokens": 512,
+     "ttft_s": 0.45752430707216263,
+     "tpot_s": 0.01260029583615333,
+     "chunks": 127,
+     "e2e_s": 6.897550743073225
+    },
+    {
+     "sample_id": "simpeg__simpeg-1342/llm_32",
+     "prompt_tokens": 29905,
+     "completion_tokens": 56,
+     "ttft_s": 0.45791810378432274,
+     "tpot_s": 0.013702794232151726,
+     "chunks": 14,
+     "e2e_s": 1.2130905985832214
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_3",
+     "prompt_tokens": 3327,
+     "completion_tokens": 189,
+     "ttft_s": 0.45676127448678017,
+     "tpot_s": 0.012988082073787426,
+     "chunks": 46,
+     "e2e_s": 2.898859605193138
+    },
+    {
+     "sample_id": "streamlink__streamlink-5792/llm_48",
+     "prompt_tokens": 27866,
+     "completion_tokens": 462,
+     "ttft_s": 0.5236556380987167,
+     "tpot_s": 0.011973010889232288,
+     "chunks": 104,
+     "e2e_s": 6.044258777052164
+    },
+    {
+     "sample_id": "sanitize-git-repo/llm_2",
+     "prompt_tokens": 1454,
+     "completion_tokens": 177,
+     "ttft_s": 0.5244165807962418,
+     "tpot_s": 0.01416504510085691,
+     "chunks": 46,
+     "e2e_s": 3.0197325348854065
+    },
+    {
+     "sample_id": "airspeed-velocity__asv-704/llm_19",
+     "prompt_tokens": 18530,
+     "completion_tokens": 66,
+     "ttft_s": 0.6698531657457352,
+     "tpot_s": 0.014362846372219233,
+     "chunks": 16,
+     "e2e_s": 1.6043408177793026
+    },
+    {
+     "sample_id": "oasis-open__cti-python-stix2-489/llm_11",
+     "prompt_tokens": 7345,
+     "completion_tokens": 25,
+     "ttft_s": 0.6699645482003689,
+     "tpot_s": 0.022532261442393064,
+     "chunks": 9,
+     "e2e_s": 1.2125631384551525
+    },
+    {
+     "sample_id": "tobymao__sqlglot-3870/llm_21",
+     "prompt_tokens": 29608,
+     "completion_tokens": 47,
+     "ttft_s": 0.6678316481411457,
+     "tpot_s": 0.011817447598213736,
+     "chunks": 10,
+     "e2e_s": 1.2140371650457382
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_8",
+     "prompt_tokens": 4481,
+     "completion_tokens": 18,
+     "ttft_s": 0.6678280383348465,
+     "tpot_s": 0.03185201195233008,
+     "chunks": 9,
+     "e2e_s": 1.2115659676492214
+    },
+    {
+     "sample_id": "spinning-up-rl/llm_16",
+     "prompt_tokens": 20063,
+     "completion_tokens": 94,
+     "ttft_s": 0.7194853574037552,
+     "tpot_s": 0.014934643462140074,
+     "chunks": 26,
+     "e2e_s": 2.109075292944908
+    },
+    {
+     "sample_id": "jaywink__federation-73/llm_18",
+     "prompt_tokens": 23789,
+     "completion_tokens": 98,
+     "ttft_s": 0.7180175706744194,
+     "tpot_s": 0.016805480090305976,
+     "chunks": 30,
+     "e2e_s": 2.3504127003252506
+    },
+    {
+     "sample_id": "pre-commit__pre-commit-1092/llm_22",
+     "prompt_tokens": 13927,
+     "completion_tokens": 47,
+     "ttft_s": 0.7160480208694935,
+     "tpot_s": 0.01063585645802643,
+     "chunks": 8,
+     "e2e_s": 1.2090246602892876
+    },
+    {
+     "sample_id": "tobymao__sqlglot-2507/llm_10",
+     "prompt_tokens": 26023,
+     "completion_tokens": 154,
+     "ttft_s": 0.7706412933766842,
+     "tpot_s": 0.009100941222867155,
+     "chunks": 26,
+     "e2e_s": 2.164128612726927
+    },
+    {
+     "sample_id": "berkerpeksag__astor-114/llm_9",
+     "prompt_tokens": 8741,
+     "completion_tokens": 245,
+     "ttft_s": 0.7684192135930061,
+     "tpot_s": 0.014247588340009823,
+     "chunks": 64,
+     "e2e_s": 4.247395101934671
+    },
+    {
+     "sample_id": "airspeed-velocity__asv-704/llm_21",
+     "prompt_tokens": 18724,
+     "completion_tokens": 114,
+     "ttft_s": 0.7668094523251057,
+     "tpot_s": 0.018979692122841302,
+     "chunks": 40,
+     "e2e_s": 2.915101669728756
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4472/llm_1",
+     "prompt_tokens": 2263,
+     "completion_tokens": 150,
+     "ttft_s": 0.7688883915543556,
+     "tpot_s": 0.011104044548217082,
+     "chunks": 31,
+     "e2e_s": 2.4253327697515488
+    },
+    {
+     "sample_id": "tobymao__sqlglot-3333/llm_41",
+     "prompt_tokens": 59834,
+     "completion_tokens": 512,
+     "ttft_s": 1.1306779831647873,
+     "tpot_s": 0.015772803466030764,
+     "chunks": 175,
+     "e2e_s": 9.192361932247877
+    },
+    {
+     "sample_id": "tobymao__sqlglot-2432/llm_29",
+     "prompt_tokens": 47034,
+     "completion_tokens": 34,
+     "ttft_s": 1.1294396631419659,
+     "tpot_s": 0.01419036282282887,
+     "chunks": 10,
+     "e2e_s": 1.598499372601509
+    },
+    {
+     "sample_id": "cloud-custodian__cloud-custodian-5472/llm_37",
+     "prompt_tokens": 33739,
+     "completion_tokens": 482,
+     "ttft_s": 1.1252467669546604,
+     "tpot_s": 0.010404680799421797,
+     "chunks": 98,
+     "e2e_s": 6.133856046944857
+    },
+    {
+     "sample_id": "financial-document-processor/llm_1",
+     "prompt_tokens": 623,
+     "completion_tokens": 122,
+     "ttft_s": 1.1263267248868942,
+     "tpot_s": 0.025265505306484286,
+     "chunks": 59,
+     "e2e_s": 4.184687599539757
+    },
+    {
+     "sample_id": "cloud-custodian__cloud-custodian-5472/llm_0",
+     "prompt_tokens": 1037,
+     "completion_tokens": 512,
+     "ttft_s": 1.1272013150155544,
+     "tpot_s": 0.017477108526486474,
+     "chunks": 204,
+     "e2e_s": 10.059189174324274
+    },
+    {
+     "sample_id": "code-from-image/llm_9",
+     "prompt_tokens": 3897,
+     "completion_tokens": 512,
+     "ttft_s": 1.127758301794529,
+     "tpot_s": 0.013226703975765206,
+     "chunks": 141,
+     "e2e_s": 7.88776471093297
+    },
+    {
+     "sample_id": "cloud-custodian__cloud-custodian-5472/llm_35",
+     "prompt_tokens": 32456,
+     "completion_tokens": 80,
+     "ttft_s": 1.2011806778609753,
+     "tpot_s": 0.00866275294860707,
+     "chunks": 16,
+     "e2e_s": 1.8873878978192806
+    },
+    {
+     "sample_id": "PennyLaneAI__pennylane-2668/llm_2",
+     "prompt_tokens": 5154,
+     "completion_tokens": 69,
+     "ttft_s": 1.1976189725100994,
+     "tpot_s": 0.01685063776505344,
+     "chunks": 24,
+     "e2e_s": 2.344650123268366
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_22",
+     "prompt_tokens": 9956,
+     "completion_tokens": 33,
+     "ttft_s": 1.2020097970962524,
+     "tpot_s": 0.004475045367144048,
+     "chunks": 6,
+     "e2e_s": 1.3466684222221375
+    },
+    {
+     "sample_id": "pre-commit__pre-commit-1092/llm_35",
+     "prompt_tokens": 21738,
+     "completion_tokens": 512,
+     "ttft_s": 0.43711477518081665,
+     "tpot_s": 0.010299066092578399,
+     "chunks": 105,
+     "e2e_s": 5.702640753239393
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4014/llm_7",
+     "prompt_tokens": 8842,
+     "completion_tokens": 126,
+     "ttft_s": 0.4240124225616455,
+     "tpot_s": 0.016883437305688857,
+     "chunks": 42,
+     "e2e_s": 2.5373007878661156
+    },
+    {
+     "sample_id": "install-windows-xp/llm_14",
+     "prompt_tokens": 9208,
+     "completion_tokens": 385,
+     "ttft_s": 0.20422452688217163,
+     "tpot_s": 0.01676413882523775,
+     "chunks": 134,
+     "e2e_s": 6.64338518306613
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4550/llm_2",
+     "prompt_tokens": 1039,
+     "completion_tokens": 54,
+     "ttft_s": 0.20248761400580406,
+     "tpot_s": 0.01906817968723909,
+     "chunks": 21,
+     "e2e_s": 1.2167335115373135
+    },
+    {
+     "sample_id": "PennyLaneAI__pennylane-2668/llm_29",
+     "prompt_tokens": 34661,
+     "completion_tokens": 512,
+     "ttft_s": 0.29903214052319527,
+     "tpot_s": 0.014321287310228423,
+     "chunks": 158,
+     "e2e_s": 7.618114020675421
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4430/llm_36",
+     "prompt_tokens": 38484,
+     "completion_tokens": 143,
+     "ttft_s": 0.38902004808187485,
+     "tpot_s": 0.017497829594452615,
+     "chunks": 49,
+     "e2e_s": 2.8766771368682384
+    },
+    {
+     "sample_id": "jaywink__federation-73/llm_38",
+     "prompt_tokens": 44378,
+     "completion_tokens": 82,
+     "ttft_s": 0.38805442675948143,
+     "tpot_s": 0.012334487412446811,
+     "chunks": 22,
+     "e2e_s": 1.3889710456132889
+    },
+    {
+     "sample_id": "tobymao__sqlglot-2439/llm_6",
+     "prompt_tokens": 17277,
+     "completion_tokens": 185,
+     "ttft_s": 0.25975047051906586,
+     "tpot_s": 0.014897323942378811,
+     "chunks": 53,
+     "e2e_s": 3.0042329654097557
+    },
+    {
+     "sample_id": "pydicom__pydicom-938/llm_10",
+     "prompt_tokens": 6124,
+     "completion_tokens": 268,
+     "ttft_s": 0.18821337446570396,
+     "tpot_s": 0.010147510703360096,
+     "chunks": 52,
+     "e2e_s": 2.898715414106846
+    },
+    {
+     "sample_id": "airspeed-velocity__asv-704/llm_17",
+     "prompt_tokens": 17157,
+     "completion_tokens": 79,
+     "ttft_s": 0.18740622326731682,
+     "tpot_s": 0.02308290322812704,
+     "chunks": 35,
+     "e2e_s": 1.988633193075657
+    },
+    {
+     "sample_id": "awdeorio__mailmerge-95/llm_9",
+     "prompt_tokens": 14347,
+     "completion_tokens": 87,
+     "ttft_s": 0.2450905442237854,
+     "tpot_s": 0.017100719041949094,
+     "chunks": 29,
+     "e2e_s": 1.7166831009089947
+    },
+    {
+     "sample_id": "streamlink__streamlink-5792/llm_4",
+     "prompt_tokens": 3319,
+     "completion_tokens": 40,
+     "ttft_s": 0.16997839510440826,
+     "tpot_s": 0.008033809849084953,
+     "chunks": 8,
+     "e2e_s": 0.4875949062407017
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_18",
+     "prompt_tokens": 7533,
+     "completion_tokens": 192,
+     "ttft_s": 0.15880564227700233,
+     "tpot_s": 0.006624908503437541,
+     "chunks": 25,
+     "e2e_s": 1.4263696074485779
+    },
+    {
+     "sample_id": "simpeg__simpeg-1342/llm_33",
+     "prompt_tokens": 31288,
+     "completion_tokens": 512,
+     "ttft_s": 0.24096446111798286,
+     "tpot_s": 0.012677665012514988,
+     "chunks": 142,
+     "e2e_s": 6.720262657850981
+    },
+    {
+     "sample_id": "install-windows-xp/llm_10",
+     "prompt_tokens": 7130,
+     "completion_tokens": 121,
+     "ttft_s": 0.1849071979522705,
+     "tpot_s": 0.007540780616303285,
+     "chunks": 19,
+     "e2e_s": 1.0903325006365776
+    },
+    {
+     "sample_id": "reshard-c4-data/llm_8",
+     "prompt_tokens": 6688,
+     "completion_tokens": 495,
+     "ttft_s": 0.181683711707592,
+     "tpot_s": 0.007372659529268983,
+     "chunks": 72,
+     "e2e_s": 3.82778562605381
+    },
+    {
+     "sample_id": "tobymao__sqlglot-2432/llm_0",
+     "prompt_tokens": 662,
+     "completion_tokens": 485,
+     "ttft_s": 0.1827852837741375,
+     "tpot_s": 0.012911861277500953,
+     "chunks": 137,
+     "e2e_s": 6.433009933680296
+    },
+    {
+     "sample_id": "cloud-custodian__cloud-custodian-5472/llm_6",
+     "prompt_tokens": 5047,
+     "completion_tokens": 45,
+     "ttft_s": 0.18567797541618347,
+     "tpot_s": 0.0127925816076723,
+     "chunks": 12,
+     "e2e_s": 0.7501411326229572
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4325/llm_10",
+     "prompt_tokens": 18295,
+     "completion_tokens": 48,
+     "ttft_s": 0.2589186802506447,
+     "tpot_s": 0.018519314362647685,
+     "chunks": 18,
+     "e2e_s": 1.1319395639002323
+    },
+    {
+     "sample_id": "tobymao__sqlglot-2439/llm_20",
+     "prompt_tokens": 32794,
+     "completion_tokens": 512,
+     "ttft_s": 0.2580231912434101,
+     "tpot_s": 0.014243137346555109,
+     "chunks": 171,
+     "e2e_s": 7.5380020551383495
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4015/llm_34",
+     "prompt_tokens": 44678,
+     "completion_tokens": 512,
+     "ttft_s": 0.2927686721086502,
+     "tpot_s": 0.013954910382249351,
+     "chunks": 169,
+     "e2e_s": 7.4252648167312145
+    },
+    {
+     "sample_id": "streamlink__streamlink-5792/llm_26",
+     "prompt_tokens": 15509,
+     "completion_tokens": 36,
+     "ttft_s": 0.20519079640507698,
+     "tpot_s": 0.018930711916514804,
+     "chunks": 14,
+     "e2e_s": 0.8679792582988739
+    },
+    {
+     "sample_id": "pydicom__pydicom-938/llm_12",
+     "prompt_tokens": 8405,
+     "completion_tokens": 453,
+     "ttft_s": 0.1810133382678032,
+     "tpot_s": 0.00901312649711571,
+     "chunks": 86,
+     "e2e_s": 4.257957242429256
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4472/llm_20",
+     "prompt_tokens": 22551,
+     "completion_tokens": 29,
+     "ttft_s": 0.19098776206374168,
+     "tpot_s": 0.01728943908321006,
+     "chunks": 11,
+     "e2e_s": 0.6778687722980976
+    },
+    {
+     "sample_id": "adamboche__python-marshmallow-union-29/llm_11",
+     "prompt_tokens": 5125,
+     "completion_tokens": 42,
+     "ttft_s": 0.1489497683942318,
+     "tpot_s": 0.015041658791100107,
+     "chunks": 13,
+     "e2e_s": 0.7690909840166569
+    },
+    {
+     "sample_id": "jaywink__federation-73/llm_21",
+     "prompt_tokens": 26031,
+     "completion_tokens": 64,
+     "ttft_s": 0.17916744574904442,
+     "tpot_s": 0.012926371206366827,
+     "chunks": 17,
+     "e2e_s": 0.9940031580626965
+    },
+    {
+     "sample_id": "gcc-compiler-optimization/llm_4",
+     "prompt_tokens": 1177,
+     "completion_tokens": 145,
+     "ttft_s": 0.15519556403160095,
+     "tpot_s": 0.018166326296826203,
+     "chunks": 53,
+     "e2e_s": 2.7719908356666565
+    },
+    {
+     "sample_id": "PennyLaneAI__pennylane-2668/llm_23",
+     "prompt_tokens": 27340,
+     "completion_tokens": 70,
+     "ttft_s": 0.23812466114759445,
+     "tpot_s": 0.012959715194892193,
+     "chunks": 19,
+     "e2e_s": 1.1332793906331062
+    },
+    {
+     "sample_id": "tobymao__sqlglot-3045/llm_3",
+     "prompt_tokens": 5491,
+     "completion_tokens": 27,
+     "ttft_s": 0.2370983436703682,
+     "tpot_s": 0.018135674154529206,
+     "chunks": 11,
+     "e2e_s": 0.7094592563807964
+    },
+    {
+     "sample_id": "tobymao__sqlglot-4355/llm_8",
+     "prompt_tokens": 8672,
+     "completion_tokens": 41,
+     "ttft_s": 0.20106647908687592,
+     "tpot_s": 0.014810675475746393,
+     "chunks": 13,
+     "e2e_s": 0.7979447916150093
+    },
+    {
+     "sample_id": "tobymao__sqlglot-3045/llm_18",
+     "prompt_tokens": 22721,
+     "completion_tokens": 289,
+     "ttft_s": 0.23606548085808754,
+     "tpot_s": 0.013845887073936561,
+     "chunks": 89,
+     "e2e_s": 4.225991878658533
+    },
+    {
+     "sample_id": "build-tcc-qemu/llm_4",
+     "prompt_tokens": 2766,
+     "completion_tokens": 512,
+     "ttft_s": 0.17318319901823997,
+     "tpot_s": 0.011620850894607444,
+     "chunks": 144,
+     "e2e_s": 6.1133728213608265
+    }
+   ]
+  }
+ ]
+}

@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-14 06:25 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-14 06:45 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -56,7 +56,24 @@ admission logic) and whether the operating point itself is right (TP=2).
 
 ## 3. Queue
 
-- Nothing queued. GPU idle since 06:22 UTC 2026-09-14.
+- Nothing queued. GPU idle since 06:41 UTC 2026-09-14.
+- **Lane 4 DONE 06:41 UTC (user go "gogogo")**: Gemma 4 26B-A4B FP8 + DFlash k=15, KV cache fp8 vs bf16, both on
+  TRITON_ATTN (`analysis/results/tpot-curve-20260914/g4-dflash15-triton-*`, `lane4.log`). TPOT median ms / aggregate
+  tok/s / accepted per draft:
+
+  | c | agent 16K, bf16 KV | agent 16K, fp8 KV | short 1.2K, bf16 KV | short 1.2K, fp8 KV |
+  |---|---|---|---|---|
+  | 1 | 4.4 / 136 / 3.3 | 4.2 / 156 / 3.5 | 3.5 / 244 / 2.6 | 3.8 / 250 / 2.4 |
+  | 4 | 8.6 / 223 / 2.9 | 7.5 / 329 / 3.2 | 6.0 / 661 / 2.5 | 5.7 / 721 / 2.7 |
+  | 8 | 28.5 / 207 / 2.9 | 10.4 / 465 / 3.0 | 6.8 / 918 / 2.5 | 6.6 / 1032 / 2.4 |
+  | 16 | 59.8 / 209 / 2.8 | 10.3 / 1064 / 3.1 | 8.5 / 1310 / 2.4 | 7.6 / 1486 / 2.6 |
+  | 32 | 97.8 / 215 / 3.0 | **13.9 / 1384 / 2.8** | 10.9 / 1376 / 2.4 | 9.9 / 1504 / 2.3 |
+
+  Reading: with fp8 KV the agent-context curve stops collapsing: c=32 TPOT 13.9 ms (72 tok/s per stream) and 1,384
+  tok/s aggregate, 7× and 6.4× over bf16 KV on the same backend, and within 8% of the short-prompt aggregate. The
+  bf16 path's c=8→16 cliff (lane 2 reading 6) is therefore a kernel-path property of bf16 KV with Gemma's hybrid
+  attention in vLLM 0.28, not the model. On this GPU the frontier point on 16K agent contexts is now **32 agents at
+  72 tok/s each, 238 tok/s single-stream**. Acceptance unchanged (2.8–3.5 agent, 2.3–2.7 short).
 - **Lane 3 DONE 06:22 UTC (user go "1吧")**: Qwen3-30B-A3B agent prompts, KV cache fp8 vs bf16, both on the TRITON_ATTN
   backend (fp8 KV needs FlashInfer for FlashAttention-class kernels; not installed; lane 1's bf16 curve used
   FlashAttention, so the pair below is the fair one). TPOT median ms / aggregate tok/s:
