@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-14 02:15 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-14 02:42 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -56,10 +56,16 @@ admission logic) and whether the operating point itself is right (TP=2).
 
 ## 3. Queue
 
-- Nothing queued. The 2-GPU host is gone (ssh refused 2026-09-14 01:58 UTC); the single-GPU instance is not yet
-  bootstrapped. First on arrival: cgroup memory limit, core count (the launcher pins the engine to cores 0-2 and the
-  proxy to core 15), `benchmark_server.sh --serving-host`, 32B model download, Python supervisord, then the
-  exclusive-tier smoke (§4.1); the primary run waits for the user's go.
+- **Chain 29 running since 02:39 UTC 2026-09-14** (`results/chain29-gpu0-32b-c24-tier80-exclusive-20260914.{sh,log}`, user go
+  "好的，开始"): the §4.1 primary case on the single-GPU instance, `pool64v4-pro6000-qwen32b-gpu0-c24-fcfs-sticky-tier80-exclusive-20260914-r1`
+  (c24, FCFS sticky, 32B, 80 GiB exclusive tier; T = 80 because the cgroup is 110 GiB). Expected ≈ 3 h, then
+  `comparison.txt` against c24/96, c24/144 and c16/96. Plumbing before it (02:30–02:38 UTC): launcher smoke passed with
+  the patch active on both roles; two manual 4B checks on the host (`/workspace/xt-check{,3}`): finish copy-back only
+  for the evicted part (present/stored logged), DRAM hits and full loads after an HBM reset, 24/24 copy-backs under a
+  1 GiB tier with no error, KV usage back to 0 (delayed frees released).
+- New host: `ssh -p 35803 root@connect.singapore-a.gpuhub.com`, 1× Pro 6000, driver 580.95, cgroup 110 GiB / 22 cores,
+  disk 33 GB free; the whole old `/workspace` arrived by cloud transfer (models, venvs, outlen incl. the 50 GB OUTLETS
+  caches, 69 launch logs, manifests). Python supervisord started by hand; source shipped at d038f86a.
 
 ## 4. Next (proposals; each needs the user's go before any GPU time)
 
