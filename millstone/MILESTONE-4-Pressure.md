@@ -519,7 +519,7 @@ policy?
 | c24 | 96 GiB + FIFO working-set admission (236K in-flight tokens) | 96.15 | 0.44 | 106K | 14.0 | −177 s [−205, −151] vs c24/96: dispatch order is not the lever |
 | c24 | 96 GiB + DualMap | does not complete | — | — | — | one request starved per run (three attempts; hold p99 954 s, max 1,895 s) |
 | c24 | 144 GiB | **51.80** | **0.91** | 16K | 25.9 | −120 s [−262, +21] vs c16: the c16 step time at 50% more load |
-| c20 | 144 GiB | (chain 28, pending) | | | | second test of the sizing rule |
+| c20 | 144 GiB | **46.19** | **0.95** | 9.1K | 27.8 | −1,332 s [−1,418, −1,243] vs c20/96; −457 s [−544, −371] vs c16/96; ran alone; rule confirmed |
 
 Readings. (1) **Capacity, not policy.** The trace-driven tier simulation (`scripts/evaluation/dram_tier_simulation.py`)
 shows an oracle that knows every task's next arrival evicts the same contexts as LRU at every capacity, because tool
@@ -529,7 +529,7 @@ with long tool gaps. (2) **Not dispatch order either.** The FIFO gate held in-fl
 (FCFS: 408K) and the cached share did not move; what must fit in DRAM is every active task's context, in flight or
 in a tool gap, because LMCache stores every prefilled chunk and HBM keeps only what is in flight. (3) **Sizing
 rule.** DRAM tokens ≥ ≈ 1.4 × concurrency × mean context (17.9K at 32B, 256 KB per token): c16 needs ≈ 400K (96 GiB
-= 393K, fits), c20 ≈ 500K (96 GiB thrashes, 144 GiB = 590K should fit), c24 ≈ 600K (144 GiB fits). The 1.4 is
+= 393K, fits), c20 ≈ 500K (96 GiB thrashes at 0.74; 144 GiB = 590K fits at 0.95, chain 28, read 01:33 UTC 2026-09-14), c24 ≈ 600K (144 GiB fits). The 1.4 is
 headroom for p90 steps (33.8K), the replacement stream and 256-token chunk granularity; the plain product already
 thrashed at c20. (4) **Residency-first admission starves.** DualMap's waiting pool is ordered by cached-prefix
 length with no aging (`double_hash_global_scheduler_utils.py`); CacheWise's released policy is the same family

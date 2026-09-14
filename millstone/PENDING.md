@@ -45,7 +45,7 @@ admission logic) and whether the operating point itself is right (TP=2).
 
 - **Scheduling / KV pressure at 32B** — M4 §3.2 (store vs admission 2×2 at 4B and 32B) and §3.3 (pressure axis,
   DRAM capacity curve, sizing rule ≈ 1.4 × concurrency × mean context, FIFO gate −3%, DualMap starvation, tier
-  simulation: capacity not policy). Pending: chain 28 (c20 + 144 GiB, second rule test) result.
+  simulation: capacity not policy). Chain 28 confirmed the rule at c20 (46.19 min, cached 0.95).
 - **Output-length prediction** — closed as a prompt-side hidden-state limit; the full ladder and the sampling ceiling are in
   `analysis/development/output-length-prediction-handoff.md`; the hazard (P(remaining ≤ X)) probes are the kept dynamic
   signal for thinking steps.
@@ -55,9 +55,8 @@ admission logic) and whether the operating point itself is right (TP=2).
 
 ## 3. Queue
 
-- GPU 1: chain 28, c20 + 144 GiB DRAM (`results/chain28-gpu1-32b-c20-tier144-20260913.sh`), started 23:51 UTC 2026-09-13,
-  pre-registered prediction: cached ≥ 0.85 and mean JCT ≤ 59 min. When it lands: record in M4 §3.3 table, then both GPUs idle.
-- GPU 0: idle since 23:50 UTC. Nothing queued.
+- Nothing queued. Both GPUs idle since 01:32 UTC 2026-09-14 (chain 28 landed: c20 + 144 GiB 46.19 min, cached 0.95,
+  prediction met; M4 §3.3). The host can be released or replaced whenever the user decides (§4.3).
 
 ## 4. Next (proposals; each needs the user's go before any GPU time)
 
