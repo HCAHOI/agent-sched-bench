@@ -69,8 +69,13 @@ admission logic) and whether the operating point itself is right (TP=2).
 2. **Sizing rule as online admission**: bound active tasks so Σ contexts ≤ DRAM/1.4 (task-level FIFO, no starvation);
    differs from ThunderAgent/KAIROS program admission by the DRAM criterion. Half a day; run at c24/96.
 3. Instance switch: a single-GPU box with ~110 GB DRAM serves ≈ 13 agents at 32B (80 GiB tier) or ≈ 35 with
-   30B-A3B; choose the concurrency by the rule. Save first: `/workspace/outlen` feature caches (≈ 55 GB, hours to
-   rebuild), models (≈ 97 GB, ~1 h to re-download). Results are all local and committed.
+   30B-A3B; choose the concurrency by the rule. Backup taken 2026-09-14 01:45 UTC into
+   `results/gpuhub-host-backup-20260914/` (untracked, local): `outlen/` (datasets, every label set incl. thinking and
+   sampled, replay prefixes, small feature caches, hazard features, all probe/OUTLETS results and models, lane scripts
+   and logs; the 50 GB OUTLETS per-token caches are excluded, ≈ 3 h to re-extract), `host-logs/` (launch logs,
+   manifests), `venvs-and-upstreams.tar` (serving venv with the LMCache sm_120 build, the vLLM 0.28 venv, outlen venv,
+   upstreams). Not saved: models (re-download ≈ 97 GB), host copies of run dirs (every run's `server/` is already
+   pulled locally). Restore = untar under `/workspace` on a host with the same layout, or rerun the bootstrap.
 4. Push branch `codex/cleanup-research-dead-code` (≈ 150 commits ahead).
 
 ## 5. Decisions waiting on the user
