@@ -1,0 +1,5 @@
+c=1   n=16  TPOT median 6.2 ms  per-stream 160 tok/s  aggregate 100 tok/s  TTFT 0.75 s  prompt 14425 tok  accepted/draft None
+c=4   n=32  TPOT median 10.4 ms  per-stream 96 tok/s  aggregate 190 tok/s  TTFT 0.63 s  prompt 16814 tok  accepted/draft None
+c=8   n=64  TPOT median 16.6 ms  per-stream 60 tok/s  aggregate 278 tok/s  TTFT 0.47 s  prompt 16477 tok  accepted/draft None
+c=16  n=64  TPOT median 64.2 ms  per-stream 16 tok/s  aggregate 200 tok/s  TTFT 2.12 s  prompt 16477 tok  accepted/draft None
+c=32  n=64  TPOT median 131.0 ms  per-stream 8 tok/s  aggregate 192 tok/s  TTFT 6.69 s  prompt 16477 tok  accepted/draft None

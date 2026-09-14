@@ -1,0 +1,48 @@
+2026-09-14T05:01:13Z [tpot2] STAGE a3b-prewarm server up
+2026-09-14T05:01:13Z [tpot2] STAGE curve a3b-prewarm
+c=1   n=16  TPOT median 6.5 ms  per-stream 154 tok/s  aggregate 143 tok/s  TTFT 0.07 s  prompt 12586 tok  accepted/draft None
+c=4   n=32  TPOT median 13.2 ms  per-stream 76 tok/s  aggregate 284 tok/s  TTFT 0.11 s  prompt 14407 tok  accepted/draft None
+c=8   n=64  TPOT median 26.9 ms  per-stream 37 tok/s  aggregate 244 tok/s  TTFT 0.48 s  prompt 14180 tok  accepted/draft None
+c=16  n=64  TPOT median 48.3 ms  per-stream 21 tok/s  aggregate 292 tok/s  TTFT 0.82 s  prompt 14180 tok  accepted/draft None
+c=32  n=64  TPOT median 92.5 ms  per-stream 11 tok/s  aggregate 312 tok/s  TTFT 2.01 s  prompt 14180 tok  accepted/draft None
+2026-09-14T05:05:08Z [tpot2] DONE curve a3b-prewarm
+2026-09-14T05:07:55Z [tpot2] STAGE gemma download complete
+2026-09-14T05:12:22Z [tpot2] STAGE g4-base server up
+2026-09-14T05:12:22Z [tpot2] STAGE curve g4-base
+c=1   n=16  TPOT median 6.2 ms  per-stream 160 tok/s  aggregate 100 tok/s  TTFT 0.75 s  prompt 14425 tok  accepted/draft None
+c=4   n=32  TPOT median 10.4 ms  per-stream 96 tok/s  aggregate 190 tok/s  TTFT 0.63 s  prompt 16814 tok  accepted/draft None
+c=8   n=64  TPOT median 16.6 ms  per-stream 60 tok/s  aggregate 278 tok/s  TTFT 0.47 s  prompt 16477 tok  accepted/draft None
+c=16  n=64  TPOT median 64.2 ms  per-stream 16 tok/s  aggregate 200 tok/s  TTFT 2.12 s  prompt 16477 tok  accepted/draft None
+c=32  n=64  TPOT median 131.0 ms  per-stream 8 tok/s  aggregate 192 tok/s  TTFT 6.69 s  prompt 16477 tok  accepted/draft None
+2026-09-14T05:16:19Z [tpot2] DONE curve g4-base
+2026-09-14T05:16:19Z [tpot2] STAGE curve g4-base-short
+c=1   n=16  TPOT median 5.4 ms  per-stream 185 tok/s  aggregate 169 tok/s  TTFT 0.06 s  prompt 1416 tok  accepted/draft None
+c=4   n=32  TPOT median 8.3 ms  per-stream 120 tok/s  aggregate 402 tok/s  TTFT 0.12 s  prompt 1242 tok  accepted/draft None
+c=8   n=64  TPOT median 10.2 ms  per-stream 98 tok/s  aggregate 545 tok/s  TTFT 0.16 s  prompt 1191 tok  accepted/draft None
+c=16  n=64  TPOT median 12.7 ms  per-stream 79 tok/s  aggregate 766 tok/s  TTFT 0.24 s  prompt 1191 tok  accepted/draft None
+c=32  n=64  TPOT median 16.7 ms  per-stream 60 tok/s  aggregate 1005 tok/s  TTFT 0.11 s  prompt 1191 tok  accepted/draft None
+2026-09-14T05:17:09Z [tpot2] DONE curve g4-base-short
+2026-09-14T05:22:15Z [tpot2] STAGE g4-dflash-k15 server up
+2026-09-14T05:22:15Z [tpot2] STAGE curve g4-dflash-k15
+c=1   n=16  TPOT median 4.4 ms  per-stream 228 tok/s  aggregate 127 tok/s  TTFT 0.77 s  prompt 14425 tok  accepted/draft 3.2913992297817716
+c=4   n=32  TPOT median 7.9 ms  per-stream 127 tok/s  aggregate 234 tok/s  TTFT 0.70 s  prompt 16814 tok  accepted/draft 3.220537560303239
+c=8   n=64  TPOT median 25.1 ms  per-stream 40 tok/s  aggregate 212 tok/s  TTFT 1.62 s  prompt 16477 tok  accepted/draft 3.1338461538461537
+c=16  n=64  TPOT median 62.0 ms  per-stream 16 tok/s  aggregate 204 tok/s  TTFT 3.10 s  prompt 16477 tok  accepted/draft 3.0921325051759836
+c=32  n=64  TPOT median 93.8 ms  per-stream 11 tok/s  aggregate 237 tok/s  TTFT 11.14 s  prompt 16477 tok  accepted/draft 2.971412235563179
+2026-09-14T05:26:09Z [tpot2] DONE curve g4-dflash-k15
+2026-09-14T05:26:09Z [tpot2] STAGE curve g4-dflash-k15-short
+c=1   n=16  TPOT median 3.5 ms  per-stream 289 tok/s  aggregate 244 tok/s  TTFT 0.06 s  prompt 1416 tok  accepted/draft 2.5602409638554215
+c=4   n=32  TPOT median 5.8 ms  per-stream 173 tok/s  aggregate 618 tok/s  TTFT 0.07 s  prompt 1242 tok  accepted/draft 2.474234503360717
+c=8   n=64  TPOT median 7.1 ms  per-stream 141 tok/s  aggregate 948 tok/s  TTFT 0.08 s  prompt 1191 tok  accepted/draft 2.5037745344740814
+c=16  n=64  TPOT median 8.5 ms  per-stream 118 tok/s  aggregate 1339 tok/s  TTFT 0.10 s  prompt 1191 tok  accepted/draft 2.500268961807423
+c=32  n=64  TPOT median 11.1 ms  per-stream 90 tok/s  aggregate 1538 tok/s  TTFT 0.18 s  prompt 1191 tok  accepted/draft 2.439882697947214
+2026-09-14T05:26:41Z [tpot2] DONE curve g4-dflash-k15-short
+2026-09-14T05:30:12Z [tpot2] STAGE g4-dflash-k8 server up
+2026-09-14T05:30:12Z [tpot2] STAGE curve g4-dflash-k8
+c=1   n=16  TPOT median 4.6 ms  per-stream 219 tok/s  aggregate 134 tok/s  TTFT 0.70 s  prompt 14425 tok  accepted/draft 3.1943734015345266
+c=4   n=32  TPOT median 8.6 ms  per-stream 116 tok/s  aggregate 218 tok/s  TTFT 0.91 s  prompt 16814 tok  accepted/draft 2.828428303068253
+c=8   n=64  TPOT median 30.4 ms  per-stream 33 tok/s  aggregate 206 tok/s  TTFT 1.90 s  prompt 16477 tok  accepted/draft 2.832695139911635
+c=16  n=64  TPOT median 56.8 ms  per-stream 18 tok/s  aggregate 214 tok/s  TTFT 2.91 s  prompt 16477 tok  accepted/draft 2.8803283864856333
+c=32  n=64  TPOT median 93.6 ms  per-stream 11 tok/s  aggregate 247 tok/s  TTFT 10.58 s  prompt 16477 tok  accepted/draft 2.781890812250333
+2026-09-14T05:34:05Z [tpot2] DONE curve g4-dflash-k8
+2026-09-14T05:34:17Z [tpot2] STAGE all done

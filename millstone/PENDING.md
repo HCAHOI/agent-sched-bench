@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-14 05:00 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-14 05:40 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -56,9 +56,35 @@ admission logic) and whether the operating point itself is right (TP=2).
 
 ## 3. Queue
 
-- **TPOT lane 2 running since ≈ 05:00 UTC 2026-09-14** (`results/host-lanes/tpot2-20260914.sh`, host log
-  `/workspace/tpot2-20260914.log`): decode-only control (prefixes pre-filled) on Qwen3-30B-A3B, then Gemma 4 26B-A4B
-  FP8-Dynamic baseline / DFlash k=15 / k=8 on agent and short prompts, once the download finishes. ≈ 40 min.
+- Nothing queued. GPU idle since 05:34 UTC 2026-09-14. Lane 2 done (`analysis/results/tpot-curve-20260914/`, `lane2.log`).
+- **TPOT lanes 1+2 DONE (04:17–05:34 UTC)**. Setup: vLLM 0.28.0, CUDA graphs, greedy, 512 output tokens, bf16 KV,
+  max-num-seqs 32, chunked prefill 8192. "agent" = real replay prefixes (mean 14–16K tokens); "short" = prefixes
+  ≤ 6,000 chars (≈ 1.2K tokens, first steps); "decode-only" = every prefix pre-filled before the level. Cells are
+  TPOT median ms / aggregate output tok/s (/ accepted tokens per draft):
+
+  | c | 30B-A3B short | 30B-A3B agent | 30B-A3B agent decode-only | 32B agent | G4 short | G4 agent | G4+DFlash15 short | G4+DFlash15 agent | G4+DFlash8 agent |
+  |---|---|---|---|---|---|---|---|---|---|
+  | 1 | 6.0 / 151 | 6.5 / 55 | 6.5 / 143 | 27.4 / 31 | 5.4 / 169 | 6.2 / 100 | 3.5 / 244 / 2.6 | 4.4 / 127 / 3.3 | 4.6 / 134 / 3.2 |
+  | 4 | 10.1 / 342 | 13.3 / 190 | 13.2 / 284 | 34.7 / 78 | 8.3 / 402 | 10.4 / 190 | 5.8 / 618 / 2.5 | 7.9 / 234 / 3.2 | 8.6 / 218 / 2.8 |
+  | 8 | 13.0 / 512 | 21.9 / 265 | 26.9 / 244 | 77.3 / 81 | 10.2 / 545 | 16.6 / 278 | 7.1 / 948 / 2.5 | 25.1 / 212 / 3.1 | 30.4 / 206 / 2.8 |
+  | 16 | 17.9 / 675 | 42.9 / 322 | 48.3 / 292 | 149.6 / 89 | 12.7 / 766 | 64.2 / 200 | 8.5 / 1339 / 2.5 | 62.0 / 204 / 3.1 | 56.8 / 214 / 2.9 |
+  | 32 | 21.1 / 842 | 85.6 / 313 | 92.5 / 312 | 154.2 / 92 | 16.7 / 1005 | 131.0 / 192 | 11.1 / 1538 / 2.4 | 93.8 / 237 / 3.0 | 93.6 / 247 / 2.8 |
+
+  (30B-A3B = Qwen3-30B-A3B-Instruct-2507-FP8, 48 global-attention layers, 98 KB KV/token; 32B = Qwen3-32B-FP8; G4 =
+  RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic, 30 layers of which 5 global and 25 sliding-window 1024, draft
+  z-lab/gemma-4-26B-A4B-it-DFlash.) Readings: (1) **The 300 tok/s per-stream regime is reproduced on this GPU**:
+  Gemma 4 + DFlash 289 tok/s on short prompts, 228 on agent prompts (1.4× over its 160 baseline), 1,538 tok/s
+  aggregate at c=32 on short prompts. (2) **Agent context length, not model speed, sets what a GPU can serve**: the
+  same models fall to 200–320 aggregate tok/s at c ≥ 8 on 14–16K contexts (short prompts: 840–1,540); TPOT grows
+  linearly with concurrency. (3) The growth is decode-side KV reading, not prefill interference: the decode-only
+  control reproduces the curve (92.5 vs 85.6 ms at c=32). (4) Speculative decoding pays only at low concurrency on
+  agent contexts (DFlash: 1.3–1.4× at c ≤ 4, a loss at c=8, even at c=16, +25% at c=32); draft length 8 vs 15 does
+  not matter. (5) Acceptance is higher on later agent steps (3.0–3.3, tool calls copy from context) than on first
+  steps (2.4–2.6): the recorded GPT-style history does not lower acceptance. (6) Gemma 4 has a cliff between c=8
+  and c=16 on long contexts in vLLM 0.28 (base 16.6 → 64.2 ms) that its sliding-window design should not produce;
+  not diagnosed. (7) EAGLE-3 (lmsys SpecForge draft for Qwen3-30B-A3B) accepted 1.0 tokens per draft here; not
+  pursued. Caveat: prompts are GPT-recorded trajectories replayed into other models; the step/output distribution of
+  Gemma-native trajectories may differ (§4.0).
 - **TPOT lane 1 DONE 04:56 UTC** (`analysis/results/tpot-curve-20260914/`, client `scripts/evaluation/tpot_curve.py`;
   vLLM 0.28.0, CUDA graphs, greedy, 512 output tokens, real replay prefixes, mean prompt ≈ 14K tokens; "short" =
   prefixes ≤ 6,000 chars ≈ 1.1K tokens):
