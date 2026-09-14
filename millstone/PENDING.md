@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-14 04:20 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-14 05:00 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -56,12 +56,27 @@ admission logic) and whether the operating point itself is right (TP=2).
 
 ## 3. Queue
 
-- **TPOT lane running since 04:17 UTC 2026-09-14** (`results/host-lanes/tpot-20260914.sh`, host log `/workspace/tpot-20260914.log`,
-  results `/workspace/tpot-20260914/*.json`; user go "去做"): per-stream decode speed and aggregate throughput versus
-  concurrency (1/4/8/16/32) on real agent prompts (replay prefixes), vLLM 0.28.0 with CUDA graphs:
-  Qwen3-30B-A3B-FP8 baseline, + EAGLE-3 (k=3, k=5), Qwen3-32B-FP8 baseline. Client
-  `scripts/evaluation/tpot_curve.py`. ≈ 40 min. Purpose: reproduce the 300–1000 tok/s per-stream regime on this GPU
-  and see how the agent-serving bottleneck moves when a step takes seconds instead of tens of seconds (§4.0).
+- **TPOT lane 2 running since ≈ 05:00 UTC 2026-09-14** (`results/host-lanes/tpot2-20260914.sh`, host log
+  `/workspace/tpot2-20260914.log`): decode-only control (prefixes pre-filled) on Qwen3-30B-A3B, then Gemma 4 26B-A4B
+  FP8-Dynamic baseline / DFlash k=15 / k=8 on agent and short prompts, once the download finishes. ≈ 40 min.
+- **TPOT lane 1 DONE 04:56 UTC** (`analysis/results/tpot-curve-20260914/`, client `scripts/evaluation/tpot_curve.py`;
+  vLLM 0.28.0, CUDA graphs, greedy, 512 output tokens, real replay prefixes, mean prompt ≈ 14K tokens; "short" =
+  prefixes ≤ 6,000 chars ≈ 1.1K tokens):
+
+  | c | 30B-A3B short: TPOT ms / agg tok/s | 30B-A3B agent 14K: TPOT / agg / TTFT | 32B agent 14K: TPOT / agg / TTFT |
+  |---|---|---|---|
+  | 1 | 6.0 / 151 | 6.5 / 55 / 2.5 s | 27.4 / 31 / 2.0 s |
+  | 4 | 10.1 / 342 | 13.3 / 190 / 0.5 s | 34.7 / 78 / 1.6 s |
+  | 8 | 13.0 / 512 | 21.9 / 265 / 0.4 s | 77.3 / 81 / 4.1 s |
+  | 16 | 17.9 / 675 | 42.9 / 322 / 0.7 s | 149.6 / 89 / 13.7 s |
+  | 32 | 21.1 / 842 | 85.6 / 313 / 2.0 s | 154.2 / 92 / 62.9 s |
+
+  Readings: (1) the MoE model is 4.2× faster per stream than 32B and its aggregate saturates at ≈ 320 tok/s on agent
+  prompts but reaches 842 on short prompts at the same concurrency: **agent context length, not model speed, sets
+  the per-GPU capacity** (4× TPOT, 2.7× aggregate at c=32). (2) 32B saturates at 90 tok/s aggregate; past c=8 the
+  TTFT is prefill queueing (63 s at c=32). (3) EAGLE-3 with the lmsys SpecForge draft on vLLM 0.28: acceptance
+  length 1.0 (checkpoint has d2t/t2d; cause not found; not pursued, DFlash/MTP are the frontier). TTFT at c=1 is
+  polluted by JIT warm-up; levels reuse leading samples so TTFT at c ≥ 4 has prefix hits.
 - **Chain 29 STOPPED 04:14 UTC by the user** (`pool64v4-pro6000-qwen32b-gpu0-c24-fcfs-sticky-tier80-exclusive-20260914-r1`,
   95 min of ≈ 3 h, no verdict on the §4.1 rule). Interim diagnosis at 70 min (same elapsed windows): requests finished
   569/757/911 at 30/50/70 min vs inclusive-96 529/706/869 and 144 856/1387/1861; cached share of original steps

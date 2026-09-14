@@ -1,0 +1,25 @@
+2026-09-14T04:20:19Z [tpot] STAGE a3b-base server up
+2026-09-14T04:20:19Z [tpot] STAGE curve a3b-base
+c=1   n=16  TPOT median 6.5 ms  per-stream 154 tok/s  aggregate 55 tok/s  TTFT 2.47 s  prompt 12586 tok  accepted/draft None
+c=4   n=32  TPOT median 13.3 ms  per-stream 75 tok/s  aggregate 190 tok/s  TTFT 0.50 s  prompt 14407 tok  accepted/draft None
+c=8   n=64  TPOT median 21.9 ms  per-stream 46 tok/s  aggregate 265 tok/s  TTFT 0.43 s  prompt 14180 tok  accepted/draft None
+c=16  n=64  TPOT median 42.9 ms  per-stream 23 tok/s  aggregate 322 tok/s  TTFT 0.74 s  prompt 14180 tok  accepted/draft None
+c=32  n=64  TPOT median 85.6 ms  per-stream 12 tok/s  aggregate 313 tok/s  TTFT 2.04 s  prompt 14180 tok  accepted/draft None
+2026-09-14T04:23:55Z [tpot] DONE curve a3b-base
+2026-09-14T04:25:31Z [tpot] STAGE a3b-eagle3-k3 server up
+2026-09-14T04:25:31Z [tpot] STAGE curve a3b-eagle3-k3
+c=1   n=16  TPOT median 16.9 ms  per-stream 59 tok/s  aggregate 46 tok/s  TTFT 0.54 s  prompt 12586 tok  accepted/draft 0.10313075506445672
+c=4   n=32  TPOT median 38.4 ms  per-stream 26 tok/s  aggregate 86 tok/s  TTFT 0.59 s  prompt 14407 tok  accepted/draft 0.001326259946949602
+2026-09-14T04:29:16Z [tpot] DONE curve a3b-eagle3-k3
+2026-09-14T04:30:53Z [tpot] STAGE a3b-eagle3-k5 server up
+2026-09-14T04:30:53Z [tpot] STAGE curve a3b-eagle3-k5
+2026-09-14T04:31:01Z [tpot] DONE curve a3b-eagle3-k5
+2026-09-14T04:34:02Z [tpot] STAGE b32-base server up
+2026-09-14T04:34:02Z [tpot] STAGE curve b32-base
+c=1   n=16  TPOT median 27.4 ms  per-stream 36 tok/s  aggregate 31 tok/s  TTFT 2.00 s  prompt 12963 tok  accepted/draft None
+c=4   n=32  TPOT median 34.7 ms  per-stream 29 tok/s  aggregate 78 tok/s  TTFT 1.60 s  prompt 14992 tok  accepted/draft None
+c=8   n=64  TPOT median 77.3 ms  per-stream 13 tok/s  aggregate 81 tok/s  TTFT 4.11 s  prompt 14697 tok  accepted/draft None
+c=16  n=64  TPOT median 149.6 ms  per-stream 7 tok/s  aggregate 89 tok/s  TTFT 13.68 s  prompt 14697 tok  accepted/draft None
+c=32  n=64  TPOT median 154.2 ms  per-stream 6 tok/s  aggregate 92 tok/s  TTFT 62.87 s  prompt 14697 tok  accepted/draft None
+2026-09-14T04:54:22Z [tpot] DONE curve b32-base
+2026-09-14T04:54:34Z [tpot] STAGE all done

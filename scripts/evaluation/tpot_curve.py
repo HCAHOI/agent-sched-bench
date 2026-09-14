@@ -99,20 +99,27 @@ def main() -> None:
     p.add_argument("--prompts-per-level", type=int, nargs="+", default=[16, 32, 64, 64, 64])
     p.add_argument("--max-tokens", type=int, default=512)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--prewarm", action="store_true", help="prefill every prompt of the level first (max_tokens=1, one at a time) so the level measures decode over cached prefixes: KV read without prefill interference")
+    p.add_argument("--max-prompt-chars", type=int, help="keep only samples whose message text totals at most this many characters (short-prompt control)")
     a = p.parse_args()
     assert len(a.prompts_per_level) == len(a.concurrency)
     pool = [json.loads(line) for line in a.prefixes.open()]
+    if a.max_prompt_chars:
+        pool = [s for s in pool if sum(len(str(m.get("content") or "")) for m in s["messages"]) <= a.max_prompt_chars]
+        assert pool, "no samples under --max-prompt-chars"
     rng = random.Random(a.seed)
     rng.shuffle(pool)
     levels = []
     for conc, n in zip(a.concurrency, a.prompts_per_level):
         samples = pool[:n]  # the same leading samples at every level, so levels differ only in concurrency
+        if a.prewarm:
+            asyncio.run(run_level(a.api_base, a.model, samples, 1, 1))
         level = asyncio.run(run_level(a.api_base, a.model, samples, conc, a.max_tokens))
         levels.append(level)
         print(f"c={conc:<3} n={n:<3} TPOT median {level['tpot_median_ms']:.1f} ms  per-stream {level['per_stream_tok_s_median']:.0f} tok/s"
               f"  aggregate {level['aggregate_output_tok_s']:.0f} tok/s  TTFT {level['ttft_mean_s']:.2f} s"
               f"  prompt {level['prompt_tokens_mean']:.0f} tok  accepted/draft {level['accepted_per_draft']}", flush=True)
-        a.out.write_text(json.dumps({"model": a.model, "max_tokens": a.max_tokens, "seed": a.seed, "levels": levels}, indent=1))
+        a.out.write_text(json.dumps({"model": a.model, "max_tokens": a.max_tokens, "seed": a.seed, "prewarm": a.prewarm, "max_prompt_chars": a.max_prompt_chars, "levels": levels}, indent=1))
 
 
 if __name__ == "__main__":
