@@ -83,7 +83,8 @@ esac
 [[ "$mode" != --profile-ppd || "$ppd_mode" == pd || "$ppd_mode" == static-x1 ]] || exit 2
 [[ "$mode" != --profile-lengths || "$ppd_mode" == profile ]] || exit 2
 [[ "$run" == /* && ! -e "$run" && -f "$manifest" ]] || exit 2
-[[ $(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l) == 2 ]] || exit 2
+gpu_count=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
+[[ "$gpu_count" == 2 || ( -n "$single_gpu" && "$gpu_count" == 1 ) ]] || { echo "need 2 GPUs (1 with SINGLE_GPU=0), found $gpu_count" >&2; exit 2; }
 # two identical GPUs with at least 45 GB each (L40S 46 GB, RTX Pro 6000 96 GB); the model is recorded in hardware.txt
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits | \
   awk -F, '{names[$1]=1} $2 < 45000 {bad=1} END {exit (bad || length(names) != 1)}'
@@ -142,7 +143,11 @@ if [[ -n "$ppd_mode" ]]; then
 fi
 # DRAM KV tier (LMCache CPU offload) per instance: DualMap always has one (DUALMAP_CPU_CACHE_GIB, default 48);
 # CPU_CACHE_GIB gives the same tier to any other router policy, storage without admission (2026-09-12 decomposition).
+# EXCLUSIVE_TIER=1: the tier evicts what HBM already holds first and copies back at finish
+# (scripts/serving/exclusive_tier/sitecustomize.py, loaded into the engine through PYTHONPATH; 2026-09-14).
 cpu_cache_gib=${CPU_CACHE_GIB:-}
+exclusive_tier=${EXCLUSIVE_TIER:-}
+[[ -z "$exclusive_tier" || -n "$cpu_cache_gib" || "$router_policy" == dualmap ]] || { echo "EXCLUSIVE_TIER needs a DRAM tier (CPU_CACHE_GIB)" >&2; exit 2; }
 if [[ "$router_policy" == dualmap ]]; then
   cp scripts/baselines/dualmap_official{.sh,_proxy.py} "$run/"
   cpu_cache_gib=${DUALMAP_CPU_CACHE_GIB:-48}
@@ -161,6 +166,8 @@ lscpu > "$run/cpu.txt"
 "$python" -m pip --version >/dev/null 2>&1 || true
 uv pip freeze --python "$python" > "$run/packages.txt"
 overlay=${CUPTI_DRAM_OVERLAY:-$HOME/.cache/agent-sched-bench/cupti-dram-13.3.1}
+engine_pythonpath="$overlay/cuda-bindings:$overlay:$repo"
+[[ -z "$exclusive_tier" ]] || engine_pythonpath="$repo/scripts/serving/exclusive_tier:$engine_pythonpath"
 lib=$overlay/nvidia/cu13/lib
 cap=$(setpriv --list-caps | awk '$0=="perfmon" || $0=="cap_38" {print;exit}')
 if [[ "$dram_metrics" == on ]]; then [[ -n "$cap" && -f "$lib/libcupti.so.13" ]]; fi
@@ -239,6 +246,7 @@ max_local_cpu_size: $cpu_cache_gib
 save_decode_cache: true
 extra_config:
   force_store_wait: true
+  exclusive_tier: $([[ -n "$exclusive_tier" ]] && echo true || echo false)
 internal_api_server_enabled: true
 internal_api_server_host: 127.0.0.1
 internal_api_server_port_start: $((8100+port_base+10*i))
@@ -276,7 +284,7 @@ YAML
   fi
   launch=(setsid "${privilege[@]}" env HOME="$HOME" PATH="$PATH"
     VLLM_NO_USAGE_STATS=1 CUDA_VISIBLE_DEVICES="$gpu_index" VLLM_SERVER_DEV_MODE=1 "${mps_env[@]}"
-    PYTHONPATH="$overlay/cuda-bindings:$overlay:$repo" RUN_OUTPUT_DIR="$cell/continuum"
+    PYTHONPATH="$engine_pythonpath" RUN_OUTPUT_DIR="$cell/continuum"
     VLLM_REQUEST_TELEMETRY_PATH="$cell/vllm-request-telemetry.jsonl" "${telemetry_env[@]}"
     "${cache_env[@]}"
     taskset -c "$cpuset" "${engine_command[@]}"

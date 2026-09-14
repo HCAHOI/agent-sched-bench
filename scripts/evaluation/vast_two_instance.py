@@ -95,8 +95,9 @@ def main() -> int:
     def remote(cmd: str, **kw) -> subprocess.CompletedProcess:
         return subprocess.run(ssh + [cmd], text=True, capture_output=True, timeout=120, **kw)
 
+    gpus_needed = 1 if a.single_gpu is not None else 2
     pre = remote(f"test -d {a.remote_repo}/scripts && test ! -e {remote_run} && "
-                 f"[ \"$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)\" = 2 ] && "
+                 f"[ \"$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)\" -ge {gpus_needed} ] && "
                  f"! supervisorctl status {a.name} 2>/dev/null | grep -q RUNNING")
     if pre.returncode:
         sys.exit(f"host preflight failed: {pre.stdout}{pre.stderr}")

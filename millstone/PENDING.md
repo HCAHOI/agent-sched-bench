@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-12 16:30 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-14 02:15 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -28,7 +28,8 @@ admission logic) and whether the operating point itself is right (TP=2).
 
 ## 1. Platform and standing constraints (2026-09-14)
 
-- Host: gpuhub/AutoDL container, 2× RTX Pro 6000 (96 GB HBM each), `ssh -p 41548 root@connect.singapore-a.gpuhub.com`.
+- Host until 2026-09-14: gpuhub/AutoDL container, 2× RTX Pro 6000 (96 GB HBM each); being replaced by a single-GPU
+  instance (~110 GB DRAM). The launcher accepts one GPU with `--single-gpu 0` since 2026-09-14.
   The container cgroup caps memory at 240 GB (the console's 1 TB is the physical host): a pinned DRAM tier of 144 GiB
   starts, 192 GiB does not. The image overwrites `/usr/bin/supervisord` with a Go binary at every restart; after a
   restart run `python3 -m supervisor.supervisord -c /etc/supervisor/supervisord.conf` or every launcher exits silently.
@@ -55,17 +56,38 @@ admission logic) and whether the operating point itself is right (TP=2).
 
 ## 3. Queue
 
-- Nothing queued. Both GPUs idle since 01:32 UTC 2026-09-14 (chain 28 landed: c20 + 144 GiB 46.19 min, cached 0.95,
-  prediction met; M4 §3.3). The host can be released or replaced whenever the user decides (§4.3).
+- Nothing queued. The 2-GPU host is gone (ssh refused 2026-09-14 01:58 UTC); the single-GPU instance is not yet
+  bootstrapped. First on arrival: cgroup memory limit, core count (the launcher pins the engine to cores 0-2 and the
+  proxy to core 15), `benchmark_server.sh --serving-host`, 32B model download, Python supervisord, then the
+  exclusive-tier smoke (§4.1); the primary run waits for the user's go.
 
 ## 4. Next (proposals; each needs the user's go before any GPU time)
 
-1. **Exclusive tiering** (M4 §3.3 last paragraph): store a context to DRAM only when it leaves HBM, so in-flight
-   contexts stop occupying both. Expected +236K effective DRAM tokens at 32B (+60% on 96 GiB), enough for c24 by the
-   rule. Design: a connector/LMCache patch in the 0.10.2 fork (`save_kv_layer` currently stores on every prefill;
-   `local_cpu_backend` LRU untouched); ≈ 1 day. Pre-registration to write before the run: c24 + 96 GiB exclusive vs the
-   inclusive 99.11 min and the 144 GiB reference 51.80; rule: mean JCT ≤ 60 min with cached ≥ 0.85 → the mechanism
-   replaces 48 GiB of DRAM; ≥ 85 → the double occupancy was not the binding term.
+1. **Exclusive tiering** — BUILT 2026-09-14, not yet smoked or run; needs the user's go on the
+   single-GPU instance. Mechanism (`scripts/serving/exclusive_tier/sitecustomize.py`, `EXCLUSIVE_TIER=1` in the
+   launcher, flag recorded in the run's `lmcache.yaml`): the DRAM tier evicts what HBM already holds first. Chunks of
+   an in-flight request (just loaded or just stored) go to the evict-first end of LMCache's LRU; at finish vLLM holds
+   the blocks one more step (delayed free) while the worker copies back only the part of the context that was
+   evicted and promotes the whole context to most recently used. Tool-gap contexts keep plain LRU order; lookups,
+   loads, chunking and capacity are unchanged. Costs charged: the finish copy-back (each event logged
+   `[exclusive-tier] finish req= tokens= present= stored=`; store D2H measured 36.8 GB/s mean in the c24/96 run, so a
+   full 17.9K-token context is ≈ 0.13 s), one step of block hold per request, and preempted requests (24 of 1,951 at
+   c24/96) losing their evict-first chunks.
+   Pre-registered 2026-09-14 02:15 UTC (no exclusive-tier numbers exist): the mechanism question is whether double
+   occupancy is the term that separates c24/96 from c24/144. Primary case = c24, FCFS sticky, one 32B engine,
+   pool64-v4, DRAM tier T GiB with exclusive tiering, T = 96 if the instance's cgroup allows engine + 96 GiB (else the
+   largest of 80/64 that fits, measured on arrival), ≈ 2–3.5 h. Prediction from the tier simulation
+   (`analysis/results/dram-tier-simulation-20260913/`, HBM counted once): miss share at the 0.033 floor, so cached
+   share ≈ 0.9 and JCT near the 144 GiB reference (51.80 min). Rule: mean JCT ≤ 60 min and cached ≥ 0.85 → the
+   mechanism replaces 48 GiB of DRAM at c24 and the sizing rule becomes DRAM + HBM ≥ 1.4 × c × context; ≥ 85 min →
+   double occupancy was not the binding term (diagnose with the copy-back log and `lmcache` eviction counters
+   before anything else); between → partial, report both terms. Controls: inclusive c24/96 = 99.11 min (cached
+   0.44) and c24/144 = 51.80 (0.91), both measured on the previous 2-GPU host of the same GPU model; if T < 96 the
+   inclusive-at-T control does not exist and exclusive-at-T is compared against inclusive-at-96 (a win at less DRAM
+   is the stronger statement; a loss is inconclusive and the inclusive-at-T control is the next run). Same-host
+   confound: one inclusive control rerun on the new box only if the exclusive result lands within ±5 min of a rule
+   boundary. Smoke first (`--smoke --single-gpu 0` with the 4B model, `EXCLUSIVE_TIER=1 CPU_CACHE_GIB=8`): engine log
+   shows the patch active and finish lines, KV usage returns to zero after the smoke (no leaked delayed frees).
 2. **Sizing rule as online admission**: bound active tasks so Σ contexts ≤ DRAM/1.4 (task-level FIFO, no starvation);
    differs from ThunderAgent/KAIROS program admission by the DRAM criterion. Half a day; run at c24/96.
 3. Instance switch: a single-GPU box with ~110 GB DRAM serves ≈ 13 agents at 32B (80 GiB tier) or ≈ 35 with
@@ -80,6 +102,7 @@ admission logic) and whether the operating point itself is right (TP=2).
 
 ## 5. Decisions waiting on the user
 
-- Exclusive tiering: build or not.
-- When to switch instances (after chain 28 both GPUs are free).
+- Exclusive tiering primary run (§4.1): go, and which T the new box allows.
+- Whether the cloud transfer restored `/workspace/outlen` and the venvs (else rebuild via the bootstrap; outlen data
+  from the 120 MB partial backup in `results/gpuhub-host-backup-20260914/` plus git).
 - Push the branch.
