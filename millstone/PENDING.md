@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-14 05:40 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-14 06:25 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -56,7 +56,23 @@ admission logic) and whether the operating point itself is right (TP=2).
 
 ## 3. Queue
 
-- Nothing queued. GPU idle since 05:34 UTC 2026-09-14. Lane 2 done (`analysis/results/tpot-curve-20260914/`, `lane2.log`).
+- Nothing queued. GPU idle since 06:22 UTC 2026-09-14.
+- **Lane 3 DONE 06:22 UTC (user go "1吧")**: Qwen3-30B-A3B agent prompts, KV cache fp8 vs bf16, both on the TRITON_ATTN
+  backend (fp8 KV needs FlashInfer for FlashAttention-class kernels; not installed; lane 1's bf16 curve used
+  FlashAttention, so the pair below is the fair one). TPOT median ms / aggregate tok/s:
+
+  | c | bf16 KV (Triton) | fp8 KV (Triton) |
+  |---|---|---|
+  | 1 | 6.9 / 88 | 6.1 / 95 |
+  | 4 | 14.8 / 131 | 12.1 / 134 |
+  | 8 | 25.6 / 207 | 19.6 / 210 |
+  | 16 | 67.0 / 207 | 25.6 / 535 |
+  | 32 | 86.9 / 291 | 40.7 / 641 |
+
+  Reading (3) confirmed: halving the KV bytes halves TPOT at c ≥ 16 (86.9 → 40.7 ms, 2.1×) and doubles the
+  aggregate; at c ≤ 8 the gain is 12–25% because expert-weight reads still dominate there. KV bytes per decode step
+  are the lever for agent contexts; fp8 KV is the first free half. (Aggregate at c=16 is inflated by prefix hits on
+  the reused samples; the TPOT column is the clean number.)
 - **TPOT lanes 1+2 DONE (04:17–05:34 UTC)**. Setup: vLLM 0.28.0, CUDA graphs, greedy, 512 output tokens, bf16 KV,
   max-num-seqs 32, chunked prefill 8192. "agent" = real replay prefixes (mean 14–16K tokens); "short" = prefixes
   ≤ 6,000 chars (≈ 1.2K tokens, first steps); "decode-only" = every prefix pre-filled before the level. Cells are
