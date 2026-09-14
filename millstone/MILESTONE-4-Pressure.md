@@ -503,6 +503,46 @@ with no aging, so under sustained load a request without a cached prefix (a task
 never-empty stream of cache-affine requests. A one-line aging rule would remove it; that variant would be a modified
 baseline and is not run without the advisor's decision.
 
+### 3.3 Pressure axis and DRAM sizing (chains 19–28, 2026-09-12/14; naming: HBM = GPU KV, DRAM = LMCache CPU tier)
+
+One 32B engine (HBM KV 236,496 tokens), FCFS sticky, pool64-v4, 64/64 tasks in every run. The question after §3.2:
+what happens when the working set outgrows the sized DRAM tier, and is the fix capacity, dispatch order, or eviction
+policy?
+
+| Concurrency | DRAM tier | Mean JCT (min) | Cached share | DRAM evictions | Steps/min | Note |
+|---|---|---:|---:|---:|---:|---|
+| c16 | 96 GiB | 53.81 | 0.92 | ~13K | 23.6 | reference (§3.2) |
+| c16 | 96 GiB + DualMap | 45.80 | 0.95 | 8.6K | 26.0 | admission adds 15% at 15.1 s hold/request |
+| c20 | 96 GiB | 68.38 | 0.74 | 45.6K | 19.7 | +874 s [+776, +972] vs c16; tier starts thrashing (concurrent with another run) |
+| c24 | 48 GiB | 124.29 | 0.03 | 176K | 10.9 | worse than no tier: every prefill pays the store, nothing survives |
+| c24 | 96 GiB | 99.11 | 0.44 | 106K | 15.1 | +2,718 s [+2,432, +3,035] vs c16 |
+| c24 | 96 GiB + FIFO working-set admission (236K in-flight tokens) | 96.15 | 0.44 | 106K | 14.0 | −177 s [−205, −151] vs c24/96: dispatch order is not the lever |
+| c24 | 96 GiB + DualMap | does not complete | — | — | — | one request starved per run (three attempts; hold p99 954 s, max 1,895 s) |
+| c24 | 144 GiB | **51.80** | **0.91** | 16K | 25.9 | −120 s [−262, +21] vs c16: the c16 step time at 50% more load |
+| c20 | 144 GiB | (chain 28, pending) | | | | second test of the sizing rule |
+
+Readings. (1) **Capacity, not policy.** The trace-driven tier simulation (`scripts/evaluation/dram_tier_simulation.py`)
+shows an oracle that knows every task's next arrival evicts the same contexts as LRU at every capacity, because tool
+gaps are p50 0.7 s / p90 2.2 s (5% ≥ 5 s) against LLM steps of 31–75 s: no idle context is idle long enough for the
+victim choice to matter. A return-time-aware DRAM policy has no leverage on this trace pool; it would need workloads
+with long tool gaps. (2) **Not dispatch order either.** The FIFO gate held in-flight prompt tokens at p50 228K
+(FCFS: 408K) and the cached share did not move; what must fit in DRAM is every active task's context, in flight or
+in a tool gap, because LMCache stores every prefilled chunk and HBM keeps only what is in flight. (3) **Sizing
+rule.** DRAM tokens ≥ ≈ 1.4 × concurrency × mean context (17.9K at 32B, 256 KB per token): c16 needs ≈ 400K (96 GiB
+= 393K, fits), c20 ≈ 500K (96 GiB thrashes, 144 GiB = 590K should fit), c24 ≈ 600K (144 GiB fits). The 1.4 is
+headroom for p90 steps (33.8K), the replacement stream and 256-token chunk granularity; the plain product already
+thrashed at c20. (4) **Residency-first admission starves.** DualMap's waiting pool is ordered by cached-prefix
+length with no aging (`double_hash_global_scheduler_utils.py`); CacheWise's released policy is the same family
+(fewest new KV blocks first). Starvation and their TPOT gain are the same mechanism (M2 §5, M3 Frontier A), so no
+aging variant was run. (5) **Practical ceiling.** The DRAM a rental container can pin is its cgroup limit (240 GB
+here, 192 GiB failed, 144 fit), so the rule also says what a box can serve: a 96 GiB tier ≈ 16 agents at 32B, an
+80 GiB tier ≈ 13, or ≈ 35 with the 30B-A3B model (98 KB per token).
+
+Next mechanism worth building (not started): **exclusive tiering** — LMCache keeps in-flight contexts in both HBM
+and DRAM; storing a context to DRAM only when it leaves HBM would add ≈ 236K tokens of effective DRAM at 32B (+60%
+on a 96 GiB tier), enough for c24 by the rule, with no extra memory. The fork (vLLM 0.10.2) has no such connector;
+about a day of code, evaluated on the c24 / 96 GiB cell against the 144 GiB reference.
+
 ## 4. Evidence
 
 - Smoke and calibration: `../results/fcfs-least-requests-smoke-20260911-r2/`,
@@ -513,3 +553,9 @@ baseline and is not run without the advisor's decision.
 - Chain script and log: `../results/chain6-pro6000-20260911.{sh,log}`
 - Trace pool: `../traces/exports/{swe-rebench-original-flat-644,terminal-bench-original-flat-239}-20260904/`
   with `MANIFEST.jsonl`
+
+## 5. Related work checked (2026-09-13, web + arXiv, recorded in `PENDING.md` at the time)
+
+- Hidden-state prediction for agents predicts categorical targets only — tool identity (SPORK 2607.03333, Speculate-While-You-Reason 2607.25816, Linearly Readable 2605.07990), tool necessity (When2Tool 2605.09252), call errors (2608.27750), parameter correctness (ParamBench 2608.03071), program state (KTH 2607.05188). Output length from hidden states exists only on ≤ 2K-token chat prompts (OUTLETS 2609.01068, ProD 2604.07931, EGTP/PLP 2602.11812), all MAE-only.
+- KV offloading for agents: MORI (2606.00866, HBM + DRAM by trailing idleness, Claude Code / SWE-bench Pro), CacheWise (2606.16824, time-to-reuse predictor for in-tier eviction), TokenCake (2510.18586, offload by predicted call duration, DRAM assumed unbounded), Continuum (2511.02230, HBM TTL), ThunderAgent (2602.13692, HBM only), KVFlow / CacheScout / PBKV (workflow DAGs), CachedAttention (chat turns), Agentix (batched swaps). None reports the store-vs-admission decomposition at a sized tier, the starvation mechanism of residency-first admission, or a sandbox-side interface; §3.3 reading (1) says a return-time DRAM policy would not pay on this pool anyway.
+

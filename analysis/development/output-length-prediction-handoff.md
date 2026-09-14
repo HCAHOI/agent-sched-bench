@@ -386,6 +386,37 @@ q-err p50 1.60 / p90 4.02 at 32B DualMap with the leak-free probe head (pool pri
 event 2 into a real token event and adds reasoning length as its own target; no other experiment is needed for the
 interface itself.
 
+### Measured tables behind the three signals (from the four replay runs; `probe-replay-pool64v4/staged-*.json`)
+
+| Run | Stage-1 wait p50 / p90 (s) | Remaining at scheduling p10 / p50 (s) | Share ≥ 1.8 s (≥ 3 s) | Stage-2 q-err p50 / p90 | Stage-2 + probe | Stage-3 (tool name) |
+|---|---|---|---:|---|---|---|
+| 32B DualMap 96 GiB | 3.2 / 12.9 | 3.7 / 9.6 | 1.00 (0.94) | 1.83 / 4.44 | 1.60 / 4.02 | 1.70 / 3.86 |
+| 32B FCFS sticky | 36.0 / 56.7 | 4.5 / 22.8 | 1.00 (0.95) | 1.87 / 4.90 | 1.66 / 4.28 | 1.73 / 4.13 |
+| 4B FCFS full | 3.1 / 6.3 | 1.2 / 3.2 | 0.76 (0.53) | 1.82 / 4.47 | 1.61 / 4.07 | 1.70 / 3.82 |
+| 4B DualMap capped | 1.7 / 6.2 | 1.4 / 3.6 | 0.82 (0.58) | 1.79 / 4.52 | 1.57 / 4.10 | 1.70 / 3.81 |
+
+| Run | Reasoning share of output tokens p50 / mean | Remaining after `reasoning closed` p10 / p50 (s) | Share ≥ 1.0 / 1.8 s after it | After-alert abs error p50 / p90 (s) | q-err p50 / p90 |
+|---|---|---|---|---|---|
+| 32B DualMap 96 GiB | 0.36 / 0.41 | 1.6 / 5.3 | 0.97 / 0.85 | 2.5 / 14.8 (stage 2 probe: 5.1 / 25.8) | 1.84 / 4.49 |
+| 32B FCFS sticky | same traces | 1.7 / 9.5 | 0.98 / 0.89 | 5.4 / 31.5 | 1.99 / 5.12 |
+| 4B FCFS full | same traces | 0.5 / 1.8 | 0.66 / 0.49 | 0.8 / 4.9 | 1.83 / 4.39 |
+| 4B DualMap capped | same traces | 0.6 / 2.0 | 0.68 / 0.53 | 0.9 / 5.4 | 1.84 / 4.37 |
+
+The prefill-only lower bound holds in 100% of steps (a bound that adds the 10th-percentile output length fails
+14%). Stage-1 wait is the LLM side's own decision and is sent as the `scheduled` event, not predicted. Restore
+times are the collaborator's: p50 1.0 s, p90 1.8 s.
+
+## State on 2026-09-14 (end of the 2026-09-12/13 sessions)
+
+Closed with a diagnosis: session-history predictors, SSJF-Reg, EGTP (lose to the constant); the shallow probe
+(wins the median, not the tail); tail-oriented heads, fused layers, re-prediction after k tokens, OUTLETS-agent
+(all within seed noise of the probe on the tail; the point-predictor line is closed as a prompt-side hidden-state
+limit while the sampling ceiling shows the information exists). Kept: the three-signal interface with the prefill
+bound; the thinking-tier hazard alert (`hazard-think-20260913/`, `hazard-instruct-20260913/`) as an optimisation for
+long thinking steps; the long-step and slow-tool alerts as static rankings. Not started, by decision: OUTLETS proper
+(draft model with completion-side supervision), distributional multi-draw retraining (B, stopped), whole-prompt
+pooled features (C).
+
 ## Current limitations and open problems
 
 - Natural output has a heavy tail: one draw exceeded 16K even though the longest-prefix smoke outputs were all below 1.3K. The 32K cap is still a censoring boundary, so any cap hit invalidates that label run.

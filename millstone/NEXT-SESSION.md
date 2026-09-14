@@ -17,11 +17,22 @@ multi-step coding agents. Read these first, in order, before doing anything:
    Milestone 2 (DualMap fairness, cross-instance load balance, PD/PPD
    routing), all three closed on 2026-09-11 with the runs and mechanisms
    that closed them. Read its §0 before comparing anything to a baseline.
-4. `millstone/MILESTONE-4-Pressure.md`: the current stage. The new host,
-   the bridge runs showing the L40S results were an over-capacity regime,
-   the pressure axis R, the trace pool, and the pre-registered three-step
-   decision plan on whether multi-instance scheduling is a problem at all.
-5. `millstone/MILESTONE-1-Single-Instance.md` §3 only, for metric definitions
+4. `millstone/MILESTONE-4-Pressure.md`: the current stage. §3 closed
+   multi-instance scheduling (one engine per GPU is the platform); §3.2 is
+   the store-versus-admission decomposition at a sized DRAM tier; §3.3 the
+   pressure axis, the DRAM capacity curve and the sizing rule (≈ 1.4 ×
+   concurrency × mean context), why eviction policy and dispatch order do
+   not help on this pool, and why residency-first admission starves; §5 the
+   related work checked. Naming: HBM = GPU KV, DRAM = LMCache CPU tier.
+5. `millstone/PENDING.md`: the live queue — platform constraints, the state
+   of each line with pointers, what is running, and the next proposals
+   (exclusive tiering first). Rewritten 2026-09-14; nothing there is a result.
+6. `analysis/development/output-length-prediction-handoff.md`: the
+   output-length line (closed as a prompt-side hidden-state limit, with the
+   sampling ceiling that proves the information exists), the hazard probes
+   (P(remaining ≤ X) along the generation) and the three-signal sandbox
+   interface with its measured coverage.
+7. `millstone/MILESTONE-1-Single-Instance.md` §3 only, for metric definitions
    (JCT, TTFT, TPOT, cached-prompt share, cohort windows). The rest of M1 is
    the closed single-GPU stage.
 
@@ -35,10 +46,12 @@ Repository layout that matters:
   (host-side engine logs, telemetry, KV events, source tarballs), and for the
   2026-09-09 comparisons `comparison.json`. `results/vast-host-backup-20260910/`
   holds smokes, calibration runs, and launch logs pulled off the old host.
-- `analysis/development/mixed56-2l40s-concurrency32-v1/`: the workload.
-  `manifest.yaml` carries absolute trace paths for this machine (the loader
-  requires absolute paths), `task-source.json` the 28 task records, `traces/`
-  the 56 replay traces (gitignored, 548 MB).
+- `analysis/development/pool64-distinct-v4/`: the Milestone 4 workload (64
+  distinct tasks, 1,951 original requests, peak context ≤ 60K tokens, no
+  parallel tool calls, no zero-completion steps) with `manifest.yaml`
+  (absolute trace paths) and `task-source.json`; the replacement stream keeps
+  the concurrency constant. `mixed56-2l40s-concurrency32-v1/` is the
+  Milestone 2/3 workload.
 - `scripts/evaluation/run_two_instance_fcfs.sh` runs on the GPU host: two
   engines, the cross-instance proxy, collectors. `INSTANCE_POLICY`
   (fcfs | continuum), `ROUTER_POLICY` (least-requests | thunderagent | dualmap
@@ -54,7 +67,9 @@ Repository layout that matters:
   upstreams by commit; the ThunderAgent fix patches and four PPD patches sit
   beside them.
 
-GPU host, as of 2026-09-11:
+GPU host, as of 2026-09-14 (a single-GPU instance may replace it; then re-run
+`benchmark_server.sh --serving-host`, re-download the models (≈ 97 GB) and
+copy `/workspace/outlen` if the output-length lane continues):
 
 - `ssh -p 41548 root@connect.singapore-a.gpuhub.com`, a gpuhub/AutoDL
   container with 2× RTX Pro 6000 Blackwell Server Edition (96 GB each),
@@ -70,8 +85,16 @@ GPU host, as of 2026-09-11:
   with venvs under `/workspace/venvs/`, CUDA JIT cache at
   `/workspace/.nv/ComputeCache`.
 - The driver controls runs through the Debian `supervisor` package, installed
-  by hand; after a container restart run
-  `supervisord -c /etc/supervisor/supervisord.conf` before launching.
+  by hand. The image overwrites `/usr/bin/supervisord` with a Go binary at
+  every restart (and a rental lapse restarts the container): after a restart
+  run `python3 -m supervisor.supervisord -c /etc/supervisor/supervisord.conf`
+  before launching, or every launcher exits silently with an empty log.
+- The cgroup memory cap (240 GB) bounds the pinned DRAM tier: 144 GiB starts,
+  192 GiB does not. Two single-GPU runs share the host only if their tiers
+  plus two engines fit (48 + 96 GiB did; 144 + 96 did not).
+- A second checkout `/workspace/agent-sched-bench-b` (launcher `--remote-repo`)
+  receives shipped code while a launcher runs in the main one; two concurrent
+  single-GPU runs need `--port-base 100 --tunnel-port 19100`.
 - Verified on this host on 2026-09-11: bootstrap (`benchmark_server.sh
   --serving-host`, VERIFY OK) and FCFS least-requests `--smoke`
   (`results/fcfs-least-requests-smoke-20260911-r2`): vLLM 0.10.2 with Flash
@@ -115,7 +138,8 @@ Caveats you must not lose:
 Whenever a run is compared to a baseline, check and report all of these,
 whichever direction each moved:
 
-- completion: 56/56 tasks and 2,470 requests, before anything else counts
+- completion: 64/64 tasks and 1,951 original requests (pool64-v4), before
+  anything else counts
 - task JCT mean, P95, max, and cohort makespan
 - engine TPOT, token-weighted
 - completed LLM steps per minute over a common window, original plus
