@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-14 02:42 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-14 04:20 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -56,18 +56,33 @@ admission logic) and whether the operating point itself is right (TP=2).
 
 ## 3. Queue
 
-- **Chain 29 running since 02:39 UTC 2026-09-14** (`results/chain29-gpu0-32b-c24-tier80-exclusive-20260914.{sh,log}`, user go
-  "好的，开始"): the §4.1 primary case on the single-GPU instance, `pool64v4-pro6000-qwen32b-gpu0-c24-fcfs-sticky-tier80-exclusive-20260914-r1`
-  (c24, FCFS sticky, 32B, 80 GiB exclusive tier; T = 80 because the cgroup is 110 GiB). Expected ≈ 3 h, then
-  `comparison.txt` against c24/96, c24/144 and c16/96. Plumbing before it (02:30–02:38 UTC): launcher smoke passed with
-  the patch active on both roles; two manual 4B checks on the host (`/workspace/xt-check{,3}`): finish copy-back only
-  for the evicted part (present/stored logged), DRAM hits and full loads after an HBM reset, 24/24 copy-backs under a
-  1 GiB tier with no error, KV usage back to 0 (delayed frees released).
+- **TPOT lane running since 04:17 UTC 2026-09-14** (`results/host-lanes/tpot-20260914.sh`, host log `/workspace/tpot-20260914.log`,
+  results `/workspace/tpot-20260914/*.json`; user go "去做"): per-stream decode speed and aggregate throughput versus
+  concurrency (1/4/8/16/32) on real agent prompts (replay prefixes), vLLM 0.28.0 with CUDA graphs:
+  Qwen3-30B-A3B-FP8 baseline, + EAGLE-3 (k=3, k=5), Qwen3-32B-FP8 baseline. Client
+  `scripts/evaluation/tpot_curve.py`. ≈ 40 min. Purpose: reproduce the 300–1000 tok/s per-stream regime on this GPU
+  and see how the agent-serving bottleneck moves when a step takes seconds instead of tens of seconds (§4.0).
+- **Chain 29 STOPPED 04:14 UTC by the user** (`pool64v4-pro6000-qwen32b-gpu0-c24-fcfs-sticky-tier80-exclusive-20260914-r1`,
+  95 min of ≈ 3 h, no verdict on the §4.1 rule). Interim diagnosis at 70 min (same elapsed windows): requests finished
+  569/757/911 at 30/50/70 min vs inclusive-96 529/706/869 and 144 856/1387/1861; cached share of original steps
+  0.49/0.37/0.31 vs 0.39/0.29/0.23 vs 0.86/0.89/0.90. The mechanism works as coded (copy-back only for the evicted
+  part, 1.8% stall) but the "+236K" estimate in M4 §3.3 was wrong: with `--max-num-seqs 8` only ≈ 140K tokens are in
+  flight (HBM usage mean 0.67), so exclusive-80 ≈ inclusive-115 GiB, still under the 600K the rule asks at c24.
+  Corrected rule: DRAM + (in-flight tokens) ≥ 1.4 × c × context. Recorded, not to be continued (§4.0).
 - New host: `ssh -p 35803 root@connect.singapore-a.gpuhub.com`, 1× Pro 6000, driver 580.95, cgroup 110 GiB / 22 cores,
   disk 33 GB free; the whole old `/workspace` arrived by cloud transfer (models, venvs, outlen incl. the 50 GB OUTLETS
   caches, 69 launch logs, manifests). Python supervisord started by hand; source shipped at d038f86a.
 
 ## 4. Next (proposals; each needs the user's go before any GPU time)
+
+0. **Direction (user, 04:05 UTC 2026-09-14): the frontier is per-stream decode at 300–1000 tok/s** (DeepSeek V4.1
+   Flash API ≈ 214 tok/s; Gemma 4 26B-A4B + DFlash 306 tok/s single-stream on H100, 1,957 tok/s aggregate at c16,
+   vLLM PR #41703; Qwen with MTP drafts). At that speed an agent step is 1–3 s, prefill of the 17.9K-token context
+   (2.6 s at 32B) becomes the larger part of the step, tool time goes from 50% of the trace to 85–95%, and the
+   sandbox restore (p50 1.0 s) is the same size as the LLM step. The DRAM-capacity line (§4.1–4.2 below) is closed
+   as a result, not a paper: it reduces to sizing. First step = reproduce the regime here (queue), then measure where
+   the time goes in an agent step at that speed. DeepSeek V4.1 Flash (552B total, MXFP4) does not fit one 96 GB GPU;
+   Gemma 4 26B-A4B (bf16 52 GB) + DFlash/MTP fits but needs the vLLM PR build and a 52 GB download.
 
 1. **Exclusive tiering** — BUILT 2026-09-14, not yet smoked or run; needs the user's go on the
    single-GPU instance. Mechanism (`scripts/serving/exclusive_tier/sitecustomize.py`, `EXCLUSIVE_TIER=1` in the
