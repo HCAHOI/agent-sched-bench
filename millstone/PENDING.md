@@ -277,6 +277,13 @@ admission logic) and whether the operating point itself is right (TP=2).
    reported either way: the home engines' cached share must rise against colocated, otherwise the win is not the
    claimed mechanism. Limits carried from §4.5: the engine model is an eager-mode 4B engine, so this says nothing
    about the KV-read-bound frontier regime until the frontier profile exists.
+   **Result, read 17:58 UTC: criterion met at both pool sizes.** 8 GPUs 46.3 against colocated 57.5 (−19.5%,
+   worst seed −17.6%), 32 GPUs 39.6 against 58.0 (−31.7%), and 15–29% ahead of the best fixed-PD ratio; the
+   mechanism check passes (home cached share 0.068 → 0.471 and 0.629, TPOT 129 → 94 and 82 ms). The tier must
+   be 1 GPU in 8 to 16: 2 in 8 loses to colocated (59.5) and 1 in 2 is far worse (95.3). Table, readings and
+   limits: `analysis/results/pd-pool-sim-20260915/residency-routing.md`. Next, in order: fit the frontier
+   profile from the SLA sweep's no-speculation curve and re-run this comparison there; then the 2-GPU
+   measured test the criterion justifies.
 
 5. Parked, with the record in §3: exclusive tiering (built, `scripts/serving/exclusive_tier/sitecustomize.py`; chain
    29 stopped at 95 min — the gain is the in-flight tokens only, ≈ 140K at `--max-num-seqs` 8, not the 236K of a full
