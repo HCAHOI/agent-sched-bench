@@ -250,8 +250,8 @@ a degeneration of it.
 
 **The PPD number is withdrawn.** Our run
 (`results/mixed56-vast-ppd-pcie-20260907-r1`) made those routing decisions
-into an empty cache. Cached prompt share was 0.018 over the 4,940
-original-task steps, and 0.013 over all 7,968 replayed
+into an empty cache. Cached prompt share was 0.018 over the 2,470
+original-task requests, and 0.013 over all 3,984 replayed
 steps; the decode-side instance served 3,985 requests with a mean prompt of
 25,320 tokens, mean prefill 3.49 s and mean TTFT 97.4 s, so it re-prefilled
 the whole history on essentially every turn, while the prefill-side instance
