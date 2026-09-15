@@ -346,9 +346,11 @@ All benchmarks enter via `src/agents/benchmarks/` +
   `src/trace_collect/cli.py`, or any scaffold module.
 - Per-benchmark CLI flags (`--harness-dataset` / `--harness-split` /
   `--harness-namespace`, …) — those belong in the YAML.
-- `from_<benchmark>_instance()` factories on `EvalTask`. Canonical entry:
-  `EvalTask.from_benchmark_instance(row, workspace_base, benchmark=<plugin>)`
-  delegating to the plugin's `normalize_task`.
+- `from_<benchmark>_instance()` factories on `EvalTask`. Canonical path: the
+  plugin's `load_tasks()` normalizes every row through its own
+  `normalize_task(raw) -> dict`; callers then construct `EvalTask(...)`
+  directly from that dict (`src/trace_collect/collector.py`,
+  `src/trace_collect/runtime/entrypoint.py`).
 
 ## Agent Trace Standards
 

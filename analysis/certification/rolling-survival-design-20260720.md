@@ -3,6 +3,23 @@
 This document records frozen offline evidence. It does not claim live serving
 benefit.
 
+## Provenance
+
+The pre-registration for this lane is no longer in the working tree. It was
+locked at `8d6608cc:analysis/fresh-corpus-preregistration-20260716.md`
+(2026-07-16), states that it was committed before any fresh trace was collected
+or inspected, and fixes the corpus (`nebius/SWE-rebench`, split `filtered`), the
+selection (one `random.Random(42)` shuffle at `skip=150`), the verified
+disjointness from the development set, and the collection config; a logged
+amendment (`ed4e9d88`, 2026-07-16) extends the sample from 200 to 300 tasks, and
+credit exhaustion truncates that extension to the final `N=277`. Its final
+amended text is at
+`f5478440^:analysis/certification/fresh-corpus-preregistration-20260716.md`,
+removed by `f5478440`. The analysis pipeline behind these results, including
+`hazard_recheck_ms`, is likewise out of the tree; it is recoverable at
+`90b17cdc` and in its last pre-deletion state at `f5478440^`, both under
+`scripts/` and `src/trace_collect/`.
+
 ## Closed re-check space
 
 Under the existing functional, swap-out is one irreversible action and the only

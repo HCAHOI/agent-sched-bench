@@ -346,9 +346,7 @@ PY
 ```
 
 Create fresh service state and start both daemons with logs redirected to durable
-files. The example bucket edges reproduce the development diagnostic baseline;
-they are not authoritative latency boundaries and must not be used for a
-claim-bearing run.
+files.
 
 ```bash
 export RUN_STATE="/tmp/tb-call-promotion-state"
@@ -374,7 +372,7 @@ tool_resource:
   update_policy: causal
   snapshot: latest_at_run_start
   telemetry_requirement: required_for_valid_evidence
-  latency_bucket_edges_ms: [10, 100, 1000]
+  latency_bucket_edges_ms: [500, 2000, 8000, 30000]
 YAML
 
 sudo -n env PYTHONPATH="$PWD/src:/usr/lib/python3/dist-packages" \
