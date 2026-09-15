@@ -396,7 +396,7 @@ lever to test is memory-hierarchy sizing (DRAM tier), not a new scheduler.
 
 ### 3.2 Storage versus admission, one engine (read 15:00 UTC; `results/chain17-gpu0-storage-20260912.{sh,log}`)
 
-Question (PENDING §8b): is DualMap's remaining wait an admission necessity, or
+Question (pre-registered in the queue before the run): is DualMap's remaining wait an admission necessity, or
 does a right-sized DRAM store make admission unnecessary? Qwen3-4B, one engine
 on GPU 0 capped to 262,144 KV tokens, concurrency 16 (R_avg ≈ 1.2), pool64-v4,
 64/64 tasks and 1,951 requests in every run. The 12 GiB tier (≈ 85K tokens) is
@@ -463,7 +463,7 @@ an undersized store +119 s. Used alone the two mechanisms are near-substitutes (
 thrash) and the store wins by 4 min per task without holding anyone; together they are not additive, and the
 combined cell holds each request 15.1 s at the proxy to buy its last 8 min per task. With the store sized, the tier
 is consulted far less (4.9M tokens served against 34.1M) because held requests keep their contexts on the GPU.
-Pressure axis (chain 22 after the host restart; PENDING §8b "Chain 21"): at concurrency 24 the mean working set
+Pressure axis (chain 22 after the host restart, pre-registered as chain 21): at concurrency 24 the mean working set
 (430K tokens) exceeds the 96 GiB tier alone and the p90-step peaks (810K) exceed tier + GPU. FCFS + 96 GiB at c24
 (read 09:27 UTC 2026-09-13): **99.11 min** mean JCT (c16: 53.81), P95 183.9, makespan 198.8, cached share 0.44
 (0.92), TPOT 141 ms (93), queue 70.1 s / prefill 3.0 s / decode 31.8 s per request, tier served 18.1M tokens (39% of
@@ -652,9 +652,12 @@ and logs: `analysis/results/tpot-curve-20260914/`.
   part, 1.8% stall) but the "+236K" estimate in M4 §3.3 was wrong: with `--max-num-seqs 8` only ≈ 140K tokens are in
   flight (HBM usage mean 0.67), so exclusive-80 ≈ inclusive-115 GiB, still under the 600K the rule asks at c24.
   Corrected rule: DRAM + (in-flight tokens) ≥ 1.4 × c × context. Recorded, not to be continued (§4.0).
-- New host: `ssh -p 35803 root@connect.singapore-a.gpuhub.com`, 1× Pro 6000, driver 580.95, cgroup 110 GiB / 22 cores,
-  disk 33 GB free; the whole old `/workspace` arrived by cloud transfer (models, venvs, outlen incl. the 50 GB OUTLETS
-  caches, 69 launch logs, manifests). Python supervisord started by hand; source shipped at d038f86a.
+- Hosts, in order: the 2× Pro 6000 box (port 41548) was released on 2026-09-14; a single-GPU box (port 35803, driver
+  580.95, cgroup 110 GiB / 22 cores) carried the lanes of 2026-09-14; the current one is
+  `ssh -p 36715 root@connect.singapore-a.gpuhub.com`, 1× RTX Pro 6000 Blackwell 96 GB, driver 595, cgroup 120 GiB /
+  208 cores, about 50 GB free on `/root/autodl-tmp`. Each move carried `/workspace` over, and each changes the DRAM
+  envelope: the 144 GiB tiers of §3.3 were measured under a 240 GB cgroup and cannot start on either single-GPU box.
+  Python supervisord has to be started by hand after every restart.
 
 ### 6.1 What the regime changes
 
@@ -707,3 +710,25 @@ and logs: `analysis/results/tpot-curve-20260914/`.
 
 Residency routing was simulated on top of this and the verdict retracted, because the simulator is not
 validated for routing policies: `analysis/results/pd-pool-sim-20260915/residency-routing.md`.
+
+## 7. What every run measures
+
+The two policies are instruments, not the object of study. FCFS sticky is
+the system as deployed with no help: each task pinned to one engine, vLLM's
+own queue, no admission control, no DRAM tier. DualMap is the strongest
+existing fix we can run: request-level admission at the proxy, a DRAM KV
+tier, and migration. At any operating point (instances N, concurrency c =
+number of tasks active at once in the closed loop, model size) two numbers
+answer one question: the gap FCFS → DualMap says whether pressure is a
+problem that an existing mechanism can fix; the residual DualMap → ideal
+(engine time with no hold and no queue) says how much is left to research.
+
+| Operating point | FCFS → DualMap gap | DualMap residual | Reading |
+|---|---|---|---|
+| 4B, full memory (R 0.5) | none | none | no problem |
+| 4B, capped, c32–c64 (R 1.2–2.4) | large | small (hold 3–8 s of a 7 s step) | problem exists, solved by admission |
+| 4B, N=8 | small (mean), large (makespan) | small | tail stranding only |
+| 32B, full memory (R 1.3) | huge (57 → 30 min) | **large (hold 14 s of a 36 s step)** | problem exists, **not solved**: research goes here |
+
+Chain 13 asks what the 32B residual is made of (DRAM-tier capacity, or the
+admission logic) and whether the operating point itself is right (TP=2).

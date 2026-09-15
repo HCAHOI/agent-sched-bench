@@ -36,7 +36,7 @@ Mean JCT ready-to-terminal, mixed56 workload, seeds 0/1/2 (references at seed 0 
 > two-sided run within ±10% (75.0 min, TPOT 96.9 ms, 36% of later turns local). Until it passes that, it does not
 > answer routing questions.
 
-Pre-registered criterion (PENDING §4.4, written 17:47 UTC before these runs): the best residency ratio must beat
+Pre-registered criterion (written 17:47 UTC 2026-09-15 before these runs, in the queue file at the time): the best residency ratio must beat
 colocated by ≥ 10% at both pool sizes on all three seeds, and the home engines' cached share must rise.
 **Met at both sizes.** 8 GPUs: 46.3 against 57.5, −19.5% (worst seed −17.6%). 32 GPUs: 39.6 against 58.0, −31.7%.
 Against the best fixed-PD ratio: −15% and −29%. Mechanism confirmed: the home engines' cached share rises from
