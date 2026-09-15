@@ -25,6 +25,15 @@ the KB database, start either service, or own either service's lifecycle.
 `resource-agentd` communicates with `telemetryd` over a separate local IPC
 contract.
 
+**Status 2026-09-15 — the connect-only client rule is target state, not shipped.**
+It holds for `--tool-resource-profile`, which attaches to externally managed
+services, but not for `--tool-resource-telemetry clause` (opt-in; the flag
+defaults to `off`): there the collection worker starts and stops both services
+itself, `telemetryd` under `sudo -n`. See `_managed_clause_telemetry` in
+[`../../src/trace_collect/cli.py`](../../src/trace_collect/cli.py) (L558-638,
+called at L715), documented as the supported live-collection path in
+[`../../src/tool_resource/README.md`](../../src/tool_resource/README.md).
+
 ```text
 trace collect / simulate / scheduler
                 |
@@ -371,6 +380,15 @@ later by a per-host DaemonSet if needed. `trace collect` and `simulate` only
 connect. The canonical path must not auto-start a privileged service from a
 worker.
 
+**Status 2026-09-15 — this whole section is target state, not shipped.** The
+rule above remains the contract; only its status is recorded here. No systemd
+or DaemonSet unit ships. Under `--tool-resource-telemetry clause` the
+collection worker does auto-start the privileged service, launching
+`tool_resource.telemetryd` under `sudo -n` and then
+`tool_resource.resource_agentd`, and stops both when the run ends
+([`../../src/trace_collect/cli.py`](../../src/trace_collect/cli.py) L558-638).
+Connect-only deployment ships today only behind `--tool-resource-profile`.
+
 The first implementation may retain one collector instance per telemetry
 session behind `telemetryd`. A future shared host BPF program with a
 `cgroup_id -> session_id` map is an optimization that requires separate
@@ -415,6 +433,12 @@ Implement in this order:
    in-process KB cold start/update, direct telemetry observer APIs, old server
    names, and compatibility aliases. Do not keep legacy support without a live
    consumer.
+
+**Status 2026-09-15 — step 7 is not done.** Per-worker sidecar auto-start still
+ships and is still the documented live-collection path, in
+`_managed_clause_telemetry`
+([`../../src/trace_collect/cli.py`](../../src/trace_collect/cli.py) L558-638).
+The other four items in step 7 were not checked when this status was written.
 
 ## Acceptance gates
 
