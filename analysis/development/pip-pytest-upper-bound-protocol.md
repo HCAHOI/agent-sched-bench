@@ -1,6 +1,8 @@
 # pip/pytest Modeling Upper-Bound Protocol
 
 **Frozen:** 2026-08-09
+**Status:** run once and recorded on 2026-08-09; aggregate decision
+`mixed_by_tool`. See Outcome below.
 **Purpose:** development decision on already exposed SQLGlot traces; not a
 confirmatory result.
 
@@ -121,3 +123,38 @@ one small evaluator and one focused test covering candidate-pool identity,
 causal update order, non-tool identity, and oracle selection. Run an
 independent bounded review before producing the result artifact. Do not
 collect new traces or add dependencies.
+
+## Outcome
+
+Receipt:
+[`../results/pip-pytest-upper-bound-sqlglot-v1/result.json`](../results/pip-pytest-upper-bound-sqlglot-v1/result.json),
+over 1,792 scored commands in 100 scored tasks after 100 warm-up tasks. The
+aggregate decision is `mixed_by_tool`, as the per-tool rule above requires.
+
+**Coverage gate.** pytest passed; pip did not.
+
+| Tool | Scored non-exact commands (≥20) | Scored tasks with the tool (≥10) | Distinct static semantic candidates (≥1) | Gate |
+|---|---:|---:|---:|---|
+| pip | 44 | 58 | 0 | not met |
+| pytest | 202 | 100 | 68 | met |
+
+**pip: `uninformative_coverage`.** No causally available static semantic
+candidate ever differed from the Task-Aware hard prediction, so the third
+coverage condition failed. The coverage gate above calls such a tool
+`uninformative_coverage` rather than a method failure, and the decision table's
+last row says no failure may be inferred for it. Its marginal full-cohort oracle
+arms were recorded but are not a verdict: the static-candidate oracle gained
+0.034 percentage points (95% interval [0.000, +0.107] pp, 2 helpful and 0
+harmful changes in 1 task) and the perfect-tool oracle gained 0.392 percentage
+points (95% interval [+0.170, +0.676] pp, 25 helpful and 0 harmful changes in 13
+tasks). Neither reaches the 1.0-percentage-point materiality threshold, and the
+receipt marks both `materially_positive: false`.
+
+**pytest: `keep_static_family`.** The static-candidate oracle gained 1.941
+percentage points of equal-weight four-target accuracy (95% interval [+1.326,
++2.660] pp, 118 helpful and 0 harmful changes in 44 tasks), clearing all three
+materiality conditions. The perfect-tool oracle gained 5.494 percentage points
+(95% interval [+4.535, +6.466] pp, 345 helpful and 0 harmful changes in 81
+tasks). A positive static-candidate ceiling selects the first row of the
+decision table: keep the current static family, because routing and aggregation
+still have headroom.

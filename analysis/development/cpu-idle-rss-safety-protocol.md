@@ -1,5 +1,8 @@
 # CPU-Idle Backfill with Predicted RSS Safety
 
+**Status:** run once and recorded on 2026-08-09. The gate failed on two of its
+eight conditions; see Outcome below.
+
 ## Question
 
 Can the frozen Task-Aware RSS predictor replace hindsight RSS-fit in the
@@ -106,3 +109,36 @@ exposure and conservative unavailable RSS; obtain one bounded independent
 review; commit result-affecting code; and measure a one-order smoke. Do not add
 runtime cgroup control, telemetry changes, collection, PMF quantiles, alternate
 fallbacks, or physical replay in this phase.
+
+## Outcome
+
+Receipt:
+[`../results/tool-resource-5-3-3-3-20260804/sqlglot50-cpu-idle-rss-safety-v1/result.json`](../results/tool-resource-5-3-3-3-20260804/sqlglot50-cpu-idle-rss-safety-v1/result.json),
+status `development_stop_predictor_backed_cpu_idle`.
+
+**Gate: not met.** Task-Aware failed conditions 3 and 7 of the eight above;
+conditions 1, 2, 4, 5, 6, and 8 passed.
+
+| Arm | Completion versus `serial8` | Orders improved | Service inflation | Makespan | Source-RSS exposures |
+|---|---:|---:|---:|---:|---:|
+| `oracle_rss_fcfs` | -14.620% | 32/32 | 3.073% | -17.226% | 0 |
+| `clause_kb_rss_fcfs` | -33.392% | 32/32 | 4.783% | -14.583% | 12,390 |
+| `task_aware_rss_fcfs` | -25.984% | 32/32 | 4.561% | -10.525% | 12,439 |
+
+Condition 3 required Task-Aware to beat Clause-KB by at least one percentage
+point. It was 7.408 percentage points worse instead. Condition 7 required zero
+source-RSS capacity exposures, including conservative unavailable-source
+exposures; both learned arms produced roughly twelve thousand. The paired
+order-bootstrap interval versus `serial8` was [-3,702.319, -3,437.197] s for
+Task-Aware and [-4,738.655, -4,436.349] s for Clause-KB.
+
+Predictor-backed CPU-idle admission is therefore stopped on exposed SQLGlot. As
+this protocol states, the failure does not authorize deleting Clause-KB,
+Task-Aware prediction, or CPU-idle replay.
+
+One open post-outcome sensitivity followed, recorded in
+[`cpu-idle-short-null-amendment.md`](cpu-idle-short-null-amendment.md). Applying
+the canonical short-null Low policy to source RSS cut confirmed exposures to
+2,702 Task-Aware and 2,638 Clause-KB, still nonzero, so both arms remained
+NO-GO on the zero-exposure condition alone. Its receipt is
+[`../results/tool-resource-5-3-3-3-20260804/sqlglot50-cpu-idle-short-null-v1/result.json`](../results/tool-resource-5-3-3-3-20260804/sqlglot50-cpu-idle-short-null-v1/result.json).

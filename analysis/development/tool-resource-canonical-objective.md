@@ -132,6 +132,9 @@ action-space evidence, not a deployable result.
 | SWE causal feedback | Reservation -45.010% at +1.543% service | KEEP feedback mechanism |
 | Hard-page / borrowing admissions | Completion improved 6.584% at 12.936% service inflation and 1.982% at 7.352% | Action NO-GO |
 | CPU-idle FCFS hindsight | Mean completion -14.620%, makespan -17.226%, service +3.073% | KEEP action-space evidence |
+| CPU-idle shortest-safe selection | Hindsight shortest changed completion -0.137% versus FCFS; 17/32 orders improved and the paired interval [-51.549, 70.048] s crossed zero | CLOSE ordering prediction |
+| CPU-idle predicted RSS safety | Task-Aware -25.984% and Clause-KB -33.392% in 32/32 orders, but 12,439 and 12,390 conservative source-RSS exposures | Gate failed; CLOSE hard-RSS admission on exposed SQLGlot |
+| Short-null RSS sensitivity | The amended null policy cut exposures to 2,702 Task-Aware and 2,638 Clause-KB at unchanged utility; both stayed nonzero | Both arms NO-GO; no further exposed-data exception |
 | Prediction-weighted shares / exact-duration priority | At most +0.0527% and 3.991% mean gain | CLOSE these consumers |
 | Temporal RSS hindsight | Mean completion -48.823% over static peak; zero sampled violations | KEEP action-space evidence |
 | Scope-conditioned xdist admission | Mean -20.526% but service +7.261% and 22 modeled exposures | Action NO-GO |

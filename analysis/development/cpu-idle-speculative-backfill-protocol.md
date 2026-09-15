@@ -1,5 +1,8 @@
 # CPU-Idle Speculative Backfill Oracle
 
+**Status:** run once and recorded on 2026-08-09. The action gate passed and the
+selection gate failed; see Outcome below.
+
 ## Decision question
 
 Can command prediction improve scheduling by choosing one waiting command to
@@ -123,3 +126,30 @@ Before reading the single formal outcome: add focused allocation, promotion,
 RSS-fit, and CPU-work-conservation tests; obtain one bounded independent review;
 commit the implementation; then run the frozen evaluator once. Expected replay
 cost must be measured by a smoke and must remain below 30 minutes.
+
+## Outcome
+
+Receipt:
+[`../results/tool-resource-5-3-3-3-20260804/sqlglot50-cpu-idle-backfill-oracle-v1/result.json`](../results/tool-resource-5-3-3-3-20260804/sqlglot50-cpu-idle-backfill-oracle-v1/result.json),
+status `development_idle_backfill_without_prediction_headroom`.
+
+**Action gate: met.** FCFS idle backfill versus Serial-8 reduced mean per-order
+task completion 14.620%, above the 5% minimum. All 32 orders improved, the
+paired order-bootstrap interval was [-2,127.184, -1,870.621] s with its upper
+endpoint below zero, service inflation was 3.073% against the 5% bound, makespan
+improved 17.226% rather than regressing, and the receipt records zero
+capacity or CPU-work violations. All five conditions passed.
+
+**Selection gate: not met.** Oracle-selected shortest-duration backfill versus
+FCFS recorded a mean per-order completion reduction of -0.137%, that is, it made
+completion 0.137% worse where the gate required a 10% reduction. Only 17 of 32
+orders improved and the paired interval
+[-51.549, 70.048] s crossed zero. Service inflation (2.730%), makespan
+(+0.288%), capacity, and work conservation stayed within bounds, so the gate
+failed on effect size and interval alone.
+
+Per this protocol's own branch rule, idle backfill is retained as a control and
+Clause-KB and Task-Aware candidate ordering are stopped; the receipt records
+`advance_to_predictor_selector: false`. The successor question, predictor-backed
+RSS safety with FCFS order unchanged, is
+[`cpu-idle-rss-safety-protocol.md`](cpu-idle-rss-safety-protocol.md).
