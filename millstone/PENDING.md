@@ -241,11 +241,26 @@ admission logic) and whether the operating point itself is right (TP=2).
    for agent workloads at every scale we can reach, and is not raised again. Lit check owed before any novelty claim:
    Mooncake, MemServe, Splitwise heterogeneous, SGLang cache-aware router.
 
-3. Parked, with the record in §3: exclusive tiering (built, `scripts/serving/exclusive_tier/sitecustomize.py`; chain
+3. **Residency routing in the pool simulator — pre-registered 2026-09-15 17:43 UTC, before any comparison is read.**
+   `pd_pool_simulation.py --pool residency:M,P` adds the rule neither the published PPD decision engine nor our
+   two-sided cost router implements: a step is disaggregated iff its history is not resident on the engine that would
+   decode it; the prefill tier is stateless and pushes KV to the task's home engine; warm steps prefill their delta
+   locally. Plumbing smoke (not evidence): 2× L40S, mixed56, 20.5% of steps disaggregated, runs clean.
+   Primary comparison: the H200 profile at 8 GPUs with 32 decode slots, the only point in this simulator where
+   residency exists (97% of prompt tokens cached), `residency:6,2` against the recorded `mixed:8` 8.0 min,
+   `pd:4,4` 9.2 min and `twosided:6,2` 8.7 min (mean JCT ready-to-terminal, same seed and workload).
+   Criterion: ≤ 7.6 min (5% better than colocated) → routing cold steps to a prefill tier is worth building and the
+   2-GPU test at the frontier operating point is justified; within ±5% of 8.0 → once residency exists there is
+   nothing left for disaggregation to remove, which closes the design; worse than 8.4 → the transfer and the prefill
+   tier's queue cost more than the cold prefill they take away. Secondary, reported either way: share of steps
+   disaggregated, prefill-tier utilisation, token-weighted TPOT. Same criterion re-applied on the frontier profile
+   (Gemma 4 + fp8 KV constants) once the SLA sweep supplies its decode curve.
+
+4. Parked, with the record in §3: exclusive tiering (built, `scripts/serving/exclusive_tier/sitecustomize.py`; chain
    29 stopped at 95 min — the gain is the in-flight tokens only, ≈ 140K at `--max-num-seqs` 8, not the 236K of a full
    HBM, so exclusive-80 ≈ inclusive-115 GiB); sizing rule as online task admission (Σ contexts ≤ DRAM/1.4).
 
-4. Push branch `codex/cleanup-research-dead-code` (≈ 150 commits ahead of origin).
+5. Push branch `codex/cleanup-research-dead-code` (≈ 150 commits ahead of origin).
 
 5. **PD at pool scale, by simulation (user go "先做1-3吧", 2026-09-15).** The boss's questions — PD at 8 or 32
    instances, part of the traffic disaggregated, a 141 GB GPU — cannot be run on one GPU.

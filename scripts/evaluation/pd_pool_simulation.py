@@ -25,6 +25,11 @@ Two-sided: mixed engines plus P engines; each request takes the side with the lo
 token, local = (pending prefill tokens on the task's mixed engine + its own uncached tokens) at the mixed prefill
 rate, PD = the same on the P engine plus transfer and a 0.4 s handoff (the 2026-09-11 two-sided router, with the
 simulator's own constants and exact residency).
+Residency: the same layout, routed by one bit instead of a cost model — a step is disaggregated iff its history is
+not resident on the engine that would decode it. Warm steps prefill their small delta locally (moving one would pay
+a full-context transfer to save about a thousand tokens of prefill); cold steps go to a stateless prefill tier that
+keeps no cache, and its KV is pushed to the task's home engine. This is the rule that neither the published PPD
+decision engine (append size, predicted output, QPS lookup) nor the two-sided cost router implements.
 
 Usage:
   pd_pool_simulation.py extract results/<run> --out workload.json
@@ -32,6 +37,7 @@ Usage:
   pd_pool_simulation.py run workload.json --pool pd:1,1
   pd_pool_simulation.py run workload.json --pool hybrid:4,2,2 --split-frac 0.5   (4 mixed, 2 P, 2 D)
   pd_pool_simulation.py run workload.json --pool twosided:6,2                    (6 mixed, 2 P)
+  pd_pool_simulation.py run workload.json --pool residency:6,2                   (6 home engines, 2 stateless P)
 """
 from __future__ import annotations
 
@@ -130,8 +136,9 @@ class Task:
 
 
 class Engine:
-    def __init__(self, eid: str, role: str, hw: dict, max_seqs: int, budget: int, shared_prefix: int):
-        self.eid, self.role, self.hw = eid, role, hw
+    def __init__(self, eid: str, role: str, hw: dict, max_seqs: int, budget: int, shared_prefix: int,
+                 stateless: bool = False):
+        self.eid, self.role, self.hw, self.stateless = eid, role, hw, stateless
         self.max_seqs, self.budget, self.shared = max_seqs, budget, shared_prefix
         self.cap = hw["kv_tokens"]
         self.running: list[Request] = []
@@ -252,11 +259,11 @@ class Engine:
         self.running.remove(r)
         tokens = r.computed + r.generated
         self.pinned -= tokens
-        if self.role != "D":
+        if self.role != "D" and not self.stateless:
             self.cache[r.task.tid] = tokens
             self.cache.move_to_end(r.task.tid)
         else:
-            pass  # D drops the context: the next step is prefilled on P again
+            pass  # D drops the context (the next step is prefilled on P again); a stateless P keeps nothing
         r.finish_t = t
         if self.role == "P":
             sim.transfer(r, t)
@@ -272,8 +279,10 @@ class Sim:
         kind, _, spec = pool.partition(":")
         n = [int(x) for x in spec.split(",")]
         self.mixed = [Engine(f"M{i}", "mixed", hw, max_seqs, budget, shared_prefix) for i in range(n[0] if kind != "pd" else 0)]
-        p_count, d_count = (n[0], n[1]) if kind == "pd" else (n[1], n[2]) if kind == "hybrid" else (n[1], 0) if kind == "twosided" else (0, 0)
-        self.P = [Engine(f"P{i}", "P", hw, max_seqs, budget, shared_prefix) for i in range(p_count)]
+        p_count, d_count = ((n[0], n[1]) if kind == "pd" else (n[1], n[2]) if kind == "hybrid"
+                            else (n[1], 0) if kind in ("twosided", "residency") else (0, 0))
+        self.P = [Engine(f"P{i}", "P", hw, max_seqs, budget, shared_prefix, stateless=kind == "residency")
+                  for i in range(p_count)]
         self.D = [Engine(f"D{i}", "D", hw, d_max_seqs or max_seqs, budget, shared_prefix) for i in range(d_count)]
         self.engines = self.mixed + self.P + self.D
         self.kind, self.split_frac = kind, split_frac
@@ -313,16 +322,20 @@ class Sim:
         s = task.profile[task.step]
         r = Request(task, task.step, s["prompt"], s["gen"], t)
         self.requests.append(r)
-        if self.kind == "twosided":
+        if self.kind in ("twosided", "residency"):
             home = task.sticky.get("mixed") or min(self.mixed, key=Engine.outstanding)
             task.sticky["mixed"] = home
             pe = task.sticky.get("P") or min(self.P, key=Engine.outstanding)
-            uncached_local = r.prompt - min(home.cache.get(task.tid, 0) or home.shared, r.prompt)
-            uncached_p = r.prompt - min(pe.cache.get(task.tid, 0) or pe.shared, r.prompt)
-            est_local = (home.pending_prefill_tokens() + uncached_local) * home.prefill_ms_per_token()
-            est_pd = ((pe.pending_prefill_tokens() + uncached_p) * pe.prefill_ms_per_token()
-                      + self.hw["xfer_fixed_ms"] + self.hw["xfer_ms_per_tok"] * r.prompt + 400.0)
-            if est_local <= est_pd:
+            if self.kind == "residency":
+                use_local = home.cache.get(task.tid, 0) > 0   # one bit: is this task's history still on its home engine
+            else:
+                uncached_local = r.prompt - min(home.cache.get(task.tid, 0) or home.shared, r.prompt)
+                uncached_p = r.prompt - min(pe.cache.get(task.tid, 0) or pe.shared, r.prompt)
+                est_local = (home.pending_prefill_tokens() + uncached_local) * home.prefill_ms_per_token()
+                est_pd = ((pe.pending_prefill_tokens() + uncached_p) * pe.prefill_ms_per_token()
+                          + self.hw["xfer_fixed_ms"] + self.hw["xfer_ms_per_tok"] * r.prompt + 400.0)
+                use_local = est_local <= est_pd
+            if use_local:
                 eng = home
             else:
                 eng = pe
@@ -424,7 +437,7 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     ex = sub.add_parser("extract"); ex.add_argument("run", type=Path); ex.add_argument("--out", type=Path, required=True)
     rn = sub.add_parser("run"); rn.add_argument("workload", type=Path)
-    rn.add_argument("--pool", required=True, help="mixed:N | pd:P,D | hybrid:M,P,D")
+    rn.add_argument("--pool", required=True, help="mixed:N | pd:P,D | hybrid:M,P,D | twosided:M,P | residency:M,P")
     rn.add_argument("--hw", default="l40s", choices=sorted(HW))
     rn.add_argument("--agents-per-gpu", type=float, default=16)
     rn.add_argument("--tasks-per-gpu", type=float, default=28)
