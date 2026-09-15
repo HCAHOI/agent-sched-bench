@@ -1,14 +1,17 @@
 # MILESTONE 3 — Three frontiers on 2× L40S
 
-Date: 2026-09-10. Status: closed 2026-09-11; all three frontiers closed on
-2× L40S, and Milestone 4 reinterprets them as one operating point (KV
-demand above capacity). Milestone 2 froze the exploration
-(unmodified DualMap is the system to beat; load imbalance is not a lever on
-mixed56; PD and PPD lose on JCT). This document tracks the three directions
-that remain open, one section each. Each section is rewritten when its
-frontier moves; it states what is settled, what was just measured, and the
-single next run. Metrics, workload and the reporting checklist are those of
-Milestone 2 §2 and Milestone 1 §3.
+Date: 2026-09-10. Status: closed 2026-09-11. Frontiers A and B are closed on
+2× L40S on their own evidence. Frontier C is closed for full prefill/decode
+disaggregation and for the two-sided cost router, and withdrawn for public
+PPD, whose mechanism no run on this host exercised (Frontier C below).
+Milestone 4 reinterprets the closures as one operating point (KV demand
+above capacity). Milestone 2 froze the exploration (unmodified DualMap is
+the system to beat; load imbalance is not a lever on mixed56; fixed PD loses
+on JCT). This document tracks the three directions that remain open, one
+section each. Each section is rewritten when its frontier moves; it states
+what is settled, what was just measured, and the single next run. Metrics,
+workload and the reporting checklist are those of Milestone 2 §2 and
+Milestone 1 §3.
 
 ## 0. Common ground
 
@@ -223,18 +226,48 @@ for a dropped engine connection.
 
 ## 3. Frontier C — PD/PPD routing
 
-**Closed 2026-09-11.** Fixed PD, public PPD (always-local), and the
-two-sided expected-cost router (result below) all lose to DualMap by 2.2×
-or more in mean JCT on mixed56 at 2 GPUs; the two-sided run shows why a
-per-request cost rule cannot fix it.
+**Closed 2026-09-11 for fixed disaggregation and for the two-sided
+expected-cost router.** On mixed56 at 2 GPUs both lose to DualMap's 33.2 min
+mean JCT: fixed PD by 2.15× (71.5 min), the two-sided router by 2.26×
+(75.0 min, result below); the two-sided run shows why a per-request cost
+rule cannot fix it. Public PPD is not in that list. Our one PPD run did not
+exercise the published mechanism, so it says nothing about that system
+either way.
 
-**Settled.** Fixed PD is prefill-bound (mean JCT 71.5 min); public PPD
-routes 2,414 of 2,470 requests to local prefill on the decode worker
-(109.2 min). With predicted output 128 every appended input of 512 tokens
-or more classifies as `huge_paste`, and the lookup says local at the QPS
-points seen, so the public rule equals always-local on this workload. The
-extended-context and state-aware PPD runs prepared on 2026-09-08 were never
-executed.
+**Settled.** Fixed PD is prefill-bound (mean JCT 71.5 min). The public PPD
+rule routed 2,414 of 2,470 requests to local prefill on the decode worker,
+which is what its design prescribes: with predicted output 128 every
+appended input of 512 tokens or more classifies as `huge_paste`, and the
+lookup says local at the QPS points seen. Upstream (PPD commit 28aaa63, its
+README and `ppd/comprehensive_proxy.py`) runs four roles, P (prefill, KV
+producer), D (decode, KV consumer), pD (prefill-capable decode holding a
+prefix cache) and R (plain replica); turn 1 goes from P to pD over NCCL
+(`P2pNcclConnector`, `kv_producer` / `kv_consumer`), and turn 2 onward stays
+on that pD and is served from its local prefix cache with no KV transfer at
+all. Every shipped launch script sets `--enable-prefix-caching` on every
+instance. Local routing on turn 2 and after is therefore the mechanism, not
+a degeneration of it.
+
+**The PPD number is withdrawn.** Our run
+(`results/mixed56-vast-ppd-pcie-20260907-r1`) made those routing decisions
+into an empty cache. Cached prompt share was 0.018 over the 4,940
+original-task steps, and 0.013 over all 7,968 replayed
+steps; the decode-side instance served 3,985 requests with a mean prompt of
+25,320 tokens, mean prefill 3.49 s and mean TTFT 97.4 s, so it re-prefilled
+the whole history on essentially every turn, while the prefill-side instance
+saw only 114 requests at a mean prompt of 1,194 tokens (both counts over the
+whole run, replacements included; turn 1 did route to P as designed). Two
+independent causes, either sufficient: the engine holds 273,952 KV tokens
+per GPU while 32 concurrent agent contexts need about 800K, 2.9× the
+capacity, so no policy could have kept them resident; and both instances ran
+`NixlPushConnector` with `kv_role: kv_both` rather than upstream's
+producer/consumer pair with a distinct pD role over NCCL. What the run
+measured is local full prefill with no decode isolation, the worst of both
+paths. Its 109.2 min mean JCT was therefore withdrawn on 2026-09-15 as a
+measurement of public PPD, after it had been read into the Frontier C
+closure of 2026-09-11 and against the simulator's pre-registered held-out
+calibration gate below. The extended-context and state-aware PPD runs
+prepared on 2026-09-08 were never executed.
 
 **What the 448-group profiling matrix establishes** (analysis of
 `results/serving-length-profile-vast-20260908-complete/`, 2026-09-10;
@@ -353,10 +386,13 @@ span within 30% of 0.184 ms × uncached tokens) and are unchanged. Commit
    at its per-token cost (amended, see above). No length threshold, no lookup table.
    Pre-declared criterion: if it cannot beat fixed PD on JCT,
    prefill/decode disaggregation is closed for this workload at 2 GPUs.
+   (Scope of that consequent: the P/D role split and cost-based routing over
+   it, the two things this run and the fixed-PD run put on the host.)
 
 **Two-sided result (`results/mixed56-vast-ppd-two-sided-20260911-r1`,
 2026-09-11 04:17–07:00 UTC, one run, smoke passed first). Verdict: does not
-beat fixed PD; Frontier C is closed.**
+beat fixed PD; Frontier C is closed for the P/D role split and for
+cost-based routing over it.**
 
 | Metric | Two-sided | Fixed PD (09-07 r3) | DualMap (09-10 r1) |
 |---|---:|---:|---:|
@@ -402,8 +438,14 @@ so the frontier is closed rather than iterated on mixed56.
 **Why disaggregation pays elsewhere and not here** (2026-09-11, from this
 project's measurements; observation first, inference after).
 
-Published PD/PPD gains (DistServe, Splitwise, Mooncake, the PPD upstream)
-come from serving conditions that our runs measured the opposite of:
+Published PD gains (DistServe, Splitwise, Mooncake) come from serving
+conditions that our runs measured the opposite of. The right column below is
+the fixed-PD run, the two-sided run, the DualMap baseline and the workload's
+own statistics; none of it comes from the withdrawn PPD run. The PPD
+upstream is a separate case that this table does not test: its premise is
+not cold prefill but the opposite, a conversation's history staying resident
+on the decode-capable node across turns, which is the reuse this workload
+has and this host could not hold.
 
 | Condition where PD wins | What the agent workload measured |
 |---|---|
@@ -411,7 +453,7 @@ come from serving conditions that our runs measured the opposite of:
 | Prompts of a few thousand tokens, outputs of hundreds; decode is a large share of GPU time, so prefill interference on running decodes is the main loss | Prompts 23K–110K, outputs about 150 tokens. Prefill dominates compute; centralizing it on one of two GPUs made that GPU the bottleneck (P queue 71 s TTFT) while D's decode isolation bought only TPOT (42 ms, the best of every policy) |
 | Goodput under TTFT/TPOT SLOs | Task JCT over 50–100 sequential steps; step latency is TTFT plus a short decode, so stable TPOT buys nothing |
 | Pools of many GPUs with a tunable prefill:decode ratio | Two GPUs, so one role bounds the system whichever way the split goes |
-| KV per request small next to compute; fast interconnect | 274K-token KV per L40S holds about three task histories; PD needs the history on P for hits and on D for decode, or re-prefills it on P every turn (the single P thrashed) |
+| KV per request small next to compute; fast interconnect | 274K-token KV per L40S holds about three task histories; PD needs the history on P for hits and on D for decode, or re-prefills it on P every turn (confirmed on the fixed-PD run: the single P took no cache hits, prefilled 101.7M prompt tokens and stayed saturated the whole run) |
 | Requests arrive and leave | Tool gaps of seconds to minutes between turns leave KV idle under eviction pressure |
 
 Inference: the mismatch is the per-request structure (multi-turn,
@@ -420,9 +462,15 @@ not the arrival pattern; burst and Poisson arrivals are both realistic and
 both fail for the same reason. Where PD could still fit agents: more GPUs
 with a prefill-heavy ratio and task-sticky prefill instances so histories
 stay hot on P, or heterogeneous hardware with memory-rich decode nodes.
-Neither exists at two GPUs, so this frontier does not reopen on the current
-host; the pool-scale and larger-GPU questions were answered by simulation
-below (2026-09-15).
+Neither exists at two GPUs. What a valid test of either needs is the
+condition neither of our runs had: a conversation's history resident across
+turns on the side that reuses it, on the decode-capable node for PPD and on
+P for fixed PD. Fixed PD ran with a P that took no cache hits and the PPD
+run with a decode side at 0.018 cached share on original-task steps, so what they compared was two
+ways of paying full prefill every turn. The prerequisite for reopening this
+frontier is therefore a measured decode-side or prefill-side residency well
+above that, not a different router; the pool-scale and larger-GPU questions
+were approached by simulation below (2026-09-15).
 
 **PD at pool scale and on a 141 GB GPU, by simulation (2026-09-15;
 `scripts/evaluation/pd_pool_simulation.py`,
@@ -442,10 +490,11 @@ prefill 0.040 ms per token × (1 + position/20K) from P's saturated
 throughput; mixed engines 1.4× that prefill (fitted on FCFS sticky). Gate
 (PENDING §4.5, written before the sweep was read): FCFS sticky 55.7 vs
 55.3 min measured, TPOT 131 vs 142 ms; fixed PD 68.6 vs 71.5 min, 42.1 vs
-41.8 ms; PPD (held out, one engine takes 97% of requests) 114.4 vs 109.2
-min, 134.6 vs 134 ms; cached shares 5.2 vs 8.1% and 1.6 vs 1.8%. The
-two-sided run is reproduced only optimistically (54 vs 75 min): the
-simulated router sees exact residency and queue state, the real one did not.
+41.8 ms; the withdrawn PPD run (held out, one engine takes 97% of requests)
+114.4 vs 109.2 min, 134.6 vs 134 ms; cached shares 5.2 vs 8.1% and 1.6 vs
+1.8%. The two-sided run is reproduced only optimistically (54 vs 75 min):
+the simulated router sees exact residency and queue state, the real one did
+not.
 Admission-seed spread is under 1%.
 
 Mean JCT in minutes (ready-to-terminal), best P:D ratio per pool size;
@@ -488,14 +537,19 @@ Readings (observation, then inference).
    33.2 min on the same 2×L40S (76% residency by admission control) is the
    same lever without the memory.
 
-Limits: the engine model is an eager-mode 4B engine whose fixed 35 ms per
-iteration dominates decode, so nothing here transfers to the KV-read-bound
-32B regime or to speculative decoding; H200 constants are ratios of
-datasheet numbers (capacity 3.3×, bandwidth 5.6×, FP8 compute 2.7×,
-NVLink transfer), to be read as a band; the workload has no tool time; the
-two-sided router is optimistic by 28% at two GPUs, so its rows are upper
-bounds. What would settle it: one rented multi-GPU day running the
-predicted best ratio (5:3 at 8 L40S-class GPUs) against sticky mixed.
+Limits: the held-out case carries less weight than a held-out case normally
+does, because the run it reproduces is the misconfigured PPD run withdrawn
+above. What that agreement validates is the simulator's all-local regime
+with a prefix cache that never hits, not its handling of a working
+disaggregated path, so the calibration rests on the two in-sample fits. The
+engine model is an eager-mode 4B engine whose fixed 35 ms per iteration
+dominates decode, so nothing here transfers to the KV-read-bound 32B regime
+or to speculative decoding; H200 constants are ratios of datasheet numbers
+(capacity 3.3×, bandwidth 5.6×, FP8 compute 2.7×, NVLink transfer), to be
+read as a band; the workload has no tool time; the two-sided router is
+optimistic by 28% at two GPUs, so its rows are upper bounds. What would
+settle it: one rented multi-GPU day running the predicted best ratio (5:3 at
+8 L40S-class GPUs) against sticky mixed.
 
 **Step 7, two-sided on the Poisson manifest (pre-registered 2026-09-11
 07:50 UTC, before launch; `results/mixed56p60-vast-ppd-two-sided-20260911-r1`).**
@@ -531,8 +585,8 @@ the engine logs of both instances and instance-0's telemetry but not
 `routing.jsonl`, `proxy.log` or instance-1's request telemetry; the
 routing counts above come from the minute-83 check on the host. Verdict:
 the criterion fails by a factor above 2.5 at moderate
-density as well; the Frontier C closure holds for both arrival patterns
-without caveat.
+density as well, so the two-sided closure holds for both arrival patterns.
+Public PPD was never run on this manifest, and nothing here extends to it.
 
 Run-record note. The timed-out replacement call surfaced the simulator
 defect fixed in commit 2ebe6f4 (a replacement-task failure raised after all
