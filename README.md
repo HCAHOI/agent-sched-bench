@@ -12,12 +12,6 @@ Trace collection uses the registered remote/Codex providers. GPU-backed vLLM
 is optional and is used by serving and fixed-trajectory shadow-replay
 experiments, not as an alternative collection provider.
 
-Before changing tool-resource data, prediction, evaluation, or scheduler
-integration, read
-[`analysis/development/tool-resource-canonical-objective.md`](analysis/development/tool-resource-canonical-objective.md).
-It is the authoritative objective and evidence boundary; older development
-notes are not.
-
 ## Setup
 
 The single environment entry point is:

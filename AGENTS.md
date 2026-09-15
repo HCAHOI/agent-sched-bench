@@ -313,18 +313,6 @@ via novel, feasible, hardware-friendly methods. Evaluation-path code must be
 correct and usable at intended scale; exploratory code needs no product
 infrastructure.
 
-## Tool-Resource Objective Lock
-
-Before planning or executing work that changes tool-resource data, prediction,
-evaluation, or scheduler integration, read
-`analysis/development/tool-resource-canonical-objective.md`. Its objective,
-metric definitions, evidence boundary, and current-integration statement
-override conflicting older development plans and chat summaries. The current
-targets are latency bucket PMF plus independent CPU peak, sampled RSS, and Disk
-I/O Heavy/Light classifications. Thresholds, short-null label policy, metrics,
-and current evidence status live only in the lock file. Compound command targets
-are never composed with boolean OR.
-
 ## Environment
 
 Single entry point — `uv` with `.venv` at repo root, via
