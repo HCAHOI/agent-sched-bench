@@ -24,6 +24,18 @@ Mean JCT ready-to-terminal, mixed56 workload, seeds 0/1/2 (references at seed 0 
 | H200 | pd:4,4 | 8 | 9.2 | — | 43.3 | — | 1.00 | 1.00 |
 | L40S | residency:1,1 | 2 | 95.3 | — | 112.3 | 0.022 | 0.205 | 0.31 |
 
+> **Status 2026-09-15 18:18 UTC: these numbers are not evidence.** The simulator has been checked against exactly
+> one measured routing policy — the 2026-09-11 two-sided cost router — and it predicted 54 min against a measured
+> 75.0, optimistic by 28%, because the simulated router reads exact residency and queue state instantly while the
+> real one polled snapshots. Residency routing is the same class of mechanism, so the effect below (−19.5% at 8
+> GPUs, −31.7% at 32) is the same order as the instrument's known bias in the same direction. Read the table as a
+> hypothesis to be measured, not as a result. The verdict language below is retained only to show what was
+> pre-registered and what the simulator returned.
+> What would make this instrument usable for routing questions: give the router the information the real one had
+> (snapshot latency, stale state, no cross-engine residency oracle) and require it to reproduce the measured
+> two-sided run within ±10% (75.0 min, TPOT 96.9 ms, 36% of later turns local). Until it passes that, it does not
+> answer routing questions.
+
 Pre-registered criterion (PENDING §4.4, written 17:47 UTC before these runs): the best residency ratio must beat
 colocated by ≥ 10% at both pool sizes on all three seeds, and the home engines' cached share must rise.
 **Met at both sizes.** 8 GPUs: 46.3 against 57.5, −19.5% (worst seed −17.6%). 32 GPUs: 39.6 against 58.0, −31.7%.

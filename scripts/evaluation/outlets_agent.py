@@ -22,9 +22,11 @@ import random
 import statistics
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import TextIO
 
+import httpx
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
@@ -32,6 +34,31 @@ sys.path.insert(0, str(REPO))
 from scripts.evaluation.output_length_benchmark import _read_jsonl  # noqa: E402
 
 BUCKETS = (128, 512)
+
+
+def _pooling_client(timeout_s: float) -> httpx.Client:
+    # Connection reuse reproduced resets under real pooling load; use a fresh connection per request.
+    return httpx.Client(timeout=timeout_s, trust_env=False, headers={"Connection": "close"},
+                        limits=httpx.Limits(max_keepalive_connections=0))
+
+
+def _collect_extractions(futures: dict[Future, str], client: httpx.Client, out: TextIO, rej: TextIO) -> int:
+    """Record sample errors, but terminate the batch on a broken transport."""
+    rejected = 0
+    for n, f in enumerate(as_completed(futures), 1):
+        try:
+            out.write(json.dumps(f.result()) + "\n"); out.flush()
+        except Exception as e:
+            rej.write(json.dumps({"sample_id": futures[f], "error": f"{type(e).__name__}: {e}"[:300]}) + "\n")
+            rej.flush(); rejected += 1
+            if isinstance(e, httpx.TransportError):
+                for pending in futures:
+                    pending.cancel()
+                client.close()
+                raise
+        if n % 100 == 0:
+            print(f"extracted {n}/{len(futures)} ({rejected} rejected)", flush=True)
+    return rejected
 
 
 # ----------------------------------------------------------------------------------------------------------- extract
@@ -56,7 +83,6 @@ def _render(tok, messages, tools, completion: dict | None, include_reasoning: bo
 
 def extract(a: argparse.Namespace) -> None:
     import base64
-    import httpx
     from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(a.tokenizer)
@@ -123,17 +149,10 @@ def extract(a: argparse.Namespace) -> None:
         np.savez(a.out / f"{sid.replace('/', '__')}.npz", feats=keep_feats, ids=keep_ids)
         return row_of(p, n_p, keep_ids)
 
-    rejected = 0
-    with httpx.Client(timeout=a.timeout_s, trust_env=False) as client, index_path.open("a") as out, \
+    with _pooling_client(a.timeout_s) as client, index_path.open("a") as out, \
             (a.out / "rejected.jsonl").open("a") as rej, ThreadPoolExecutor(max_workers=a.concurrency) as pool:
         futures = {pool.submit(one, p): p["sample_id"] for p in todo}
-        for n, f in enumerate(as_completed(futures), 1):
-            try:
-                out.write(json.dumps(f.result()) + "\n"); out.flush()
-            except Exception as e:  # one bad example must not end the run; it is recorded and skipped
-                rej.write(json.dumps({"sample_id": futures[f], "error": f"{type(e).__name__}: {e}"[:300]}) + "\n"); rej.flush(); rejected += 1
-            if n % 100 == 0:
-                print(f"extracted {n}/{len(todo)} ({rejected} rejected)", flush=True)
+        rejected = _collect_extractions(futures, client, out, rej)
     print(f"done: {len(todo) - rejected} extracted, {rejected} rejected", flush=True)
     (a.out / "protocol.json").write_text(json.dumps({"model": a.model, "features": "fc(cat(h2,h24,h45)) per token, float16",
                                                      "prompt_tokens_kept": a.prompt_tokens, "completion_tokens_max": a.completion_tokens,
@@ -371,7 +390,6 @@ def extract_hazard(a: argparse.Namespace) -> None:
     """Per-position final-layer states along a teacher-forced completion (reasoning + visible), every --stride tokens,
     plus the last prompt position; the pooling server runs without the aux patch (token_embed = final layer)."""
     import base64
-    import httpx
     from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(a.tokenizer)
@@ -410,17 +428,10 @@ def extract_hazard(a: argparse.Namespace) -> None:
         return {"sample_id": sid, "split": p["split"], "file": f"{sid.replace('/', '__')}.npz", "n_prompt": n_p, "n_completion": n_c,
                 "think_end": think_end, "label_total": int(r["actual_tokens"]), "truncated": n_c >= a.completion_tokens}
 
-    rejected = 0
-    with httpx.Client(timeout=a.timeout_s, trust_env=False) as client, index_path.open("a") as out, \
+    with _pooling_client(a.timeout_s) as client, index_path.open("a") as out, \
             (a.out / "rejected.jsonl").open("a") as rej, ThreadPoolExecutor(max_workers=a.concurrency) as pool:
         futures = {pool.submit(one, p): p["sample_id"] for p in todo}
-        for n, f in enumerate(as_completed(futures), 1):
-            try:
-                out.write(json.dumps(f.result()) + "\n"); out.flush()
-            except Exception as e:
-                rej.write(json.dumps({"sample_id": futures[f], "error": f"{type(e).__name__}: {e}"[:300]}) + "\n"); rej.flush(); rejected += 1
-            if n % 100 == 0:
-                print(f"extracted {n}/{len(todo)} ({rejected} rejected)", flush=True)
+        rejected = _collect_extractions(futures, client, out, rej)
     print(f"done: {len(todo) - rejected} extracted, {rejected} rejected", flush=True)
 
 

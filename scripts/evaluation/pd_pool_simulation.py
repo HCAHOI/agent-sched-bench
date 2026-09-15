@@ -121,6 +121,7 @@ class Request:
     d_target: "Engine | None" = None
     p_queue_s: float = 0.0
     d_arrival: float | None = None
+    xfer_tokens: int = 0
 
 
 @dataclass
@@ -137,8 +138,8 @@ class Task:
 
 class Engine:
     def __init__(self, eid: str, role: str, hw: dict, max_seqs: int, budget: int, shared_prefix: int,
-                 stateless: bool = False):
-        self.eid, self.role, self.hw, self.stateless = eid, role, hw, stateless
+                 keeps_cache: bool = True):
+        self.eid, self.role, self.hw, self.keeps_cache = eid, role, hw, keeps_cache
         self.max_seqs, self.budget, self.shared = max_seqs, budget, shared_prefix
         self.cap = hw["kv_tokens"]
         self.running: list[Request] = []
@@ -192,9 +193,18 @@ class Engine:
         while self.waiting and len(self.running) < self.max_seqs and budget > 0:
             r = self.waiting[0]
             if r.d_arrival is not None:
-                if not self.make_room(r.prompt):   # KV pushed from P must fit
+                resident = self.cache.get(r.task.tid, 0)   # blocks this engine still holds from the previous step
+                keep = min(resident, r.prompt)
+                if resident:
+                    self.cache.pop(r.task.tid)
+                    self.pinned += resident
+                if not self.make_room(r.prompt - keep):   # only the pushed blocks have to fit
+                    if resident:
+                        self.cache[r.task.tid] = resident
+                        self.cache.move_to_end(r.task.tid, last=False)
+                        self.pinned -= resident
                     break
-                self.pinned += r.prompt
+                self.pinned += r.prompt - keep
                 r.cached = r.computed = r.prompt
             else:
                 resident = self.cache.get(r.task.tid, 0)
@@ -260,11 +270,9 @@ class Engine:
         self.running.remove(r)
         tokens = r.computed + r.generated
         self.pinned -= tokens
-        if self.role != "D" and not self.stateless:
+        if self.keeps_cache:
             self.cache[r.task.tid] = tokens
             self.cache.move_to_end(r.task.tid)
-        else:
-            pass  # D drops the context (the next step is prefilled on P again); a stateless P keeps nothing
         r.finish_t = t
         if self.role == "P":
             sim.transfer(r, t)
@@ -364,7 +372,9 @@ class Sim:
 
     def transfer(self, r: Request, t: float) -> None:
         r.p_queue_s = (r.first_token_t or t) - r.arrival
-        done = t + (self.hw["xfer_fixed_ms"] + self.hw["xfer_ms_per_tok"] * r.prompt) / 1e3
+        resident = r.d_target.cache.get(r.task.tid, 0) if r.d_target is not None else 0
+        r.xfer_tokens = max(0, r.prompt - min(resident, r.prompt))
+        done = t + (self.hw["xfer_fixed_ms"] + self.hw["xfer_ms_per_tok"] * r.xfer_tokens) / 1e3
         self.push(done, "arrive_d", r)
 
     def request_done(self, r: Request, t: float) -> None:

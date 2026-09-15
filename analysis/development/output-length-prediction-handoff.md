@@ -1,6 +1,6 @@
 # Next-turn output-length prediction: handoff
 
-Last updated: 2026-09-04. This file is the current handoff for continuing the output-length prediction experiment. It records the active objective, frozen data, code and machine state, completed checks, known failures, and the next executable steps.
+Last updated: 2026-09-14. This handoff records the dated output-length experiments. The current reasoning-end development results and protocol are under "Reasoning-end development amendment" below; older machine and launch sections describe their historical runs. The current literature synthesis, mechanism findings and Phase 2 TODOs are in [REASONING.md](../../REASONING.md).
 
 ## Objective
 
@@ -359,19 +359,17 @@ interface is three events with a bound attached, not one predicted duration:
    resolved. At 32B, 85% of steps keep ≥ 1.8 s after this event (97% keep ≥ 1.0 s); at 4B about half.
 3. **`finished`**.
 
-For a thinking-mode target the second event can be announced ahead of time: a per-position probe on the thinking
-model's own final-layer states (`hazard-think-20260913/`, P(reasoning closes within X tokens), user's hazard
-formulation) reaches AUROC 0.88–0.94 with recall ≈ 0.8 at precision ≥ 0.78 for X = 256 past 25% of the output, and
-AUROC ≥ 0.94 with recall ≥ 0.83 for X = 64; the end of the whole step stays unpredictable in the middle of the output
-(recall 0.42–0.46) because the visible tool call after `</think>` carries the old tail. The same probe on the
-Instruct model's own completions (`hazard-instruct-20260913/`) shows the near-end signal exists inside the tool call
-too: "ends within 64 tokens" AUROC 0.88–0.96 with recall ≈ 0.8 at precision 0.70–0.96 at every progress quartile.
-So the dynamic alert "this step finishes within ~2 s" is available in both modes; what the prompt-side state lacks
-is only the far-ahead view. Scored as a restore policy (restore 1.8 s ≈ 60 tokens; `policy.json`), the alert
-matters only for long thinking steps: it cuts the time a restored sandbox sits waiting from a median of ≈ 30 s to
-≈ 11 s at one extra point of lateness, while 19% of steps need a fallback trigger; for non-thinking steps (median 67
-tokens) any in-decode trigger is late in about half the steps, so the restore starts at `scheduled` on the prefill
-slack.
+The initial thinking-model probe (`hazard-think-20260913/`) predicts P(reasoning closes within X tokens). Its
+progress-quartile scores included positions after reasoning had already closed and overstate advance-warning
+performance. On the during-reasoning slice alone, the original 256-token head has recall 0.557 / precision 0.708;
+its truncated-endpoint labels are corrected in the 2026-09-14 experiment below. Instruct has a near-end signal
+inside tool calls (`hazard-instruct-20260913/evaluation-full.json`): total-within-64 pooled recall 0.820 / precision
+0.839, falling to 0.530 / 0.558 on long outputs. These are offline feature-probe results, not an online timing guarantee.
+
+The old thinking restore-policy comparison (`hazard-think-20260913/policy.json`, restore 1.8 s ≈ 60 tokens) reduces
+conditional median waiting from about 30 to 11 s, but 19.2% of requests never trigger and ready-in-time falls from
+94.5% to 74.3%. Thus "one extra point of lateness" alone was incomplete. For Instruct, even a first-token trigger is
+late in 47.5% of requests under this conversion; the earlier `scheduled` event provides the relevant prefill slack.
 
 Thinking-mode check (Qwen3-30B-A3B-Thinking-2507-FP8, one sampled draw per prefix at temperature 0.6, 64K cap, 4,301
 labels; `thinking-20260913/`): reasoning is 91% of the output at the median (672 reasoning vs 44 visible tokens), so
@@ -406,7 +404,7 @@ The prefill-only lower bound holds in 100% of steps (a bound that adds the 10th-
 14%). Stage-1 wait is the LLM side's own decision and is sent as the `scheduled` event, not predicted. Restore
 times are the collaborator's: p50 1.0 s, p90 1.8 s.
 
-## State on 2026-09-14 (end of the 2026-09-12/13 sessions)
+## State on 2026-09-14
 
 Closed with a diagnosis: session-history predictors, SSJF-Reg, EGTP (lose to the constant); the shallow probe
 (wins the median, not the tail); tail-oriented heads, fused layers, re-prediction after k tokens, OUTLETS-agent
@@ -415,9 +413,471 @@ limit while the sampling ceiling shows the information exists). Kept: the three-
 bound; the thinking-tier hazard alert (`hazard-think-20260913/`, `hazard-instruct-20260913/`) as an optimisation for
 long thinking steps; the long-step and slow-tool alerts as static rankings. Not started, by decision: OUTLETS proper
 (draft model with completion-side supervision), distributional multi-draw retraining (B, stopped), whole-prompt
-pooled features (C).
+pooled features (C). The reasoning-end repair, short-history comparison, and full-observation follow-up are complete
+below. Filling 1,183 existing completions removes the frozen single-trigger heads' missing alerts. Full-data refitting
+then gives current/history test recall 41.77/47.96% at validation precision 70%, with achieved test precision
+69.32/69.01%. History/single reduces offline mean waste by 4.35 s versus current/single, with similar lateness, but
+only 36.30% of first alerts fall within the target 256-token window. The subsequent user-authorized exploration
+keeps history/single as its reference and improves the validation-selected candidate to a remaining-length MLP
+with four closing-token signals and EWMA 0.7: development-test within-256 44.83%, mean waste 24.64 s, lateness
+6.25% (baseline 5.77%). Ridge, eight-position remaining/progress heads, and closing-signal-only heads fail the
+validation dual constraint. Middle-layer correctness/cost preflight passes on eight real requests; the user
+authorized full layer-24 extraction and evaluation. The first partial run was stopped and deleted at the user's
+request. Disabling HTTP connection reuse passed the 128-request control and the restarted full 4,215-request run
+with zero failures (~102 minutes, 8.9 GB). Full feature and endpoint audits pass. Layer 24 loses to the retained
+final-layer candidate: validation within-256 26.97% versus 43.68%; development-test 33.41% versus 44.83%, with
+more early alerts and greater waste. Stop layer expansion after this negative primary. Full OUTLETS remains conditional.
+No new responses or online integration were run.
 
 ## Current limitations and open problems
+
+### Reasoning-end development amendment (2026-09-14, before corrected-run results)
+
+The user authorized two sequential comparisons using the existing thinking cache: repair the current MLP's training
+target, then test short causal history. The old test results above were already visible; this is development on an
+exposed split, not fresh confirmation. The older reasoning progress-quartile scores include positions after
+`</think>`; during reasoning alone, the old 256-token head has recall 0.557 and precision 0.708. Its old labels also
+substitute total output length when the closing token lies beyond the 2,048-token extraction window. Those scores
+are not a valid reference for advance alerts until evaluated on corrected full-completion endpoints.
+
+Entry point: `scripts/evaluation/reasoning_end_hazard.py`. Reconstruct full rendered completions with the original
+tokenizer/template and check exact alignment with the cached truncated completion. Keep only states strictly before
+the closing token (endpoint = tokens consumed including `</think>`), with equal per-request weight in normalization,
+training BCE, and validation BCE. Decode-position precision/recall retain the old pooled-position metric; also report
+request-balanced metrics. This clarification follows the plumbing smoke, before full-data corrected results: equal
+training influence must not silently change the precision-70 comparison. Prefill states can train the head but cannot
+trigger an in-decode alert. Retain original task-grouped splits. Real-data alignment found one truncated Unicode
+character changed the last cached token; retain only the exactly matching prefix and record all tail mismatches.
+
+Primary comparison: frozen old head recalibrated on corrected validation labels versus a corrected 256-wide MLP,
+seed 42, 30 epochs, validation-BCE checkpoint selection, AdamW lr 0.001 / weight decay 0.01. Target: reasoning closes
+within 256 tokens. Select the threshold maximizing pooled-position validation recall at precision >= 0.70; use
+complete tied-score groups, or no alert if the target is unattainable. The next comparison adds log consumed tokens
+and the current state's difference from the mean of up to three preceding cached states, with width 128 to match
+parameter count. No feature extraction, new generations, or test-based hyperparameter choices in these two rounds.
+
+For each model, compare one crossing and three consecutive crossings, with validation-selected thresholds for each.
+Score first alerts per request, lead to reasoning and whole-output end, coverage including never-alert requests,
+late fraction, and waste. For an explicit accounting fallback, never-alert requests restore at whole-output end,
+incurring the entire restore delay. Keep the prior 1.8 s restore / 0.03 s per token conversion for comparability;
+report token leads and label seconds as offline estimates, excluding unmeasured online predictor overhead. The
+2,048-token cache still limits late observation; correcting labels does not invent missing states. Compare paired
+results clustered by underlying task (2,000 bootstrap draws, seed 42, descriptive 95% intervals; about 50 draws per
+tail, sufficient for the percentage-point comparison, not a fresh-confirmation gate). Interpret recall together
+with achieved precision and first-alert costs.
+
+Real-data alignment and a short training timing check precede formal runs. Run outputs are new directories under
+`/workspace/outlen/results-reasoning-20260914/`; original caches, checkpoints and result files remain frozen.
+
+#### Results (2026-09-14 07:49 UTC)
+
+Local artifacts: `analysis/results/output-length-source-labels-crossbench-20260904/reasoning-end-20260914/`.
+`comparison.json` contains all validation/test metrics, paired intervals and cache-coverage diagnosis; each model
+directory contains frozen thresholds, scores, request-level alerts and training metadata. Full-endpoint alignment
+retained all 4,215 cached requests (2,964 / 419 / 832), with one mismatched cache-tail token and no request exclusions.
+There are 1,183 endpoints beyond the cache; 215 of 832 test requests have no cached position in the final 256 tokens.
+The matched prefix mask did not remove a sampled state in that one Unicode case (the stride skipped that token).
+
+Both new heads selected epoch 2 by validation BCE; current/history have 524,801 / 524,673 parameters. Training
+uses 743,612 pre-end positions; decode evaluation uses the identical 198,680 test positions for every model. Total
+run times, including feature loading and evaluation: legacy 8.9 s, corrected current 59.7 s, history 94.6 s.
+
+| Model, single crossing | Validation precision / recall | Test precision / recall | Recall change versus corrected current |
+|---|---|---|---|
+| Frozen old head, recalibrated | 70.01% / 54.93% | 70.43% / 56.13% | +0.63 pp |
+| Corrected current-state MLP | 70.00% / 54.50% | 69.92% / 55.50% | reference |
+| Short-history MLP | 70.01% / 59.13% | 69.21% / 60.41% | +4.91 pp, paired 95% interval [4.37, 5.43] |
+
+Repairing training alone does not improve recall (versus legacy: −0.63 pp, interval [−1.37, +0.11]). Short history
+adds information at this operating point, with test precision 0.70 pp lower than the corrected current head; these
+are achieved test precisions at validation-selected thresholds, not test-retuned precision-70 scores. Intervals
+describe task variation at seed 42, not training-seed variation or fresh confirmation. The two added input types
+(elapsed tokens and hidden-state change) were tested together, so the gain cannot be assigned to either alone.
+
+All following denominators include every test request. "Within 256" means the *first* alert falls in the last
+256 tokens before reasoning ends. Never-alert requests use the explicitly charged end-of-output fallback. Waste
+means are over all requests, with zero waste when late/never. Seconds assume 0.03 s/token and 1.8 s restore.
+
+| Model / trigger | First alert within 256 | Never alert | Late including never | Mean waste (s) | Mean stall with fallback (s) | Median lead to reasoning / output end, fired only (s) |
+|---|---:|---:|---:|---:|---:|---|
+| Old / single | 32.69% | 12.02% | 17.91% | 31.689 | 0.236 | 10.68 / 17.715 |
+| Corrected / single | 31.25% | 11.66% | 17.43% | 32.719 | 0.229 | 10.80 / 18.990 |
+| History / single | 33.41% | 13.94% | 19.71% | 28.122 | 0.271 | 10.05 / 17.490 |
+| Old / three | 37.98% | 19.35% | 26.20% | 20.229 | 0.379 | 8.01 / 13.980 |
+| Corrected / three | 36.66% | 19.35% | 26.20% | 21.037 | 0.379 | 8.28 / 14.670 |
+| History / three | 36.78% | 18.51% | 25.48% | 22.376 | 0.365 | 8.49 / 15.000 |
+
+History/single versus corrected/single cuts mean waste 4.60 s (interval [−7.43, −1.90]) but increases never-alerts
+from 97 to 116 requests and late-including-never by 2.28 pp. Every single-trigger never-alert request, for all three
+models, belongs to the 215 requests lacking the final-256 cache window. Fired-but-late counts are 48 for both new
+heads; the net ready-in-time decrease comes entirely from the extra never-alerts. This is a measured limitation
+of the truncated-observation policy, not proof that the history model would miss those requests if observed later.
+Three consecutive crossings further reduce early waste but increase missed/late requests; they are not a default
+improvement. History/three versus history/single: mean waste −5.75 s, late +5.77 pp, stall +0.094 s/request.
+
+Decision: keep corrected labels/training and short history as a candidate; do not claim a finished restore-policy
+improvement. The next evidence needed for that decision is the missing later states of the existing long reasoning
+completions, not new responses. No extraction or `</think>` probability feature was launched in that initial
+comparison. Its results do not establish whether a score-history feature or EOS-probability feature would help.
+
+Verification: three focused regression tests and an independent bounded review passed. Review caught and fixed
+the exact-60-token floating-point lateness boundary. Real-data preparation caught the truncated-Unicode token
+mismatch; its prefix-mask fix was re-reviewed before model runs. No serving/evaluation baseline code was changed.
+
+#### Full-observation follow-up (authorized 2026-09-14, before extended-feature verdicts)
+
+The user authorized continuing on `ssh -p 35803 root@connect.singapore-a.gpuhub.com`. Primary question: how much of
+the single-alert missingness is caused by the 2,048-token observation cutoff? Hold the three existing heads and
+their previously selected validation thresholds fixed; add the missing observations and score the identical 832
+test requests, including never alerts. This isolates observation coverage from retraining or recalibration. Compare
+all prior first-alert measures and position precision/recall, with the same task-clustered uncertainty and offline
+time conversion. Further fitting is conditional on a remaining predictor failure; no new responses are generated.
+
+Supplement exactly the 1,183 existing requests whose full reasoning endpoint exceeds the cached window, across
+the original train/validation/test splits. Existing `outlets_agent.py extract-hazard` reads the same completed
+answers and tokenizer snapshot, with completion cap 65,536 (largest actual rendered completion 17,513), stride 4,
+final-layer token embeddings, activation disabled. Model: Qwen3-30B-A3B-Thinking-2507-FP8 snapshot
+`60d80c83c53c3b611c642dbb8c942b3f90c5948a`; vLLM 0.28.0, same bf16 KV, pooling conversion, max context 163,840,
+max sequences 16, GPU memory fraction 0.90, GPU 0. Max required input 90,388 tokens. Extraction input is 18.63M
+tokens versus 76.77M in the previous 109-minute extraction; initial estimate 25–35 min plus startup/validation,
+new files about 6.4 GB against 25 GB free. Smoke the longest input and longest reasoning before launching the full
+set. Reuse successful smoke feature files only under the identical protocol.
+
+Merge only later positions into the original cache in memory, retaining every original sampled state exactly.
+Require the supplement request-ID set, prompt length, reasoning endpoint, output endpoint and split to match the
+frozen full-endpoint manifest; require a complete grid `[0, 1, 5, 9, ... < reasoning_end]` for every request.
+Original caches, heads and previous results stay frozen. New run root: `/workspace/outlen/results-reasoning-full-20260914/`.
+The changed loader and frozen-checkpoint/threshold branches passed four regression tests and independent review
+before use; extraction code is unchanged. No `</think>` probability feature is added in this comparison.
+
+Amendment after feature audit, before any full-observation prediction verdicts: all 1,183 requests were recovered
+(13 connection failures succeeded on one identical-protocol retry), and all 4,215 position grids/endpoints pass.
+However, 239 supplement requests have non-identical overlap states relative to the old cache; most states remain
+close, but the worst per-position cosine is 0.521. A repeat of the worst validation request gave bit-identical
+states across current full-batch, full-single, and truncated-single extraction, so extending the answer did not
+change its earlier states in that control. Old/current server logs agree on model, dtype, attention/MoE backends,
+and chunk budget; the historical drift's exact source remains unresolved. Original states remain fixed in the
+primary analysis. Add one sensitivity comparison for current/history: use this extraction's entire state sequence
+for the 1,183 supplemented requests (including overlap), with the same frozen heads/thresholds and all requests.
+This checks whether the result depends on overlap drift or the history feature at the cache join; it is not a
+replacement dataset or a new fit. Preserve both outcomes and the audit/repeat records.
+
+Conditional fitting amendment (2026-09-14, after frozen full-observation verdicts): single-trigger never-alerts
+became zero for all three heads. Full validation precision is only 63.56/64.18/66.43% for legacy/current/history,
+and test first-alert-within-256 is 33.41/32.21/35.34%; thus coverage is repaired but the target operating point and
+early alerts remain unresolved. First recalibrate all existing heads on full validation at the unchanged 70%
+precision floor. Then refit current/history on all 1,359,019 train positions using the original 30 epochs, seed 42,
+request-balanced normalization/BCE, validation-BCE checkpoint choice and parameter counts. No tuning sweep or new
+features. Compare refit versus the same frozen architecture recalibrated on full validation, and history versus
+current at that operating point; retain all first-alert costs. Estimated 3–5 minutes for these small heads. Existing
+full-test results are now development-exposed; this is a dated amendment, not fresh confirmation.
+
+#### Full-observation results (2026-09-14 08:56 UTC)
+
+Local artifacts: `analysis/results/output-length-source-labels-crossbench-20260904/reasoning-full-20260914/`.
+`comparison.json` contains the paired task intervals, coverage diagnosis and overlap sensitivity; model directories
+contain thresholds, scores and all request-level alerts. The 6.38 GB feature supplement remains at the declared
+remote root, with its index and full audit copied locally. All 1,183 requests succeeded, including 13 recovered
+connection failures. Added 883,197 pre-end states: train/validation/test = 615,407 / 86,918 / 180,872. Every one of
+4,215 requests has the full stride-4 pre-end grid; test has 379,552 decode positions and 45,006 positives.
+
+**Coverage, with heads and thresholds frozen.** All three single-trigger heads now alert on all 832 test requests.
+Current/history never-alert counts fall 97/116 → 0/0; late-including-never falls 17.43/19.71% → 5.77/6.01%.
+All previously fired first alerts are unchanged. But only 8/97 and 16/116 recovered alerts fall within the final
+256 tokens; their median reasoning leads are 1,147 and 841 tokens. Coverage explains the old missingness, while
+premature first alerts remain a separate failure. Full validation precision falls to 64.18/66.43%, so those frozen
+thresholds do not represent the intended precision-70 operating point.
+
+**Numerical check.** The overlap drift described in the amendment remains unresolved at the kernel/source level.
+Replacing all overlap states for supplemented requests changes only 2–5 first-alert locations per model/policy,
+no never-alert/late/within-256 counts, and at most 0.086 s mean waste. Primary old-position probabilities differ
+from their previous saved values by less than 5e-7; thresholds are identical. This supports the coverage conclusion
+under the checked sensitivity, without asserting bitwise reproduction of every historical feature.
+
+**Refit at the same validation rule.** Current/history select epochs 2/3 by request-balanced validation BCE, with
+524,801/524,673 parameters and 1,359,019 train positions. Runs take 87.0/146.8 s including loading and evaluation.
+Every row below selects its threshold on full validation only; test is not recalibrated.
+
+| Model, single trigger | Validation precision / recall | Test precision / recall |
+|---|---|---|
+| Legacy head, full-validation recalibration | 70.03% / 40.46% | 69.59% / 39.89% |
+| Previous current head, recalibrated | 70.00% / 39.60% | 69.87% / 39.52% |
+| Previous history head, recalibrated | 70.01% / 45.13% | 69.73% / 44.54% |
+| Current MLP, full-data refit | 70.01% / 41.91% | 69.32% / 41.77% |
+| History MLP, full-data refit | 70.02% / 48.86% | 69.01% / 47.96% |
+
+Full-data refitting increases current/history recall by 2.25/3.43 pp versus their recalibrated previous heads
+(paired 95% intervals [1.79, 2.72] / [3.01, 3.87]); achieved test precision falls 0.55/0.72 pp. Refit history versus
+refit current gains 6.19 pp recall [5.50, 6.85], with test precision 0.31 pp lower. These are task-variation intervals
+from 2,000 paired task bootstrap draws across 174 tasks at one model seed, not independent confirmation.
+
+| Full-data model / trigger | First alert within 256 | Never alert | Late including never | Mean waste (s) | Mean stall (s) | Median reasoning / output lead (s), fired only |
+|---|---:|---:|---:|---:|---:|---|
+| Current / single | 36.90% | 0/832 | 5.89% | 35.286 | 0.0208 | 10.665 / 18.075 |
+| History / single | 36.30% | 1/832 | 5.77% | 30.932 | 0.0211 | 10.980 / 17.670 |
+| Current / three | 44.83% | 16/832 | 9.50% | 23.659 | 0.0689 | 8.520 / 14.985 |
+| History / three | 44.11% | 13/832 | 8.89% | 24.694 | 0.0614 | 8.580 / 15.240 |
+
+History/single versus current/single cuts mean waste 4.35 s [−6.93, −1.81], with no clear change in lateness or
+first-alert-within-256. Full refitting of history versus its old recalibrated version improves position recall but
+does not clearly reduce waste (−0.12 s [−1.98, +1.52]); within-256 first alerts decrease 2.28 pp [−4.53, −0.12].
+Thus better position recall does not establish better alert placement. History/three versus history/single cuts
+waste another 6.24 s [−7.91, −4.65], but increases late requests by 3.125 pp [1.92, 4.43] and mean stall by 0.0403 s
+[0.0258, 0.0569]. The three-position trigger uses its separately validation-selected threshold.
+
+Decision: keep full endpoints/observations and history/single as the next development baseline; do not add a seed
+sweep to rescue first-alert accuracy or default to three crossings. The remaining problem is premature first
+alerts under repeated detection, not missing long-completion observations. Score-history or closing-token
+probability remains an untested next feature, rather than a demonstrated fix. Seconds still assume 0.03 s/token
+and 1.8 s restore, include no-alert fallback, and exclude online prediction/serving overhead. No actual sandbox
+restore improvement has been measured. Four regression tests and the independent code review passed before
+scientific use; the dedicated pooling server is stopped and all head runs are finished.
+
+### Sequential first-alert exploration (2026-09-14)
+
+The user authorized five ordered stages: fixed-head policies, log remaining-length targets, relative progress with
+eight sampled states, direct closing-token signals (then selected middle layers if needed), and conditional full
+OUTLETS. Existing test is development-exposed. Selection uses validation only: lateness and mean waste must not
+exceed the original full-data history/single baseline on that same validation split; maximize within-256 first
+alerts, then minimize waste and lateness. Keep no-alert requests and the original offline time assumptions.
+
+Stage 1 fixes the existing head and compares single, three crossings, EWMA coefficients 0.1/0.3/0.7, and empirical
+per-request maximum-early-score thresholds. Validation selects EWMA 0.7: 140/419 within-256, 18/419 late, 27.463 s
+waste versus baseline 136/419, 18/419, 28.542 s. Development test gives 306/832 within-256, 49/832 late, 29.797 s
+waste versus 302/832, 48/832, 30.932 s. Paired task-bootstrap deltas: within +0.48 pp [-0.84, 1.81], lateness
++0.12 pp [0.00, 0.37], waste -1.135 s [-2.207, -0.220]. Three crossings has no threshold satisfying both validation
+constraints. This limited gain does not justify expanding the smoothing grid. Maxwise calibration is empirical;
+validation tuning provides no conformal guarantee. Frozen artifacts: `reasoning-explore-20260914/policy/`.
+
+Before stage 2/3 results: ridge uses history inputs, request-weighted squared error, an unpenalized intercept and
+validation-selected alpha from {0.1, 1, 10, 100}. Remaining-length MLP keeps the 524,673-parameter history head.
+Both predict train-min/max-scaled log(1 + remaining tokens). Eight-position models use a depthwise temporal
+convolution and matched ~525K-parameter head; compare direct remaining length with sigmoid relative remaining
+progress (SmoothL1), then causal prefix least-squares extrapolation with intercept one. These are target/representation
+adaptations, not faithful DyCon or Fuel Gauge reproductions; stride-4 samples are not consecutive tokens. All MLPs
+retain seed 42, 30 epochs, AdamW 0.001/0.01, batch 1024, request weighting and validation-loss checkpoint selection.
+The same finite policy family is applied to each model; no test tuning or seed search. The full-data one-epoch
+remaining-length plumbing check took 116 s, with ~1 s training; it is not a scientific result. Seven focused tests
+and independent scoped reviews passed before formal stage 1 and stage 2/3 use.
+
+Stage 2: ridge selects alpha 10 but has no feasible alert policy (minimum validation waste under the lateness cap
+is 30.102 s). The history remaining-length MLP selects epoch 21 and single crossing at log-remaining <= 5.223106:
+validation within/late/waste = 34.84% / 4.30% / 27.200 s. Development test = 39.78% / 5.77% / 28.086 s, with no
+never alerts. Paired deltas versus original history/single: within +3.49 pp [1.09, 5.93], lateness 0.00 pp
+[-0.36, 0.36], waste -2.846 s [-5.038, -0.965]. Auxiliary single-trigger precision/recall = 70.99% / 45.27%.
+Retain this candidate: position recall alone would have missed the improved first-alert utility. Fits took
+145.5 s (ridge) and 138.7 s (MLP), including loading. The eight-position remaining-length comparator has no feasible
+validation policy (minimum waste 30.789 s), so do not expand its architecture; finish the predeclared progress
+target comparison to distinguish target from representation effects.
+
+Before stage 4 learned-head results: source inspection confirms Qwen3MoE final RMSNorm, token_embed with
+use_activation=false and no sentence-transformer projector, untied BF16 lm_head excluded from FP8 quantization,
+and unscaled logits. Project existing states without another norm; retain log P(</think>) and negative log rank,
+plus differences from the preceding three cached positions. These are raw model logits before sampling filters,
+not temperature/top-p generation probabilities, and inherit the historical cache drift. Compare a 32-wide binary
+MLP on these four scalars alone with adding the four scalars to the strongest validation-selected model from
+stages 1-3, retaining its target and width. Keep the same 30-epoch optimizer/selection protocol and finite policy
+family. No intermediate layers are extracted at this stage. A 4,096-position projection check took 0.0415 s
+(~98.7K positions/s); complete projection is ~20 s plus input loading, and compact signals need <40 MB. The eighth
+focused test verifies projection probability/rank, alignment, and causal request-local deltas. Independent review
+caught binary logits versus probability EWMA incompatibility; sigmoid score export was corrected and re-reviewed
+before any stage 4 learned-head result.
+
+Stage 3: eight-position remaining/progress select epochs 4/1, take 130.8/128.6 s, and both fail the validation
+dual constraint. The progress model requires at least 53.378 s mean waste under the lateness cap. At its natural
+256-token diagnostic threshold, validation has 44/419 never alerts and 15.75% late; 52/419 requests reach an
+extrapolated zero remaining length while actually more than 256 tokens remain. This is inaccurate trajectory
+extrapolation, not an observation-coverage failure. No parameter or seed expansion follows the negative result.
+
+Stage 4: full LM-head projection took 43.17 s including loading (15.96 s projection, 1,929,234 cached positions).
+Probability >=0.1 occurs at 93 validation positions, all in the final four tokens; none occur with 5-256 tokens
+left. The signals-only head (193 parameters, epoch 29, 59.1 s) cannot meet the dual constraint (minimum validation
+waste 55.338 s); its validation-P70 test precision/recall is 79.88% / 1.20%. Direct strong closing-token signals
+are too late for this advance-warning objective, although the four continuous scalars can help a hidden-state head.
+
+The remaining-length history head with four signals has 525,185 parameters, selects epoch 12, and takes 161.5 s.
+Validation selects EWMA 0.7, threshold -5.3992874885. All choices below were frozen before test scoring:
+
+| Candidate | Validation within / late / waste | Development-test within / late / waste | Test never |
+|---|---|---|---:|
+| Original history/single | 32.46% / 4.30% / 28.542 s | 36.30% / 5.77% / 30.932 s | 1/832 |
+| Fixed head, selected EWMA 0.7 | 33.41% / 4.30% / 27.463 s | 36.78% / 5.89% / 29.797 s | 1/832 |
+| Log-remaining MLP, selected single | 34.84% / 4.30% / 27.200 s | 39.78% / 5.77% / 28.086 s | 0/832 |
+| Log-remaining + signals, selected EWMA 0.7 | 43.68% / 4.30% / 23.090 s | 44.83% / 6.25% / 24.639 s | 1/832 |
+
+The last candidate's paired deltas versus original history/single are within +8.53 pp [6.13, 11.11], lateness
++0.48 pp [-0.003, 1.083], and waste -6.292 s [-8.434, -4.330]. Versus the remaining-length MLP, they are
++5.05 pp [3.09, 7.14], +0.48 pp [0.12, 0.97], and -3.447 s [-4.857, -2.207]. These compare complete selected
+pipelines, including their validation-selected policy; they do not identify the contribution of each scalar or
+separate training-seed variation. The candidate satisfies the prescribed validation constraint, but its four
+additional late test requests prevent a claim of demonstrated no-lateness-regression. Do not retune on this test.
+Its auxiliary validation-P70 test precision/recall is 69.60% / 49.32%. Median reasoning/output lead is 8.70/15.69 s
+among fired requests; average fallback-inclusive stall is 0.02326 s. Seconds remain offline assumptions.
+
+On the fixed test length groups, combined-head within/waste/late is 53.81% / 15.207 s / 7.95% for 604 requests
+with reasoning <=2048, and 21.05% / 49.626 s / 1.75% for 228 longer requests. Thus important early-alert loss
+remains on long reasoning. Keep the validation winner as a development candidate, not an independently confirmed
+restore policy. Artifacts, checkpoints, score trajectories, protocols and task-paired bootstrap outputs are under
+`analysis/results/output-length-source-labels-crossbench-20260904/reasoning-explore-20260914/`, mirrored from
+`/workspace/outlen/results-reasoning-explore-20260914/`. Nine focused tests and the scoped independent reviews pass.
+
+Middle-layer preflight: fix the next primary layer at residual stream after block 24 (of 48); block 36 is a
+subsequent candidate only if the first comparison warrants it. The existing vLLM auxiliary-state wrapper now
+supports auxiliary-only output to avoid storing another final-state copy. Its previously hidden forward signature
+prevented vLLM from marking token dimensions dynamic and caused an 8192-versus-32 compiled-shape failure. Restoring
+the signature with functools.wraps fixes the root cause; a dedicated regression and independent review pass.
+Default concatenation remains available. The successful smoke retained torch.compile and CUDA graphs.
+
+The longest input and longest reasoning both succeed (116,602 total input tokens, 27.12 s); layer width is 2048,
+states are finite, complete stride-4 grids and full endpoints match, and the returned raw residual states differ
+from the final-normalized cache. A seed-42 request from each of six prompt-length sextiles also passes, using
+126,545 input tokens in 18.41 s. This is plumbing/cost evidence only. Scaling this small batch to the fixed 4,215
+requests / 80,633,930 input tokens gives ~3.26 hours; prefix-cache reuse, batch scale and startup limit that estimate.
+The 2,172,124 stored output positions require ~8.90 GB FP16 features, against ~19 GB free before extraction.
+
+The full layer-24 extraction and evaluation authorized on 2026-09-14 are complete under `middle24/`. The comparison
+uses the retained history remaining-length + scalar-signals setup, original labels, splits, seed, training and
+validation policy rules. All 4,215 requests, 2,172,124 stored states and 1,929,234 pre-end states pass the finite-value,
+2048-dimensional and exact-position audit. Existing endpoint preparation with cache-window 65536 retains all requests
+without exclusions, tail mismatches or missing endpoints. Canonical request order was restored before joining the
+unchanged final-head scalar signals; original labels and task splits match exactly. No new completions were generated.
+The eight-request audits, timings and smoke server configuration are saved under `middle24-smoke/`. The formal
+pooling service and extractor use the private Python Supervisor configuration in `middle24/`. At the user's
+instruction, the first 183-record partial feature directory was deleted after three connection resets; it will
+not be reused. Both extraction callers now disable persistent HTTP connections, cancel pending work and close the
+client on a transport failure, then exit nonzero. Already-running workers must unwind before process exit; no
+automatic retry is introduced. Eleven focused tests and independent review pass. A real 128-request old-client
+control reproduced a reset on a reused connection while receiving response headers (33 new TCP connections for
+128 requests). The fixed client passed all 128 requests using 128 fresh TCP connections, with finite, aligned
+2048-dimensional features; elapsed time was 195.3 s versus 197.5 s for the old client. This identifies connection
+reuse as the observed failure path; expiry timing itself was not established by packet capture. The diagnostic
+saved no features. Its receipt is `middle24/http-transport-validation.json`. The full extractor restarted from
+`0 cached, 4215 to extract` and finished with 4,215 successes and zero rejections in about 102 minutes. The pooling
+service is stopped. Training took 176.1 s including loading and scoring, retained 525,185 parameters and selected
+epoch 16 of 30 by validation loss. Policy selection chose EWMA 0.3 under the original baseline's validation constraints.
+
+| Development comparison | Validation within-256 / late / waste | Test within-256 / late / waste |
+|---|---|---|
+| Original history/single baseline | 32.46% / 4.30% / 28.542 s | 36.30% / 5.77% / 30.932 s |
+| Retained final-layer remaining + signals | 43.68% / 4.30% / 23.090 s | 44.83% / 6.25% / 24.639 s |
+| Layer-24 remaining + same signals | 26.97% / 4.30% / 28.531 s | 33.41% / 6.49% / 28.093 s |
+
+Layer 24 passes the baseline feasibility constraint but is dominated by the retained candidate on validation.
+Against the retained candidate on development test, task-paired bootstrap gives within-256 -11.42 pp
+[-14.06, -8.94], lateness +0.24 pp [-0.36, 0.96], and mean waste +3.454 s [2.169, 4.790]. Early first alerts
+increase from 458 to 550, within-window alerts fall from 373 to 278, and never alerts increase from one to four.
+For reasoning >2048, within-256 falls from 21.05% to 15.79%, with waste increasing from 49.626 to 57.289 s.
+
+The failure is at the constrained decision point: layer 24's validation precision-70 threshold reaches 53.57%
+position recall but gives 7.88% lateness, above the 4.30% cap. Meeting the cap shifts alerts earlier, yielding only
+113/419 within-window alerts versus 183/419 for the retained candidate. Its auxiliary test precision/recall is
+70.79% / 51.02% versus 69.60% / 49.32%; this modest position-level gain does not improve first-alert utility.
+Keep the final-layer candidate and stop layer/seed/threshold expansion after the negative primary. This compares
+the complete pipelines, including their separately validation-selected rules; it does not isolate layer effects
+from all extraction numerics, and it does not establish that every intermediate layer is uninformative.
+Frozen checkpoints, score trajectories, policies, full audits and paired diagnosis are in `middle24/` locally and
+remotely; full feature arrays remain on the GPU host. Existing test remains development-exposed and all seconds
+retain the 0.03 s/token and 1.8 s restore assumptions. Full OUTLETS and independent real-restore confirmation are
+not launched; the long-reasoning loss remains open.
+
+The user also authorized unused-weight cleanup. Removed only the Qwen3-4B-Instruct-2507-FP8 pretrained weight
+blob (revision 8591804019c8b22094c3b5b4454e0edc05dffc98), releasing 5,190,053,264 bytes after checking process
+references and blob sharing. Its tokenizer/configuration remain; historical 4B inference commands require
+re-downloading the weights at that revision. Current Thinking, recent TPOT model weights, learned heads,
+features and results are retained. Cleanup receipt is in `middle24/protocol.json`; free space rose to ~23 GiB.
+
+### Reasoning-process diagnosis and final-FFN readout (2026-09-14)
+
+Following the user's direction to investigate reasoning mechanisms, the next phase reuses existing answers and
+the frozen final-layer predictor. No predictor is fitted and no new continuation is generated. All observations
+below use development-exposed validation; they do not establish a forecasting improvement.
+
+Text alignment covers all 419 validation requests. Of 183 within-window alerts, 83 come from reasoning of at most
+256 tokens. Among the other 336 requests, only 100 alerts hit the window (29.76%); 236 are early. Twenty early
+alerts occur at the first generated token, and 99/236 occur by token 256. The first-token cases still have the
+entire input context available, but cannot reflect progress within the current reasoning. Paragraph delimiters
+are descriptive boundaries, not verified cognitive steps.
+
+A fixed, stratified 24-request sample was selected before reading its text. Unblinded qualitative inspection
+finds both premature local decisions followed by repeated command/code elaboration and provisional solutions
+that are subsequently revised. Correct alerts also accompany repeated intentions. These examples motivate
+distinguishing action readiness, reasoning progress and natural termination; they do not justify keyword rules
+or estimates of how common each reasoning pattern is. A later quality check joined these 24 completions to
+their original input histories: some final recaps have supporting test output, while one completion invents
+permission to stop after a full-suite timeout. Static checks on all 419 validation completions found 346
+schema-valid tool calls, but an invalid notebook JSON payload and a shell quoting defect. Generated tools
+were not executed, so this is not a task-success estimate. A separate exact-32-token-suffix control yields ten early/late pairs, mostly repeated
+code or structured text. Closing-token log probability rises in only four pairs; this is not a clean test of
+semantic convergence and does not support that claim.
+
+The model diagnostic captures the final MoE block's pre-FFN residual, FFN update and native normalized output
+at the same 24 requests' alert and at leads 256, 64 and 1 (96 existing-answer prefixes). True endpoints only
+choose diagnostic observations. Removing the final FFN update, then applying the original RMSNorm and LM head,
+tests its contribution to next-token readout. Reconstructing the intact output passes first: maximum relative
+hidden-state error 0.0000243, minimum cosine 0.99999988, and maximum closing-token log-probability error zero.
+
+| Diagnostic position | Median native P(close) | Median P(close), final FFN omitted | Requests where FFN raises log P(close) |
+|---|---:|---:|---:|
+| Frozen first alert | 1.77e-15 | 3.83e-11 | 0/24 |
+| 256 tokens before close | 3.80e-15 | 8.58e-12 | 0/24 |
+| 64 tokens before close | 2.58e-15 | 4.93e-11 | 0/24 |
+| 1 token before close | 0.999978 | 0.992616 | 24/24 |
+
+In this sample the final FFN suppresses immediate closing at the earlier observations and strengthens it just
+before emission. Crucially, the residual-only readout already strongly favors closing at lead 1, so the final
+FFN is not the sole source of that terminal signal. Sparse positions do not locate the transition or establish
+that earlier representations lack useful information. This is whole-block readout ablation, not neuron
+identification, a NEAT reproduction, or evidence about changed natural stopping time or answer quality.
+
+The follow-up newline control uses 24 paired earlier/final prose prefixes from 22 tasks, at one/two trailing
+newlines (96 reads, 52.6 s). Median closing probabilities are 0.997722/4.01e-15 for earlier prose and
+0.999980/3.96e-14 for final prose. Reconstruction relative and closing-logP errors are zero. This shows strong
+format dependence in the current model, not format-only behavior or a general reasoning clock: under the same
+two-newline format, 18/24 final prefixes still have higher closing log probability. Saved validation reasoning
+already ends in one newline in all 419 cases; raw generated token streams were not saved. These are controlled
+prefix readouts, not natural continuation or cross-model evidence. Protocol, annotations and states are in
+`reasoning-mechanism/phase2-boundaries/`; scoped independent review and real-model smoke passed.
+Following the user's generalization concern, further component extraction along the newline branch is stopped.
+Reflection-marker studies are conditional diagnostics; the user redirected the immediate priority to forecast
+quality. A complete-history GRU comparison is now finished: identical cached inputs/target, seed 42, 30 epochs,
+524,591 parameters vs MLP 525,185, plus an MLP with identical 8-request minibatches. Original MLP reproduction
+has zero score difference on validation and development test. GRU reduces validation MSE by 19.9% but its selected
+first-alert hit rate is 31.50% vs incumbent 43.68%; development test is 34.38% vs 44.83%, with waste 25.512 vs
+24.639 s and late 5.89% vs 6.25%. Paired task within-256 difference vs incumbent is -10.46 pp [-13.13, -7.77].
+Both heads cross threshold inside the target window on 418/419 validation requests, but GRU crosses too early
+on 286 vs 236. It is not retained; stop this size/seed branch. Formal reproduction/control/GRU/policy runs took
+953.9 s; 11 focused tests and independent review passed. Frozen outputs are in `reasoning-explore-20260914/gru-head/`.
+See REASONING.md §4.6 for controls and precision-dependent inference checks. No attention-decomposition result or reflection predictor is claimed. Keep
+the current forecasting candidate unchanged. Frozen protocol, annotations, paired states, runnable diagnostic
+and 96 observations are under `reasoning-explore-20260914/reasoning-mechanism/`. Extraction took 41.9 s after
+startup; the pooling service is stopped. Twelve focused tests, real-model reconstruction and independent review
+of capture and evaluation logic pass.
+
+### Gemma/DFlash first-boundary comparison (2026-09-14)
+
+The fixed primary is complete: 32 task-distinct TPOT replay requests, seed 42, thinking enabled, Gemma4 26B-A4B
+FP8 + existing DFlash, block size 16 / 15 speculative tokens, FP8 KV, concurrency 1. Intentional replay instructions
+and full message histories are retained; no source replacement occurred. The real vLLM v2 capture reuses native
+target copies before drafting and asynchronously records draft IDs. Captured and streamed tokens match, including
+Gemma reasoning boundary 101 and tool stop 50; all effective prompt counts match the serving render endpoint.
+Formal runtime 99.10 s, no request failures or capped primary outputs; independent review and focused tests pass.
+
+For 25 schema-valid local sandbox tool requests, assuming 1.8 s restore, target vs first-draft rules give lateness
+88% vs 80%, mean blocked 1.28112 vs 1.08412 s, idle 0.15746 vs 0.21755 s. Blocking reduction is 0.19700 s
+(paired task 95% CI [0.06035, 0.37158]); increased idle fails the frozen gate. Of 14 advance alerts, only 6 correspond
+to a boundary in the next 15 tokens (30–104 ms actual lead); all first candidate paths were rejected. Fifteen requests
+emit the reasoning boundary immediately, leaving no draft lookahead opportunity. All 32 outcomes remain recorded:
+27 tool_calls include one invalid timeout and one nonlocal message; five are final answers with unnecessary restores.
+Across all 32, observable pre-finish idle lower bound rises 0.33287→0.54480 s at 1.8 s restore. No tools or restores were
+executed. These are real generation event times plus explicit restore assumptions, not end-to-end sandbox results.
+
+Keep the target-boundary control; stop expansion of the single-draft-marker rule. Next analyze whether sandbox is
+needed and time until tool readiness using existing trajectories. See REASONING.md §4.7 for sensitivity, diagnosis
+and current TODOs. Manifest, raw streams/events, configuration and summaries are mirrored under
+`reasoning-explore-20260914/dflash-boundary/`; entrypoints are `dflash_boundary.py` and
+`vllm_dflash_trace_sitecustomize.py`. The experiment server is stopped.
+
+## Historical label-run notes
 
 - Natural output has a heavy tail: one draw exceeded 16K even though the longest-prefix smoke outputs were all below 1.3K. The 32K cap is still a censoring boundary, so any cap hit invalidates that label run.
 - One warm request is performed per prefix before its other 19 draws run concurrently. This improves prefix reuse but means only one data-parallel engine is active during that warm draw. Do not change this behavior mid-protocol; optimize it only as a separately declared revision.
@@ -428,9 +888,9 @@ pooled features (C).
 - OUTLETS cannot be evaluated faithfully on recorded labels: its official training regenerates completions with the target model and supervises completion-side hidden states. A ready official checkpoint has also not been confirmed.
 - GitHub does not yet contain commit `0875daa`; pushing is a separate authorized action.
 
-## Useful commands
+## Historical label-run commands
 
-Inspect current services:
+Inspect the original services:
 
 ```bash
 ssh -p 28126 root@137.175.22.196 'supervisorctl status; nvidia-smi'

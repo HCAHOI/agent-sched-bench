@@ -277,7 +277,11 @@ admission logic) and whether the operating point itself is right (TP=2).
    reported either way: the home engines' cached share must rise against colocated, otherwise the win is not the
    claimed mechanism. Limits carried from §4.5: the engine model is an eager-mode 4B engine, so this says nothing
    about the KV-read-bound frontier regime until the frontier profile exists.
-   **Result, read 17:58 UTC: criterion met at both pool sizes.** 8 GPUs 46.3 against colocated 57.5 (−19.5%,
+   **Result, read 17:58 UTC: the simulator returned a pass at both pool sizes, and the pass is not evidence**
+   (retracted 18:18 UTC): this simulator has one measured routing-policy check and fails it by 28% in the
+   optimistic direction (two-sided: 54 simulated against 75.0 measured), which is the same order as the
+   effect below and in the same direction. Treat as a hypothesis; the instrument must first reproduce the
+   two-sided run with the router's real information before any routing verdict is quoted from it. 8 GPUs 46.3 against colocated 57.5 (−19.5%,
    worst seed −17.6%), 32 GPUs 39.6 against 58.0 (−31.7%), and 15–29% ahead of the best fixed-PD ratio; the
    mechanism check passes (home cached share 0.068 → 0.471 and 0.629, TPOT 129 → 94 and 82 ms). The tier must
    be 1 GPU in 8 to 16: 2 in 8 loses to colocated (59.5) and 1 in 2 is far worse (95.3). Table, readings and
