@@ -421,7 +421,81 @@ both fail for the same reason. Where PD could still fit agents: more GPUs
 with a prefill-heavy ratio and task-sticky prefill instances so histories
 stay hot on P, or heterogeneous hardware with memory-rich decode nodes.
 Neither exists at two GPUs, so this frontier does not reopen on the current
-host.
+host; the pool-scale and larger-GPU questions were answered by simulation
+below (2026-09-15).
+
+**PD at pool scale and on a 141 GB GPU, by simulation (2026-09-15;
+`scripts/evaluation/pd_pool_simulation.py`,
+`analysis/results/pd-pool-sim-20260915/`).** Asked by the advisor's group
+lead: does PD win at 8 or 32 instances, with part of the traffic
+disaggregated, or on H200-class memory? One GPU is available, so a
+trace-driven simulator replays the mixed56 workload (2,470 steps with their
+measured prompt and completion tokens, inter-step gaps median 0.02 s, the
+harness's 32-slot closed loop; 16 agents and 28 tasks per GPU at every pool
+size) through a per-iteration model of vLLM's scheduler: 8 sequences per
+engine, 2,048-token chunks, 275,008-token KV with an LRU prefix cache keyed
+by task, newest-request preemption. Costs are fitted on the 2×L40S runs
+(the mixed56 engine is **Qwen3-4B-Instruct-2507-FP8 in eager mode**, not
+32B): decode iteration 34.6 ms + 0.38 ms per sequence + 0.054 ms per
+thousand tokens of batch context (D side of fixed PD, 3,997 requests);
+prefill 0.040 ms per token × (1 + position/20K) from P's saturated
+throughput; mixed engines 1.4× that prefill (fitted on FCFS sticky). Gate
+(PENDING §4.5, written before the sweep was read): FCFS sticky 55.7 vs
+55.3 min measured, TPOT 131 vs 142 ms; fixed PD 68.6 vs 71.5 min, 42.1 vs
+41.8 ms; PPD (held out, one engine takes 97% of requests) 114.4 vs 109.2
+min, 134.6 vs 134 ms; cached shares 5.2 vs 8.1% and 1.6 vs 1.8%. The
+two-sided run is reproduced only optimistically (54 vs 75 min): the
+simulated router sees exact residency and queue state, the real one did not.
+Admission-seed spread is under 1%.
+
+Mean JCT in minutes (ready-to-terminal), best P:D ratio per pool size;
+full table in `sweep-table.md`:
+
+| Pool | Mixed, sticky | Fixed PD (best ratio) | Hybrid (task split / two-sided) | TPOT mixed → PD |
+|---|---:|---:|---:|---|
+| 2× L40S | 55.7 (measured 55.3) | 68.6 at 1:1 (71.5) | — / 54.1 | 131 → 42 ms |
+| 8× L40S | 57.4 | 54.3 at 5:3 (4:4 66.9, 6:2 60.3) | 53.1 (2M+4P+2D, 75% of tasks PD) / 54.3 | 129 → 48 ms |
+| 32× L40S | 57.9 | 55.7 at 20:12 (16:16 68.6, 24:8 61.5) | — / 57.9 (24M+8P) | 129 → 48 ms |
+| 2× L40S, KV ×3.3 only | 19.4 | 35.5 | — | 54 → 49 ms |
+| 2× H200 (speed only, L40S KV) | 28.5 | 36.2 | — | 68 → 37 ms |
+| 2× H200 | 14.1 (8.0 with 32 slots) | 9.4 at 1:1, 32 D slots | — | 43 → 43 ms |
+| 8× H200, 32 slots | 8.0 | 9.2 at 4:4 (5:3 11.6, 6:2 18.4) | 8.7 two-sided 6M+2P | 43 → 43 ms |
+| 32× H200, 32 slots | 8.0 | 11.4 at 16:16 | — | 44 → 42 ms |
+
+Readings (observation, then inference).
+
+1. *Scale.* With more GPUs the P:D ratio becomes tunable and fixed PD
+   stops losing: at the best ratio (about 60% of GPUs prefilling) it ties
+   or beats mixed by 4–5% in mean JCT while holding TPOT at 45–48 ms
+   against 129 ms. It does not win big, because P has no residency either:
+   16 agents × 25K tokens per GPU is 1.5× one engine's KV, so P re-prefills
+   the whole history every step (P cache hits 2%) and the pool needs 5 of
+   8 GPUs just to keep up with prefill. The two-GPU loss was the 1:1 ratio,
+   not disaggregation itself.
+2. *Splitting the traffic.* Pinning a share of tasks to a PD sub-pool or
+   routing per request by expected time to first token gains at most 7%
+   over mixed at 8 GPUs and nothing at 32; on H200 the two-sided pool is
+   9% behind mixed. Inference: once residency is the constraint, moving
+   prefill between engines cannot create it.
+3. *Bigger GPU.* Capacity is the lever, not speed: 3.3× KV alone (L40S
+   speeds) takes mixed from 55.7 to 19.4 min with 97% of prompt tokens
+   cached; H200 speeds alone (L40S KV) give 28.5. With both, every layout
+   lands at 8–11 min and mixed stays ahead of PD (8.0 vs 9.2–11.4),
+   because a resident context leaves about 1K new tokens to prefill per
+   step and the prefill interference that PD removes is gone with it; PD's
+   TPOT advantage vanishes too (43 vs 43 ms). Inference: an H200 pool does
+   not make PD win; it removes the reason to want it. DualMap's measured
+   33.2 min on the same 2×L40S (76% residency by admission control) is the
+   same lever without the memory.
+
+Limits: the engine model is an eager-mode 4B engine whose fixed 35 ms per
+iteration dominates decode, so nothing here transfers to the KV-read-bound
+32B regime or to speculative decoding; H200 constants are ratios of
+datasheet numbers (capacity 3.3×, bandwidth 5.6×, FP8 compute 2.7×,
+NVLink transfer), to be read as a band; the workload has no tool time; the
+two-sided router is optimistic by 28% at two GPUs, so its rows are upper
+bounds. What would settle it: one rented multi-GPU day running the
+predicted best ratio (5:3 at 8 L40S-class GPUs) against sticky mixed.
 
 **Step 7, two-sided on the Poisson manifest (pre-registered 2026-09-11
 07:50 UTC, before launch; `results/mixed56p60-vast-ppd-two-sided-20260911-r1`).**
