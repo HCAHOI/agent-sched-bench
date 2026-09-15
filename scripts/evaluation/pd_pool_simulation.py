@@ -21,12 +21,17 @@ Roles: mixed (prefill + decode), P (prefill only; the finished KV is pushed to a
 22 ms + 0.0102 ms per token on PCIe), D (receives KV, decodes). Routing: task-sticky on mixed engines and on
 P engines (turn 1 to the engine with the fewest outstanding requests); D by fewest outstanding.
 Hybrid: a fraction of tasks is pinned to the PD sub-pool at admission; the rest use the mixed sub-pool.
+Two-sided: mixed engines plus P engines; each request takes the side with the lower expected time to first
+token, local = (pending prefill tokens on the task's mixed engine + its own uncached tokens) at the mixed prefill
+rate, PD = the same on the P engine plus transfer and a 0.4 s handoff (the 2026-09-11 two-sided router, with the
+simulator's own constants and exact residency).
 
 Usage:
   pd_pool_simulation.py extract results/<run> --out workload.json
   pd_pool_simulation.py run workload.json --pool mixed:2 --hw l40s [--agents-per-gpu 16] [--out JSON]
   pd_pool_simulation.py run workload.json --pool pd:1,1
   pd_pool_simulation.py run workload.json --pool hybrid:4,2,2 --split-frac 0.5   (4 mixed, 2 P, 2 D)
+  pd_pool_simulation.py run workload.json --pool twosided:6,2                    (6 mixed, 2 P)
 """
 from __future__ import annotations
 
@@ -107,6 +112,7 @@ class Request:
     preempted: int = 0
     p_engine: "Engine | None" = None
     p_cached: int = 0
+    d_target: "Engine | None" = None
     p_queue_s: float = 0.0
     d_arrival: float | None = None
 
@@ -149,6 +155,14 @@ class Engine:
     def outstanding(self) -> int:
         return len(self.running) + len(self.waiting)
 
+    def pending_prefill_tokens(self) -> int:
+        return sum(max(0, r.prompt - r.computed) for r in self.running) + sum(
+            r.prompt - min(self.cache.get(r.task.tid, 0) or self.shared, r.prompt) for r in self.waiting)
+
+    def prefill_ms_per_token(self) -> float:
+        """Mean cost of one prefill token at this workload's context positions (position factor 2.1)."""
+        return self.hw["p_ms_per_tok"] * 2.1 * (self.hw["mixed_prefill_factor"] if self.role == "mixed" else 1.0)
+
     # one scheduler iteration ---------------------------------------------------------------------------
     def iterate(self, now: float, sim: "Sim") -> float:
         hw = self.hw
@@ -169,7 +183,7 @@ class Engine:
         # admit waiting requests while there are slots and budget
         while self.waiting and len(self.running) < self.max_seqs and budget > 0:
             r = self.waiting[0]
-            if self.role == "D":
+            if r.d_arrival is not None:
                 if not self.make_room(r.prompt):   # KV pushed from P must fit
                     break
                 self.pinned += r.prompt
@@ -258,7 +272,7 @@ class Sim:
         kind, _, spec = pool.partition(":")
         n = [int(x) for x in spec.split(",")]
         self.mixed = [Engine(f"M{i}", "mixed", hw, max_seqs, budget, shared_prefix) for i in range(n[0] if kind != "pd" else 0)]
-        p_count, d_count = (n[0], n[1]) if kind == "pd" else ((n[1], n[2]) if kind == "hybrid" else (0, 0))
+        p_count, d_count = (n[0], n[1]) if kind == "pd" else (n[1], n[2]) if kind == "hybrid" else (n[1], 0) if kind == "twosided" else (0, 0)
         self.P = [Engine(f"P{i}", "P", hw, max_seqs, budget, shared_prefix) for i in range(p_count)]
         self.D = [Engine(f"D{i}", "D", hw, d_max_seqs or max_seqs, budget, shared_prefix) for i in range(d_count)]
         self.engines = self.mixed + self.P + self.D
@@ -299,7 +313,22 @@ class Sim:
         s = task.profile[task.step]
         r = Request(task, task.step, s["prompt"], s["gen"], t)
         self.requests.append(r)
-        if task.pool == "mixed":
+        if self.kind == "twosided":
+            home = task.sticky.get("mixed") or min(self.mixed, key=Engine.outstanding)
+            task.sticky["mixed"] = home
+            pe = task.sticky.get("P") or min(self.P, key=Engine.outstanding)
+            uncached_local = r.prompt - min(home.cache.get(task.tid, 0) or home.shared, r.prompt)
+            uncached_p = r.prompt - min(pe.cache.get(task.tid, 0) or pe.shared, r.prompt)
+            est_local = (home.pending_prefill_tokens() + uncached_local) * home.prefill_ms_per_token()
+            est_pd = ((pe.pending_prefill_tokens() + uncached_p) * pe.prefill_ms_per_token()
+                      + self.hw["xfer_fixed_ms"] + self.hw["xfer_ms_per_tok"] * r.prompt + 400.0)
+            if est_local <= est_pd:
+                eng = home
+            else:
+                eng = pe
+                task.sticky["P"] = eng
+                r.p_engine, r.d_target = eng, home
+        elif task.pool == "mixed":
             eng = task.sticky.get("mixed") or min(self.mixed, key=Engine.outstanding)
             task.sticky["mixed"] = eng
         else:
@@ -352,7 +381,7 @@ class Sim:
                 r: Request = payload
                 r.d_arrival = t
                 r.first_token_t = None
-                eng = min(self.D, key=Engine.outstanding)
+                eng = r.d_target or min(self.D, key=Engine.outstanding)
                 eng.waiting.append(r)
                 self.kick(eng, t)
             if all(task.done_t is not None for task in self.measured):
@@ -384,6 +413,7 @@ class Sim:
             out["cached_share_local"] = round(sum(min(r.cached, r.prompt) for r in local) / sum(r.prompt for r in local), 3)
         if pd_done:
             out["pd_requests"] = len(pd_done)
+            out["pd_request_share"] = round(len(pd_done) / len(done), 3)
             out["p_wait_s_mean"] = round(statistics.fmean(r.p_queue_s for r in pd_done), 1)
             out["cached_share_on_p"] = round(sum(r.p_cached for r in pd_done) / sum(r.prompt for r in pd_done), 3)
         return out
