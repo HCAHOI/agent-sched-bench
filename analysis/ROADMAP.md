@@ -3,9 +3,9 @@
 The live frontier and experiment queue are
 [`../millstone/MILESTONE-4-Pressure.md`](../millstone/MILESTONE-4-Pressure.md)
 and [`../millstone/PENDING.md`](../millstone/PENDING.md); this file is not the
-current research state. It is the compact decision roadmap for the phase-action
-and KV-stopping work retained under `analysis/`: the frontier framing that work
-was left in, plus the closed branches and amendments that still bind it.
+current research state. It is the compact decision roadmap for the
+baseline and KV-stopping work retained under `analysis/`: the frontier framing
+that work was left in, plus the closed branches that still bind it.
 
 ## Organizing question
 
@@ -29,7 +29,6 @@ contribution.
 | Low-pressure PennyLane paper baselines | At concurrency four, GPU utilization is about 15%, waiting queues are absent, and peak logged KV occupancy is below 41%; GPU policies have little opportunity. | Failure of the paper methods in their target high-pressure regimes. |
 | Unique-128 official ThunderAgent | At real GPU/KV pressure, mean JCT falls 53.4% and throughput rises 57.2% versus FCFS. | A tail-safe result: p99 TTFT rises from 445.2 to 1,524.9 s. Tools are trace-timed. |
 | Unique-128 CacheWise reproduction | A program/KV policy can produce a still larger observed average gain. | Policy attribution until the exact CacheWise fork has a disabled-policy control. |
-| PennyLane physical feedback | Tool-phase admission can reduce mean JCT about 33% and makespan about 42% in two repetitions. | The frozen tail-safe claim; one p99 ratio is 1.115. The hard duration predictor never activates. |
 | Production Copilot characterization | Idle time has distinct intra-turn and cross-turn regimes; compaction is concentrated in token-heavy sessions and creates cache-cold work. | Causal serving benefit, task correctness, server queue/KV state, or physical tool-resource interference. |
 
 Local receipts are indexed in [`README.md`](README.md#result-entry-points).
@@ -104,9 +103,8 @@ support only GPU/KV claims.
    period. One result per method is not run-to-run uncertainty.
 
 The older 12-task balanced PennyLane manifest is a physical low-pressure audit,
-not a substitute for the pressure regime. The 70-task simulator remains
-development-exposed. A new collection is not justified while reusable traces
-can answer the mechanism question.
+not a substitute for the pressure regime. A new collection is not justified
+while reusable traces can answer the mechanism question.
 
 ## Priority 2 — Action-anchor-preserving adaptive compaction
 
@@ -151,36 +149,11 @@ exist.
 
 ## Closed or subordinate branches
 
-- Predictive tool-gap lending: closed on activation failure. Both repetitions
-  produced the same single early action ID against a frozen minimum of four
-  distinct activations, so the arm carries no performance verdict.
-  [`results/predictive-tool-gap-loan-20260810/result.json`](results/predictive-tool-gap-loan-20260810/result.json).
 - Raw command-duration prediction for per-request KV eviction: scoped No-Go;
   the deadline is already near-optimal and the decision budget is small.
-  [`CLAIMS.md`](CLAIMS.md#c6--command-duration-prediction-is-a-scoped-no-go-for-per-request-kv-eviction).
-- Tool-container parking and remote snapshot RPC for current PennyLane: closed
-  by the free-perfect-parking No-Go.
-  [`results/pennylane-perfect-container-parking-development-v1/result.json`](results/pennylane-perfect-container-parking-development-v1/result.json).
+  [`CLAIMS.md`](CLAIMS.md#c5--command-duration-prediction-is-a-scoped-no-go-for-per-request-kv-eviction).
 - PD separation, Disk-aware placement, and RP × TP are subordinate components;
   revisit only after a primary mechanism exposes the corresponding bottleneck.
-
-## Preserved A100 service-model amendment
-
-The old full-corpus simulator branch is stopped, not silently superseded.
-
-**Calibration amendment, 2026-08-19.** Task 963's replay cached-token field was
-zero. Joining provider cache data still failed the frozen TTFT transfer gate
-(48.83% median, 118.56% p90 error). A post-outcome diagnostic reconstructed the
-exact 16-token-block common prefix and improved the exposed fit to 24.56%/41.73%;
-that could not repair the original gate. The feature was frozen, then tested
-unchanged on fresh task 1320. Latency passed at 12.39%/29.49%, but TTFT was
-20.91%/51.22% and missed the 50% p90 limit. Task 1320 is consumed.
-
-The subsequent cold-start interval follow-up was frozen before task 1325. Warm
-coverage and median slack passed, but the cold call missed both bounds: latency
-2,239.8 ms versus 2,194.0 ms and TTFT 971.3 ms versus 968.2 ms. Under the frozen
-all-cold-calls condition this is a NO-GO, even though the misses are narrow.
-Do not run the old concurrency probe or full-corpus scheduler from this model.
 
 ## Authorization boundary
 

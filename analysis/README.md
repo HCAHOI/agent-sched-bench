@@ -33,7 +33,6 @@ own numbers, validity, and provenance.
 | PennyLane paper-baseline suite | Development-exposed, one A100, 12 tasks at concurrency four, physical tools | [`results/pennylane-paper-baseline-suite-physical-v1.md`](results/pennylane-paper-baseline-suite-physical-v1.md) |
 | ThunderAgent and reproduction smokes | Official ThunderAgent comparison plus Agentix, SAGA, and Continuum mechanism smokes | [`results/paper-baseline-physical-20260820/result.json`](results/paper-baseline-physical-20260820/result.json) |
 | CacheWise SWE predictor ordering | Development-exposed historical local KMeans/C20–C100 reproduction; no live KV pressure or JCT claim. The official reproduction fork has since been run and is recorded in [`../millstone/MILESTONE-1-Single-Instance.md`](../millstone/MILESTONE-1-Single-Instance.md) | [`results/cachewise-swe-reproduction-20260731/result.json`](results/cachewise-swe-reproduction-20260731/result.json) |
-| PennyLane joint/physical phase actions | Hindsight joint packing ceiling and paired physical feedback repetitions | [`results/pennylane-joint-phase-packing-v1/result.json`](results/pennylane-joint-phase-packing-v1/result.json), [`results/pennylane-physical-gap-loan-development-v1/result.json`](results/pennylane-physical-gap-loan-development-v1/result.json) |
 | Historical KV stopping lane | Forced-eviction accounting and settled duration-prediction limits | [`CLAIMS.md`](CLAIMS.md#retained-kv-stopping-findings) |
 
 The Unique-128 run directory is no longer present under the repository-root

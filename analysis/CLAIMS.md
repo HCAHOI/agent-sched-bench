@@ -8,35 +8,11 @@ with [`../millstone/PENDING.md`](../millstone/PENDING.md) as the queue), and the
 milestone files carry their own numbers.
 
 This file records the claims supported by the evidence retained under
-`analysis/`: the 2026 phase-action and paper-baseline runs, and the historical
+`analysis/`: the 2026 paper-baseline and reproduction runs, and the historical
 KV-stopping lane. It does not promote an oracle, reproduction subset, failed
 gate, or external workload observation into a system result.
 
-## C1 — Alternating phases create action headroom, but the safe carrier is open
-
-**Supported action-space claim.** On 70 exposed PennyLane trajectories, a
-frozen hindsight joint arm reached 14,100.143 s mean completion and 42,692 s
-makespan, versus 21,705.486 s and 55,628 s for the best tool-only arm, with no
-modeled LLM-slot, CPU, or RSS violation. A temporal-RSS hindsight oracle also
-improved mean completion 48.823% over static peak packing.
-
-**Supported physical mechanism claim.** On one A100 and eight exposed PennyLane
-tasks, causal feedback reduced mean JCT 32.748% and 33.102% and makespan 42.774%
-and 42.443% in two paired repetitions.
-
-**Limit.** The hindsight model used recorded request occupancy and proxy
-resources, not causal A100 service. Both CPU-only causal carriers deadlocked.
-Physical feedback was not tail-safe: paired p99 TTFT ratios were 1.048 and
-1.115, so the second repetition failed the frozen 1.05 gate. The hard
-Task-Aware bucket produced no distinct physical loan. Receipts:
-[`results/pennylane-joint-phase-packing-v1/result.json`](results/pennylane-joint-phase-packing-v1/result.json),
-[`results/pennylane-temporal-rss-packing-ceiling-development-v1/result.json`](results/pennylane-temporal-rss-packing-ceiling-development-v1/result.json),
-[`results/pennylane-causal-joint-tool-admission-v1/result.json`](results/pennylane-causal-joint-tool-admission-v1/result.json),
-[`results/pennylane-finite-bound-joint-admission-v1/result.json`](results/pennylane-finite-bound-joint-admission-v1/result.json),
-and
-[`results/pennylane-physical-gap-loan-development-v1/result.json`](results/pennylane-physical-gap-loan-development-v1/result.json).
-
-## C2 — GPU/KV scheduling is load-dependent and already has a strong baseline
+## C1 — GPU/KV scheduling is load-dependent and already has a strong baseline
 
 **Supported physical observation.** At low pressure, official ThunderAgent
 performed no pause/resume action and changed mean JCT by 0.55% in the harmful
@@ -61,7 +37,7 @@ scheduling claims only. Receipts:
 and
 [`results/mixed128-poisson-unique-baselines-20260827/result.md`](results/mixed128-poisson-unique-baselines-20260827/result.md).
 
-## C3 — Reproduction results inherit their implementation boundary
+## C2 — Reproduction results inherit their implementation boundary
 
 **Supported observations on Unique-128.** The CacheWise reproduction reduced
 mean JCT 59.2% and increased throughput 68.3%, but raised p99 TTFT to 2,299.0 s.
@@ -86,7 +62,7 @@ This historical lane assumed forced eviction and scored hidden swap
 milliseconds. Fresh-277 had no shared KV cache and cannot support a contention,
 JCT, or live-serving claim.
 
-### C4 — Priced stopping has a bounded offline benefit
+### C3 — Priced stopping has a bounded offline benefit
 
 Under the frozen functional, robust-clock pre-restore yields +156.2 s/277 at a
 3,500 ms KV cost (task-clustered 95% CI [60.4, 256.6]) and +317.9 s/277 at
@@ -100,7 +76,7 @@ over the warmup snapshot at 3,500/5,000 ms. Per-call publication added exactly
 zero. It is not an unopened-stream or order-robust result. See
 [`results/prequential-task-update-20260721/`](results/prequential-task-update-20260721/).
 
-### C5 — Elapsed-only re-checking is closed under this functional
+### C4 — Elapsed-only re-checking is closed under this functional
 
 With call survival as the only runtime observation, a multi-check plan reduces
 to one precomputable stopping time. An independent `k=2` dynamic program matched
@@ -110,13 +86,13 @@ Boundary identity changed 72.9% of decisions but had paired log-score gain
 -0.0137 nats, task-clustered 95% CI [-0.41, +0.20]. This closes only
 elapsed-only and observed-boundary enrichments under the frozen functional.
 
-### C6 — Command-duration prediction is a scoped No-Go for per-request KV eviction
+### C5 — Command-duration prediction is a scoped No-Go for per-request KV eviction
 
 The earlier swap-out advantage over a fixed deadline was a container artifact,
 not a general command-duration result. At 3,500/5,000 ms, container-setup calls
 contributed +36.3/+124.5 s to total robust-clock deltas of +20.1/+118.0 s.
 Removing those calls under the fixed fold map made the deltas -20.6 s (95% CI
-[-55.1, +3.3]) and -6.5 s ([-27.7, +5.8]). This does not retract C4, which is a
+[-55.1, +3.3]) and -6.5 s ([-27.7, +5.8]). This does not retract C3, which is a
 pre-restore result at a different decision point. Receipt:
 [`results/kv-swap-gain-attribution-20260729/attribution.json`](results/kv-swap-gain-attribution-20260729/attribution.json).
 
@@ -149,6 +125,10 @@ Receipts:
 [`results/per-request-scale-20260730/result.json`](results/per-request-scale-20260730/result.json),
 [`results/cross-corpus-replication-20260730/result.json`](results/cross-corpus-replication-20260730/result.json),
 [`results/effective-restore-fraction-20260730/result.json`](results/effective-restore-fraction-20260730/result.json),
+[`results/prediction-budget-20260729/result.json`](results/prediction-budget-20260729/result.json),
+[`results/rho-sensitivity-20260730/result.json`](results/rho-sensitivity-20260730/result.json),
+[`results/best-constant-20260729/result.json`](results/best-constant-20260729/result.json),
+[`results/key-ladder-20260729/result.json`](results/key-ladder-20260729/result.json),
 and
 [`results/loo-fine-key-20260729/result.json`](results/loo-fine-key-20260729/result.json).
 
@@ -174,3 +154,16 @@ and
   boundary-conditioned KV-duration policy is active.
 - The removed online-first replay was protocol-invalid and contributes no
   positive or negative paper result.
+
+## Spent corpora
+
+Recorded here because it outlives the claims it was attached to. These
+PennyLane tasks were consumed by the A100 service-model fit and its frozen
+follow-ups, so they are development-exposed and cannot serve as held-out
+evidence: **963** (used in the fit; its replay cached-token field was zero and
+a post-outcome diagnostic reconstructed the prefix), **1320** (tested
+unchanged on the frozen feature; latency passed, TTFT missed the 50% p90
+limit), and **1325** (cold-start interval follow-up; the cold call missed both
+bounds, a NO-GO under the frozen all-cold-calls condition). The claim and the
+calibration receipt behind these were deleted with the tool-resource line; the
+exposure is what survives. Full text at `9a13b794:analysis/ROADMAP.md`.
