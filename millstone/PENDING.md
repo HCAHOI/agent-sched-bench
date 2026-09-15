@@ -213,7 +213,9 @@ admission logic) and whether the operating point itself is right (TP=2).
    building. Secondary: at the largest feasible concurrency, if the no-speculation aggregate is within 5% of
    DFlash's, speculative decoding is a single-stream latency tool, not a capacity tool, at this operating point.
 
-2. **PD/PPD re-evaluated at the frontier operating point** (analysis 2026-09-15, no run). Frontier C closed PD on
+2. **PD/PPD re-evaluated at the frontier operating point** (analysis 2026-09-15, no run; the pool-scale and
+   H200 questions were answered by the simulation in §4.5 and M3 §3 — read that first, this item only adds
+   the frontier-regime arithmetic it explicitly does not cover). Frontier C closed PD on
    2 × L40S at 4B (fixed PD 71.5 min, public PPD 109.2, two-sided 75.0, DualMap 33.2; M3 §3). Three things are now
    quantified that were not then. (i) Both rules we ran are blind to residency, in two different ways. The published
    PPD rule decides from the turn number, the tokens appended this turn (a 512-token short-input threshold keeps
@@ -244,6 +246,30 @@ admission logic) and whether the operating point itself is right (TP=2).
    HBM, so exclusive-80 ≈ inclusive-115 GiB); sizing rule as online task admission (Σ contexts ≤ DRAM/1.4).
 
 4. Push branch `codex/cleanup-research-dead-code` (≈ 150 commits ahead of origin).
+
+5. **PD at pool scale, by simulation (user go "先做1-3吧", 2026-09-15).** The boss's questions — PD at 8 or 32
+   instances, part of the traffic disaggregated, a 141 GB GPU — cannot be run on one GPU.
+   `scripts/evaluation/pd_pool_simulation.py` replays the mixed56 workload (56 tasks, 2,470 steps, prompt and
+   completion tokens per step from the FCFS run's replay logs, inter-step gaps median 0.02 s, the harness's 32-slot
+   closed-loop admission) through a per-iteration model of vLLM's scheduler (max_num_seqs 8, 2,048-token chunks,
+   275,008-token KV with LRU prefix cache keyed by task, newest-request preemption). Facts corrected on the way: the
+   2×L40S mixed56 runs used **Qwen3-4B-Instruct-2507-FP8**, eager mode, 8 sequences per engine (not 32B); FCFS
+   sticky's prefix-cache hits were 8% of prompt tokens (system prompt only) against DualMap's 76%.
+   Calibration (all from the 2026-09-07/09 2×L40S runs): decode iteration 34.6 ms + 0.38 ms per sequence + 0.054 ms
+   per thousand tokens of batch context (D side of the fixed-PD run, 3,997 requests, r² 0.42); prefill 0.040 ms per
+   token × (1 + position/20K) from P's aggregate throughput (101.7M tokens, saturated); mixed engines pay 1.4× that
+   prefill (fitted on FCFS sticky's TPOT/JCT). Held out: the PPD run (3,902 of 4,015 requests local on one engine).
+   **Gate, written 2026-09-15 16:03 UTC as the sweep launched, sweep outputs unread:** mean JCT (ready-to-terminal)
+   within ±15% and token-weighted TPOT within ±20% on all three measured runs, cached share within 5 points.
+   Result: FCFS 55.7 vs 55.3 min, TPOT 131 vs 142 ms, cached 5.2 vs 8.1%; fixed PD 68.6 vs 71.5 min, 42.1 vs 41.8 ms;
+   PPD (held out) 114.4 vs 109.2 min, 134.6 vs 134 ms. Passed; amendment: the mixed-prefill factor was fitted on
+   FCFS after seeing that the sum-of-parts model ran 20% fast, so FCFS is a calibration run, not a check.
+   Predictions (`analysis/results/pd-pool-sim-20260915/sweep/`): mixed:N vs pd:P,D at N = 8 and 32, hybrid task
+   splits, H200 constants (capacity 3.3×, bandwidth 5.6×, prefill compute 2.7×, NVLink transfer; assumptions, read
+   as a band), capacity-only and bandwidth-only sensitivities. Limits: the decode model is an eager-mode 4B engine
+   (fixed 35 ms per iteration dominates), so nothing here speaks to the KV-read-bound 32B regime or to spec decode;
+   DualMap is not simulated; the workload has no tool time. Next step if any prediction matters: one rented
+   multi-GPU day on the predicted best P:D ratio.
 
 ## 5. Decisions waiting on the user
 
