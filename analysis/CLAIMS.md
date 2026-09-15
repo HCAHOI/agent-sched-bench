@@ -1,6 +1,14 @@
 # Current claims and evidence limits
 
-This file records claims supported by retained evidence. It does not promote an
+The live research record is the milestone series
+([`../millstone/MILESTONE-1-Single-Instance.md`](../millstone/MILESTONE-1-Single-Instance.md)
+through
+[`../millstone/MILESTONE-4-Pressure.md`](../millstone/MILESTONE-4-Pressure.md),
+with [`../millstone/PENDING.md`](../millstone/PENDING.md) as the queue), and the
+milestone files carry their own numbers.
+
+This file records the claims supported by the evidence retained under
+`analysis/`, for the tool-resource and KV-stopping lanes. It does not promote an
 oracle, reproduction subset, failed gate, or external workload observation into
 a system result. The canonical target and exposure contract is
 [`development/tool-resource-canonical-objective.md`](development/tool-resource-canonical-objective.md).
@@ -89,7 +97,10 @@ slower.
 **Limits.** CacheWise uses the authors' different vLLM fork plus this
 repository's reconstruction of an unpublished causal attachment hook. An
 exact-fork policy-disabled control is required before attributing its full gain
-to CacheWise. The SAGA cell is only the published single-GPU KV/TTL subset; it
+to CacheWise. Such controls exist on the later single-instance L40S workloads
+(see [`README.md`](README.md#single-instance-l40s-notes)) but not on Unique-128,
+so this result stays fork-confounded. The SAGA cell is only the published
+single-GPU KV/TTL subset; it
 does not evaluate private AFS/AEG, migration, or CUDA paths. These results do
 not support “CacheWise beats ThunderAgent” or “SAGA fails” as full-method
 claims. Baseline classifications are in
@@ -175,8 +186,11 @@ and
   Unique-128; all relevant partitions and results are development-exposed.
 - No trace-timed-tool result demonstrates physical CPU contention, interference,
   or CPU-GPU co-scheduling benefit.
-- No CacheWise result is policy-attributable until an exact-fork disabled-policy
-  control exists; no subset result stands for a full private system.
+- No Unique-128 CacheWise result is policy-attributable: exact-fork
+  disabled-policy controls exist on the later single-instance L40S workloads,
+  not on Unique-128. On the mixed24 L40S ladder CacheWise reached 1.210x of its
+  control and failed the pre-registered 1.30x gate. No subset result stands for
+  a full private system.
 - No live W5 result exists. Fresh-277 had no shared KV cache and cannot establish
   memory-pressure behavior.
 - No adaptive-compaction result exists in this repository. Production workload

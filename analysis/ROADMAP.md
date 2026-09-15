@@ -1,7 +1,12 @@
 # Research frontiers
 
-This is the compact decision roadmap. Tool-resource metrics, data exposure,
-KEEP/CLOSE decisions, and frozen gates remain authoritative in
+The live frontier and experiment queue are
+[`../millstone/MILESTONE-4-Pressure.md`](../millstone/MILESTONE-4-Pressure.md)
+and [`../millstone/PENDING.md`](../millstone/PENDING.md); this file is not the
+current research state. It is the compact decision roadmap for the tool-resource
+and KV-stopping lanes: the frontier framing those lanes were left in, plus the
+closed branches and amendments that still bind them. Tool-resource metrics, data
+exposure, KEEP/CLOSE decisions, and frozen gates remain authoritative in
 [`development/tool-resource-canonical-objective.md`](development/tool-resource-canonical-objective.md).
 
 ## Organizing question
@@ -52,7 +57,11 @@ only if it closes a measurable Pareto gap left by faithful existing methods.
 ### Baseline closure before invention
 
 1. Run a policy-disabled control on the exact CacheWise vLLM fork. Without it,
-   the Unique-128 CacheWise gain is fork-confounded.
+   the Unique-128 CacheWise gain is fork-confounded. Such controls have since
+   run on the later single-instance L40S workloads — on the mixed24 ladder
+   CacheWise failed its pre-registered 1.30x gate against one — but none on
+   Unique-128, which still needs its own. See the single-instance L40S notes in
+   [`README.md`](README.md#single-instance-l40s-notes).
 2. Keep stock FCFS and official ThunderAgent as the control and strong baseline.
    Integrate applicable public or paper-derived Continuum and Agentix mechanisms
    with their fidelity limits visible. Do not call a subset the full paper.
