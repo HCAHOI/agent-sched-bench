@@ -23,12 +23,24 @@ from pathlib import Path
 import httpx
 
 SPEC_RE = re.compile(r"^vllm:spec_decode_(num_drafts|num_draft_tokens|num_accepted_tokens)_total\{[^}]*\}\s+([\d.eE+]+)", re.M)
+# Engine-side gauges sampled during a level: they say whether the engine actually reached the requested
+# concurrency, and whether KV capacity (usage, waiting queue, preemptions) bound it before latency did.
+GAUGES = ("num_requests_running", "num_requests_waiting", "kv_cache_usage_perc", "num_preemptions_total")
 
 
 def spec_counters(metrics_text: str) -> dict[str, float]:
     out: dict[str, float] = {}
     for name, value in SPEC_RE.findall(metrics_text):
         out[name] = out.get(name, 0.0) + float(value)
+    return out
+
+
+def gauges(metrics_text: str) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for name in GAUGES:
+        vals = re.findall(rf"^vllm:{name}\{{[^}}]*\}}\s+([\d.eE+]+)", metrics_text, re.M)
+        if vals:
+            out[name] = sum(map(float, vals))
     return out
 
 
@@ -65,21 +77,45 @@ async def one_request(client: httpx.AsyncClient, api_base: str, model: str, samp
 async def run_level(api_base: str, model: str, samples: list[dict], concurrency: int, max_tokens: int) -> dict:
     sem = asyncio.Semaphore(concurrency)
     async with httpx.AsyncClient() as client:
-        before = spec_counters((await client.get(f"{api_base}/metrics")).text)
+        text = (await client.get(f"{api_base}/metrics")).text
+        before, g_before = spec_counters(text), gauges(text)
+        samples_seen: list[dict] = []
+        stop = asyncio.Event()
+
+        async def sample_engine():
+            while not stop.is_set():
+                try:
+                    samples_seen.append(gauges((await client.get(f"{api_base}/metrics")).text))
+                except httpx.HTTPError:
+                    pass
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    pass
 
         async def guarded(s):
             async with sem:
                 return await one_request(client, api_base, model, s, max_tokens)
 
+        sampler = asyncio.create_task(sample_engine())
         t0 = time.perf_counter()
         results = await asyncio.gather(*(guarded(s) for s in samples))
         wall = time.perf_counter() - t0
-        after = spec_counters((await client.get(f"{api_base}/metrics")).text)
-    tpots = [r["tpot_s"] for r in results if r["tpot_s"]]
+        stop.set()
+        await sampler
+        text = (await client.get(f"{api_base}/metrics")).text
+        after, g_after = spec_counters(text), gauges(text)
+    tpots = [r["tpot_s"] for r in results if r["tpot_s"]] or [float("nan")]  # prewarm passes (1 token) have no TPOT
     out_tokens = sum(r["completion_tokens"] for r in results)
     spec = {k: after.get(k, 0.0) - before.get(k, 0.0) for k in set(before) | set(after)}
     drafts = spec.get("num_drafts", 0.0)
-    return {"concurrency": concurrency, "requests": len(results), "wall_s": wall, "output_tokens": out_tokens,
+    eng: dict[str, float] = {"samples": len(samples_seen),
+                             "preemptions": g_after.get("num_preemptions_total", 0.0) - g_before.get("num_preemptions_total", 0.0)}
+    for name in ("num_requests_running", "num_requests_waiting", "kv_cache_usage_perc"):
+        vals = [s[name] for s in samples_seen if name in s]
+        if vals:
+            eng[f"{name}_mean"], eng[f"{name}_max"] = round(statistics.mean(vals), 3), round(max(vals), 3)
+    return {"concurrency": concurrency, "requests": len(results), "wall_s": wall, "output_tokens": out_tokens, "engine": eng,
             "aggregate_output_tok_s": out_tokens / wall, "tpot_mean_ms": statistics.mean(tpots) * 1e3,
             "tpot_median_ms": statistics.median(tpots) * 1e3, "per_stream_tok_s_median": 1 / statistics.median(tpots),
             "ttft_mean_s": statistics.mean(r["ttft_s"] for r in results if r["ttft_s"] is not None),
@@ -118,7 +154,10 @@ def main() -> None:
         levels.append(level)
         print(f"c={conc:<3} n={n:<3} TPOT median {level['tpot_median_ms']:.1f} ms  per-stream {level['per_stream_tok_s_median']:.0f} tok/s"
               f"  aggregate {level['aggregate_output_tok_s']:.0f} tok/s  TTFT {level['ttft_mean_s']:.2f} s"
-              f"  prompt {level['prompt_tokens_mean']:.0f} tok  accepted/draft {level['accepted_per_draft']}", flush=True)
+              f"  prompt {level['prompt_tokens_mean']:.0f} tok  accepted/draft {level['accepted_per_draft']}"
+              f"  | engine running {level['engine'].get('num_requests_running_mean')} (max {level['engine'].get('num_requests_running_max')})"
+              f" waiting {level['engine'].get('num_requests_waiting_mean')} KV {level['engine'].get('kv_cache_usage_perc_max')}"
+              f" preempt {level['engine']['preemptions']:.0f}", flush=True)
         a.out.write_text(json.dumps({"model": a.model, "max_tokens": a.max_tokens, "seed": a.seed, "prewarm": a.prewarm, "max_prompt_chars": a.max_prompt_chars, "levels": levels}, indent=1))
 
 

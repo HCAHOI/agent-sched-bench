@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-15 16:10 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-14 08:56 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -176,76 +176,74 @@ admission logic) and whether the operating point itself is right (TP=2).
   disk 33 GB free; the whole old `/workspace` arrived by cloud transfer (models, venvs, outlen incl. the 50 GB OUTLETS
   caches, 69 launch logs, manifests). Python supervisord started by hand; source shipped at d038f86a.
 
-## 4. Next (proposals; each needs the user's go before any GPU time)
+## 4. Next
 
-0. **Direction (user, 04:05 UTC 2026-09-14): the frontier is per-stream decode at 300–1000 tok/s** (DeepSeek V4.1
-   Flash API ≈ 214 tok/s; Gemma 4 26B-A4B + DFlash 306 tok/s single-stream on H100, 1,957 tok/s aggregate at c16,
-   vLLM PR #41703; Qwen with MTP drafts). At that speed an agent step is 1–3 s, prefill of the 17.9K-token context
-   (2.6 s at 32B) becomes the larger part of the step, tool time goes from 50% of the trace to 85–95%, and the
-   sandbox restore (p50 1.0 s) is the same size as the LLM step. The DRAM-capacity line (§4.1–4.2 below) is closed
-   as a result, not a paper: it reduces to sizing. First step = reproduce the regime here (queue), then measure where
-   the time goes in an agent step at that speed. DeepSeek V4.1 Flash (552B total, MXFP4) does not fit one 96 GB GPU;
-   Gemma 4 26B-A4B (bf16 52 GB) + DFlash/MTP fits but needs the vLLM PR build and a 52 GB download.
+0. **Direction (user, 04:05 UTC 2026-09-14): the frontier is per-stream decode at 300–1000 tok/s.** Reproduced here
+   on 2026-09-14 (§3): Gemma 4 26B-A4B FP8 + DFlash + fp8 KV gives 289 tok/s single-stream on short prompts, 228 on
+   agent prompts, 1,384 tok/s aggregate at c=32 on 16K contexts. The DRAM-capacity line is closed as a sizing result,
+   not a paper. What changes in this regime, measured: an agent step is 2–7 s instead of 30–50 s, and because decode
+   is amortised over a much larger batch while prefill is not, **prefill stops being a rounding error**. Per step
+   (pool64-v4 measured: prompt 18,514 tokens, uncached 944 at cached-share 0.95, output 209 tokens; prefill rates
+   from c=1 TTFT, ±30%):
 
-1. **Exclusive tiering** — BUILT 2026-09-14, not yet smoked or run; needs the user's go on the
-   single-GPU instance. Mechanism (`scripts/serving/exclusive_tier/sitecustomize.py`, `EXCLUSIVE_TIER=1` in the
-   launcher, flag recorded in the run's `lmcache.yaml`): the DRAM tier evicts what HBM already holds first. Chunks of
-   an in-flight request (just loaded or just stored) go to the evict-first end of LMCache's LRU; at finish vLLM holds
-   the blocks one more step (delayed free) while the worker copies back only the part of the context that was
-   evicted and promotes the whole context to most recently used. Tool-gap contexts keep plain LRU order; lookups,
-   loads, chunking and capacity are unchanged. Costs charged: the finish copy-back (each event logged
-   `[exclusive-tier] finish req= tokens= present= stored=`; store D2H measured 36.8 GB/s mean in the c24/96 run, so a
-   full 17.9K-token context is ≈ 0.13 s), one step of block hold per request, and preempted requests (24 of 1,951 at
-   c24/96) losing their evict-first chunks.
-   Pre-registered 2026-09-14 02:15 UTC (no exclusive-tier numbers exist): the mechanism question is whether double
-   occupancy is the term that separates c24/96 from c24/144. Primary case = c24, FCFS sticky, one 32B engine,
-   pool64-v4, DRAM tier T GiB with exclusive tiering, T = 96 if the instance's cgroup allows engine + 96 GiB (else the
-   largest of 80/64 that fits, measured on arrival), ≈ 2–3.5 h. Prediction from the tier simulation
-   (`analysis/results/dram-tier-simulation-20260913/`, HBM counted once): miss share at the 0.033 floor, so cached
-   share ≈ 0.9 and JCT near the 144 GiB reference (51.80 min). Rule: mean JCT ≤ 60 min and cached ≥ 0.85 → the
-   mechanism replaces 48 GiB of DRAM at c24 and the sizing rule becomes DRAM + HBM ≥ 1.4 × c × context; ≥ 85 min →
-   double occupancy was not the binding term (diagnose with the copy-back log and `lmcache` eviction counters
-   before anything else); between → partial, report both terms. Controls: inclusive c24/96 = 99.11 min (cached
-   0.44) and c24/144 = 51.80 (0.91), both measured on the previous 2-GPU host of the same GPU model; if T < 96 the
-   inclusive-at-T control does not exist and exclusive-at-T is compared against inclusive-at-96 (a win at less DRAM
-   is the stronger statement; a loss is inconclusive and the inclusive-at-T control is the next run). Same-host
-   confound: one inclusive control rerun on the new box only if the exclusive result lands within ±5 min of a rule
-   boundary. Smoke first (`--smoke --single-gpu 0` with the 4B model, `EXCLUSIVE_TIER=1 CPU_CACHE_GIB=8`): engine log
-   shows the patch active and finish lines, KV usage returns to zero after the smoke (no leaked delayed frees).
-2. **Sizing rule as online admission**: bound active tasks so Σ contexts ≤ DRAM/1.4 (task-level FIFO, no starvation);
-   differs from ThunderAgent/KAIROS program admission by the DRAM criterion. Half a day; run at c24/96.
-3. Instance switch: a single-GPU box with ~110 GB DRAM serves ≈ 13 agents at 32B (80 GiB tier) or ≈ 35 with
-   30B-A3B; choose the concurrency by the rule. Backup taken 2026-09-14 01:45 UTC into
-   `results/gpuhub-host-backup-20260914/` (untracked, local): `outlen/` (datasets, every label set incl. thinking and
-   sampled, replay prefixes, small feature caches, hazard features, all probe/OUTLETS results and models, lane scripts
-   and logs; the 50 GB OUTLETS per-token caches are excluded, ≈ 3 h to re-extract), `host-logs/` (launch logs,
-   manifests), `venvs-and-upstreams.tar` (serving venv with the LMCache sm_120 build, the vLLM 0.28 venv, outlen venv,
-   upstreams). Not saved: models (re-download ≈ 97 GB), host copies of run dirs (every run's `server/` is already
-   pulled locally). Restore = untar under `/workspace` on a host with the same layout, or rerun the bootstrap.
-4. Push branch `codex/cleanup-research-dead-code` (≈ 150 commits ahead).
-5. **PD at pool scale, by simulation (user go "先做1-3吧", 2026-09-15).** The boss's questions — PD at 8 or 32
-   instances, part of the traffic disaggregated, a 141 GB GPU — cannot be run on one GPU.
-   `scripts/evaluation/pd_pool_simulation.py` replays the mixed56 workload (56 tasks, 2,470 steps, prompt and
-   completion tokens per step from the FCFS run's replay logs, inter-step gaps median 0.02 s, the harness's 32-slot
-   closed-loop admission) through a per-iteration model of vLLM's scheduler (max_num_seqs 8, 2,048-token chunks,
-   275,008-token KV with LRU prefix cache keyed by task, newest-request preemption). Facts corrected on the way: the
-   2×L40S mixed56 runs used **Qwen3-4B-Instruct-2507-FP8**, eager mode, 8 sequences per engine (not 32B); FCFS
-   sticky's prefix-cache hits were 8% of prompt tokens (system prompt only) against DualMap's 76%.
-   Calibration (all from the 2026-09-07/09 2×L40S runs): decode iteration 34.6 ms + 0.38 ms per sequence + 0.054 ms
-   per thousand tokens of batch context (D side of the fixed-PD run, 3,997 requests, r² 0.42); prefill 0.040 ms per
-   token × (1 + position/20K) from P's aggregate throughput (101.7M tokens, saturated); mixed engines pay 1.4× that
-   prefill (fitted on FCFS sticky's TPOT/JCT). Held out: the PPD run (3,902 of 4,015 requests local on one engine).
-   **Gate, written 2026-09-15 16:03 UTC as the sweep launched, sweep outputs unread:** mean JCT (ready-to-terminal)
-   within ±15% and token-weighted TPOT within ±20% on all three measured runs, cached share within 5 points.
-   Result: FCFS 55.7 vs 55.3 min, TPOT 131 vs 142 ms, cached 5.2 vs 8.1%; fixed PD 68.6 vs 71.5 min, 42.1 vs 41.8 ms;
-   PPD (held out) 114.4 vs 109.2 min, 134.6 vs 134 ms. Passed; amendment: the mixed-prefill factor was fitted on
-   FCFS after seeing that the sum-of-parts model ran 20% fast, so FCFS is a calibration run, not a check.
-   Predictions (`analysis/results/pd-pool-sim-20260915/sweep/`): mixed:N vs pd:P,D at N = 8 and 32, hybrid task
-   splits, H200 constants (capacity 3.3×, bandwidth 5.6×, prefill compute 2.7×, NVLink transfer; assumptions, read
-   as a band), capacity-only and bandwidth-only sensitivities. Limits: the decode model is an eager-mode 4B engine
-   (fixed 35 ms per iteration dominates), so nothing here speaks to the KV-read-bound 32B regime or to spec decode;
-   DualMap is not simulated; the workload has no tool time. Next step if any prediction matters: one rented
-   multi-GPU day on the predicted best P:D ratio.
+   | Serving configuration (decode batch) | warm prefill | decode GPU time | prefill share | cold prefill | full-context KV transfer |
+   |---|---:|---:|---:|---:|---:|
+   | Qwen3-32B dense, bf16 KV, batch 8 (the pool64-v4 runs) | 146 ms | 2,069 ms | 7% | 2,767 ms | 323 ms |
+   | Qwen3-30B-A3B, fp8 KV, batch 32 | 69 ms | 266 ms | 21% | 1,311 ms | 124 ms |
+   | Gemma 4 26B-A4B + DFlash, fp8 KV, batch 32 | 49 ms | 91 ms | 35% | 932 ms | 25 ms |
+
+   Share = warm prefill / (warm prefill + output × TPOT / batch). Counting the cold steps at cached share 0.95
+   (5 cold + 95 warm per 100 steps) the totals are 12% prefill at 32B/batch 8 and 51% at Gemma/batch 32. Inference,
+   not yet a result: agent serving becomes prefill-bound at high per-stream speed even at a 95% cache hit rate, which
+   is the condition industrial PD serving is designed for.
+
+1. **RUNNING: where the TPOT service level binds** (`results/host-lanes/tpot5-sla-20260915.sh`, launched 17:27 UTC
+   2026-09-15, user go "跑吧"; host log `/workspace/tpot5-sla-20260915.log`, results `/workspace/tpot-20260915/`).
+   Gemma 4 + fp8 KV on TRITON_ATTN with `--max-num-seqs` raised to 128, concurrency 16/32/64/96/128 on real agent
+   prefixes, with DFlash k=15 and without speculative decoding. The client now samples the engine per level
+   (running/waiting queue, KV usage, preemptions) so the two candidate limits are separable. ≈ 35 min.
+   **Pre-registered 17:30 UTC 2026-09-15, before any number exists.** Readout: for each service level in
+   {25, 50, 100, 200} ms, the largest concurrency whose median TPOT stays under it, and whether the engine reached
+   that concurrency (running ≈ requested, waiting ≈ 0, no preemptions) or KV capacity stopped it first. Decision:
+   (a) if at 50 ms and above the binding constraint is capacity at every level — TPOT still under the service level
+   where the engine runs out of KV — then the service-level formulation reduces to capacity, "minimise latency
+   subject to the SLA" becomes "fit the most agents", and the mechanism question returns to residency and admission;
+   (b) if TPOT crosses 50 ms while KV headroom remains, an SLA-aware admission controller that predicts TPOT from the
+   running batch's KV bytes (the relation measured in lane 3: halving KV bytes halves TPOT at c ≥ 16) is worth
+   building. Secondary: at the largest feasible concurrency, if the no-speculation aggregate is within 5% of
+   DFlash's, speculative decoding is a single-stream latency tool, not a capacity tool, at this operating point.
+
+2. **PD/PPD re-evaluated at the frontier operating point** (analysis 2026-09-15, no run). Frontier C closed PD on
+   2 × L40S at 4B (fixed PD 71.5 min, public PPD 109.2, two-sided 75.0, DualMap 33.2; M3 §3). Three things are now
+   quantified that were not then. (i) Both rules we ran are blind to residency, in two different ways. The published
+   PPD rule decides from the turn number, the tokens appended this turn (a 512-token short-input threshold keeps
+   small appends local on D), a predicted output length and the current QPS, against a lookup table from its own
+   offline benchmark; on agent traffic almost every append classified as `huge_paste` and the table said local at the
+   QPS points reached, so it degenerated to always-local (2,414 of 2,470 requests, 109.2 min). None of its features
+   is the variable our measurements say sets the cost: two turns with the same append size and QPS differ by 18K
+   tokens of real prefill work depending on whether the task's history is still resident on the decode engine. The
+   two-sided expected-cost router is ours, not the paper's (`ppd_policy.two_sided_estimate`), and fails the other
+   way: it priced only the requesting turn's TTFT, so when P was busy it sent cold requests back to D — 12.4M
+   uncached tokens prefilled on D over 973 "local" requests, 12,700 each. A residency rule (miss → P, hit → D, no
+   cost comparison) closes both holes.
+   (ii) But its value is bounded by the table in §4.0: at cached share 0.95 the cold steps are half of all prefill
+   work, so moving only them off the decode GPU frees **6%** of its time at 32B/batch 8 and **25%** at Gemma/batch 32.
+   6% does not buy a second GPU; the sized DRAM tier already removed 95% of the cold prefill that PD would have
+   taken away. (iii) For multi-turn agents PD pays either 2× KV memory (history kept on both P and D, which is what
+   heterogeneous hardware with a memory-rich decode tier would buy) or 19× prefill (944 → 17,935 uncached tokens per
+   step when P starts cold); the KV transfer itself is cheap on modern attention (25 ms for Gemma's 16K context).
+   **Pre-registered decision rule, 17:30 UTC 2026-09-15, before the sweep's numbers exist:** from the sweep take the
+   largest feasible concurrency B\* and its TPOT, and compute f = cold prefill / (cold prefill + warm prefill +
+   output × TPOT / B\*) with the same per-step constants and the run's measured cached share. f ≥ 20% → one 2-GPU
+   test of cold-only disaggregation against colocated at B\* is justified (rent, ≈ 4 h); f < 20% → PD/PPD is closed
+   for agent workloads at every scale we can reach, and is not raised again. Lit check owed before any novelty claim:
+   Mooncake, MemServe, Splitwise heterogeneous, SGLang cache-aware router.
+
+3. Parked, with the record in §3: exclusive tiering (built, `scripts/serving/exclusive_tier/sitecustomize.py`; chain
+   29 stopped at 95 min — the gain is the in-flight tokens only, ≈ 140K at `--max-num-seqs` 8, not the 236K of a full
+   HBM, so exclusive-80 ≈ inclusive-115 GiB); sizing rule as online task admission (Σ contexts ≤ DRAM/1.4).
+
+4. Push branch `codex/cleanup-research-dead-code` (≈ 150 commits ahead of origin).
 
 ## 5. Decisions waiting on the user
 
