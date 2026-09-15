@@ -42,7 +42,7 @@ def check(run: Path, *, final: bool = False) -> None:
         if not final and time.time() - finish["timestamp_s"] < 10:
             continue
         dispatch = dispatches[finish["route_id"]]
-        terminal = telemetry[dispatch["backend"]].get(dispatch["engine_request_id"])
+        terminal = telemetry.get(dispatch["backend"], {}).get(dispatch["engine_request_id"])
         assert terminal is not None, f"Missing terminal telemetry: {dispatch}"
         for key in ("ttft_s", "queue_s", "prefill_s", "decode_s", "e2e_s", "preempted_wait_s"):
             assert math.isfinite(terminal[key]) and terminal[key] >= 0, (key, terminal)

@@ -148,8 +148,10 @@ changes more often than this file.
   state is unverified; re-check before launching one. The launcher defaults
   the UCX transport to `all/all` (GPU-direct over PCIe); TCP over loopback
   stalled KV pushes on the L40S host.
-- The PPD upstream exists only on the host, so `tests/test_ppd_*.py` fail
-  locally on import; that is expected.
+- The PPD upstream exists only on the host, so `tests/test_ppd_*.py` and
+  `tests/test_serving_length_profile.py` fail locally on import: the profiler
+  imports `scripts.benchmark.comprehensive_benchmark` from that checkout. Thirteen
+  local failures are expected for this reason; anything else is real.
 - Commit 2ebe6f4 made replays survive a replacement-task failure (recorded
   in `throughput_summary.json` as `replacement_failures`) and gave the
   least-requests proxy one retry on a dropped engine connection. Runs before
