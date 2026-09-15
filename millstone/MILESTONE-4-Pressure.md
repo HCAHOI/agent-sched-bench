@@ -559,3 +559,151 @@ about a day of code, evaluated on the c24 / 96 GiB cell against the 144 GiB refe
 - Hidden-state prediction for agents predicts categorical targets only — tool identity (SPORK 2607.03333, Speculate-While-You-Reason 2607.25816, Linearly Readable 2605.07990), tool necessity (When2Tool 2605.09252), call errors (2608.27750), parameter correctness (ParamBench 2608.03071), program state (KTH 2607.05188). Output length from hidden states exists only on ≤ 2K-token chat prompts (OUTLETS 2609.01068, ProD 2604.07931, EGTP/PLP 2602.11812), all MAE-only.
 - KV offloading for agents: MORI (2606.00866, HBM + DRAM by trailing idleness, Claude Code / SWE-bench Pro), CacheWise (2606.16824, time-to-reuse predictor for in-tier eviction), TokenCake (2510.18586, offload by predicted call duration, DRAM assumed unbounded), Continuum (2511.02230, HBM TTL), ThunderAgent (2602.13692, HBM only), KVFlow / CacheScout / PBKV (workflow DAGs), CachedAttention (chat turns), Agentix (batched swaps). None reports the store-vs-admission decomposition at a sized tier, the starvation mechanism of residency-first admission, or a sandbox-side interface; §3.3 reading (1) says a return-time DRAM policy would not pay on this pool anyway.
 
+## 6. High per-stream decode regime (2026-09-14/15)
+
+Section 3 measured one 32B dense engine at 8 decode slots, where decode is 93% of the work. On 2026-09-14 the
+advisor redirected the work to the regime the field is moving to — 300–1,000 tokens per second per stream — and
+the measurements below were taken on one RTX Pro 6000 (single-GPU host, vLLM 0.28.0). Raw curves, lane scripts
+and logs: `analysis/results/tpot-curve-20260914/`.
+
+- **Lane 4 DONE 06:41 UTC (user go "gogogo")**: Gemma 4 26B-A4B FP8 + DFlash k=15, KV cache fp8 vs bf16, both on
+  TRITON_ATTN (`analysis/results/tpot-curve-20260914/g4-dflash15-triton-*`, `lane4.log`). TPOT median ms / aggregate
+  tok/s / accepted per draft:
+
+  | c | agent 16K, bf16 KV | agent 16K, fp8 KV | short 1.2K, bf16 KV | short 1.2K, fp8 KV |
+  |---|---|---|---|---|
+  | 1 | 4.4 / 136 / 3.3 | 4.2 / 156 / 3.5 | 3.5 / 244 / 2.6 | 3.8 / 250 / 2.4 |
+  | 4 | 8.6 / 223 / 2.9 | 7.5 / 329 / 3.2 | 6.0 / 661 / 2.5 | 5.7 / 721 / 2.7 |
+  | 8 | 28.5 / 207 / 2.9 | 10.4 / 465 / 3.0 | 6.8 / 918 / 2.5 | 6.6 / 1032 / 2.4 |
+  | 16 | 59.8 / 209 / 2.8 | 10.3 / 1064 / 3.1 | 8.5 / 1310 / 2.4 | 7.6 / 1486 / 2.6 |
+  | 32 | 97.8 / 215 / 3.0 | **13.9 / 1384 / 2.8** | 10.9 / 1376 / 2.4 | 9.9 / 1504 / 2.3 |
+
+  Reading: with fp8 KV the agent-context curve stops collapsing: c=32 TPOT 13.9 ms (72 tok/s per stream) and 1,384
+  tok/s aggregate, 7× and 6.4× over bf16 KV on the same backend, and within 8% of the short-prompt aggregate. The
+  bf16 path's c=8→16 cliff (lane 2 reading 6) is therefore a kernel-path property of bf16 KV with Gemma's hybrid
+  attention in vLLM 0.28, not the model. On this GPU the frontier point on 16K agent contexts is now **32 agents at
+  72 tok/s each, 238 tok/s single-stream**. Acceptance unchanged (2.8–3.5 agent, 2.3–2.7 short).
+- **Lane 3 DONE 06:22 UTC (user go "1吧")**: Qwen3-30B-A3B agent prompts, KV cache fp8 vs bf16, both on the TRITON_ATTN
+  backend (fp8 KV needs FlashInfer for FlashAttention-class kernels; not installed; lane 1's bf16 curve used
+  FlashAttention, so the pair below is the fair one). TPOT median ms / aggregate tok/s:
+
+  | c | bf16 KV (Triton) | fp8 KV (Triton) |
+  |---|---|---|
+  | 1 | 6.9 / 88 | 6.1 / 95 |
+  | 4 | 14.8 / 131 | 12.1 / 134 |
+  | 8 | 25.6 / 207 | 19.6 / 210 |
+  | 16 | 67.0 / 207 | 25.6 / 535 |
+  | 32 | 86.9 / 291 | 40.7 / 641 |
+
+  Reading (3) confirmed: halving the KV bytes halves TPOT at c ≥ 16 (86.9 → 40.7 ms, 2.1×) and doubles the
+  aggregate; at c ≤ 8 the gain is 12–25% because expert-weight reads still dominate there. KV bytes per decode step
+  are the lever for agent contexts; fp8 KV is the first free half. (Aggregate at c=16 is inflated by prefix hits on
+  the reused samples; the TPOT column is the clean number.)
+- **TPOT lanes 1+2 DONE (04:17–05:34 UTC)**. Setup: vLLM 0.28.0, CUDA graphs, greedy, 512 output tokens, bf16 KV,
+  max-num-seqs 32, chunked prefill 8192. "agent" = real replay prefixes (mean 14–16K tokens); "short" = prefixes
+  ≤ 6,000 chars (≈ 1.2K tokens, first steps); "decode-only" = every prefix pre-filled before the level. Cells are
+  TPOT median ms / aggregate output tok/s (/ accepted tokens per draft):
+
+  | c | 30B-A3B short | 30B-A3B agent | 30B-A3B agent decode-only | 32B agent | G4 short | G4 agent | G4+DFlash15 short | G4+DFlash15 agent | G4+DFlash8 agent |
+  |---|---|---|---|---|---|---|---|---|---|
+  | 1 | 6.0 / 151 | 6.5 / 55 | 6.5 / 143 | 27.4 / 31 | 5.4 / 169 | 6.2 / 100 | 3.5 / 244 / 2.6 | 4.4 / 127 / 3.3 | 4.6 / 134 / 3.2 |
+  | 4 | 10.1 / 342 | 13.3 / 190 | 13.2 / 284 | 34.7 / 78 | 8.3 / 402 | 10.4 / 190 | 5.8 / 618 / 2.5 | 7.9 / 234 / 3.2 | 8.6 / 218 / 2.8 |
+  | 8 | 13.0 / 512 | 21.9 / 265 | 26.9 / 244 | 77.3 / 81 | 10.2 / 545 | 16.6 / 278 | 7.1 / 948 / 2.5 | 25.1 / 212 / 3.1 | 30.4 / 206 / 2.8 |
+  | 16 | 17.9 / 675 | 42.9 / 322 | 48.3 / 292 | 149.6 / 89 | 12.7 / 766 | 64.2 / 200 | 8.5 / 1339 / 2.5 | 62.0 / 204 / 3.1 | 56.8 / 214 / 2.9 |
+  | 32 | 21.1 / 842 | 85.6 / 313 | 92.5 / 312 | 154.2 / 92 | 16.7 / 1005 | 131.0 / 192 | 11.1 / 1538 / 2.4 | 93.8 / 237 / 3.0 | 93.6 / 247 / 2.8 |
+
+  (30B-A3B = Qwen3-30B-A3B-Instruct-2507-FP8, 48 global-attention layers, 98 KB KV/token; 32B = Qwen3-32B-FP8; G4 =
+  RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic, 30 layers of which 5 global and 25 sliding-window 1024, draft
+  z-lab/gemma-4-26B-A4B-it-DFlash.) Readings: (1) **The 300 tok/s per-stream regime is reproduced on this GPU**:
+  Gemma 4 + DFlash 289 tok/s on short prompts, 228 on agent prompts (1.4× over its 160 baseline), 1,538 tok/s
+  aggregate at c=32 on short prompts. (2) **Agent context length, not model speed, sets what a GPU can serve**: the
+  same models fall to 200–320 aggregate tok/s at c ≥ 8 on 14–16K contexts (short prompts: 840–1,540); TPOT grows
+  linearly with concurrency. (3) The growth is decode-side KV reading, not prefill interference: the decode-only
+  control reproduces the curve (92.5 vs 85.6 ms at c=32). (4) Speculative decoding pays only at low concurrency on
+  agent contexts (DFlash: 1.3–1.4× at c ≤ 4, a loss at c=8, even at c=16, +25% at c=32); draft length 8 vs 15 does
+  not matter. (5) Acceptance is higher on later agent steps (3.0–3.3, tool calls copy from context) than on first
+  steps (2.4–2.6): the recorded GPT-style history does not lower acceptance. (6) Gemma 4 has a cliff between c=8
+  and c=16 on long contexts in vLLM 0.28 (base 16.6 → 64.2 ms) that its sliding-window design should not produce;
+  not diagnosed. (7) EAGLE-3 (lmsys SpecForge draft for Qwen3-30B-A3B) accepted 1.0 tokens per draft here; not
+  pursued. Caveat: prompts are GPT-recorded trajectories replayed into other models; the step/output distribution of
+  Gemma-native trajectories may differ (§4.0).
+- **TPOT lane 1 DONE 04:56 UTC** (`analysis/results/tpot-curve-20260914/`, client `scripts/evaluation/tpot_curve.py`;
+  vLLM 0.28.0, CUDA graphs, greedy, 512 output tokens, real replay prefixes, mean prompt ≈ 14K tokens; "short" =
+  prefixes ≤ 6,000 chars ≈ 1.1K tokens):
+
+  | c | 30B-A3B short: TPOT ms / agg tok/s | 30B-A3B agent 14K: TPOT / agg / TTFT | 32B agent 14K: TPOT / agg / TTFT |
+  |---|---|---|---|
+  | 1 | 6.0 / 151 | 6.5 / 55 / 2.5 s | 27.4 / 31 / 2.0 s |
+  | 4 | 10.1 / 342 | 13.3 / 190 / 0.5 s | 34.7 / 78 / 1.6 s |
+  | 8 | 13.0 / 512 | 21.9 / 265 / 0.4 s | 77.3 / 81 / 4.1 s |
+  | 16 | 17.9 / 675 | 42.9 / 322 / 0.7 s | 149.6 / 89 / 13.7 s |
+  | 32 | 21.1 / 842 | 85.6 / 313 / 2.0 s | 154.2 / 92 / 62.9 s |
+
+  Readings: (1) the MoE model is 4.2× faster per stream than 32B and its aggregate saturates at ≈ 320 tok/s on agent
+  prompts but reaches 842 on short prompts at the same concurrency: **agent context length, not model speed, sets
+  the per-GPU capacity** (4× TPOT, 2.7× aggregate at c=32). (2) 32B saturates at 90 tok/s aggregate; past c=8 the
+  TTFT is prefill queueing (63 s at c=32). (3) EAGLE-3 with the lmsys SpecForge draft on vLLM 0.28: acceptance
+  length 1.0 (checkpoint has d2t/t2d; cause not found; not pursued, DFlash/MTP are the frontier). TTFT at c=1 is
+  polluted by JIT warm-up; levels reuse leading samples so TTFT at c ≥ 4 has prefix hits.
+- **Chain 29 STOPPED 04:14 UTC by the user** (`pool64v4-pro6000-qwen32b-gpu0-c24-fcfs-sticky-tier80-exclusive-20260914-r1`,
+  95 min of ≈ 3 h, no verdict on the §4.1 rule). Interim diagnosis at 70 min (same elapsed windows): requests finished
+  569/757/911 at 30/50/70 min vs inclusive-96 529/706/869 and 144 856/1387/1861; cached share of original steps
+  0.49/0.37/0.31 vs 0.39/0.29/0.23 vs 0.86/0.89/0.90. The mechanism works as coded (copy-back only for the evicted
+  part, 1.8% stall) but the "+236K" estimate in M4 §3.3 was wrong: with `--max-num-seqs 8` only ≈ 140K tokens are in
+  flight (HBM usage mean 0.67), so exclusive-80 ≈ inclusive-115 GiB, still under the 600K the rule asks at c24.
+  Corrected rule: DRAM + (in-flight tokens) ≥ 1.4 × c × context. Recorded, not to be continued (§4.0).
+- New host: `ssh -p 35803 root@connect.singapore-a.gpuhub.com`, 1× Pro 6000, driver 580.95, cgroup 110 GiB / 22 cores,
+  disk 33 GB free; the whole old `/workspace` arrived by cloud transfer (models, venvs, outlen incl. the 50 GB OUTLETS
+  caches, 69 launch logs, manifests). Python supervisord started by hand; source shipped at d038f86a.
+
+### 6.1 What the regime changes
+
+   on 2026-09-14 (§3): Gemma 4 26B-A4B FP8 + DFlash + fp8 KV gives 289 tok/s single-stream on short prompts, 228 on
+   agent prompts, 1,384 tok/s aggregate at c=32 on 16K contexts. The DRAM-capacity line is closed as a sizing result,
+   not a paper. What changes in this regime, measured: an agent step is 2–7 s instead of 30–50 s, and because decode
+   is amortised over a much larger batch while prefill is not, **prefill stops being a rounding error**. Per step
+   (pool64-v4 measured: prompt 18,514 tokens, uncached 944 at cached-share 0.95, output 209 tokens; prefill rates
+   from c=1 TTFT, ±30%):
+
+   | Serving configuration (decode batch) | warm prefill | decode GPU time | prefill share | cold prefill | full-context KV transfer |
+   |---|---:|---:|---:|---:|---:|
+   | Qwen3-32B dense, bf16 KV, batch 8 (the pool64-v4 runs) | 146 ms | 2,069 ms | 7% | 2,767 ms | 323 ms |
+   | Qwen3-30B-A3B, fp8 KV, batch 32 | 69 ms | 266 ms | 21% | 1,311 ms | 124 ms |
+   | Gemma 4 26B-A4B + DFlash, fp8 KV, batch 32 | 49 ms | 91 ms | 35% | 932 ms | 25 ms |
+
+   Share = warm prefill / (warm prefill + output × TPOT / batch). Counting the cold steps at cached share 0.95
+   (5 cold + 95 warm per 100 steps) the totals are 12% prefill at 32B/batch 8 and 51% at Gemma/batch 32. Inference,
+   not yet a result: agent serving becomes prefill-bound at high per-stream speed even at a 95% cache hit rate, which
+   is the condition industrial PD serving is designed for.
+
+### 6.2 PD and PPD at this operating point
+
+   H200 questions were answered by the simulation in §4.5 and M3 §3 — read that first, this item only adds
+   the frontier-regime arithmetic it explicitly does not cover). Frontier C closed PD on
+   2 × L40S at 4B (fixed PD 71.5 min, public PPD 109.2, two-sided 75.0, DualMap 33.2; M3 §3). Three things are now
+   quantified that were not then. (i) Both rules we ran are blind to residency, in two different ways. The published
+   PPD rule decides from the turn number, the tokens appended this turn (a 512-token short-input threshold keeps
+   small appends local on D), a predicted output length and the current QPS, against a lookup table from its own
+   offline benchmark; on agent traffic almost every append classified as `huge_paste` and the table said local at the
+   QPS points reached, so it degenerated to always-local (2,414 of 2,470 requests, 109.2 min). None of its features
+   is the variable our measurements say sets the cost: two turns with the same append size and QPS differ by 18K
+   tokens of real prefill work depending on whether the task's history is still resident on the decode engine. The
+   two-sided expected-cost router is ours, not the paper's (`ppd_policy.two_sided_estimate`), and fails the other
+   way: it priced only the requesting turn's TTFT, so when P was busy it sent cold requests back to D — 12.4M
+   uncached tokens prefilled on D over 973 "local" requests, 12,700 each. A residency rule (miss → P, hit → D, no
+   cost comparison) closes both holes.
+   (ii) But its value is bounded by the table in §4.0: at cached share 0.95 the cold steps are half of all prefill
+   work, so moving only them off the decode GPU frees **6%** of its time at 32B/batch 8 and **25%** at Gemma/batch 32.
+   6% does not buy a second GPU; the sized DRAM tier already removed 95% of the cold prefill that PD would have
+   taken away. (iii) For multi-turn agents PD pays either 2× KV memory (history kept on both P and D, which is what
+   heterogeneous hardware with a memory-rich decode tier would buy) or 19× prefill (944 → 17,935 uncached tokens per
+   step when P starts cold); the KV transfer itself is cheap on modern attention (25 ms for Gemma's 16K context).
+   **Pre-registered decision rule, 17:30 UTC 2026-09-15, before the sweep's numbers exist:** from the sweep take the
+   largest feasible concurrency B\* and its TPOT, and compute f = cold prefill / (cold prefill + warm prefill +
+   output × TPOT / B\*) with the same per-step constants and the run's measured cached share. f ≥ 20% → one 2-GPU
+   test of cold-only disaggregation against colocated at B\* is justified (rent, ≈ 4 h); f < 20% → PD/PPD is closed
+   for agent workloads at every scale we can reach, and is not raised again. Lit check owed before any novelty claim:
+   Mooncake, MemServe, Splitwise heterogeneous, SGLang cache-aware router.
+
+Residency routing was simulated on top of this and the verdict retracted, because the simulator is not
+validated for routing policies: `analysis/results/pd-pool-sim-20260915/residency-routing.md`.
