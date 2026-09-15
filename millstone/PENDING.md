@@ -26,7 +26,7 @@ live in the milestone files; this file only points at them.
   curve, sizing rule, FIFO gate, DualMap starvation, tier simulation).
 - **High per-stream decode regime** — M4 §6; raw curves, lane scripts and logs in
   `analysis/results/tpot-curve-20260914/`.
-- **PD / PPD routing** — M3 §3, under withdrawal (audit: `analysis/results/ppd-run-audit-20260915.md`).
+- **PD / PPD routing** — M3 §3, where the public-PPD number is withdrawn and the audit that withdrew it is recorded.
 - **PD at pool scale, by simulation** — M3 §3; its residency-routing reading is retracted
   (`analysis/results/pd-pool-sim-20260915/residency-routing.md`).
 - **Baselines** — DualMap/CacheWise/ThunderAgent family starves under saturation: M4 §3.3 (4).
@@ -65,7 +65,7 @@ live in the milestone files; this file only points at them.
 - Whether to fund a rented multi-GPU PD/PPD test at all. M4 §6.2 pre-registers the trigger (f ≥ 20% computed from
   the running sweep, ≈ 4 h of rental); the audit adds a precondition, that any rented test must first show the
   decode side holding conversations at a cached share well above the level the audit measured
-  (`analysis/results/ppd-run-audit-20260915.md`).
+ (recorded in M3 §3).
 - Whether to spend the work validating the pool simulator for routing (§4.2) before its predictions are quoted
   again (§4.1), or to drop the simulator line instead.
 - Push the branch (§4.6).
