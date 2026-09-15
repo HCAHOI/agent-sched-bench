@@ -145,6 +145,7 @@ class Engine:
         self.waiting: deque[Request] = deque()
         self.cache: OrderedDict[int, int] = OrderedDict()   # task id -> resident context tokens (LRU, oldest first)
         self.pinned = 0
+        self.homed = 0            # tasks whose home this engine is (residency routing balances on this)
         self.busy_s = 0.0
         self.iterations = 0
         self.scheduled = False
@@ -323,7 +324,12 @@ class Sim:
         r = Request(task, task.step, s["prompt"], s["gen"], t)
         self.requests.append(r)
         if self.kind in ("twosided", "residency"):
-            home = task.sticky.get("mixed") or min(self.mixed, key=Engine.outstanding)
+            if self.kind == "residency":
+                home = task.sticky.get("mixed") or min(self.mixed, key=lambda e: (e.homed, e.outstanding()))
+            else:
+                home = task.sticky.get("mixed") or min(self.mixed, key=Engine.outstanding)
+            if task.sticky.get("mixed") is None:
+                home.homed += 1
             task.sticky["mixed"] = home
             pe = task.sticky.get("P") or min(self.P, key=Engine.outstanding)
             if self.kind == "residency":
@@ -367,6 +373,8 @@ class Sim:
         if task.step >= len(task.profile):
             task.done_t = t
             self.active -= 1
+            if task.sticky.get("mixed") is not None:
+                task.sticky["mixed"].homed -= 1
             delay = self.rng.expovariate(1 / self.delay_mean) if self.delay_mean else 0.0
             self.push(t + delay, "admit", None)
         else:

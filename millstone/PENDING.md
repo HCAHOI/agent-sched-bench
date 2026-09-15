@@ -256,11 +256,33 @@ admission logic) and whether the operating point itself is right (TP=2).
    disaggregated, prefill-tier utilisation, token-weighted TPOT. Same criterion re-applied on the frontier profile
    (Gemma 4 + fp8 KV constants) once the SLA sweep supplies its decode curve.
 
-4. Parked, with the record in §3: exclusive tiering (built, `scripts/serving/exclusive_tier/sitecustomize.py`; chain
+4. **Confirmatory test of residency routing under memory pressure — pre-registered 2026-09-15 17:47 UTC.**
+   The pre-registered primary in §4.3 was run and **failed**: on the H200 profile at 8 GPUs (97% of prompt tokens
+   resident) `residency:6,2` gives 8.5 min against colocated 8.0, `residency:7,1` 8.2, `twosided:6,2` 8.7,
+   `pd:4,4` 9.2; only 2.3–2.5% of steps are cold, the prefill tier idles at 3–7%, so dedicating even one GPU of
+   eight to it costs more than the cold prefill it removes. That is the "nothing left to remove" branch. One
+   implementation defect was found and fixed first (a task's first step is never resident, so the home engine's
+   queue was empty when the home was chosen and every task was homed on the same engine; homes are now balanced on
+   the count of tasks homed per engine).
+   **Unregistered secondary observation, therefore exploratory:** on the memory-constrained L40S profile at 8 GPUs,
+   `residency:7,1` gives 45.0 min against colocated 57.4 and the best fixed PD (5:3) 54.3, and the home engines'
+   cached share rises from 0.067 to 0.50 — taking cold prefills off the decode engines stops them thrashing their
+   own KV, which raises residency, which makes fewer steps cold. At 2 GPUs the same rule is far worse (95.3 against
+   55.7): the tier must be a small, well-used share of the fleet (1 of 8 at 76% busy, not 1 of 2 at 31%).
+   Confirmatory design, fixed now: L40S profile, pool sizes 8 and 32, residency at 1/8 of the fleet (7:1, 28:4) and
+   at 1/4 (6:2, 30:2), seeds 0/1/2, against colocated (57.4 at 8, 57.9 at 32) and the best fixed PD ratio (54.3,
+   55.7). Criterion: the best residency ratio beats colocated by ≥ 10% at both pool sizes on all three seeds → the
+   effect is real and a 2-GPU measured test at the frontier operating point is justified; 0–10% → report as
+   marginal and do not build; a win at one pool size only → size-dependent, report and stop. Mechanism check
+   reported either way: the home engines' cached share must rise against colocated, otherwise the win is not the
+   claimed mechanism. Limits carried from §4.5: the engine model is an eager-mode 4B engine, so this says nothing
+   about the KV-read-bound frontier regime until the frontier profile exists.
+
+5. Parked, with the record in §3: exclusive tiering (built, `scripts/serving/exclusive_tier/sitecustomize.py`; chain
    29 stopped at 95 min — the gain is the in-flight tokens only, ≈ 140K at `--max-num-seqs` 8, not the 236K of a full
    HBM, so exclusive-80 ≈ inclusive-115 GiB); sizing rule as online task admission (Σ contexts ≤ DRAM/1.4).
 
-5. Push branch `codex/cleanup-research-dead-code` (≈ 150 commits ahead of origin).
+6. Push branch `codex/cleanup-research-dead-code` (≈ 150 commits ahead of origin).
 
 5. **PD at pool scale, by simulation (user go "先做1-3吧", 2026-09-15).** The boss's questions — PD at 8 or 32
    instances, part of the traffic disaggregated, a 141 GB GPU — cannot be run on one GPU.
