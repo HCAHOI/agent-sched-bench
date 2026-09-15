@@ -8,40 +8,11 @@ with [`../millstone/PENDING.md`](../millstone/PENDING.md) as the queue), and the
 milestone files carry their own numbers.
 
 This file records the claims supported by the evidence retained under
-`analysis/`, for the tool-resource and KV-stopping lanes. It does not promote an
-oracle, reproduction subset, failed gate, or external workload observation into
-a system result. The canonical target and exposure contract is
-[`development/tool-resource-canonical-objective.md`](development/tool-resource-canonical-objective.md).
+`analysis/`: the 2026 phase-action and paper-baseline runs, and the historical
+KV-stopping lane. It does not promote an oracle, reproduction subset, failed
+gate, or external workload observation into a system result.
 
-## C1 — Command-level tool-resource signal transfers
-
-**Supported development claim.** On exposed SQLGlot50, Task-Aware improves the
-equal-weight latency/CPU/RSS/Disk accuracy from 80.203% for Clause-KB to 84.463%.
-On the preregistered PennyLane transfer, it improves 75.680% to 78.326%; the
-task-bootstrap gain interval is +0.746 to +4.515 percentage points. The pytest
-worker-count × target-scope representation improves RSS accuracy/High recall to
-87.799%/54.762% from 82.536%/2.381%.
-
-**Limit.** These datasets are exposed; only the SQLGlot RSS head cleared the
-existing five-point target gate. Accuracy is not scheduling utility, and no
-predictor is deployed. Receipts:
-[`results/tool-resource-5-3-3-3-20260804/sqlglot50-multitarget-sota-v1/result.json`](results/tool-resource-5-3-3-3-20260804/sqlglot50-multitarget-sota-v1/result.json)
-and
-[`results/pennylane-multitarget-transfer-validation-v1/result.json`](results/pennylane-multitarget-transfer-validation-v1/result.json).
-
-## C2 — Causal runtime feedback reduces over-reservation
-
-**Supported mechanism claim.** Causal command-level eBPF feedback reduced
-logical CPU reservation 45.010% at 1.543% service inflation across 259 SWE100
-and SWE277 tasks from 205 repositories.
-
-**Limit.** This is a per-command counterfactual, not a scheduler or physical
-throughput result. The tested hard-page and borrowing consumers exceeded their
-service-inflation gates, so feedback is retained as a mechanism/control rather
-than an integrated policy. Receipt:
-[`results/tool-resource-5-3-3-3-20260804/swe100-277-cpu-feedback-generality-v1/result.json`](results/tool-resource-5-3-3-3-20260804/swe100-277-cpu-feedback-generality-v1/result.json).
-
-## C3 — Alternating phases create action headroom, but the safe carrier is open
+## C1 — Alternating phases create action headroom, but the safe carrier is open
 
 **Supported action-space claim.** On 70 exposed PennyLane trajectories, a
 frozen hindsight joint arm reached 14,100.143 s mean completion and 42,692 s
@@ -58,11 +29,14 @@ resources, not causal A100 service. Both CPU-only causal carriers deadlocked.
 Physical feedback was not tail-safe: paired p99 TTFT ratios were 1.048 and
 1.115, so the second repetition failed the frozen 1.05 gate. The hard
 Task-Aware bucket produced no distinct physical loan. Receipts:
-[`results/pennylane-joint-phase-packing-v1/result.json`](results/pennylane-joint-phase-packing-v1/result.json)
+[`results/pennylane-joint-phase-packing-v1/result.json`](results/pennylane-joint-phase-packing-v1/result.json),
+[`results/pennylane-temporal-rss-packing-ceiling-development-v1/result.json`](results/pennylane-temporal-rss-packing-ceiling-development-v1/result.json),
+[`results/pennylane-causal-joint-tool-admission-v1/result.json`](results/pennylane-causal-joint-tool-admission-v1/result.json),
+[`results/pennylane-finite-bound-joint-admission-v1/result.json`](results/pennylane-finite-bound-joint-admission-v1/result.json),
 and
 [`results/pennylane-physical-gap-loan-development-v1/result.json`](results/pennylane-physical-gap-loan-development-v1/result.json).
 
-## C4 — GPU/KV scheduling is load-dependent and already has a strong baseline
+## C2 — GPU/KV scheduling is load-dependent and already has a strong baseline
 
 **Supported physical observation.** At low pressure, official ThunderAgent
 performed no pause/resume action and changed mean JCT by 0.55% in the harmful
@@ -87,7 +61,7 @@ scheduling claims only. Receipts:
 and
 [`results/mixed128-poisson-unique-baselines-20260827/result.md`](results/mixed128-poisson-unique-baselines-20260827/result.md).
 
-## C5 — Reproduction results inherit their implementation boundary
+## C3 — Reproduction results inherit their implementation boundary
 
 **Supported observations on Unique-128.** The CacheWise reproduction reduced
 mean JCT 59.2% and increased throughput 68.3%, but raised p99 TTFT to 2,299.0 s.
@@ -112,7 +86,7 @@ This historical lane assumed forced eviction and scored hidden swap
 milliseconds. Fresh-277 had no shared KV cache and cannot support a contention,
 JCT, or live-serving claim.
 
-### C6 — Priced stopping has a bounded offline benefit
+### C4 — Priced stopping has a bounded offline benefit
 
 Under the frozen functional, robust-clock pre-restore yields +156.2 s/277 at a
 3,500 ms KV cost (task-clustered 95% CI [60.4, 256.6]) and +317.9 s/277 at
@@ -126,7 +100,7 @@ over the warmup snapshot at 3,500/5,000 ms. Per-call publication added exactly
 zero. It is not an unopened-stream or order-robust result. See
 [`results/prequential-task-update-20260721/`](results/prequential-task-update-20260721/).
 
-### C7 — Elapsed-only re-checking is closed under this functional
+### C5 — Elapsed-only re-checking is closed under this functional
 
 With call survival as the only runtime observation, a multi-check plan reduces
 to one precomputable stopping time. An independent `k=2` dynamic program matched
@@ -136,13 +110,13 @@ Boundary identity changed 72.9% of decisions but had paired log-score gain
 -0.0137 nats, task-clustered 95% CI [-0.41, +0.20]. This closes only
 elapsed-only and observed-boundary enrichments under the frozen functional.
 
-### C8 — Command-duration prediction is a scoped No-Go for per-request KV eviction
+### C6 — Command-duration prediction is a scoped No-Go for per-request KV eviction
 
 The earlier swap-out advantage over a fixed deadline was a container artifact,
 not a general command-duration result. At 3,500/5,000 ms, container-setup calls
 contributed +36.3/+124.5 s to total robust-clock deltas of +20.1/+118.0 s.
 Removing those calls under the fixed fold map made the deltas -20.6 s (95% CI
-[-55.1, +3.3]) and -6.5 s ([-27.7, +5.8]). This does not retract C6, which is a
+[-55.1, +3.3]) and -6.5 s ([-27.7, +5.8]). This does not retract C4, which is a
 pre-restore result at a different decision point. Receipt:
 [`results/kv-swap-gain-attribution-20260729/attribution.json`](results/kv-swap-gain-attribution-20260729/attribution.json).
 
@@ -180,8 +154,8 @@ and
 
 ## Explicit non-claims
 
-- No current controller combines tool prediction, GPU/KV scheduling, CPU/RSS
-  control, or compaction in production.
+- No current controller combines GPU/KV scheduling, CPU/RSS control, or
+  compaction in production.
 - No confirmation claim comes from SQLGlot, SWE100/277, PennyLane, or
   Unique-128; all relevant partitions and results are development-exposed.
 - No trace-timed-tool result demonstrates physical CPU contention, interference,

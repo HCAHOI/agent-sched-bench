@@ -3,11 +3,9 @@
 The live frontier and experiment queue are
 [`../millstone/MILESTONE-4-Pressure.md`](../millstone/MILESTONE-4-Pressure.md)
 and [`../millstone/PENDING.md`](../millstone/PENDING.md); this file is not the
-current research state. It is the compact decision roadmap for the tool-resource
-and KV-stopping lanes: the frontier framing those lanes were left in, plus the
-closed branches and amendments that still bind them. Tool-resource metrics, data
-exposure, KEEP/CLOSE decisions, and frozen gates remain authoritative in
-[`development/tool-resource-canonical-objective.md`](development/tool-resource-canonical-objective.md).
+current research state. It is the compact decision roadmap for the phase-action
+and KV-stopping work retained under `analysis/`: the frontier framing that work
+was left in, plus the closed branches and amendments that still bind it.
 
 ## Organizing question
 
@@ -153,17 +151,16 @@ exist.
 
 ## Closed or subordinate branches
 
-- Predictive tool-gap lending under the registered five-bucket mapping: closed;
-  no distinct physical action.
+- Predictive tool-gap lending: closed on activation failure. Both repetitions
+  produced the same single early action ID against a frozen minimum of four
+  distinct activations, so the arm carries no performance verdict.
+  [`results/predictive-tool-gap-loan-20260810/result.json`](results/predictive-tool-gap-loan-20260810/result.json).
 - Raw command-duration prediction for per-request KV eviction: scoped No-Go;
   the deadline is already near-optimal and the decision budget is small.
-- CPU-only hard bucket/page carriers and further reservation tuning: closed.
+  [`CLAIMS.md`](CLAIMS.md#c6--command-duration-prediction-is-a-scoped-no-go-for-per-request-kv-eviction).
 - Tool-container parking and remote snapshot RPC for current PennyLane: closed
   by the free-perfect-parking No-Go.
-- Tool-latency priority under the 35-task model: closed by a 0.435% exact-duration
-  oracle ceiling.
-- Generic KB-structure, pip-specific semantics, prediction-weighted shares,
-  arbitrary generated policies, and trace-conditioned agents: closed.
+  [`results/pennylane-perfect-container-parking-development-v1/result.json`](results/pennylane-perfect-container-parking-development-v1/result.json).
 - PD separation, Disk-aware placement, and RP × TP are subordinate components;
   revisit only after a primary mechanism exposes the corresponding bottleneck.
 

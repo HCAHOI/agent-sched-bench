@@ -9,23 +9,20 @@ experiments and open decisions. A fresh session starts from
 [`../millstone/NEXT-SESSION.md`](../millstone/NEXT-SESSION.md), the onboarding
 prompt.
 
-This directory is not that record. It is the authority for two lanes the
-milestone series does not cover — tool-resource prediction and the historical
-KV-stopping work — plus the store for their frozen receipts. Inside those two
-lanes, read in this order:
+This directory is not that record. It is the store for frozen result receipts
+and the authority for the historical KV-stopping lane. The tables below index
+the receipts that still carry a claim; the rest of `results/` is retained
+provenance. Inside that scope, read in this order:
 
-1. [`development/tool-resource-canonical-objective.md`](development/tool-resource-canonical-objective.md)
-   — authority for tool-resource targets, causal semantics, KEEP/CLOSE
-   decisions, evidence exposure, and launch boundaries.
-2. [`ROADMAP.md`](ROADMAP.md) — the frontier framing, decision order, closed
-   branches, and amendments that still bind these lanes.
-3. [`CLAIMS.md`](CLAIMS.md) — claims the retained evidence supports, with
+1. [`ROADMAP.md`](ROADMAP.md) — the frontier framing, decision order, closed
+   branches, and amendments that still bind this material.
+2. [`CLAIMS.md`](CLAIMS.md) — claims the retained evidence supports, with
    explicit non-claims.
-4. [`CLOSED-QUESTIONS.md`](CLOSED-QUESTIONS.md) — closed historical branches
+3. [`CLOSED-QUESTIONS.md`](CLOSED-QUESTIONS.md) — closed historical branches
    and the evidence required to reopen them.
 
-If prose conflicts inside those two lanes, that order controls interpretation;
-outside them the milestone series controls. A frozen result receipt controls its
+If prose conflicts inside that scope, that order controls interpretation;
+outside it the milestone series controls. A frozen result receipt controls its
 own numbers, validity, and provenance.
 
 ## Result entry points
@@ -36,8 +33,7 @@ own numbers, validity, and provenance.
 | PennyLane paper-baseline suite | Development-exposed, one A100, 12 tasks at concurrency four, physical tools | [`results/pennylane-paper-baseline-suite-physical-v1.md`](results/pennylane-paper-baseline-suite-physical-v1.md) |
 | ThunderAgent and reproduction smokes | Official ThunderAgent comparison plus Agentix, SAGA, and Continuum mechanism smokes | [`results/paper-baseline-physical-20260820/result.json`](results/paper-baseline-physical-20260820/result.json) |
 | CacheWise SWE predictor ordering | Development-exposed historical local KMeans/C20–C100 reproduction; no live KV pressure or JCT claim. The official reproduction fork has since been run and is recorded in [`../millstone/MILESTONE-1-Single-Instance.md`](../millstone/MILESTONE-1-Single-Instance.md) | [`results/cachewise-swe-reproduction-20260731/result.json`](results/cachewise-swe-reproduction-20260731/result.json) |
-| Tool-resource prediction and CPU actions | Canonical 5/3/3/3 targets and related action screens | [`results/tool-resource-5-3-3-3-20260804/`](results/tool-resource-5-3-3-3-20260804/) |
-| PennyLane joint/physical phase actions | Hindsight ceilings, causal failures, physical feedback, revocable lease, and parking screens | [`development/tool-resource-canonical-objective.md`](development/tool-resource-canonical-objective.md#result-ledger) |
+| PennyLane joint/physical phase actions | Hindsight joint packing ceiling and paired physical feedback repetitions | [`results/pennylane-joint-phase-packing-v1/result.json`](results/pennylane-joint-phase-packing-v1/result.json), [`results/pennylane-physical-gap-loan-development-v1/result.json`](results/pennylane-physical-gap-loan-development-v1/result.json) |
 | Historical KV stopping lane | Forced-eviction accounting and settled duration-prediction limits | [`CLAIMS.md`](CLAIMS.md#retained-kv-stopping-findings) |
 
 The Unique-128 run directory is no longer present under the repository-root
@@ -87,20 +83,9 @@ records the stop and the reason given for it.
 
 ## Historical material
 
-The receipts below are retained for provenance, but their targets or selection
-criteria have been superseded. They are not inputs to current 5/3/3/3 model
-selection and must not be rewritten to match the current contract.
-
-### Superseded tool-resource contracts
-
-| Historical contract | Preserved receipts | Status |
-|---|---|---|
-| Per-call targets, q90 pinball, and balanced accuracy | [`results/tool-resource-20260723/`](results/tool-resource-20260723/) | Superseded historical contract. Its findings note reserves the terminal-bench corpus for one confirmatory read of the final champion set; that reservation has since lapsed — terminal-bench was used in [`archive/tb-dev100-audit-20260724/`](archive/tb-dev100-audit-20260724/), and 239 terminal-bench traces are in the Milestone 4 trace pool. Read that sentence as history, not as a live constraint, and do not rewrite the frozen file. |
-| Old nine-bucket latency | [`results/tool-resource-canonical-signature-v1-20260727/`](results/tool-resource-canonical-signature-v1-20260727/), [`results/tool-resource-canonical-signature-v2-20260727/`](results/tool-resource-canonical-signature-v2-20260727/), [`results/tool-resource-fit-size-20260727/`](results/tool-resource-fit-size-20260727/), [`results/tool-resource-latency-p1-20260727/`](results/tool-resource-latency-p1-20260727/), [`results/tool-resource-representation-20260727/`](results/tool-resource-representation-20260727/) | Superseded historical contract |
-| Old binary resource classes | [`results/tool-resource-heavy-light-20260728/`](results/tool-resource-heavy-light-20260728/) | Superseded historical contract |
-| Failed shared-runtime replacements | [`results/tool-resource-local-vs-public-20260727/`](results/tool-resource-local-vs-public-20260727/), [`results/tool-resource-nighttime-3bucket-20260728/`](results/tool-resource-nighttime-3bucket-20260728/) | Superseded historical contract |
-
-### Archived branches and presentations
+The material below is retained for provenance. Nothing in it is an active
+implementation or launch definition, and none of it is to be rewritten to match
+a later contract.
 
 | Material | Status |
 |---|---|
@@ -127,8 +112,8 @@ and [`../scripts/baselines/README.md`](../scripts/baselines/README.md).
 ## Directory roles
 
 - `results/` contains immutable result receipts and machine-readable outputs.
-- `development/` contains the current authority, frozen inputs, and protocols
-  still referenced by evaluators or results.
+- `development/` contains frozen run manifests, workload splits, and launch
+  plans still referenced by those receipts.
 - `certification/` contains retained calibration and adjudication evidence.
 - `serving/` contains hardware measurements and historical serving inputs; it
   does not imply a live result exists.

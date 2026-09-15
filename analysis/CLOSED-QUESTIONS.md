@@ -1,5 +1,16 @@
 # Closed questions
 
+This file covers the July 2026 KV-stopping lane: the estimator, update-scope,
+and corpus branches closed under its frozen functional. The live research record
+is the milestone series
+([`../millstone/MILESTONE-1-Single-Instance.md`](../millstone/MILESTONE-1-Single-Instance.md)
+through
+[`../millstone/MILESTONE-4-Pressure.md`](../millstone/MILESTONE-4-Pressure.md),
+with [`../millstone/PENDING.md`](../millstone/PENDING.md) as the queue and
+[`../millstone/NEXT-SESSION.md`](../millstone/NEXT-SESSION.md) as the onboarding
+prompt). These closures still bind their own lane; they are not the current
+research frontier.
+
 Reopen an entry only with new data or an argument that addresses the recorded
 failure. Git references below are intentional recovery points; they do not imply
 that every removed artifact is archived.
