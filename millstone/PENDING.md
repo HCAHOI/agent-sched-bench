@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-14 06:45 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-15 16:10 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -47,16 +47,45 @@ admission logic) and whether the operating point itself is right (TP=2).
 - **Scheduling / KV pressure at 32B** — M4 §3.2 (store vs admission 2×2 at 4B and 32B) and §3.3 (pressure axis,
   DRAM capacity curve, sizing rule ≈ 1.4 × concurrency × mean context, FIFO gate −3%, DualMap starvation, tier
   simulation: capacity not policy). Chain 28 confirmed the rule at c20 (46.19 min, cached 0.95).
-- **Output-length prediction** — closed as a prompt-side hidden-state limit; the full ladder and the sampling ceiling are in
-  `analysis/development/output-length-prediction-handoff.md`; the hazard (P(remaining ≤ X)) probes are the kept dynamic
-  signal for thinking steps.
+- **Output-length prediction** — prompt-side point prediction remains closed. Full-observation repair is complete;
+  subsequent cached-feature exploration selects log-remaining MLP + closing-token signals + EWMA 0.7 on validation.
+  Development-test first-alert-within-256 improves 36.30 → 44.83%, mean offline waste 30.93 → 24.64 s, but lateness
+  increases 5.77 → 6.25% (48 → 52 requests). The original history/single remains the fixed reference. Ridge,
+  eight-position remaining/progress, and signals-only candidates fail validation's lateness/waste constraints.
+  Long reasoning still has only 21.05% first-alert hits. Layer-24 full extraction, coverage audit and evaluation
+  are complete: 4,215 requests, zero errors after the connection-reuse repair, ~102 min and 8.9 GB.
+  Layer 24 loses on validation (within-256 26.97% vs retained 43.68%) and development test (33.41% vs 44.83%,
+  waste 28.093 vs 24.639 s; late 6.49% vs 6.25%). More early alerts explain the loss despite slightly better
+  position recall. Retain the final-layer candidate; stop layer expansion after this negative primary.
+  Reasoning-process diagnosis now covers all 419 validation traces, with 24 fixed qualitative examples and
+  96 final-FFN readout observations. Excluding reasoning <=256, validation hits are 100/336 (29.76%). Early
+  alerts include both repeated action elaboration and later-revised solutions. At leads 256/64, the final FFN
+  suppresses closing in all 24 cases; at lead 1 the residual-only readout already gives median P(close)=99.26%.
+  P2.1 newline control completed: same earlier prose gives median P(close) 99.77% with one newline versus
+  4.01e-15 with two; the terminal readout is strongly format-dependent in this model. Stop this format branch;
+  reflection-state inspection is now conditional on its value for forecasting. Complete-history GRU plus a
+  matched request-batch MLP comparison is finished: GRU lowers target MSE but loses first-alert accuracy
+  (validation 31.50% vs incumbent 43.68%; development test 34.38% vs 44.83%). Original MLP reproduces exactly.
+  Retain incumbent. A real Gemma+DFlash k16 boundary comparison is now complete on 32 fixed TPOT replay tasks
+  (99.10 s, no truncations/errors); intentional replay instructions and full histories are retained. On 25 valid local
+  tool requests, assumed 1.8 s restore gives target vs first-draft lateness 88% vs 80%, blocked 1.281 vs 1.084 s,
+  idle 0.157 vs 0.218 s. It fails the frozen no-idle-increase gate. Only 6 of 14 advance alerts have the actual boundary
+  within the next 15 tokens (30–104 ms lead); 15 requests close reasoning at their first output token.
+  Next analyze sandbox need and time until tool readiness using these captured trajectories. Full OUTLETS and independent
+  real-restore confirmation remain conditional; pooling and this DFlash experiment service are stopped.
+  Unused 4B pretrained weights removed (5.19 GB); tokenizer/config and experiment artifacts retained. New Gemma outputs
+  are observational only; no generated tool execution or restore-policy integration. Protocols, paired intervals and limitations:
+  `analysis/development/output-length-prediction-handoff.md`; frozen outputs: `reasoning-explore-20260914/`.
+  Literature synthesis, current mechanism evidence and ordered Phase 2 TODOs: [REASONING.md](../REASONING.md).
 - **Sandbox interface** — three signals + prefill bound, tables and restore-policy scores in the handoff; restore p50 1.0 s / p90 1.8 s.
 - **Baselines** — DualMap/CacheWise/ThunderAgent family starves under saturation (M4 §3.3 (4)); PD/PPD closed (M3).
 - **Related work** — M4 §5 (hidden-state tool prediction; agent KV offloading: MORI, CacheWise, TokenCake, Continuum).
 
 ## 3. Queue
 
-- Nothing queued. GPU idle since 06:41 UTC 2026-09-14.
+- Reasoning full-observation follow-up DONE: feature supplement, frozen comparisons, overlap sensitivity,
+  full-validation recalibration and full-data current/history refits are complete. The dedicated pooling server
+  is stopped; no further predictor, generation or TPOT run is queued. All TPOT lanes below had completed by 06:41 UTC.
 - **Lane 4 DONE 06:41 UTC (user go "gogogo")**: Gemma 4 26B-A4B FP8 + DFlash k=15, KV cache fp8 vs bf16, both on
   TRITON_ATTN (`analysis/results/tpot-curve-20260914/g4-dflash15-triton-*`, `lane4.log`). TPOT median ms / aggregate
   tok/s / accepted per draft:
@@ -194,6 +223,29 @@ admission logic) and whether the operating point itself is right (TP=2).
    upstreams). Not saved: models (re-download ≈ 97 GB), host copies of run dirs (every run's `server/` is already
    pulled locally). Restore = untar under `/workspace` on a host with the same layout, or rerun the bootstrap.
 4. Push branch `codex/cleanup-research-dead-code` (≈ 150 commits ahead).
+5. **PD at pool scale, by simulation (user go "先做1-3吧", 2026-09-15).** The boss's questions — PD at 8 or 32
+   instances, part of the traffic disaggregated, a 141 GB GPU — cannot be run on one GPU.
+   `scripts/evaluation/pd_pool_simulation.py` replays the mixed56 workload (56 tasks, 2,470 steps, prompt and
+   completion tokens per step from the FCFS run's replay logs, inter-step gaps median 0.02 s, the harness's 32-slot
+   closed-loop admission) through a per-iteration model of vLLM's scheduler (max_num_seqs 8, 2,048-token chunks,
+   275,008-token KV with LRU prefix cache keyed by task, newest-request preemption). Facts corrected on the way: the
+   2×L40S mixed56 runs used **Qwen3-4B-Instruct-2507-FP8**, eager mode, 8 sequences per engine (not 32B); FCFS
+   sticky's prefix-cache hits were 8% of prompt tokens (system prompt only) against DualMap's 76%.
+   Calibration (all from the 2026-09-07/09 2×L40S runs): decode iteration 34.6 ms + 0.38 ms per sequence + 0.054 ms
+   per thousand tokens of batch context (D side of the fixed-PD run, 3,997 requests, r² 0.42); prefill 0.040 ms per
+   token × (1 + position/20K) from P's aggregate throughput (101.7M tokens, saturated); mixed engines pay 1.4× that
+   prefill (fitted on FCFS sticky's TPOT/JCT). Held out: the PPD run (3,902 of 4,015 requests local on one engine).
+   **Gate, written 2026-09-15 16:03 UTC as the sweep launched, sweep outputs unread:** mean JCT (ready-to-terminal)
+   within ±15% and token-weighted TPOT within ±20% on all three measured runs, cached share within 5 points.
+   Result: FCFS 55.7 vs 55.3 min, TPOT 131 vs 142 ms, cached 5.2 vs 8.1%; fixed PD 68.6 vs 71.5 min, 42.1 vs 41.8 ms;
+   PPD (held out) 114.4 vs 109.2 min, 134.6 vs 134 ms. Passed; amendment: the mixed-prefill factor was fitted on
+   FCFS after seeing that the sum-of-parts model ran 20% fast, so FCFS is a calibration run, not a check.
+   Predictions (`analysis/results/pd-pool-sim-20260915/sweep/`): mixed:N vs pd:P,D at N = 8 and 32, hybrid task
+   splits, H200 constants (capacity 3.3×, bandwidth 5.6×, prefill compute 2.7×, NVLink transfer; assumptions, read
+   as a band), capacity-only and bandwidth-only sensitivities. Limits: the decode model is an eager-mode 4B engine
+   (fixed 35 ms per iteration dominates), so nothing here speaks to the KV-read-bound 32B regime or to spec decode;
+   DualMap is not simulated; the workload has no tool time. Next step if any prediction matters: one rented
+   multi-GPU day on the predicted best P:D ratio.
 
 ## 5. Decisions waiting on the user
 

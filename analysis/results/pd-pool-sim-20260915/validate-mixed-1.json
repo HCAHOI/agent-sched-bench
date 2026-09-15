@@ -1,0 +1,36 @@
+{
+ "pool": "mixed:1",
+ "hw": "l40s",
+ "params": {
+  "a_ms": 34.6,
+  "b_ms": 0.38,
+  "c_ms_per_ktok": 0.054,
+  "p_ms_per_tok": 0.04,
+  "attn_ktok": 20.0,
+  "mixed_prefill_factor": 1.4,
+  "kv_tokens": 275008,
+  "xfer_fixed_ms": 22.0,
+  "xfer_ms_per_tok": 0.0102
+ },
+ "max_num_seqs": 8,
+ "split_frac": 0.5,
+ "seed": 0,
+ "gpus": 1,
+ "agents": 32,
+ "measured_tasks": 56,
+ "requests": 2470,
+ "makespan_min": 279.8,
+ "mean_jct_elapsed_min": 89.8,
+ "p95_jct_elapsed_min": 172.2,
+ "mean_jct_r2t_min": 114.4,
+ "p95_jct_r2t_min": 211.0,
+ "tpot_ms_token_weighted": 134.6,
+ "tpot_ms_median": 136.9,
+ "share_tpot_over_50ms": 0.914,
+ "ttft_s_mean": 97.3,
+ "preempted_share": 0.011,
+ "engine_busy": {
+  "M0": 1.0
+ },
+ "cached_share_local": 0.017
+}
