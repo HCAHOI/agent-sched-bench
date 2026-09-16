@@ -63,9 +63,10 @@ only if it closes a measurable Pareto gap left by faithful existing methods.
    Integrate applicable public or paper-derived Continuum and Agentix mechanisms
    with their fidelity limits visible. Do not call a subset the full paper.
 3. Include native priority plus aging as the simple return-protection baseline.
-   The older six-cell native-priority protocol remains frozen but must be
-   reconciled with this baseline matrix before launch; its cohort, amendments,
-   and gates cannot be silently repurposed.
+   The older six-cell native-priority protocol is gone: it was prepared on an
+   A100 for the tool-resource line, never run, and its driver, analyzer and
+   inputs were removed on 2026-09-16 after that line's objective document went
+   in b78f483a. There is nothing left to reconcile with this matrix.
 4. Add fixed concurrency, reactive phase-only admission, and a cost-charged
    future-aware oracle on identical trajectories. The oracle measures residual
    action headroom; it is never a feature or a result arm.
