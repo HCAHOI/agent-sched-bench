@@ -129,6 +129,10 @@ async def test_pd_legs_causal_routing_and_release_cancellation(monkeypatch, tmp_
     (args.output / "instance-0/vllm.log").write_text("".join(
         "INFO PPD_KV_RELEASE " + json.dumps(dict(request_id=row["engine_request_id"],
         reason="consumer_notification")) + "\n" for row in decisions if row["routing_mode"] == "pd"))
+    # The final audit reports the decode engine's prefix-cache share from this scrape.
+    (args.output / "instance-1/vllm-metrics-final.prom").write_text(
+        'vllm:prefix_cache_queries_total{engine="0"} 1000.0\n'
+        'vllm:prefix_cache_hits_total{engine="0"} 250.0\n')
     log = args.output / "instance-1/vllm.log"
     allocation_log = "".join("INFO PPD_KV_ALLOCATION " + json.dumps(dict(request_id=row["engine_request_id"], external_tokens=100)) + "\n"
                             for row in decisions if row["routing_mode"] == "pd")
@@ -136,6 +140,7 @@ async def test_pd_legs_causal_routing_and_release_cancellation(monkeypatch, tmp_
         num_layers=36, received_bytes=128, receive_and_inject_span_ms=2)) + "\n"
         for row in decisions if row["routing_mode"] == "pd"))
     check(args.output, 36, final=True)
+    assert json.loads((args.output / "mechanism-check.json").read_text())["cached_prompt_share"] == 0.25
     prefill_path = args.output / "instance-0/vllm-request-telemetry.jsonl"
     original = prefill_path.read_text()
     prefill_path.write_text("")

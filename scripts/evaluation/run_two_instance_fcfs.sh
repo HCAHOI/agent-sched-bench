@@ -261,8 +261,9 @@ YAML
     [[ "$kv_buffer_device" == cuda || "$kv_buffer_device" == cpu ]] || exit 2
     # Router UUIDs already ensure uniqueness; keep IDs joinable across P and D.
     cache_env+=(VLLM_DISABLE_REQUEST_ID_RANDOMIZATION=1)
-    # kv_both on both sides is how vLLM's own NIXL disaggregation examples run: the connector
-    # decides producer or consumer per request from kv_transfer_params, not from a launch role.
+    # kv_both on both sides: vLLM's NIXL connector never reads kv_role - it decides producer or
+    # consumer per request from kv_transfer_params (do_remote_prefill / do_remote_decode), checked
+    # in the installed vllm 0.11.2 source. Both recorded PD and PPD runs ran this configuration.
     # Upstream PPD moves KV over P2pNcclConnector instead; that is transport, not paradigm.
     cache_args=(--kv-transfer-config "{\"kv_connector\":\"NixlPushConnector\",\"kv_role\":\"kv_both\",\"kv_buffer_device\":\"$kv_buffer_device\"}")
   fi
@@ -560,6 +561,11 @@ else
   echo "$rc" > "$run/simulate-exit-code"
   [[ "$rc" == 0 ]]
 fi
+# Scrape each engine's final counters before the audit: its mechanism report (the decode engine's
+# prefix-cache share) reads them, and the collectors below are torn down after it.
+for i in "${instances[@]}"; do
+  curl -fsS "http://127.0.0.1:$((8000+port_base+i))/metrics" > "$run/instance-$i/vllm-metrics-final.prom"
+done
 if [[ "$router_policy" != least-requests ]]; then
   stop_group "$proxy_pid"; proxy_pid=
   sleep 2 # Let aborted backend requests write terminal telemetry before final reconciliation.
@@ -591,7 +597,6 @@ for i in "${instances[@]}"; do
   if [[ -n "$cpu_cache_gib" ]]; then
     curl -fsS "http://127.0.0.1:$((8101+port_base+10*i))/metrics" > "$run/instance-$i/lmcache-metrics-final.prom"
   fi
-  curl -fsS "http://127.0.0.1:$((8000+port_base+i))/metrics" > "$run/instance-$i/vllm-metrics-final.prom"
   kill -TERM "${collectors[i]}"
   wait "${collectors[i]}"
 done

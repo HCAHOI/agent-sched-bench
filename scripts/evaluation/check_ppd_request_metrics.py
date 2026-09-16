@@ -41,11 +41,13 @@ def decode_cache_share(run: Path) -> dict | None:
 
 def check(run: Path, num_layers: int, *, final: bool = False) -> None:
     check_decode(run, final=final)
-    if final and (share := decode_cache_share(run)) is not None:
+    if final:
+        share = decode_cache_share(run)
+        assert share is not None, "final audit needs instance-1/vllm-metrics-final.prom with prefix-cache counters"
         (run / "mechanism-check.json").write_text(json.dumps(share, indent=1))
         print(f"decode engine prefix-cache share {share['cached_prompt_share']} "
-              f"({share['prefix_cache_hits']:.0f}/{share['prefix_cache_queries']:.0f} blocks), mode {share['mode']}; "
-              "near zero means every local turn re-prefilled its context", flush=True)
+              f"({share['prefix_cache_hits']:.0f} of {share['prefix_cache_queries']:.0f} prompt tokens queried), "
+              f"mode {share['mode']}; near zero means every local turn re-prefilled its context", flush=True)
     routing = rows(run / "routing.jsonl", final)
     decisions = {r["route_id"]: r for r in routing if r["event"] == "decision"}
     prefill = {r["request_id"]: r for r in rows(run / "instance-0/vllm-request-telemetry.jsonl", final)}

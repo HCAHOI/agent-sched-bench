@@ -150,12 +150,14 @@ changes more often than this file.
   must pass before the next launch, not after. The launcher defaults
   the UCX transport to `all/all` (GPU-direct over PCIe); TCP over loopback
   stalled KV pushes on the L40S host.
-- The PPD upstream exists only on the host, so `tests/test_ppd_*.py` fail
-  locally on import (`ppd.optimizer`, `scripts.benchmark.comprehensive_benchmark`).
-  Since the 2026-09-16 cleanup that is **six** expected local failures
-  (four `test_ppd_official_proxy.py` parameters, `test_ppd_profile.py`,
-  `test_ppd_request_metrics.py`); anything else is real. Last full run:
-  1,324 passed, 15 skipped, 0 collection errors.
+- Six local test failures are expected, all because the PPD upstream and its
+  patched vLLM exist only on the host: four `test_ppd_official_proxy.py`
+  parameters and `test_ppd_profile.py` fail on import (`ppd.optimizer`,
+  `scripts.benchmark.comprehensive_benchmark`), `test_ppd_request_metrics.py`
+  because the local vLLM wheel is unpatched and writes no request telemetry.
+  Anything else is real. Last full run: 1,324 passed, 6 failed, 15 skipped,
+  0 collection errors. `make test` itself does not run: its `PYTHON ?= python3`
+  is the system interpreter, which has no pytest; use `.venv/bin/python -m pytest`.
 - Commit 2ebe6f4 made replays survive a replacement-task failure (recorded
   in `throughput_summary.json` as `replacement_failures`) and gave the
   least-requests proxy one retry on a dropped engine connection. Runs before

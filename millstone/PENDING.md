@@ -48,17 +48,17 @@ live in the milestone files; this file only points at them.
 2. Make the pool simulator answer routing questions or stop quoting it for them: reproduce the measured two-sided
    run with the router's real information, ±10%
    (`analysis/results/pd-pool-sim-20260915/residency-routing.md`).
-3. Done 2026-09-16: the simulator carries `mixed`, `pd` and `ppd` only. Its `ppd` layout reproduces the decisions
-   the published engine actually made on this workload (turn one disaggregated, every later step local). Open: the
-   engine's lookup-table clause is measured hardware data the simulator does not carry, so a workload where the
-   table disagrees with the bypass would need the table itself.
+3. Carry the published engine's lookup table into the simulator, or leave its `ppd` layout restricted to
+   workloads where the table and the 512-token bypass agree. The layout now replays the decisions that engine
+   actually made on mixed56 (turn one disaggregated, every later step local); the table itself is measured
+   hardware data the simulator does not hold.
 4. Parked: exclusive tiering (built; chain 29 stopped, M4 §6), sizing rule as online task admission.
 5. PD at pool scale by simulation is finished and recorded in M3 §3.
    **Gate, written 2026-09-15 16:03 UTC as the sweep launched, sweep outputs unread:** mean JCT (ready-to-terminal)
    within ±15% and token-weighted TPOT within ±20% on all three measured runs, cached share within 5 points.
    Amendment: the mixed-prefill factor was fitted on FCFS after seeing that the sum-of-parts model ran 20% fast, so
    FCFS is a calibration run, not a check.
-6. Push branch `codex/cleanup-research-dead-code` (≈ 150 commits ahead of origin).
+6. Push branch `codex/cleanup-research-dead-code` (216 commits ahead of origin).
 
 ## 5. Decisions waiting on the user
 
