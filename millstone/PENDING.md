@@ -58,7 +58,7 @@ live in the milestone files; this file only points at them.
    within ±15% and token-weighted TPOT within ±20% on all three measured runs, cached share within 5 points.
    Amendment: the mixed-prefill factor was fitted on FCFS after seeing that the sum-of-parts model ran 20% fast, so
    FCFS is a calibration run, not a check.
-6. Push branch `codex/cleanup-research-dead-code` (216 commits ahead of origin).
+6. Push branch `codex/cleanup-research-dead-code` (213 commits ahead of origin).
 
 ## 5. Decisions waiting on the user
 
