@@ -1,9 +1,16 @@
-"""Reconcile both PD legs and worker-side KV receive records with replay."""
+"""Reconcile both PD legs and worker-side KV receive records with replay.
+
+Also reports the decode engine's prefix-cache hit share at the end of a run. That is the
+counter that says whether PPD's local turns reused the conversation's KV or recomputed it:
+the 2026-09-07 PPD run scored 0.012 there and measured nothing the paper describes.
+It is a report, not a gate - no threshold was pre-registered for it.
+"""
 from __future__ import annotations
 
 import argparse
 import json
 import math
+import re
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -11,8 +18,34 @@ from pathlib import Path
 from scripts.evaluation.check_two_instance_request_metrics import check as check_decode, rows
 
 
+def decode_cache_share(run: Path) -> dict | None:
+    """Prefix-cache hits/queries on the decode engine, from its final metrics scrape."""
+    metrics = run / "instance-1/vllm-metrics-final.prom"
+    if not metrics.exists():
+        return None
+    text = metrics.read_text()
+    counts = {}
+    for name in ("prefix_cache_queries_total", "prefix_cache_hits_total"):
+        found = re.findall(rf"^vllm:{name}\{{[^}}]*\}}\s+([\d.eE+]+)", text, re.M)
+        if not found:
+            return None
+        counts[name] = sum(map(float, found))
+    queries = counts["prefix_cache_queries_total"]
+    mode = None
+    config = run / "adapter-config.json"
+    if config.exists():
+        mode = json.loads(config.read_text()).get("mode")
+    return {"mode": mode, "prefix_cache_queries": queries, "prefix_cache_hits": counts["prefix_cache_hits_total"],
+            "cached_prompt_share": counts["prefix_cache_hits_total"] / queries if queries else None}
+
+
 def check(run: Path, num_layers: int, *, final: bool = False) -> None:
     check_decode(run, final=final)
+    if final and (share := decode_cache_share(run)) is not None:
+        (run / "mechanism-check.json").write_text(json.dumps(share, indent=1))
+        print(f"decode engine prefix-cache share {share['cached_prompt_share']} "
+              f"({share['prefix_cache_hits']:.0f}/{share['prefix_cache_queries']:.0f} blocks), mode {share['mode']}; "
+              "near zero means every local turn re-prefilled its context", flush=True)
     routing = rows(run / "routing.jsonl", final)
     decisions = {r["route_id"]: r for r in routing if r["event"] == "decision"}
     prefill = {r["request_id"]: r for r in rows(run / "instance-0/vllm-request-telemetry.jsonl", final)}
