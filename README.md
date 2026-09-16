@@ -1,128 +1,52 @@
-# agent-sched-bench
+# agent-sched-bench — archived
 
-Research environment for measuring and scheduling multi-step LLM agents. The
-repository covers four connected workflows:
+**This repository is closed to new work as of 2026-09-16.** Its code was split
+in two along the line the benchmark actually has: one side runs the agent and
+executes its tools, the other serves its prompts. Work continues there.
 
-1. collect benchmark agent traces with raw model/tool outputs and timing;
-2. replay the recorded tool trajectory under controlled concurrency;
-3. observe and predict clause-level latency, CPU, RSS, and disk behavior; and
-4. evaluate CPU/GPU serving and scheduling policies against paper baselines.
-
-Trace collection uses the registered remote/Codex providers. GPU-backed vLLM
-is optional and is used by serving and fixed-trajectory shadow-replay
-experiments, not as an alternative collection provider.
-
-## Setup
-
-The single environment entry point is:
-
-```bash
-bash scripts/setup/benchmark_server.sh
-source .venv/bin/activate
-```
-
-The script installs Python 3.12 and the dependencies declared by the project,
-verifies Docker, installs the eBPF prerequisite when needed, and creates
-`.venv`. On a GPU serving node use:
-
-```bash
-bash scripts/setup/benchmark_server.sh --gpu
-```
-
-`--gpu` installs the pinned `serving-spike` extra and verifies CUDA, torch, and
-vLLM. The repository does not use conda. Run `make help` for development and
-download targets.
-
-## Where Things Live
-
-| Path | Purpose |
+| Repository | What it owns |
 |---|---|
-| [`configs/`](configs/README.md) | Benchmark definitions, frozen corpus definitions, prompts, replay, and serving configs. |
-| [`data/`](data/README.md) | Materialized benchmark metadata and repositories on this machine. |
-| [`traces/`](traces/README.md) | Raw collections and replay outputs; most contents are intentionally untracked. |
-| `trace_archives/` | Compact retained trace archives checked into this checkout. |
-| `outputs/traces/` | Shareable consolidated trace bundles and their checksums. |
-| [`analysis/`](analysis/README.md) | Current research authority chain and result artifacts. |
-| `scripts/baselines/` | Paper baseline adapters and fidelity boundaries. |
-| `scripts/evaluation/` | Physical runners and result evaluators. |
-| [`src/tool_resource/`](src/tool_resource/README.md) | Clause telemetry, causal resource KB, predictor, and service interfaces. |
-| `src/trace_collect/` | Collection, resume, replay, and trace-artifact implementation. |
-| `src/agents/benchmarks/` | Benchmark plugins paired with `configs/benchmarks/*.yaml`. |
-| `tests/` | Focused regression and evaluation-semantics tests. |
+| [`agent-sched-bench-cpu`](https://github.com/HCAHOI/agent-sched-bench-cpu) (private) | The agent runtime: benchmark plugins, trace collection, task containers, tool execution, replay. Takes an LLM response, produces the next prompt. |
+| [`agent-sched-bench-gpu`](https://github.com/HCAHOI/agent-sched-bench-gpu) (private) | The serving side: vLLM engines, the published scheduling baselines and their pinned forks, prefill/decode layouts, KV tiering, engine-pool simulation. Takes a prompt, produces a response. |
+| [`agent-sched-bench-common`](https://github.com/HCAHOI/agent-sched-bench-common) (private) | `asb_common` — the contract both sides import: the serving wire format, the recorded-trace and workload formats, replay timing, and the two-machine handshake. No runtime dependencies. |
 
-The three locations are deliberately different: `configs/corpora/` defines
-cohorts, `data/` holds task metadata, and `traces/` holds executions. A corpus
-JSON is not proof that every referenced trace is present or valid. See the
-linked data and trace maps before starting an evaluation.
+Each side can run alone. With no agent side attached, the serving side replays a
+recorded trajectory and treats every tool call as a sleep it may accelerate; with
+no serving side attached, the agent side treats LLM inference the same way. That
+is why the tool-timing regime is a required field of the handshake rather than a
+default — a run whose records do not say which regime it used cannot be compared
+with any other run.
 
-## Collect Traces
+## What is still here
 
-Benchmark-specific dataset, image, selection, and prompt defaults live in
-`configs/benchmarks/<slug>.yaml`.
+Two things, and nothing else worth cloning for:
 
-```bash
-PYTHONPATH=src python -m trace_collect.cli \
-  --provider codex \
-  --model gpt-5.6-sol \
-  --benchmark swe-rebench \
-  --scaffold openclaw \
-  --container docker \
-  --mcp-config none \
-  --max-iterations 100 \
-  --concurrency 2 \
-  --sample 2
-```
+- **`results/` — 159 GB, the only copy.** Every run directory named in Milestones
+  1 through 4 lives here, in this working tree, on one host. It was never in Git
+  and it did not move at the split, because it is too large to carry and no
+  result receipt depends on having it. **Never delete or rewrite it.** The
+  receipts in the two new repositories are the portable record; this tree is the
+  provenance behind them. A result is locally recoverable only when its receipt
+  also names a retained in-repository file, archive, or Git object.
+- **The history up to `split-point-20260916`.** The tag marks the last commit
+  before the split. Both new repositories start from copies of this tree, so
+  anything deleted during the split is recoverable here by path and revision —
+  for example the pre-split `analysis/ROADMAP.md` at `9a13b794`, which the CPU
+  repository's `CLAIMS.md` still cites for the spent-corpora text.
 
-Registered providers are `openrouter`, `dashscope`, `openai`, `siliconflow`,
-`deepseek`, `pioneer`, and `codex`. Use `--service-tier fast` only with Codex.
-For observation-only clause telemetry add `--tool-resource-telemetry clause`;
-this does not query, update, or persist the resource KB.
+The code in this tree is the pre-split arrangement. It is kept for provenance,
+not for use: it has no successor commits, and every fix since 2026-09-16 landed
+in one of the three repositories above.
 
-Resume an interrupted collection with `--run-id <existing-run-directory>`.
-The exact acceptance rules are documented in [OPERATIONS.md](OPERATIONS.md#resume).
+## If you are looking for
 
-## Replay Traces
-
-Replay executes the recorded tool calls in real task containers. By default it
-uses source-trace LLM timing and issues no new model requests:
-
-```bash
-PYTHONPATH=src:. uv run python -m trace_collect.cli simulate \
-  --manifest /abs/path/to/manifest.yaml \
-  --container docker \
-  --concurrency 4 \
-  --workers 4 \
-  --prep-concurrency 4 \
-  --replay-speed 20 \
-  --output-dir /abs/path/to/output
-```
-
-`--replay-speed` scales recorded gaps and synthetic LLM sleeps, never real tool
-execution, timeouts, or telemetry clocks. Fixed-trajectory GPU evaluation adds
-`--shadow-llm-api-base` and `--shadow-llm-model`; the policy is selected with
-`--shadow-llm-mode`. This measures serving behavior without letting newly
-generated text alter the recorded action sequence.
-
-See [OPERATIONS.md](OPERATIONS.md) for manifest format, resource monitoring,
-large-corpus disk constraints, and daemon-backed tool-resource replay.
-
-## Registered Benchmarks
-
-| Slug | Runtime | Dataset source |
-|---|---|---|
-| `swe-bench-verified` | task container | `princeton-nlp/SWE-bench_Verified` |
-| `swe-rebench` | task container | `nebius/SWE-rebench` |
-| `terminal-bench` | host controller | pinned local Terminal-Bench registry |
-
-Add benchmark behavior through `src/agents/benchmarks/` and
-`configs/benchmarks/<slug>.yaml`; do not add dataset-specific collector flags
-or hardcode dataset names in the collection core.
-
-## Inspect Traces
-
-```bash
-PYTHONPATH=src python -m trace_collect.cli gantt-serve
-PYTHONPATH=src python -m trace_collect.cli gantt-export --help
-```
-
-The interactive viewer lives in `demo/gantt_viewer/`.
+| | Where it went |
+|---|---|
+| Benchmark plugins, `src/trace_collect/`, `src/agents/`, task containers | `agent-sched-bench-cpu`, `src/` |
+| Workload manifests, task pools, run pre-registrations | `agent-sched-bench-cpu`, `analysis/development/` |
+| The July 2026 KV-stopping lane and its closed questions | `agent-sched-bench-cpu`, `analysis/` |
+| `scripts/evaluation/`, `scripts/baselines/`, `scripts/serving/` | `agent-sched-bench-gpu`, `scripts/` |
+| Paper-baseline receipts, the single-instance L40S notes, serving measurements | `agent-sched-bench-gpu`, `analysis/` |
+| The serving wire format and the replay handshake | `agent-sched-bench-common`, `asb_common/` |
+| The milestone series and `PENDING.md` | Both new repositories, `millstone/`, identical in each |
+| Raw run directories | Here, in `results/`, and nowhere else |
