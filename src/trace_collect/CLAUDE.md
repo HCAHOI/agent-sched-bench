@@ -1,6 +1,8 @@
 # trace_collect
 
-This module is cloud-provider-only. Active subcommands:
+This module collects and replays agent trajectories. It never imports vllm or
+torch; its one serving coupling is the shadow-LLM client described below.
+Active subcommands:
 
 - default: collect traces with a configured cloud/OpenAI-compatible provider
 - `simulate`: replay source traces under bounded concurrency using source timing
@@ -24,9 +26,22 @@ benchmark plugin layer under `src/agents/benchmarks/`.
 
 ## Simulate contract
 
-`uv run python -m trace_collect.cli simulate` performs cloud replay only. It
-does not issue LLM requests; it replays source trace timing with
-`--replay-speed` and a bounded queue controlled by `--concurrency`.
+`uv run python -m trace_collect.cli simulate` replays a recorded trajectory
+under a bounded queue controlled by `--concurrency`. By default it issues no
+LLM requests: each `llm_call` sleeps for `llm_replay_duration_s` (source
+timing divided by `--replay-speed`, or a declared `--llm-timing ttft-tpot`
+model) and the recorded response is replayed verbatim.
+
+`--shadow-llm-api-base` turns that sleep into a real streaming request to a
+vLLM server, so the module does issue LLM requests in that mode. The
+trajectory still comes from the trace either way — the request exists to put
+real load on real hardware, which is what "fixed-trajectory shadow
+generation" means. The server must be reachable on a loopback address (use an
+SSH tunnel for a remote host), and the flags are `--shadow-llm-api-base`,
+`--shadow-llm-model`, `--shadow-llm-mode`, `--shadow-llm-seed`,
+`--shadow-llm-timeout-s`, `--shadow-llm-max-concurrency`. This is the only
+serving coupling in the module; the ban above still holds for engine-side
+flags (`--vllm-*`, `--kv-*`, `--gpu-*`, `--metrics-url`).
 
 ## Trace integrity
 
