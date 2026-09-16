@@ -43,7 +43,7 @@ def main() -> int:
     p.add_argument("--host", required=True)
     p.add_argument("--port", type=int, required=True)
     p.add_argument("--name", required=True, help="run name; becomes results/<name> here and on the host")
-    p.add_argument("--router-policy", required=True, choices=["least-requests", "thunderagent", "dualmap", "pd", "ppd", "profile"])
+    p.add_argument("--router-policy", required=True, choices=["least-requests", "thunderagent", "dualmap", "pd", "ppd"])
     p.add_argument("--instance-policy", default="fcfs", choices=["fcfs", "continuum"])
     p.add_argument("--task-sticky", action="store_true")
     p.add_argument("--concurrency", type=int, default=32)
@@ -70,9 +70,6 @@ def main() -> int:
                    help="dualmap: take DUALMAP_PREFILL_TPOT from results/NAME/server/prefill-calibration.json")
     p.add_argument("--smoke", action="store_true", help="host-side --smoke instead of a workload replay")
     p.add_argument("--calibrate", action="store_true", help="host-side --calibrate (dualmap prefill TPOT); no replay")
-    p.add_argument("--profile-lengths", type=Path, metavar="PLAN",
-                   help="host-side --profile-lengths with this plan (router-policy profile); no replay")
-    p.add_argument("--profile-stage", default="load", choices=["preliminary", "full", "load"])
     p.add_argument("--replay-budget-s", type=int, default=9000, help="SIGINT the replay after this wall time")
     p.add_argument("--tunnel-port", type=int, default=19019)
     p.add_argument("--port-base", type=int, default=0, metavar="N",
@@ -150,13 +147,8 @@ def main() -> int:
     for kv in a.env:
         k, v = kv.split("=", 1)
         env[k] = v
-    if a.profile_lengths:
-        assert a.router_policy == "profile", "--profile-lengths requires --router-policy profile"
-        env["LENGTH_PROFILE_PLAN"] = f"/workspace/manifests/{a.name}-plan.md"
-        env["LENGTH_PROFILE_STAGE"] = a.profile_stage
-    host_only = a.smoke or a.calibrate or bool(a.profile_lengths)
-    mode = ("--smoke" if a.smoke else "--calibrate" if a.calibrate
-            else "--profile-lengths" if a.profile_lengths else "--external-replay")
+    host_only = a.smoke or a.calibrate
+    mode = "--smoke" if a.smoke else "--calibrate" if a.calibrate else "--external-replay"
     conf = (f"[program:{a.name}]\ndirectory={a.remote_repo}\n"
             f"command=/usr/bin/env {' '.join(f'{k}={shlex.quote(v)}' for k, v in env.items())} "
             f"bash scripts/evaluation/run_two_instance_fcfs.sh {mode}\n"
@@ -167,10 +159,6 @@ def main() -> int:
         (run / "calibration-source.txt").write_text(a.calibration_run + "\n")
     subprocess.run(["scp", "-q", "-P", str(a.port), a.manifest, f"root@{a.host}:/workspace/manifests/{a.name}.yaml"],
                    check=True) if remote("mkdir -p /workspace/manifests").returncode == 0 else sys.exit("mkdir failed")
-    if a.profile_lengths:
-        subprocess.run(["scp", "-q", "-P", str(a.port), str(a.profile_lengths),
-                        f"root@{a.host}:{env['LENGTH_PROFILE_PLAN']}"], check=True)
-        (run / "length-profile-plan.md").write_text(a.profile_lengths.read_text())
     subprocess.run(["scp", "-q", "-P", str(a.port), str(run / "launch.conf"),
                     f"root@{a.host}:/etc/supervisor/conf.d/{a.name}.conf"], check=True)
     started = remote(f"supervisorctl reread >/dev/null && supervisorctl update >/dev/null && supervisorctl start {a.name}")
@@ -227,7 +215,7 @@ def main() -> int:
         remote(f"printf '%s\\n' {rc} > {remote_run}/external-replay-exit-code.tmp && "
                f"mv {remote_run}/external-replay-exit-code.tmp {remote_run}/external-replay-exit-code")
         print("replay exit", rc, flush=True)
-    # Host-only modes (calibrate, profile) run for hours; a replay's host side finishes within minutes of it.
+    # Host-only modes (calibrate) run for hours; a replay's host side finishes within minutes of it.
     deadline = time.monotonic() + (a.replay_budget_s if host_only else 1800)
     while not host_done():
         if time.monotonic() > deadline:

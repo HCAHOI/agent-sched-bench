@@ -55,7 +55,7 @@ if [ "$SERVING_HOST" = "1" ]; then
   export PATH="$HOME/.local/bin:$PATH"
   command -v uv >/dev/null || { echo "FATAL: uv install failed" >&2; exit 1; }
   uv python install 3.12
-  export CONTINUUM_PYTHON=${CONTINUUM_PYTHON:-$(uv python find 3.12)} THUNDERAGENT_PYTHON=${THUNDERAGENT_PYTHON:-$(uv python find 3.12)} PPD_NATIVE_PUSH=1
+  export CONTINUUM_PYTHON=${CONTINUUM_PYTHON:-$(uv python find 3.12)} THUNDERAGENT_PYTHON=${THUNDERAGENT_PYTHON:-$(uv python find 3.12)}
   C=$XDG_CACHE_HOME/agent-sched-bench
   TA=7ddc8610270e56d3b109eed8796b3a4360fc67c9
   log() { printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*"; }

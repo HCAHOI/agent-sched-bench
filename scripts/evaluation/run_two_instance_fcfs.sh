@@ -63,10 +63,11 @@ case "$router_policy" in
     [[ "$instance_policy" == fcfs && "$task_sticky" == 0 ]] || exit 2
     [[ "$mode" == --calibrate || -n "${DUALMAP_PREFILL_TPOT:-}" ]] || { echo "DUALMAP_PREFILL_TPOT requires hardware calibration" >&2; exit 2; }
     shadow_mode=thunderagent ;;
-  pd|ppd|static-x1|profile)
+  # Two paradigms: pd (classic disaggregation) and ppd (arXiv 2603.13358). static-x1 is not a third
+  # one - it is PPD's always-local arm, reachable only from --profile-ppd (and a plumbing smoke).
+  pd|ppd|static-x1)
     [[ "$instance_policy" == fcfs && "$task_sticky" == 0 && "$instances_per_gpu" == 1 ]] || exit 2
     [[ "$router_policy" != static-x1 || "$mode" == --smoke || "$mode" == --profile-ppd ]] || exit 2
-    [[ "$router_policy" != profile || "$mode" == --profile-lengths ]] || exit 2
     [[ "$router_policy" != ppd || -d "${PPD_BENCHMARK_DATA:-}" ]] || { echo "PPD needs measured decision tables" >&2; exit 2; }
     [[ "${PORT_BASE:-0}" == 0 ]] || { echo "PD paths use fixed ports; PORT_BASE must be 0" >&2; exit 2; }
     ppd_mode=$router_policy
@@ -78,10 +79,9 @@ case "$instance_policy" in
   continuum) serve_command=serve ;;
   *) echo "INSTANCE_POLICY must be fcfs or continuum" >&2; exit 2 ;;
 esac
-[[ "$mode" == --run || "$mode" == --smoke || "$mode" == --calibrate || "$mode" == --profile-ppd || "$mode" == --profile-lengths || "$mode" == --external-replay ]] || exit 2
+[[ "$mode" == --run || "$mode" == --smoke || "$mode" == --calibrate || "$mode" == --profile-ppd || "$mode" == --external-replay ]] || exit 2
 [[ "$mode" != --calibrate || "$router_policy" == dualmap ]] || exit 2
 [[ "$mode" != --profile-ppd || "$ppd_mode" == pd || "$ppd_mode" == static-x1 ]] || exit 2
-[[ "$mode" != --profile-lengths || "$ppd_mode" == profile ]] || exit 2
 [[ "$run" == /* && ! -e "$run" && -f "$manifest" ]] || exit 2
 gpu_count=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 [[ "$gpu_count" == 2 || ( -n "$single_gpu" && "$gpu_count" == 1 ) ]] || { echo "need 2 GPUs (1 with SINGLE_GPU=0), found $gpu_count" >&2; exit 2; }
@@ -124,16 +124,9 @@ cp scripts/baselines/thunderagent_official{.sh,_launcher.py} "$run/"
 cp scripts/evaluation/check_two_instance_request_metrics.py "$run/"
 checker=("$python" scripts/evaluation/check_two_instance_request_metrics.py "$run")
 if [[ -n "$ppd_mode" ]]; then
-  cp scripts/baselines/ppd_official{.sh,_proxy.py} scripts/baselines/ppd_request_metrics.patch scripts/baselines/ppd_nixl_metrics.patch "$run/"
+  cp scripts/baselines/ppd_official{.sh,_proxy.py} scripts/baselines/ppd_push_metrics.patch "$run/"
   cp scripts/evaluation/check_ppd_request_metrics.py "$run/"
   cp scripts/evaluation/profile_ppd.py "$run/"
-  if [[ "$mode" == --profile-lengths ]]; then
-    cp scripts/evaluation/profile_serving_lengths.py "$run/"
-    cp "${LENGTH_PROFILE_PLAN:?Length profiling requires its declared plan}" "$run/length-profile-plan.md"
-  fi
-  cp scripts/baselines/ppd_policy.py "$run/"
-  [[ "${PPD_STATE_AWARE:-0}" != 1 ]] || cp scripts/baselines/ppd_state_query.patch "$run/"
-  [[ "${PPD_NATIVE_PUSH:-0}" != 1 ]] || cp scripts/baselines/ppd_push_metrics.patch "$run/"
   num_layers=$("$ppd_python" -c 'import sys; from transformers import AutoConfig; print(AutoConfig.from_pretrained(sys.argv[1], local_files_only=True).num_hidden_layers)' "$model")
   checker=(env PYTHONPATH="$repo" "$python" scripts/evaluation/check_ppd_request_metrics.py "$run" --num-layers "$num_layers")
   uv pip freeze --python "$ppd_python" > "$run/engine-packages.txt"
@@ -266,13 +259,12 @@ YAML
       VLLM_NIXL_ABORT_REQUEST_TIMEOUT=$((timeout_s+60)))
     kv_buffer_device=${PPD_KV_BUFFER_DEVICE:-cuda}
     [[ "$kv_buffer_device" == cuda || "$kv_buffer_device" == cpu ]] || exit 2
-    connector_name=NixlConnector
-    if [[ "${PPD_NATIVE_PUSH:-0}" == 1 ]]; then
-      connector_name=NixlPushConnector
-      # Router UUIDs already ensure uniqueness; keep IDs joinable across P and D.
-      cache_env+=(VLLM_DISABLE_REQUEST_ID_RANDOMIZATION=1)
-    fi
-    cache_args=(--kv-transfer-config "{\"kv_connector\":\"$connector_name\",\"kv_role\":\"kv_both\",\"kv_buffer_device\":\"$kv_buffer_device\"}")
+    # Router UUIDs already ensure uniqueness; keep IDs joinable across P and D.
+    cache_env+=(VLLM_DISABLE_REQUEST_ID_RANDOMIZATION=1)
+    # kv_both on both sides is how vLLM's own NIXL disaggregation examples run: the connector
+    # decides producer or consumer per request from kv_transfer_params, not from a launch role.
+    # Upstream PPD moves KV over P2pNcclConnector instead; that is transport, not paradigm.
+    cache_args=(--kv-transfer-config "{\"kv_connector\":\"NixlPushConnector\",\"kv_role\":\"kv_both\",\"kv_buffer_device\":\"$kv_buffer_device\"}")
   fi
   privilege=() telemetry_env=() telemetry_args=()
   if [[ "$dram_metrics" == on ]]; then
@@ -408,16 +400,6 @@ if [[ -n "$ppd_mode" ]]; then
     --mode "$ppd_mode" --model "$model" --backends http://127.0.0.1:8000 http://127.0.0.1:8001
     --transport nixl --output "$run" --timeout-s "$timeout_s")
   [[ "$ppd_mode" != ppd ]] || proxy+=(--benchmark-data "$run/ppd-calibration")
-  [[ "${PPD_EXTENDED_CONTEXT:-0}" != 1 ]] || proxy+=(--extended-context)
-  if [[ "${PPD_TWO_SIDED:-0}" == 1 ]]; then
-    # ppd_official.sh installs and verify-installed checks the state-query patch
-    # only under PPD_NATIVE_PUSH=1 PPD_STATE_AWARE=1; two-sided needs that endpoint.
-    [[ "${PPD_STATE_AWARE:-0}${PPD_NATIVE_PUSH:-0}" == 11 ]] || \
-      { echo "PPD_TWO_SIDED=1 requires PPD_NATIVE_PUSH=1 PPD_STATE_AWARE=1" >&2; exit 2; }
-    proxy+=(--two-sided)
-  elif [[ "${PPD_STATE_AWARE:-0}" == 1 ]]; then
-    proxy+=(--state-aware)
-  fi
 fi
 printf '%q ' "${proxy[@]}" > "$run/proxy.argv"
 "${proxy[@]}" > "$run/proxy.log" 2>&1 &
@@ -537,12 +519,6 @@ else
       scripts/evaluation/profile_ppd.py --mode "$ppd_mode" --model "$model"
       --output "$run/ppd-calibration" --seed 42 --start-point "${PPD_PROFILE_START_POINT:-1}")
     [[ -z "${PPD_PROFILE_CONTEXT_TOKENS:-}" ]] || simulate+=(--context-tokens "$PPD_PROFILE_CONTEXT_TOKENS")
-  fi
-  if [[ "$mode" == --profile-lengths ]]; then
-    simulate=(setsid taskset -c "${CALIBRATION_CPUSET:-${ROUTER_CPUSET:-15}}" env PYTHONPATH="$ppd_checkout:$repo" "$ppd_python"
-      scripts/evaluation/profile_serving_lengths.py --model "$model" --plan "$run/length-profile-plan.md"
-      --output "$run/length-profile" --stage "${LENGTH_PROFILE_STAGE:-preliminary}" --timeout-s "$timeout_s")
-    [[ -z "${LENGTH_PROFILE_RESUME_FROM:-}" ]] || simulate+=(--resume-from "$LENGTH_PROFILE_RESUME_FROM")
   fi
   if [[ "$mode" == --external-replay ]]; then
     # The external replay controller writes its actual exit status atomically.

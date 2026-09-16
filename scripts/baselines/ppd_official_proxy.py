@@ -1,7 +1,17 @@
 """One P and one D, with the public PPD decision engine and audited replay.
 
-PD always visits P then D. Default PPD calls the unchanged public decision engine.
-Explicit flags add measured huge-context scores and a cache/load-aware D guard.
+Two paradigms, no variants of our own:
+  * `pd` - classic disaggregation: every request prefills on P and decodes on D.
+  * `ppd` - arXiv 2603.13358: turn one goes P -> pD, and every later turn is routed
+    by the unchanged public decision engine (turn 1 -> PD; new input below the
+    512-token bypass -> local; otherwise its offline lookup table). A local turn
+    append-prefills on pD's own prefix cache.
+`static-x1` is not a third paradigm: it is PPD's always-local (1P_1pD) arm, used
+only by profile_ppd.py to measure the lookup table that `ppd` then reads.
+
+Contexts above the public table's largest class score against the "large" row,
+which is the upstream engine's own extrapolation. We do not extend the table.
+
 Agent sessions use program IDs; new input is measured against the last completed
 token history, and predicted output length uses only completed responses.
 """
@@ -24,8 +34,6 @@ from starlette.responses import StreamingResponse
 from transformers import AutoTokenizer
 
 from scripts.baselines.thunderagent_official_launcher import RequestAudit, _request_record
-from scripts.baselines.ppd_policy import (add_huge_context_table, protect_decode,
-                                          two_sided_constants, two_sided_estimate)
 
 
 @dataclass
@@ -42,13 +50,6 @@ class Session:
 def create_app(args: Any) -> RequestAudit:
     tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
     engine = None
-    extended_context = getattr(args, "extended_context", False)
-    state_aware = getattr(args, "state_aware", False)
-    two_sided = getattr(args, "two_sided", False)
-    assert not state_aware or extended_context, "State-aware comparison uses the same extended table"
-    assert not two_sided or not (extended_context or state_aware), \
-        "Two-sided routing replaces the lookup-table extensions"
-    assert not two_sided or args.mode in ("pd", "ppd"), "Two-sided routing needs the public turn-one path"
     if args.mode == "ppd":
         from ppd.optimizer.ppd_decision_engine import (
             PPDDecisionEngine, QPS_POINTS, T2_WORKLOAD_CONFIGS,
@@ -58,9 +59,6 @@ def create_app(args: Any) -> RequestAudit:
         engine = PPDDecisionEngine(str(args.benchmark_data), base_config="1P_1D", w_ttft=1, w_tpot=1)
         assert len(engine.performance_data) == 2 * len(T2_WORKLOAD_CONFIGS) * len(QPS_POINTS), \
             "Incomplete PPD calibration table; refusing default-only routing"
-        if extended_context:
-            add_huge_context_table(engine, args.benchmark_data)
-    assert engine is not None or not (extended_context or state_aware)
     backends = args.backends
     assert len(backends) == 2 and len(set(backends)) == 2 and args.transport == "nixl"
     sessions: dict[str, Session] = {}
@@ -76,12 +74,8 @@ def create_app(args: Any) -> RequestAudit:
             w_ttft=engine.w_ttft, w_tpot=engine.w_tpot,
             output_prediction="mean of completed responses; cold start 128",
             qps_estimate="cumulative arrivals before this request / elapsed seconds",
-            extended_context=extended_context, state_aware=state_aware,
-            state_guard="actual uncached tokens >= bypass threshold AND D queue full or waiting",
         )
         engine.export_lookup_table(str(args.output / "ppd-lookup-table.json"))
-    if two_sided:
-        config["two_sided_constants"] = two_sided_constants()
     (args.output / "adapter-config.json").write_text(json.dumps(config, default=str, indent=2))
 
     class PpdAudit(RequestAudit):
@@ -123,17 +117,6 @@ def create_app(args: Any) -> RequestAudit:
         sessions.pop(job_id, None)
         return {"released": True, "program_id": job_id}
 
-    @app.post("/profiling/reset")
-    async def reset_profile() -> dict[str, bool]:
-        nonlocal arrivals, total_output, completed, started
-        if args.mode != "profile":
-            raise HTTPException(404, "Profiling mode is disabled")
-        if pending or sessions:
-            raise HTTPException(409, "Release and drain every conversation first")
-        arrivals = total_output = completed = 0
-        started = time.monotonic()
-        return {"reset": True}
-
     @app.post("/v1/chat/completions")
     async def completion(request: Request) -> StreamingResponse:
         nonlocal arrivals, total_output, completed
@@ -156,14 +139,6 @@ def create_app(args: Any) -> RequestAudit:
         turn = session.turns + 1
         use_local = args.mode == "static-x1" and turn > 1
         decision_details = {}
-        forced_path = payload.pop("profiling_path", None)
-        if args.mode == "profile":
-            if forced_path not in {"pd", "local"} or (turn == 1 and forced_path != "pd"):
-                raise HTTPException(400, "Profiling requires PD on turn one and an explicit return path")
-            use_local = forced_path == "local"
-            decision_details["profiling_path"] = forced_path
-        elif forced_path is not None:
-            raise HTTPException(400, "Forced paths are only allowed in profiling mode")
         if engine is not None:
             # Read the public engine's counter delta; do not reimplement its branches.
             before = {key: sum(counts.values()) for key, counts in engine.stats.decisions_by_workload.items()}
@@ -176,39 +151,11 @@ def create_app(args: Any) -> RequestAudit:
             if reason not in {"turn1", "short_input_bypass"}:
                 context_class = classify_context_length(context_tokens)
                 decision_details["ppd_lookup_key"] = [
-                    "large" if context_class == "huge" and not extended_context else context_class,
+                    # The public table has two context classes; anything longer scores against
+                    # "large", which is the upstream engine's own extrapolation.
+                    "large" if context_class == "huge" else context_class,
                     reason, find_nearest_qps(qps),
                 ]
-        async def cache_state(backend: str) -> dict[str, Any]:
-            response = await app.state.client.post(backend + "/ppd/cache_state",
-                                                   json={"prompt_token_ids": prompt})
-            response.raise_for_status()
-            return response.json()
-
-        # Two-sided compares both engines; the state guard only inspects D.
-        queried = backends if two_sided and turn > 1 else backends[1:] if state_aware else []
-        if queried:
-            query_started = time.perf_counter()
-            pending[job_id] = asyncio.current_task()
-            try:
-                states = await asyncio.gather(*map(cache_state, queried))
-            except BaseException as exc:
-                del pending[job_id]
-                if isinstance(exc, Exception):
-                    fatal.append(repr(exc))
-                raise
-            decision_details["state_query_ms"] = (time.perf_counter() - query_started) * 1000
-            if two_sided:
-                decision_details["prefill_state"], decision_details["decode_state"] = states
-                decision_details["two_sided"] = two_sided_estimate(len(prompt), *states)
-                decision_details["two_sided_reason"] = "two_sided_expected_ttft"
-                use_local = decision_details["two_sided"]["use_local"]
-            else:
-                decision_details["decode_state"] = states[0]
-                decision_details["calibrated_use_local"] = use_local
-                use_local, guard = protect_decode(use_local, len(prompt), states[0],
-                                                   int(os.environ.get("PPD_BYPASS_THRESHOLD", "512")))
-                decision_details["state_guard_reason"] = guard
         row = _request_record.get()
         wire_id = "ppd_" + row["route_id"]
         row.update(wire_request_id=wire_id, engine_request_id="chatcmpl-" + wire_id,
@@ -300,15 +247,13 @@ def create_app(args: Any) -> RequestAudit:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=["pd", "static-x1", "ppd", "profile"], required=True)
+    parser.add_argument("--mode", choices=["pd", "static-x1", "ppd"], required=True,
+                        help="pd: every request P then D. ppd: the public decision engine. "
+                             "static-x1: PPD's always-local arm, for profile_ppd.py calibration only")
     parser.add_argument("--model", required=True)
     parser.add_argument("--backends", nargs=2, required=True, help="P and D HTTP bases, in that order")
     parser.add_argument("--transport", choices=["nixl"], default="nixl")
     parser.add_argument("--benchmark-data", type=Path)
-    parser.add_argument("--extended-context", action="store_true")
-    parser.add_argument("--state-aware", action="store_true")
-    parser.add_argument("--two-sided", action="store_true",
-                        help="Route turn>1 by the declared two-sided TTFT model; needs the state-query patch")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout-s", type=float, default=1800)
     args = parser.parse_args()
