@@ -140,18 +140,22 @@ changes more often than this file.
 - The host source is a snapshot of the local HEAD. After committing code the
   host executes, re-ship it (README commands) before launching, and never
   while a launcher is executing there (the workers import from disk).
-- PD-family runs (`ROUTER_POLICY=pd|ppd|profile`): the pinned vLLM 0.28.0
+- PD-family runs (`ROUTER_POLICY=pd|ppd`): the pinned vLLM 0.28.0
   wheel is a CUDA 13 build needing driver 580 or newer, and the launcher
   falls back to `--env PPD_CUDA=cu129 --env PPD_VENV=<venv>` on older
   drivers. This host reports driver 595, so the default CUDA 13 wheel is the
   branch that applies — but no PD-family run has launched here, so the venv
-  state is unverified; re-check before launching one. The launcher defaults
+  state is unverified; re-check before launching one. The 2026-09-16 cleanup
+  left one transport stack (0.28.0 push), so `ppd_official.sh verify-installed`
+  must pass before the next launch, not after. The launcher defaults
   the UCX transport to `all/all` (GPU-direct over PCIe); TCP over loopback
   stalled KV pushes on the L40S host.
-- The PPD upstream exists only on the host, so `tests/test_ppd_*.py` and
-  `tests/test_serving_length_profile.py` fail locally on import: the profiler
-  imports `scripts.benchmark.comprehensive_benchmark` from that checkout. Thirteen
-  local failures are expected for this reason; anything else is real.
+- The PPD upstream exists only on the host, so `tests/test_ppd_*.py` fail
+  locally on import (`ppd.optimizer`, `scripts.benchmark.comprehensive_benchmark`).
+  Since the 2026-09-16 cleanup that is **six** expected local failures
+  (four `test_ppd_official_proxy.py` parameters, `test_ppd_profile.py`,
+  `test_ppd_request_metrics.py`); anything else is real. Last full run:
+  1,324 passed, 15 skipped, 0 collection errors.
 - Commit 2ebe6f4 made replays survive a replacement-task failure (recorded
   in `throughput_summary.json` as `replacement_failures`) and gave the
   least-requests proxy one retry on a dropped engine connection. Runs before

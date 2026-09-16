@@ -269,6 +269,19 @@ closure of 2026-09-11 and against the simulator's pre-registered held-out
 calibration gate below. The extended-context and state-aware PPD runs
 prepared on 2026-09-08 were never executed.
 
+**Code, 2026-09-16 08:24 UTC.** The framework now carries two PD-family
+paradigms and no variants of ours: classic disaggregation (`ROUTER_POLICY=pd`,
+every step P then D) and the published PPD rule (`ROUTER_POLICY=ppd`, the
+upstream decision engine unchanged, reading a measured lookup table). The
+two-sided router, the state-aware decode guard, the extended huge-context
+table and the serving-length profiler that measured the two-sided constants
+were deleted with their vLLM patch and tests; `static-x1` stays because it is
+PPD's always-local arm, which the calibration profiler needs. The results
+above are the record of those runs and are unchanged by the deletion. Every
+PD-family run now writes `mechanism-check.json`: the decode engine's
+prefix-cache hit share, the counter whose value of 0.0123 withdrew the PPD
+number here (classic PD scored 0.0126 on the same workload).
+
 **What the 448-group profiling matrix establishes** (analysis of
 `results/serving-length-profile-vast-20260908-complete/`, 2026-09-10;
 observation first, inference after):

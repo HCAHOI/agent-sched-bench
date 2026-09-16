@@ -410,5 +410,7 @@ Result directories live under `results/` in this repository; provenance branches
   `scripts/baselines/thunderagent_official_launcher.py` with `thunderagent_pending_release.patch` and `thunderagent_capacity_consistent.patch`;
   `scripts/baselines/dualmap_official_proxy.py` (`--agent-progress`);
   `scripts/baselines/ppd_official_proxy.py`, `ppd_policy.py` and the four PPD patches;
-  `scripts/evaluation/profile_serving_lengths.py`, `profile_ppd.py`;
+  `scripts/evaluation/profile_serving_lengths.py`, `profile_ppd.py`
+  (the 2026-09-16 cleanup kept only the two paradigms: `ppd_policy.py`, `profile_serving_lengths.py`
+  and three of the patches are gone, `ppd_official_proxy.py` and `profile_ppd.py` remain — M3 §3);
   workload manifest `analysis/development/mixed56-2l40s-concurrency32-v1/`.

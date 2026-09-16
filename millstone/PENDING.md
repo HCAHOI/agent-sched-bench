@@ -1,6 +1,6 @@
 # Pending: experiment queue and open decisions
 
-Current as of 2026-09-15 19:07 UTC. Rewritten, not appended: this file says
+Current as of 2026-09-16 08:24 UTC. Rewritten, not appended: this file says
 what is queued, why, and what each result decides. Records of finished work
 live in the milestone files; this file only points at them.
 
@@ -27,20 +27,19 @@ live in the milestone files; this file only points at them.
 - **High per-stream decode regime** — M4 §6; raw curves, lane scripts and logs in
   `analysis/results/tpot-curve-20260914/`.
 - **PD / PPD routing** — M3 §3, where the public-PPD number is withdrawn and the audit that withdrew it is recorded.
+  The code now carries two paradigms only: `ROUTER_POLICY=pd` (classic, every step P then D) and `ROUTER_POLICY=ppd`
+  (the upstream decision engine, unchanged). Our two-sided router, state-aware guard and extended lookup table were
+  deleted on 2026-09-16; every PD-family run writes the decode engine's prefix-cache share to `mechanism-check.json`.
 - **PD at pool scale, by simulation** — M3 §3; its residency-routing reading is retracted
-  (`analysis/results/pd-pool-sim-20260915/residency-routing.md`).
+  (`analysis/results/pd-pool-sim-20260915/residency-routing.md`). The simulator now offers `mixed`, `pd` and `ppd`
+  layouts only.
 - **Baselines** — DualMap/CacheWise/ThunderAgent family starves under saturation: M4 §3.3 (4).
 - **Related work** — M4 §5 (hidden-state tool prediction; agent KV offloading: MORI, CacheWise, TokenCake, Continuum).
 
 ## 3. Queue
 
-- **RUNNING since 17:27 UTC 2026-09-15** (user go "跑吧"): where the TPOT service level binds.
-  `results/host-lanes/tpot5-sla-20260915.sh`, host log `/workspace/tpot5-sla-20260915.log`, results
-  `/workspace/tpot-20260915/`. Gemma 4 26B-A4B FP8 + fp8 KV, TRITON_ATTN, `--max-num-seqs` 128, concurrency
-  16/32/64/96/128 on real agent prefixes, with DFlash k=15 and without speculation. Decides: the largest
-  concurrency under each service level in {25, 50, 100, 200} ms, whether latency or KV capacity binds first, and
-  whether speculative decoding pays at the frontier concurrency. Pre-registration and readings: M4 §6.
-- Nothing else queued.
+- Empty. The TPOT service-level sweep of 2026-09-15 finished; its pre-registration and readings are in M4 §6.
+  The GPU host is idle.
 
 ## 4. Next (one line each; the records hold the reasoning)
 
@@ -49,9 +48,10 @@ live in the milestone files; this file only points at them.
 2. Make the pool simulator answer routing questions or stop quoting it for them: reproduce the measured two-sided
    run with the router's real information, ±10%
    (`analysis/results/pd-pool-sim-20260915/residency-routing.md`).
-3. Strip the simulator to mixed / PD / PPD and implement the published PPD rule from the pinned upstream
-   (`ppd/optimizer/ppd_decision_engine.py`: 512-token short-input threshold, context class, nearest QPS point,
-   offline lookup table) instead of our variants.
+3. Done 2026-09-16: the simulator carries `mixed`, `pd` and `ppd` only. Its `ppd` layout reproduces the decisions
+   the published engine actually made on this workload (turn one disaggregated, every later step local). Open: the
+   engine's lookup-table clause is measured hardware data the simulator does not carry, so a workload where the
+   table disagrees with the bypass would need the table itself.
 4. Parked: exclusive tiering (built; chain 29 stopped, M4 §6), sizing rule as online task admission.
 5. PD at pool scale by simulation is finished and recorded in M3 §3.
    **Gate, written 2026-09-15 16:03 UTC as the sweep launched, sweep outputs unread:** mean JCT (ready-to-terminal)
