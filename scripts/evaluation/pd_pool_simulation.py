@@ -1,5 +1,5 @@
 """Trace-driven simulation of a GPU pool serving multi-step coding agents: mixed engines, prefill/decode
-disaggregation (PD), or a hybrid, at any pool size, on measured or scaled hardware.
+disaggregation (PD), or the PPD layout, at any pool size, on measured or scaled hardware.
 
 Why a simulator: the PD verdicts in Milestone 3 come from two GPUs, where one role bounds the system. The
 questions "what at 8 or 32 GPUs", "what if part of the traffic is disaggregated", and "what on a 141 GB GPU"
@@ -20,24 +20,23 @@ Engine model (one vLLM engine, per iteration; parameters fitted from the 2xL40S 
 Roles: mixed (prefill + decode), P (prefill only; the finished KV is pushed to a D engine, transfer cost
 22 ms + 0.0102 ms per token on PCIe), D (receives KV, decodes). Routing: task-sticky on mixed engines and on
 P engines (turn 1 to the engine with the fewest outstanding requests); D by fewest outstanding.
-Hybrid: a fraction of tasks is pinned to the PD sub-pool at admission; the rest use the mixed sub-pool.
-Two-sided: mixed engines plus P engines; each request takes the side with the lower expected time to first
-token, local = (pending prefill tokens on the task's mixed engine + its own uncached tokens) at the mixed prefill
-rate, PD = the same on the P engine plus transfer and a 0.4 s handoff (the 2026-09-11 two-sided router, with the
-simulator's own constants and exact residency).
-Residency: the same layout, routed by one bit instead of a cost model — a step is disaggregated iff its history is
-not resident on the engine that would decode it. Warm steps prefill their small delta locally (moving one would pay
-a full-context transfer to save about a thousand tokens of prefill); cold steps go to a stateless prefill tier that
-keeps no cache, and its KV is pushed to the task's home engine. This is the rule that neither the published PPD
-decision engine (append size, predicted output, QPS lookup) nor the two-sided cost router implements.
+
+Three layouts, no variants of our own:
+  mixed  - colocated replicas, task-sticky.
+  pd     - classic disaggregation: every step prefills on a P engine and decodes on a D engine.
+  ppd    - arXiv 2603.13358: P engines plus prefill-capable decode engines (pD). A task's turn one
+           prefills on a P engine and its KV is pushed to the task's home pD; every later step stays
+           on that pD and append-prefills against its own prefix cache. That is what the published
+           decision engine did on this workload: in results/mixed56-vast-ppd-pcie-20260907-r1 it sent
+           all 113 first turns to PD and all 3,902 later steps local (1,547 by its 512-token
+           short-input bypass, 2,355 by its offline lookup table). The table is measured hardware data
+           the simulator does not carry, so the simulator claims nothing beyond those recorded decisions.
 
 Usage:
   pd_pool_simulation.py extract results/<run> --out workload.json
   pd_pool_simulation.py run workload.json --pool mixed:2 --hw l40s [--agents-per-gpu 16] [--out JSON]
-  pd_pool_simulation.py run workload.json --pool pd:1,1
-  pd_pool_simulation.py run workload.json --pool hybrid:4,2,2 --split-frac 0.5   (4 mixed, 2 P, 2 D)
-  pd_pool_simulation.py run workload.json --pool twosided:6,2                    (6 mixed, 2 P)
-  pd_pool_simulation.py run workload.json --pool residency:6,2                   (6 home engines, 2 stateless P)
+  pd_pool_simulation.py run workload.json --pool pd:1,1                          (1 P, 1 D)
+  pd_pool_simulation.py run workload.json --pool ppd:6,2                         (6 pD, 2 P)
 """
 from __future__ import annotations
 
@@ -137,16 +136,14 @@ class Task:
 
 
 class Engine:
-    def __init__(self, eid: str, role: str, hw: dict, max_seqs: int, budget: int, shared_prefix: int,
-                 keeps_cache: bool = True):
-        self.eid, self.role, self.hw, self.keeps_cache = eid, role, hw, keeps_cache
+    def __init__(self, eid: str, role: str, hw: dict, max_seqs: int, budget: int, shared_prefix: int):
+        self.eid, self.role, self.hw = eid, role, hw
         self.max_seqs, self.budget, self.shared = max_seqs, budget, shared_prefix
         self.cap = hw["kv_tokens"]
         self.running: list[Request] = []
         self.waiting: deque[Request] = deque()
         self.cache: OrderedDict[int, int] = OrderedDict()   # task id -> resident context tokens (LRU, oldest first)
         self.pinned = 0
-        self.homed = 0            # tasks whose home this engine is (residency routing balances on this)
         self.busy_s = 0.0
         self.iterations = 0
         self.scheduled = False
@@ -270,9 +267,8 @@ class Engine:
         self.running.remove(r)
         tokens = r.computed + r.generated
         self.pinned -= tokens
-        if self.keeps_cache:
-            self.cache[r.task.tid] = tokens
-            self.cache.move_to_end(r.task.tid)
+        self.cache[r.task.tid] = tokens
+        self.cache.move_to_end(r.task.tid)
         r.finish_t = t
         if self.role == "P":
             sim.transfer(r, t)
@@ -283,18 +279,19 @@ class Engine:
 # ------------------------------------------------------------------------------------------------ pool
 class Sim:
     def __init__(self, workload: dict, pool: str, hw: dict, agents: int, max_seqs: int, budget: int, shared_prefix: int,
-                 split_frac: float, seed: int, tasks_per_gpu: float, d_max_seqs: int | None):
+                 seed: int, tasks_per_gpu: float, d_max_seqs: int | None):
         self.hw, self.rng = hw, random.Random(seed)
         kind, _, spec = pool.partition(":")
+        assert kind in ("mixed", "pd", "ppd"), f"pool must be mixed:N, pd:P,D or ppd:pD,P: {pool}"
         n = [int(x) for x in spec.split(",")]
+        # ppd's decode side is a pD: it decodes, keeps its prefix cache and prefills later turns itself,
+        # which is what the mixed engine already models, so it reuses that role.
         self.mixed = [Engine(f"M{i}", "mixed", hw, max_seqs, budget, shared_prefix) for i in range(n[0] if kind != "pd" else 0)]
-        p_count, d_count = ((n[0], n[1]) if kind == "pd" else (n[1], n[2]) if kind == "hybrid"
-                            else (n[1], 0) if kind in ("twosided", "residency") else (0, 0))
-        self.P = [Engine(f"P{i}", "P", hw, max_seqs, budget, shared_prefix, stateless=kind == "residency")
-                  for i in range(p_count)]
+        p_count, d_count = (n[0], n[1]) if kind == "pd" else (n[1], 0) if kind == "ppd" else (0, 0)
+        self.P = [Engine(f"P{i}", "P", hw, max_seqs, budget, shared_prefix) for i in range(p_count)]
         self.D = [Engine(f"D{i}", "D", hw, d_max_seqs or max_seqs, budget, shared_prefix) for i in range(d_count)]
         self.engines = self.mixed + self.P + self.D
-        self.kind, self.split_frac = kind, split_frac
+        self.kind = kind
         self.gpus = len(self.engines)
         self.agents = agents
         profiles = [t["steps"] for t in workload["tasks"]]
@@ -323,7 +320,7 @@ class Sim:
                 task = Task(self.next_tid, self.profiles[self.next_tid % len(self.profiles)], False)
                 self.next_tid += 1
             task.admitted = t
-            task.pool = "pd" if (self.kind == "pd" or (self.kind == "hybrid" and self.rng.random() < self.split_frac)) else "mixed"
+            task.pool = "pd" if self.kind == "pd" else "mixed"
             self.active += 1
             self.start_step(task, t)
 
@@ -331,30 +328,17 @@ class Sim:
         s = task.profile[task.step]
         r = Request(task, task.step, s["prompt"], s["gen"], t)
         self.requests.append(r)
-        if self.kind in ("twosided", "residency"):
-            if self.kind == "residency":
-                home = task.sticky.get("mixed") or min(self.mixed, key=lambda e: (e.homed, e.outstanding()))
-            else:
-                home = task.sticky.get("mixed") or min(self.mixed, key=Engine.outstanding)
-            if task.sticky.get("mixed") is None:
-                home.homed += 1
+        if self.kind == "ppd":
+            # Published rule as it behaved on this workload: turn one disaggregates, every later step
+            # stays on the task's home pD and append-prefills against the context it already holds.
+            home = task.sticky.get("mixed") or min(self.mixed, key=Engine.outstanding)
             task.sticky["mixed"] = home
-            pe = task.sticky.get("P") or min(self.P, key=Engine.outstanding)
-            if self.kind == "residency":
-                use_local = home.cache.get(task.tid, 0) > 0   # one bit: is this task's history still on its home engine
-            else:
-                uncached_local = r.prompt - min(home.cache.get(task.tid, 0) or home.shared, r.prompt)
-                uncached_p = r.prompt - min(pe.cache.get(task.tid, 0) or pe.shared, r.prompt)
-                est_local = (home.pending_prefill_tokens() + uncached_local) * home.prefill_ms_per_token()
-                est_pd = ((pe.pending_prefill_tokens() + uncached_p) * pe.prefill_ms_per_token()
-                          + self.hw["xfer_fixed_ms"] + self.hw["xfer_ms_per_tok"] * r.prompt + 400.0)
-                use_local = est_local <= est_pd
-            if use_local:
-                eng = home
-            else:
-                eng = pe
+            if task.step == 0:
+                eng = task.sticky.get("P") or min(self.P, key=Engine.outstanding)
                 task.sticky["P"] = eng
                 r.p_engine, r.d_target = eng, home
+            else:
+                eng = home
         elif task.pool == "mixed":
             eng = task.sticky.get("mixed") or min(self.mixed, key=Engine.outstanding)
             task.sticky["mixed"] = eng
@@ -383,8 +367,6 @@ class Sim:
         if task.step >= len(task.profile):
             task.done_t = t
             self.active -= 1
-            if task.sticky.get("mixed") is not None:
-                task.sticky["mixed"].homed -= 1
             delay = self.rng.expovariate(1 / self.delay_mean) if self.delay_mean else 0.0
             self.push(t + delay, "admit", None)
         else:
@@ -455,7 +437,7 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     ex = sub.add_parser("extract"); ex.add_argument("run", type=Path); ex.add_argument("--out", type=Path, required=True)
     rn = sub.add_parser("run"); rn.add_argument("workload", type=Path)
-    rn.add_argument("--pool", required=True, help="mixed:N | pd:P,D | hybrid:M,P,D | twosided:M,P | residency:M,P")
+    rn.add_argument("--pool", required=True, help="mixed:N | pd:P,D | ppd:pD,P")
     rn.add_argument("--hw", default="l40s", choices=sorted(HW))
     rn.add_argument("--agents-per-gpu", type=float, default=16)
     rn.add_argument("--tasks-per-gpu", type=float, default=28)
@@ -463,7 +445,6 @@ def main() -> None:
     rn.add_argument("--d-max-num-seqs", type=int)
     rn.add_argument("--max-num-batched-tokens", type=int, default=2048)
     rn.add_argument("--shared-prefix", type=int, default=272, help="tokens of the common system prompt (turn-1 cache hits)")
-    rn.add_argument("--split-frac", type=float, default=0.5, help="hybrid: share of tasks pinned to the PD sub-pool")
     rn.add_argument("--kv-scale", type=float, default=1.0); rn.add_argument("--p-scale", type=float, default=1.0)
     rn.add_argument("--a-scale", type=float, default=1.0)
     rn.add_argument("--mixed-prefill-factor", type=float, help="override the mixed-engine prefill cost factor")
@@ -484,9 +465,9 @@ def main() -> None:
         hw["mixed_prefill_factor"] = a.mixed_prefill_factor
     workload = json.loads(a.workload.read_text())
     sim = Sim(workload, a.pool, hw, agents=0, max_seqs=a.max_num_seqs, budget=a.max_num_batched_tokens, shared_prefix=a.shared_prefix,
-              split_frac=a.split_frac, seed=a.seed, tasks_per_gpu=a.tasks_per_gpu, d_max_seqs=a.d_max_num_seqs)
+              seed=a.seed, tasks_per_gpu=a.tasks_per_gpu, d_max_seqs=a.d_max_num_seqs)
     sim.agents = round(a.agents_per_gpu * sim.gpus)
-    out = {"pool": a.pool, "hw": a.hw, "params": hw, "max_num_seqs": a.max_num_seqs, "split_frac": a.split_frac, "seed": a.seed, **sim.run()}
+    out = {"pool": a.pool, "hw": a.hw, "params": hw, "max_num_seqs": a.max_num_seqs, "seed": a.seed, **sim.run()}
     print(json.dumps(out, indent=1))
     if a.out:
         a.out.write_text(json.dumps(out, indent=1) + "\n")
